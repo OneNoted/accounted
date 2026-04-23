@@ -86,6 +86,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       total: 10000,
       remaining_amount: 0,
       due_date: '2099-12-31',
+      registration_journal_entry_id: 'je-reg-1',
       payments: [],
     })
 
@@ -167,13 +168,18 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(body.data.status).toBe('paid')
   })
 
-  it('handles cash method (credit row without registration_journal_entry_id) — skips reverseEntry', async () => {
+  it('handles cash method (credit row without registration_journal_entry_id) — skips reverseEntry and restores to registered', async () => {
+    // Pure cash-method: neither the original nor the credit row have a
+    // registration JE. The original must not be restored to 'approved' —
+    // that would assert a verifikation that never existed (sambandskravet,
+    // BFL 4 kap 2§). 'registered' is the correct state.
     const original = makeSupplierInvoice({
       id: 'inv-1',
       status: 'credited',
       total: 5000,
       remaining_amount: 0,
       due_date: '2099-12-31',
+      registration_journal_entry_id: null,
       payments: [],
     })
 
@@ -184,17 +190,19 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     })
     enqueue({ data: null, error: null })
     enqueue({
-      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      data: { ...original, status: 'registered', remaining_amount: 5000 },
       error: null,
     })
 
     const request = createMockRequest('/api/supplier-invoices/inv-1/uncredit', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
     const { status, body } = await parseJsonResponse<{
+      data: { status: string }
       reversal_entry_id: string | null
     }>(response)
 
     expect(status).toBe(200)
+    expect(body.data.status).toBe('registered')
     expect(mockReverseEntry).not.toHaveBeenCalled()
     expect(body.reversal_entry_id).toBeNull()
   })
@@ -205,6 +213,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       status: 'credited',
       total: 5000,
       remaining_amount: 0,
+      registration_journal_entry_id: 'je-reg-1',
       payments: [],
     })
 
@@ -260,6 +269,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       total: 5000,
       remaining_amount: 0,
       due_date: '2099-12-31',
+      registration_journal_entry_id: 'je-reg-1',
       payments: [],
     })
 
@@ -291,6 +301,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       total: 5000,
       remaining_amount: 0,
       due_date: '2099-12-31',
+      registration_journal_entry_id: 'je-reg-1',
       payments: [],
     })
 

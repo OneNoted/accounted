@@ -252,9 +252,12 @@ export default function NewSupplierInvoicePage() {
 
   async function handleUncreditAndRetry() {
     if (!conflict?.existing) return
+    const existingId = conflict.existing.id
+    const existingNumber = conflict.existing.supplier_invoice_number
     setIsResolvingConflict(true)
+
     const uncreditRes = await fetch(
-      `/api/supplier-invoices/${conflict.existing.id}/uncredit`,
+      `/api/supplier-invoices/${existingId}/uncredit`,
       { method: 'POST' }
     )
     const uncreditResult = await uncreditRes.json()
@@ -268,23 +271,31 @@ export default function NewSupplierInvoicePage() {
       return
     }
 
+    // The duplicate number is now free — drop the dialog regardless of what
+    // happens next, otherwise the user is left staring at a stale "number in
+    // use" prompt that no longer matches reality.
+    setConflict(null)
+
     const { ok, status, result } = await submitInvoice()
     setIsResolvingConflict(false)
 
     if (ok && result.data) {
-      setConflict(null)
       toast({
         title: 'Kreditering ångrad och faktura registrerad',
         description: `Ankomstnummer: ${result.data.arrival_number}`,
       })
       router.push(`/supplier-invoices/${result.data.id}`)
-    } else {
-      toast({
-        title: 'Krediteringen ångrades men registreringen misslyckades',
-        description: getErrorMessage(result, { context: 'supplier_invoice', statusCode: status }),
-        variant: 'destructive',
-      })
+      return
     }
+
+    // Uncredit succeeded but the resubmit hit a different validation error.
+    // Tell the user exactly what happened so they don't assume the uncredit
+    // also failed, and leave them on the form to fix and retry.
+    toast({
+      title: 'Kreditering ångrad — men nya fakturan kunde inte registreras',
+      description: `Faktura ${existingNumber} är återställd och numret är ledigt. ${getErrorMessage(result, { context: 'supplier_invoice', statusCode: status })}`,
+      variant: 'destructive',
+    })
   }
 
   function handlePickNewNumber() {

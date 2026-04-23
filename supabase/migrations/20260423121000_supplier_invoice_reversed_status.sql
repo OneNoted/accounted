@@ -31,9 +31,20 @@ ALTER TABLE public.supplier_invoices
 COMMENT ON COLUMN public.supplier_invoices.reversed_at IS
   'Timestamp when a credit note was reversed via "Ångra kreditering". Pairs with status=''reversed''. Row itself is retained for BFL 7 kap compliance.';
 
--- 3. Extend the partial unique index to also exclude status='reversed'.
--- Without this, re-crediting the same original after an uncredit would collide on the
--- KREDIT-prefixed supplier_invoice_number of the previously-reversed credit note.
+-- 3. Widen the partial unique index to exclude both 'credited' and 'reversed'.
+--
+-- Baseline (migration 20260330130000): UNIQUE on (company_id, supplier_id,
+-- supplier_invoice_number) WHERE supplier_invoice_number IS NOT NULL. A credited
+-- original kept its row under the original number, blocking any re-entry of a
+-- corrected invoice under the same number (Postgres 23505 -> HTTP 500 with no
+-- recovery path). That breaks a common Swedish accounting pattern: a supplier
+-- re-issues a corrected invoice under the same löpnummer.
+--
+-- With this migration: 'credited' originals and 'reversed' (uncredited) credit
+-- notes both drop out of the uniqueness check. The credit note itself carries
+-- a "KREDIT-" prefixed number so it never collides with the original either way.
+-- The credited original and the reversed credit row both remain in the table
+-- for BFL 7 kap audit purposes; only the number slot is freed.
 DROP INDEX IF EXISTS public.idx_supplier_invoices_company_supplier_number;
 
 CREATE UNIQUE INDEX idx_supplier_invoices_company_supplier_number

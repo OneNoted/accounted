@@ -124,10 +124,15 @@ export async function POST(
     newStatus = 'partially_paid'
   } else if (original.due_date && new Date(original.due_date) < new Date()) {
     newStatus = 'overdue'
-  } else {
-    // Original had a registration JE (or it could not have been credited),
-    // so 'approved' is the safe restoration target.
+  } else if (original.registration_journal_entry_id) {
+    // Posted verifikation exists -> safe to restore to 'approved'.
     newStatus = 'approved'
+  } else {
+    // No registration JE on the original (cash method, or an inconsistent row
+    // that somehow reached 'credited' without a booking). Restoring to
+    // 'approved' would yield an approved invoice with no verifikation, which
+    // violates sambandskravet (BFL 4 kap 2§). Fall back to 'registered'.
+    newStatus = 'registered'
   }
 
   const { data: restored, error: updateError } = await supabase
