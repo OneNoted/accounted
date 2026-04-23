@@ -46,12 +46,15 @@ export async function POST(
     return NextResponse.json({ data: original })
   }
 
+  // Filter out already-reversed credits — re-crediting the same original after a prior
+  // uncredit creates a second credit row, so we may find multiple historical matches.
   const { data: creditNote } = await supabase
     .from('supplier_invoices')
     .select('id, registration_journal_entry_id')
     .eq('company_id', companyId)
     .eq('credited_invoice_id', id)
     .eq('is_credit_note', true)
+    .neq('status', 'reversed')
     .maybeSingle()
 
   let reversalEntryId: string | null = null
@@ -87,16 +90,21 @@ export async function POST(
   }
 
   if (creditNote) {
-    await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', creditNote.id)
-    const { error: deleteError } = await supabase
+    // Soft-delete: mark the credit row 'reversed' and stamp reversed_at. BFL 7 kap
+    // requires räkenskapsinformation to be preserved for 7 years; BFL 5 kap 7§ wants
+    // an unbroken ankomstnummer series; sambandskravet requires the posted JE to
+    // remain traceable back to its business-layer row. A hard-delete would break all
+    // three. The row and its items are kept; the partial unique index excludes
+    // status='reversed' so re-crediting is still possible.
+    const { error: reverseMarkError } = await supabase
       .from('supplier_invoices')
-      .delete()
+      .update({ status: 'reversed', reversed_at: new Date().toISOString() })
       .eq('id', creditNote.id)
       .eq('company_id', companyId)
 
-    if (deleteError) {
+    if (reverseMarkError) {
       return NextResponse.json(
-        { error: getErrorMessage(deleteError, { context: 'supplier_invoice' }) },
+        { error: getErrorMessage(reverseMarkError, { context: 'supplier_invoice' }) },
         { status: 500 }
       )
     }
@@ -145,7 +153,7 @@ export async function POST(
       type: 'supplier_invoice.uncredited',
       payload: {
         supplierInvoice: restored as SupplierInvoice,
-        deletedCreditNoteId: creditNote?.id ?? '',
+        reversedCreditNoteId: creditNote?.id ?? '',
         reversalEntryId,
         userId: user.id,
         companyId,

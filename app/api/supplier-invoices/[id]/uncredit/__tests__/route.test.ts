@@ -79,7 +79,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(mockReverseEntry).not.toHaveBeenCalled()
   })
 
-  it('reverses credit JE, deletes credit row, and restores original to approved when no payments', async () => {
+  it('reverses credit JE, soft-deletes credit row, and restores original to approved when no payments', async () => {
     const original = makeSupplierInvoice({
       id: 'inv-1',
       status: 'credited',
@@ -91,15 +91,13 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
 
     // Fetch original
     enqueue({ data: original, error: null })
-    // Find credit row
+    // Find active (non-reversed) credit row
     enqueue({
       data: { id: 'credit-1', registration_journal_entry_id: 'je-credit' },
       error: null,
     })
     mockReverseEntry.mockResolvedValue({ id: 'je-reversal' })
-    // Delete credit items
-    enqueue({ data: null, error: null })
-    // Delete credit row
+    // Mark credit row reversed (soft-delete)
     enqueue({ data: null, error: null })
     // Update original
     enqueue({
@@ -156,7 +154,6 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     })
     mockReverseEntry.mockResolvedValue({ id: 'je-reversal' })
     enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
     enqueue({
       data: { ...original, status: 'paid', remaining_amount: 0 },
       error: null,
@@ -185,7 +182,6 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       data: { id: 'credit-1', registration_journal_entry_id: null },
       error: null,
     })
-    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({
       data: { ...original, status: 'approved', remaining_amount: 5000 },
@@ -218,7 +214,6 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       error: null,
     })
     mockReverseEntry.mockRejectedValue(new Error('Can only reverse posted entries'))
-    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({
       data: { ...original, status: 'approved', remaining_amount: 5000 },
@@ -258,6 +253,37 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(body.error).toMatch(/låst|stängd/i)
   })
 
+  it('restores original even when no active credit row is found (credit already reversed)', async () => {
+    const original = makeSupplierInvoice({
+      id: 'inv-1',
+      status: 'credited',
+      total: 5000,
+      remaining_amount: 0,
+      due_date: '2099-12-31',
+      payments: [],
+    })
+
+    enqueue({ data: original, error: null })
+    // Find credit row filters out status='reversed' — nothing comes back
+    enqueue({ data: null, error: null })
+    enqueue({
+      data: { ...original, status: 'approved', remaining_amount: 5000 },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/inv-1/uncredit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      data: { status: string }
+      reversal_entry_id: string | null
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('approved')
+    expect(body.reversal_entry_id).toBeNull()
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+  })
+
   it('emits supplier_invoice.uncredited event', async () => {
     const original = makeSupplierInvoice({
       id: 'inv-1',
@@ -275,7 +301,6 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     })
     mockReverseEntry.mockResolvedValue({ id: 'je-reversal' })
     enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
     enqueue({
       data: { ...original, status: 'approved', remaining_amount: 5000 },
       error: null,
@@ -292,7 +317,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
       expect.objectContaining({
         type: 'supplier_invoice.uncredited',
         payload: expect.objectContaining({
-          deletedCreditNoteId: 'credit-1',
+          reversedCreditNoteId: 'credit-1',
           reversalEntryId: 'je-reversal',
           userId: 'user-1',
         }),

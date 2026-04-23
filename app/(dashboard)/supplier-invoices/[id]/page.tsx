@@ -28,6 +28,7 @@ const statusColors: Record<string, string> = {
   overdue: 'bg-destructive/10 text-destructive',
   disputed: 'bg-purple-100 text-purple-800',
   credited: 'bg-gray-100 text-gray-800',
+  reversed: 'bg-gray-100 text-gray-500',
 }
 
 const statusLabels: Record<string, string> = {
@@ -38,6 +39,7 @@ const statusLabels: Record<string, string> = {
   overdue: 'Förfallen',
   disputed: 'Tvist',
   credited: 'Krediterad',
+  reversed: 'Makulerad',
 }
 
 export default function SupplierInvoiceDetailPage() {
