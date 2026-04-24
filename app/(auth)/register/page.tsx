@@ -114,7 +114,7 @@ function RegisterPageContent() {
             description: 'Ett konto med den har e-postadressen finns redan. Logga in och koppla BankID i installningarna.',
             variant: 'destructive',
           })
-          setTimeout(() => router.push('/login'), 1500)
+          router.push('/login')
         } else {
           toast({
             title: 'Registrering misslyckades',

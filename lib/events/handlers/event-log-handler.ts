@@ -81,10 +81,11 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
 }
 
 /**
- * Strip userId from payload (stored in its own column) and return clean data.
+ * Strip userId and companyId from payload (each stored in its own column) and
+ * return clean data for the JSONB blob.
  */
-function stripUserId(payload: Record<string, unknown>): Record<string, unknown> {
-  const { userId: _userId, ...data } = payload
+function stripMetaFields(payload: Record<string, unknown>): Record<string, unknown> {
+  const { userId: _userId, companyId: _companyId, ...data } = payload
   return data
 }
 
@@ -158,7 +159,7 @@ export function registerEventLogHandler(): (() => void)[] {
         }
 
         const entityId = extractEntityId(rawPayload)
-        const data = stripUserId(rawPayload)
+        const data = stripMetaFields(rawPayload)
         await persistEvent(eventType, userId, companyId, entityId, data)
       } catch (err) {
         log.error(`Event log handler error for ${eventType}:`, err)
