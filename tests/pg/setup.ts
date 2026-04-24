@@ -32,10 +32,27 @@ export async function withUserContext<T>(
   const client = await getClient()
   try {
     await client.query('BEGIN')
-    await client.query(`SET LOCAL ROLE authenticated`)
+    // Set JWT claims BEFORE switching role: non-superuser set_config on a
+    // namespaced GUC is fine, but keeping order explicit avoids surprises.
+    // Set both the whole-claims object and the individual `sub` claim —
+    // different versions of Supabase's auth.uid() read one or the other.
     await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
       JSON.stringify({ sub: userId, role: 'authenticated' }),
     ])
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+    await client.query(`SET LOCAL ROLE authenticated`)
+    // Fail loudly and early if the JWT context did not land the way we
+    // expect — otherwise RLS policies return empty and the real test
+    // failure points at an unrelated assertion.
+    const authCheck = await client.query<{ uid: string | null }>(
+      `SELECT auth.uid()::text AS uid`,
+    )
+    if (authCheck.rows[0]?.uid !== userId) {
+      throw new Error(
+        `withUserContext: auth.uid() resolved to ${authCheck.rows[0]?.uid ?? 'NULL'}, ` +
+          `expected ${userId}. Check request.jwt.claims setup.`,
+      )
+    }
     const result = await fn(client)
     await client.query('ROLLBACK')
     return result
