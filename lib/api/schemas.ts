@@ -812,6 +812,16 @@ export const AcceptProposalSchema = z.object({
   edits: z.union([EditBookingProposalSchema, EditMatchProposalSchema]).optional(),
 })
 
+// Change the matched transaction on a pending match proposal without
+// accepting it. Source tells us whether the user picked one of the AI's
+// own alternatives, an AI-regenerated suggestion, or a manually-chosen
+// transaction — kept on edit_diff for learning signal.
+export const ChangeMatchProposalSchema = z.object({
+  version: z.number().int().nonnegative(),
+  matched_transaction_id: uuid,
+  source: z.enum(['user_alternative', 'user_manual', 'ai_regenerated']),
+})
+
 export const RejectProposalSchema = z.object({
   version: z.number().int().nonnegative(),
   reason: z.string().max(500).optional(),

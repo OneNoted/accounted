@@ -3,13 +3,14 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { ensureInitialized } from '@/lib/init'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { isAgentInboxEnabled } from '@/lib/ai/feature-flag'
 import { requireCompanyId } from '@/lib/company/context'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Sparkles } from 'lucide-react'
 import AgentInbox from '@/components/agent-inbox/AgentInbox'
-import type { AIProposal, AIRequest, InvoiceInboxItem, Transaction, DocumentAttachment } from '@/types'
+import type { AIProposal, AIRequest, InvoiceInboxItem, Transaction, DocumentAttachment, MatchProposalPayload } from '@/types'
 
 ensureInitialized()
 
@@ -23,8 +24,9 @@ export interface AgentInboxItemView {
 }
 
 export default async function AgentInboxPage() {
-  // Hard gate: extension not enabled at build time → 404.
-  if (!ENABLED_EXTENSION_IDS.has('ai-agent')) {
+  // Hard gate: extension not enabled at build time, OR the feature flag is
+  // off in this environment (prod by default) → 404.
+  if (!ENABLED_EXTENSION_IDS.has('ai-agent') || !isAgentInboxEnabled()) {
     notFound()
   }
 
@@ -109,12 +111,22 @@ export default async function AgentInboxPage() {
       inboxMap.set(row.id, row as InvoiceInboxItem & { document: DocumentAttachment | null })
     }
 
+    // Collect transaction IDs from two sources:
+    //   1. inbox_item.matched_transaction_id — set after a match is accepted
+    //      (used by booking cards to show the paired transaction).
+    //   2. proposal_json.matched_transaction_id on pending match proposals —
+    //      the transaction the AI is *proposing*; needed so match cards can
+    //      show a human-readable description instead of a raw UUID.
     const matchedTxIds = [
-      ...new Set(
-        [...inboxMap.values()]
+      ...new Set([
+        ...[...inboxMap.values()]
           .map((i) => i.matched_transaction_id)
-          .filter((id): id is string => Boolean(id))
-      ),
+          .filter((id): id is string => Boolean(id)),
+        ...typedProposals
+          .filter((p) => p.step_type === 'match')
+          .map((p) => (p.proposal_json as MatchProposalPayload).matched_transaction_id)
+          .filter((id): id is string => Boolean(id)),
+      ]),
     ]
 
     const txMap = new Map<string, Transaction>()
@@ -131,11 +143,16 @@ export default async function AgentInboxPage() {
     for (const proposal of typedProposals) {
       const inbox = inboxMap.get(proposal.subject_id)
       if (!inbox) continue
+      // Match cards render the transaction being *proposed*; booking cards render
+      // the transaction already accepted on the inbox item.
+      const txId = proposal.step_type === 'match'
+        ? (proposal.proposal_json as MatchProposalPayload).matched_transaction_id
+        : inbox.matched_transaction_id
       items.push({
         proposal,
         request: null,
         inbox_item: inbox,
-        transaction: inbox.matched_transaction_id ? txMap.get(inbox.matched_transaction_id) ?? null : null,
+        transaction: txId ? txMap.get(txId) ?? null : null,
       })
     }
     for (const request of typedRequests) {

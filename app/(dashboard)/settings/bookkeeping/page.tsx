@@ -10,13 +10,14 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ExternalLink, Sparkles } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { isAgentInboxEnabled } from '@/lib/ai/feature-flag'
 import type { CompanySettings } from '@/types'
 
 const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export default function BookkeepingSettingsPage() {
   const { settings, isLoading, updateSettings } = useSettings()
-  const aiAgentAvailable = ENABLED_EXTENSION_IDS.has('ai-agent')
+  const aiAgentAvailable = ENABLED_EXTENSION_IDS.has('ai-agent') && isAgentInboxEnabled()
 
   if (isLoading || !settings) return <SettingsLoadingSkeleton />
 

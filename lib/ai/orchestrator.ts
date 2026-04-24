@@ -105,6 +105,14 @@ async function handleProposalAccepted(
 
   const item = inboxItem as InvoiceInboxItem
 
+  // Defense in depth: don't chain to booking without a source document.
+  // reValidateMatch already blocks this at accept time, but a stale accepted
+  // proposal (from before the gate existed) could still reach here.
+  if (!item.document_id) {
+    log.warn(`refusing to chain booking for inbox item ${item.id} — no source document attached`)
+    return
+  }
+
   const { data: tx } = await supabase
     .from('transactions')
     .select('*')

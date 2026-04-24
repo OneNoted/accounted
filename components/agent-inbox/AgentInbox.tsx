@@ -11,6 +11,7 @@ import ProposalCard from './ProposalCard'
 import RequestCard from './RequestCard'
 import EditBookingDialog from './EditBookingDialog'
 import LearningPromptDialog from './LearningPromptDialog'
+import ChangeTransactionDialog from './ChangeTransactionDialog'
 import type { AgentInboxItemView } from '@/app/(dashboard)/agent-inbox/page'
 import type { AIProposal, BookingProposalPayload } from '@/types'
 
@@ -39,6 +40,7 @@ export default function AgentInbox({ initialItems }: AgentInboxProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [busyProposalId, setBusyProposalId] = useState<string | null>(null)
   const [editProposal, setEditProposal] = useState<AIProposal | null>(null)
+  const [changeMatchItem, setChangeMatchItem] = useState<AgentInboxItemView | null>(null)
   const [learningPrompt, setLearningPrompt] = useState<LearningPromptState | null>(null)
   const [backfillRunning, setBackfillRunning] = useState(false)
   const [batchRunning, setBatchRunning] = useState(false)
@@ -295,6 +297,7 @@ export default function AgentInbox({ initialItems }: AgentInboxProps) {
                     onAccept={() => handleAccept(item.proposal!)}
                     onReject={() => handleReject(item.proposal!)}
                     onEdit={() => setEditProposal(item.proposal!)}
+                    onChangeMatch={() => setChangeMatchItem(item)}
                   />
                 )
               }
@@ -330,6 +333,26 @@ export default function AgentInbox({ initialItems }: AgentInboxProps) {
             const proposal = editProposal
             setEditProposal(null)
             await handleAccept(proposal, edits)
+          }}
+        />
+      )}
+
+      {changeMatchItem?.proposal && (
+        <ChangeTransactionDialog
+          open={true}
+          onOpenChange={(open) => { if (!open) setChangeMatchItem(null) }}
+          proposal={changeMatchItem.proposal}
+          receiptTotal={
+            (changeMatchItem.inbox_item.extracted_data as { totals?: { total?: number | null } } | null)
+              ?.totals?.total ?? null
+          }
+          receiptDate={
+            (changeMatchItem.inbox_item.extracted_data as { receipt?: { date?: string | null } } | null)
+              ?.receipt?.date ?? null
+          }
+          onChanged={() => {
+            setChangeMatchItem(null)
+            router.refresh()
           }}
         />
       )}

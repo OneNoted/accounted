@@ -6,6 +6,7 @@ import { RememberLearningSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { calculateConfidence } from '@/lib/bookkeeping/counterparty-templates'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 import type { AIProposal } from '@/types'
 
 ensureInitialized()
@@ -23,6 +24,9 @@ ensureInitialized()
  * an explicit user choice.
  */
 export async function POST(request: Request) {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

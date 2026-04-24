@@ -8,6 +8,7 @@ import {
   generateMatchProposalFor,
   generateBookingProposalFor,
 } from '@/lib/ai/orchestrator'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 import type {
   InvoiceInboxItem,
   Transaction,
@@ -35,6 +36,9 @@ ensureInitialized()
  * v1 dev-only this is acceptable; a proper job queue is a follow-up.
  */
 export async function POST() {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

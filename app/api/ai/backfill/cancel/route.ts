@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 
 ensureInitialized()
 
@@ -14,6 +15,9 @@ ensureInitialized()
  * stay — the cancel just stops further generation.
  */
 export async function POST() {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -8,6 +8,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { reValidateProposal } from '@/lib/ai/proposals/re-validate'
 import { applyProposal } from '@/lib/ai/proposals/apply'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 import type { AIProposal, InvoiceInboxItem } from '@/types'
 
 ensureInitialized()
@@ -32,6 +33,9 @@ interface BatchOutcomePerProposal {
  * individual proposal and approve from there.
  */
 export async function POST(request: Request) {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -28,6 +28,7 @@ export type ValidationFailureCode =
   | 'transaction_already_matched_elsewhere'
   | 'period_missing_or_closed'
   | 'account_missing_or_inactive'
+  | 'receipt_file_missing'
   | 'step_prerequisite_missing'
 
 export interface ValidationSuccess {
@@ -105,6 +106,18 @@ async function reValidateMatch(
   item: InvoiceInboxItem,
   payload: MatchProposalPayload
 ): Promise<ValidationResult> {
+  // BFL 5 kap 7§: every verifikation requires an underlying source document.
+  // Block the match accept when no receipt file is attached so the user
+  // can't reach the booking step without proof. The UI shows an upload
+  // affordance in the receipt detail modal for this exact case.
+  if (!item.document_id) {
+    return {
+      ok: false,
+      code: 'receipt_file_missing',
+      message: 'Kvittobild krävs innan du kan koppla transaktionen. Ladda upp en bild av kvittot först.',
+    }
+  }
+
   const txId = payload.matched_transaction_id
 
   const { data: tx } = await supabase

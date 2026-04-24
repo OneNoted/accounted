@@ -4,6 +4,7 @@ import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
 import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
 import { registerAIProposalHandler } from '@/lib/ai/orchestrator'
+import { isAgentInboxEnabled } from '@/lib/ai/feature-flag'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('init')
@@ -76,7 +77,7 @@ export function ensureInitialized(): void {
   setContextFactory(createExtensionContext)
   registerSupplierInvoiceHandler()
   registerEventLogHandler()
-  registerAIProposalHandler()
+  if (isAgentInboxEnabled()) registerAIProposalHandler()
   loadExtensions()
 
   initialized = true

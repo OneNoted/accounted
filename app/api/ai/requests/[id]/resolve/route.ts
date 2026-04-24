@@ -6,6 +6,7 @@ import { ResolveRequestSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 import type { AIRequest, InvoiceInboxItem } from '@/types'
 
 ensureInitialized()
@@ -23,6 +24,9 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { validateQuery } from '@/lib/api/validate'
 import { ListProposalsQuerySchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 
 ensureInitialized()
 
@@ -20,6 +21,9 @@ ensureInitialized()
  * Returns { data: AIProposal[], count: number }.
  */
 export async function GET(request: Request) {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -10,6 +10,7 @@ import { reValidateProposal } from '@/lib/ai/proposals/re-validate'
 import { applyProposal } from '@/lib/ai/proposals/apply'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { gateAgentInbox } from '@/lib/ai/feature-flag'
 import type {
   AIProposal,
   BookingProposalPayload,
@@ -36,6 +37,9 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const gate = gateAgentInbox()
+  if (gate) return gate
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
