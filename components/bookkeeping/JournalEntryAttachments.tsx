@@ -31,13 +31,21 @@ function isImageType(type: string | null): boolean {
   return type?.startsWith('image/') ?? false
 }
 
+function isPdfType(type: string | null): boolean {
+  return type === 'application/pdf'
+}
+
+function isPreviewable(type: string | null): boolean {
+  return isImageType(type) || isPdfType(type)
+}
+
 export default function JournalEntryAttachments({
   journalEntryId,
   onCountChange,
 }: JournalEntryAttachmentsProps) {
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
-  const [expandedImage, setExpandedImage] = useState<string | null>(null)
+  const [expandedDoc, setExpandedDoc] = useState<string | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [uploadFiles, setUploadFiles] = useState<UploadedFile[]>([])
 
@@ -87,8 +95,8 @@ export default function JournalEntryAttachments({
   }
 
   const handlePreviewToggle = async (doc: DocumentRecord) => {
-    if (expandedImage === doc.id) {
-      setExpandedImage(null)
+    if (expandedDoc === doc.id) {
+      setExpandedDoc(null)
       return
     }
 
@@ -108,7 +116,7 @@ export default function JournalEntryAttachments({
       }
     }
 
-    setExpandedImage(doc.id)
+    setExpandedDoc(doc.id)
   }
 
   if (loading) {
@@ -158,12 +166,12 @@ export default function JournalEntryAttachments({
           {documents.map((doc) => (
             <div key={doc.id}>
               <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50">
-                {isImageType(doc.mime_type) ? (
+                {isPreviewable(doc.mime_type) ? (
                   <button
                     onClick={() => handlePreviewToggle(doc)}
                     className="shrink-0 hover:text-primary transition-colors"
                   >
-                    {expandedImage === doc.id ? (
+                    {expandedDoc === doc.id ? (
                       <ChevronUp className="h-4 w-4" />
                     ) : (
                       <ChevronDown className="h-4 w-4" />
@@ -173,8 +181,12 @@ export default function JournalEntryAttachments({
                   <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                 )}
 
-                {isImageType(doc.mime_type) && expandedImage !== doc.id && (
-                  <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                {isPreviewable(doc.mime_type) && expandedDoc !== doc.id && (
+                  isImageType(doc.mime_type) ? (
+                    <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                  ) : (
+                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                  )
                 )}
 
                 <span className="truncate flex-1">{doc.file_name}</span>
@@ -194,12 +206,23 @@ export default function JournalEntryAttachments({
               </div>
 
               {/* Image preview */}
-              {expandedImage === doc.id && doc.download_url && (
+              {expandedDoc === doc.id && doc.download_url && isImageType(doc.mime_type) && (
                 <div className="px-2 py-2">
                   <img
                     src={doc.download_url}
                     alt={doc.file_name}
                     className="max-h-48 rounded-lg object-contain"
+                  />
+                </div>
+              )}
+
+              {/* PDF preview */}
+              {expandedDoc === doc.id && doc.download_url && isPdfType(doc.mime_type) && (
+                <div className="px-2 py-2">
+                  <iframe
+                    src={doc.download_url}
+                    title={doc.file_name}
+                    className="w-full h-[60vh] rounded-lg border"
                   />
                 </div>
               )}
