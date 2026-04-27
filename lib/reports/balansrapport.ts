@@ -8,7 +8,7 @@ import type {
 
 const CLASS_LABELS: Record<number, string> = {
   1: '1 Tillgångar',
-  2: '2 Eget kapital och skulder',
+  2: '2 Eget kapital, obeskattade reserver, avsättningar och skulder',
 }
 
 /**

@@ -11,7 +11,7 @@ const CLASS_LABELS: Record<number, string> = {
   3: '3 Rörelsens inkomster/intäkter',
   4: '4 Material- och varukostnader',
   5: '5 Övriga externa kostnader',
-  6: '6 Övriga externa kostnader (forts.)',
+  6: '6 Övriga externa kostnader',
   7: '7 Personalkostnader',
   8: '8 Finansiella poster och bokslutsdispositioner',
 }

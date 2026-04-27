@@ -1103,11 +1103,11 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
             <span className="tabular-nums">{formatAmount(data.total_assets_ub)} kr</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Summa eget kapital och skulder</span>
+            <span className="text-muted-foreground">Summa eget kapital, reserver, avsättningar och skulder</span>
             <span className="tabular-nums">{formatAmount(data.total_equity_liabilities_ub)} kr</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Beräknat resultat</span>
+            <span className="text-muted-foreground">Beräknat resultat (ej bokslutsjusterat)</span>
             <span className="tabular-nums">{formatAmount(data.beraknat_resultat)} kr</span>
           </div>
           <div className="flex justify-between items-center pt-2 border-t">
