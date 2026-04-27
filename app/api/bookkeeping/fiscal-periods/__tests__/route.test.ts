@@ -31,14 +31,14 @@ type Period = { id: string; period_start: string; period_end: string; is_closed:
 function buildMockSupabase(options: {
   user?: { id: string } | null
   allPeriods?: Period[]
-  openCount?: number
+  openPeriods?: Array<{ name: string; period_start: string; period_end: string }>
   overlapping?: Array<{ id: string; name: string }>
   insertResult?: { data: unknown; error: unknown }
 }) {
   const {
     user = { id: 'user-1' },
     allPeriods = [],
-    openCount = 0,
+    openPeriods = [],
     overlapping = [],
     insertResult = { data: { id: 'new-period', name: 'FY 2025' }, error: null },
   } = options
@@ -58,18 +58,20 @@ function buildMockSupabase(options: {
       const chainable: Record<string, unknown> = {}
 
       // For the allPeriods query (call 1): .select('id, period_start, ...').eq(...).order(...)
-      // For openCount query (call 2): .select('id', { count: ... }).eq(...).eq(...)
+      // For openPeriods query (call 2): .select('name, period_start, period_end').eq(...).eq(...).is(...).order(...)
       // For overlap query (call 3): .select('id, name').eq(...).lte(...).gte(...).limit(...)
       // For insert (call 4): .insert(...).select().single()
       // For update (call 5): .update(...).eq(...).eq(...)
 
-      chainable.select = vi.fn().mockImplementation((_sel: string, opts?: { count?: string }) => {
-        if (opts?.count === 'exact') {
-          // openCount query: .eq(company_id).eq(is_closed=false).is(locked_at, null)
+      chainable.select = vi.fn().mockImplementation((sel: string) => {
+        if (sel.includes('name') && sel.includes('period_start') && !sel.includes('id')) {
+          // openPeriods query: .eq(company_id).eq(is_closed=false).is(locked_at, null).order(...)
           return {
             eq: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({
-                is: vi.fn().mockResolvedValue({ count: openCount }),
+                is: vi.fn().mockReturnValue({
+                  order: vi.fn().mockResolvedValue({ data: openPeriods, error: null }),
+                }),
               }),
             }),
           }
@@ -162,16 +164,17 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.error).toMatch(/must start on 2026-01-01/)
   })
 
-  it('rejects forward period when an unlocked open period exists', async () => {
+  it('rejects forward period when an unlocked open period exists and lists its name', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: false }],
-      openCount: 1,
+      openPeriods: [{ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' }],
     })
     const req = createMockRequest({ name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' })
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error).toMatch(/unlocked period/)
+    expect(body.error).toMatch(/FY 2025 \(2025-01-01 – 2025-12-31\)/)
   })
 
   // Regression: BFL 6 kap allows löpande bokföring of the new year in parallel
@@ -179,11 +182,11 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
   // months for AB årsredovisning). A locked-but-not-yet-closed prior period is
   // the normal state during that window and must not block creation of the
   // next räkenskapsår. The .is('locked_at', null) filter excludes locked
-  // periods from the openCount, so the mock returns 0 here.
+  // periods from openPeriods, so the mock returns [] here.
   it('allows forward period creation when prior period is locked-but-not-closed', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
-      openCount: 0,
+      openPeriods: [],
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
@@ -218,7 +221,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     // There's an unclosed period (2026), but backward creation should still work
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false }],
-      openCount: 1,
+      openPeriods: [{ name: 'FY 2026', period_start: '2026-01-01', period_end: '2026-12-31' }],
       overlapping: [],
     })
     const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
@@ -274,13 +277,14 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
         fpCallIndex++
         const callNum = fpCallIndex
         return {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          select: vi.fn().mockImplementation((_sel: string, opts?: any) => {
-            if (opts?.count === 'exact') {
+          select: vi.fn().mockImplementation((sel: string) => {
+            if (sel.includes('name') && sel.includes('period_start') && !sel.includes('id')) {
               return {
                 eq: vi.fn().mockReturnValue({
                   eq: vi.fn().mockReturnValue({
-                    is: vi.fn().mockResolvedValue({ count: 0 }),
+                    is: vi.fn().mockReturnValue({
+                      order: vi.fn().mockResolvedValue({ data: [], error: null }),
+                    }),
                   }),
                 }),
               }
@@ -337,13 +341,14 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
         fpCallIndex++
         const callNum = fpCallIndex
         return {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          select: vi.fn().mockImplementation((_sel: string, opts?: any) => {
-            if (opts?.count === 'exact') {
+          select: vi.fn().mockImplementation((sel: string) => {
+            if (sel.includes('name') && sel.includes('period_start') && !sel.includes('id')) {
               return {
                 eq: vi.fn().mockReturnValue({
                   eq: vi.fn().mockReturnValue({
-                    is: vi.fn().mockResolvedValue({ count: 0 }),
+                    is: vi.fn().mockReturnValue({
+                      order: vi.fn().mockResolvedValue({ data: [], error: null }),
+                    }),
                   }),
                 }),
               }

@@ -104,16 +104,22 @@ export async function POST(request: Request) {
       // Locked periods are write-blocked by enforce_period_lock and so don't
       // represent skipping ahead; they're the normal state during bokslut work,
       // which BFL 6 kap allows in parallel with löpande bokföring of the new year.
-      const { count: openCount } = await supabase
+      const { data: openPeriods } = await supabase
         .from('fiscal_periods')
-        .select('id', { count: 'exact', head: true })
+        .select('name, period_start, period_end')
         .eq('company_id', companyId)
         .eq('is_closed', false)
         .is('locked_at', null)
+        .order('period_start', { ascending: true })
 
-      if (openCount && openCount > 0) {
+      if (openPeriods && openPeriods.length > 0) {
+        const names = openPeriods
+          .map((p) => `${p.name} (${p.period_start} – ${p.period_end})`)
+          .join(', ')
         return NextResponse.json(
-          { error: 'Cannot create a new period while an unlocked period exists' },
+          {
+            error: `Cannot create a new period while an unlocked period exists. Lock the following first: ${names}`,
+          },
           { status: 409 }
         )
       }
