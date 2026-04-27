@@ -72,9 +72,12 @@ describe('invoices.invoice_number nullable + partial unique index', () => {
     await insertInvoice({ userId: a.userId, companyId: a.companyId, invoiceNumber: 'F-2026001' })
     await insertInvoice({ userId: b.userId, companyId: b.companyId, invoiceNumber: 'F-2026001' })
 
+    // Scope the count to these two companies — earlier tests in the suite leave
+    // 'F-2026001' rows behind in their own companies, and pg-real has no
+    // per-test cleanup.
     const { rows } = await getPool().query(
-      'SELECT count(*)::int FROM public.invoices WHERE invoice_number = $1',
-      ['F-2026001'],
+      'SELECT count(*)::int FROM public.invoices WHERE invoice_number = $1 AND company_id = ANY($2::uuid[])',
+      ['F-2026001', [a.companyId, b.companyId]],
     )
     expect(rows[0]!.count).toBe(2)
   })
