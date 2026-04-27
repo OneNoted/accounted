@@ -19,7 +19,7 @@ import {
 } from './lib/bankid-client'
 import { TICAPIError } from './lib/tic-types'
 import type { TICCompanyProfile } from './lib/tic-types'
-import type { BankIdCompleteRequest } from './lib/bankid-types'
+import type { BankIdCompleteRequest, EnrichmentData } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -30,20 +30,19 @@ import crypto from 'crypto'
 const log = createLogger('tic/bankid')
 
 /**
- * Request CompanyRoles enrichment for a completed BankID session and cache
- * the result in `extension_data` so /select-company can pre-fill the picker.
- * Non-blocking: any failure is logged and swallowed — BankID auth must still
- * succeed even if enrichment is down.
+ * Fetch CompanyRoles enrichment for a completed BankID session.
  *
- * Only types currently enabled on the TIC tenant are requested — see the
- * block comment inside the function. If Address (formerly SPAR) is enabled
- * later, add it here to restore address pre-fill in the manual wizard.
+ * MUST be called before collectBankIdResult: TIC's session state machine marks
+ * a session as "consumed" when /poll or /collect is read after it reaches
+ * `complete`, after which /enrichment refuses the sessionId with
+ * `error: 'Session not completed'` (confirmed by TIC support 2026-04-24).
+ * Calling /enrichment first, then /collect, avoids the bug — the consume flag
+ * only blocks subsequent /enrichment calls, of which there are none.
+ *
+ * Non-blocking: any failure is logged and returns null so BankID auth still
+ * succeeds even if enrichment is down.
  */
-async function fetchAndStoreEnrichment(
-  sessionId: string,
-  userId: string,
-  supabase: SupabaseClient,
-): Promise<void> {
+async function fetchEnrichmentSafely(sessionId: string): Promise<EnrichmentData | null> {
   try {
     // IMPORTANT: only request types that are actually enabled on the TIC
     // tenant. Requesting an unknown/disabled type (e.g. 'SPAR', which TIC
@@ -74,8 +73,8 @@ async function fetchAndStoreEnrichment(
     if (!usable) {
       // Log the full response shape (sans secureUrl — time-limited token)
       // so we can diagnose why a real-user enrichment comes back non-usable.
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { secureUrl: _omit, ...responseDiagnostic } = enrichment
+      void _omit
 
       // Interpret common failure shapes into actionable hints so developers
       // don't have to re-trace this every time. TIC returns these as body
@@ -83,20 +82,23 @@ async function fetchAndStoreEnrichment(
       const errField = (enrichment as { error?: string }).error ?? ''
       let hint: string | undefined
       if (errField === 'Session not completed') {
-        // Two distinct causes produce this identical error:
-        //   1. We requested a type not enabled on the tenant (most common —
-        //      verify via GET /api/v1/enrichment/types)
-        //   2. The BankID session genuinely never went through the
-        //      consent-to-enrich dialog
-        hint = 'Likely cause: a requested enrichment type is not enabled on the TIC tenant. Run `curl -H "X-Api-Key: $KEY" https://id.tic.io/api/v1/enrichment/types` to verify which types have `enabled: true` and adjust the requestEnrichment call to match.'
+        // Three distinct causes produce this identical error:
+        //   1. We called /poll or /collect before /enrichment — TIC's
+        //      session-consume bug. Should not happen now that this
+        //      function runs before collectBankIdResult.
+        //   2. We requested a type not enabled on the tenant (verify via
+        //      GET /api/v1/enrichment/types).
+        //   3. The BankID session genuinely never went through the
+        //      consent-to-enrich dialog.
+        hint = 'Most likely the TIC session-consume bug (a /poll or /collect ran before /enrichment). Verify the call order in /bankid/complete. Otherwise, run `curl -H "X-Api-Key: $KEY" https://id.tic.io/api/v1/enrichment/types` to check enabled types.'
       } else if (errField.toLowerCase().includes('not enabled')) {
         hint = 'Enrichment explicitly disabled on TIC tenant — contact support@tic.io.'
       } else if (errField.toLowerCase().includes('too old')) {
-        hint = '>30 min between auth completion and enrichment call — check for slow server-side work between /bankid/complete and fetchAndStoreEnrichment.'
+        hint = '>30 min between auth completion and enrichment call — check for slow server-side work between /bankid/complete and fetchEnrichmentSafely.'
       }
 
       log.warn('enrichment not usable', { ...responseDiagnostic, hint })
-      return
+      return null
     }
 
     const enrichmentData = await fetchEnrichmentData(enrichment.secureUrl)
@@ -104,7 +106,7 @@ async function fetchAndStoreEnrichment(
     // Log a PII-free snapshot so we can debug the role filter in production.
     // Raw personnummer/names are deliberately omitted. `spar`/`address` not
     // logged — we don't request those types currently (see block comment
-    // on requestEnrichment above), so they'd always be absent.
+    // above), so they'd always be absent.
     const firstRole = enrichmentData.companyRoles?.[0]
     log.info('enrichment data shape', {
       companyCount: enrichmentData.companyRoles?.length ?? 0,
@@ -118,16 +120,33 @@ async function fetchAndStoreEnrichment(
         : null,
     })
 
+    return enrichmentData
+  } catch (enrichError) {
+    log.warn('enrichment failed (non-blocking)', enrichError)
+    return null
+  }
+}
+
+/**
+ * Persist a previously fetched EnrichmentData blob so /select-company can
+ * pre-fill the picker. Non-blocking — DB failure is logged and swallowed.
+ */
+async function storeEnrichment(
+  userId: string,
+  supabase: SupabaseClient,
+  data: EnrichmentData,
+): Promise<void> {
+  try {
     await supabase
       .from('extension_data')
       .upsert({
         user_id: userId,
         extension_id: 'tic',
         key: 'bankid_enrichment',
-        value: enrichmentData,
+        value: data,
       }, { onConflict: 'user_id,extension_id,key' })
-  } catch (enrichError) {
-    log.warn('enrichment failed (non-blocking)', enrichError)
+  } catch (storeError) {
+    log.warn('storeEnrichment failed (non-blocking)', storeError)
   }
 }
 
@@ -619,6 +638,14 @@ export const ticExtension: Extension = {
             )
           }
 
+          // CRITICAL ORDER: /enrichment must run BEFORE /collect. TIC's session
+          // state machine marks the session as "consumed" on any /poll or /collect
+          // read after `complete`, after which /enrichment refuses the sessionId
+          // with `error: 'Session not completed'`. Confirmed by TIC support
+          // 2026-04-24. Calling /enrichment first leaves us free to call /collect
+          // afterward — the consume flag only blocks subsequent /enrichment calls.
+          const enrichmentData = await fetchEnrichmentSafely(sessionId)
+
           // Verify BankID session is complete
           const session = await collectBankIdResult(sessionId)
           if (session.status !== 'complete' || !session.user) {
@@ -671,7 +698,7 @@ export const ticExtension: Extension = {
             }
 
             // Refresh enrichment so /select-company sees current Bolagsverket roles.
-            await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
+            if (enrichmentData) await storeEnrichment(existing.user_id, supabase, enrichmentData)
 
             return NextResponse.json({
               data: {
@@ -771,7 +798,7 @@ export const ticExtension: Extension = {
           }
 
           // Enrichment (CompanyRoles) — pre-fills /select-company picker.
-          await fetchAndStoreEnrichment(sessionId, userId, supabase)
+          if (enrichmentData) await storeEnrichment(userId, supabase, enrichmentData)
 
           return NextResponse.json({
             data: {
