@@ -311,7 +311,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
           <Input
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
-            placeholder={invoice.invoice_number ?? undefined}
+            placeholder={invoice.invoice_number ?? ''}
+            disabled={!invoice.invoice_number}
             className={cn(
               confirmText && confirmText !== invoice.invoice_number && 'border-destructive'
             )}
@@ -327,7 +328,12 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         <Button
           variant="destructive"
           onClick={handleSubmit}
-          disabled={isSubmitting || confirmText !== invoice.invoice_number || !canWrite}
+          disabled={
+            isSubmitting ||
+            !invoice.invoice_number ||
+            confirmText !== invoice.invoice_number ||
+            !canWrite
+          }
           title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
         >
           {isSubmitting ? (

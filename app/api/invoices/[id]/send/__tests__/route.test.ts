@@ -253,10 +253,8 @@ describe('POST /api/invoices/[id]/send', () => {
     enqueue({ data: draftWithoutNumber, error: null })
     // Fetch company settings
     enqueue({ data: company, error: null })
-    // ensureInvoiceNumber: rpc generate_invoice_number
+    // ensureInvoiceNumber: rpc generate_invoice_number (RPC now persists internally)
     enqueue({ data: 'F-2026010', error: null })
-    // ensureInvoiceNumber: update with new number
-    enqueue({ data: { invoice_number: 'F-2026010' }, error: null })
 
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-99' })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -274,6 +272,8 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(body.success).toBe(true)
     expect(mockSupabase.rpc).toHaveBeenCalledWith('generate_invoice_number', {
       p_company_id: 'company-1',
+      p_invoice_id: 'inv-1',
+      p_document_type: 'invoice',
     })
     // The journal entry should see the freshly-assigned number
     expect(mockCreateInvoiceJournalEntry).toHaveBeenCalledWith(

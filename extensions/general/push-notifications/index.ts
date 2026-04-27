@@ -20,6 +20,7 @@ import {
   createReceiptExtractedPayload,
   createReceiptMatchedPayload,
 } from './payload-builders'
+import { invoiceNumberDisplay } from '@/lib/invoices/display'
 
 // ============================================================
 // Settings
@@ -166,7 +167,7 @@ async function handleInvoiceSent(
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createInvoiceSentPayload(
-    invoice.invoice_number ?? '(Utkast)',
+    invoiceNumberDisplay(invoice.invoice_number),
     invoice.id
   )
 

@@ -11,6 +11,7 @@ import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
+import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import {
   Loader2,
   ArrowLeft,
@@ -365,7 +366,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</h1>
+              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</h1>
               {isProforma && (
                 <Badge variant="secondary" className="bg-primary/10 text-primary">Proforma</Badge>
               )}
@@ -622,7 +623,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <CardContent className="space-y-4">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Fakturanummer</span>
-                <span className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</span>
+                <span className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Fakturadatum</span>

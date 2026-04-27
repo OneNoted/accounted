@@ -1,8 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Invoice } from '@/types'
+import type { Invoice, InvoiceDocumentType } from '@/types'
 
-type InvoiceShape = Pick<Invoice, 'id' | 'invoice_number'> & { invoice_number: string | null }
+type InvoiceShape = Pick<Invoice, 'id' | 'invoice_number'> & {
+  invoice_number: string | null
+  document_type?: InvoiceDocumentType | null
+}
 
+/**
+ * Assign an invoice number to a draft invoice. Idempotent: if the row already
+ * has a number, returns it unchanged without consuming a sequence number.
+ *
+ * Concurrency is handled inside the generate_invoice_number RPC via row lock.
+ * Two callers racing on the same draft both return the same final number; the
+ * counter advances by exactly one. Proforma document_type produces a 'PF-'
+ * prefix; everything else uses the company's configured invoice_prefix.
+ */
 export async function ensureInvoiceNumber(
   supabase: SupabaseClient,
   companyId: string,
@@ -12,42 +24,16 @@ export async function ensureInvoiceNumber(
     return invoice.invoice_number
   }
 
-  const { data: generated, error: rpcError } = await supabase.rpc('generate_invoice_number', {
+  const { data: assigned, error: rpcError } = await supabase.rpc('generate_invoice_number', {
     p_company_id: companyId,
+    p_invoice_id: invoice.id,
+    p_document_type: invoice.document_type ?? 'invoice',
   })
 
-  if (rpcError || !generated) {
-    throw new Error(`Failed to generate invoice number: ${rpcError?.message ?? 'no value returned'}`)
+  if (rpcError || !assigned) {
+    throw new Error(`Failed to assign invoice number: ${rpcError?.message ?? 'no value returned'}`)
   }
 
-  const { data: updated, error: updateError } = await supabase
-    .from('invoices')
-    .update({ invoice_number: generated })
-    .eq('id', invoice.id)
-    .eq('company_id', companyId)
-    .is('invoice_number', null)
-    .select('invoice_number')
-    .maybeSingle()
-
-  if (updateError) {
-    throw new Error(`Failed to persist invoice number: ${updateError.message}`)
-  }
-
-  if (!updated) {
-    const { data: existing } = await supabase
-      .from('invoices')
-      .select('invoice_number')
-      .eq('id', invoice.id)
-      .eq('company_id', companyId)
-      .single()
-
-    if (existing?.invoice_number) {
-      invoice.invoice_number = existing.invoice_number
-      return existing.invoice_number
-    }
-    throw new Error('Failed to persist invoice number: row not found')
-  }
-
-  invoice.invoice_number = updated.invoice_number
-  return updated.invoice_number as string
+  invoice.invoice_number = assigned
+  return assigned
 }

@@ -4,6 +4,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import type { Invoice } from '@/types'
 
 ensureInitialized()
@@ -58,19 +59,16 @@ export async function POST(
     )
   }
 
-  // Generate real invoice number
-  const { data: invoiceNumber } = await supabase.rpc('generate_invoice_number', {
-    p_company_id: companyId,
-  })
-
-  // Create the real invoice
+  // Create the real invoice with invoice_number=null; assign atomically below.
+  // generate_invoice_number now requires the target row to exist so it can lock
+  // it (FOR UPDATE) and persist the number in the same transaction.
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
     .insert({
       user_id: user.id,
       company_id: companyId,
       customer_id: proforma.customer_id,
-      invoice_number: invoiceNumber,
+      invoice_number: null,
       invoice_date: new Date().toISOString().split('T')[0],
       due_date: proforma.due_date,
       currency: proforma.currency,
@@ -97,6 +95,20 @@ export async function POST(
 
   if (invoiceError) {
     return NextResponse.json({ error: invoiceError.message }, { status: 500 })
+  }
+
+  // Now that the row exists, allocate the F-series number. Mutates invoice
+  // in place so the response includes the assigned number.
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    // Roll back the partially-created invoice so the company counter is the
+    // only side effect to clean up (manually in worst case).
+    await supabase.from('invoices').delete().eq('id', invoice.id)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Failed to assign invoice number' },
+      { status: 500 }
+    )
   }
 
   // Copy invoice items

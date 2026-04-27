@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn } from '@/lib/utils'
+import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 
 const customerTypeLabels: Record<CustomerType, string> = {
@@ -350,7 +351,7 @@ export default function CustomerDetailPage({
                   className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
                 >
                   <div>
-                    <p className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</p>
+                    <p className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</p>
                     <p className="text-sm text-muted-foreground">{invoice.invoice_date}</p>
                   </div>
                   <div className="flex items-center gap-3">

@@ -17,16 +17,31 @@ import type {
 const log = createLogger('invoice-entries')
 
 /**
+ * Build the invoice identifier used in line_description. Prefers the assigned
+ * invoice number; falls back to a draft tag with the first 8 chars of the
+ * invoice UUID so the verifikation still identifies *vad affärshändelsen avser*
+ * per BFL 5 kap 6§ p.3 even if a journal entry is somehow created against an
+ * unnumbered invoice. The send path always assigns a number first, so this
+ * fallback is defensive — but it leaves no ambiguity if a future caller skips
+ * ensureInvoiceNumber.
+ */
+function invoiceTag(invoice: Pick<Invoice, 'id' | 'invoice_number'>): string {
+  return invoice.invoice_number ?? `utkast ${invoice.id.slice(0, 8)}`
+}
+
+/**
  * Build a BFL-compliant verifikation description with event type and counterparty.
  * Falls back to prefix + invoiceNumber if name is not provided (backward compat).
  */
 function buildInvoiceDescription(
-  prefix: string, invoiceNumber: string | null, counterpartyName?: string
+  prefix: string, invoiceNumber: string | null, counterpartyName?: string,
+  invoiceId?: string,
 ): string {
-  const numberPart = invoiceNumber ? ` ${invoiceNumber}` : ''
+  const tag = invoiceNumber ?? (invoiceId ? `utkast ${invoiceId.slice(0, 8)}` : null)
+  const tagPart = tag ? ` ${tag}` : ''
   return counterpartyName
-    ? `${prefix}${numberPart}, ${counterpartyName}`
-    : `${prefix}${numberPart}`
+    ? `${prefix}${tagPart}, ${counterpartyName}`
+    : `${prefix}${tagPart}`
 }
 
 /**
@@ -37,7 +52,7 @@ function generatePerRateLines(
   items: InvoiceItem[],
   invoiceVatTreatment: VatTreatment,
   entityType: EntityType,
-  invoiceNumber: string | null,
+  invoiceTagText: string,
   currency?: string | null,
   exchangeRate?: number | null
 ): CreateJournalEntryLineInput[] {
@@ -65,7 +80,7 @@ function generatePerRateLines(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: invoiceNumber ? `Försäljning faktura ${invoiceNumber}` : 'Försäljning faktura',
+      line_description: `Försäljning faktura ${invoiceTagText}`,
     })
 
     const totalVat = items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
@@ -78,7 +93,7 @@ function generatePerRateLines(
           account_number: vatAccount,
           debit_amount: 0,
           credit_amount: vatSek,
-          line_description: `Utgående moms`,
+          line_description: `Utgående moms faktura ${invoiceTagText}`,
         })
       } else {
         const vatLines = generateSalesVatLines({
@@ -114,7 +129,7 @@ function generatePerRateLines(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: roundedSubtotal,
-      line_description: invoiceNumber ? `Försäljning faktura ${invoiceNumber}` : 'Försäljning faktura',
+      line_description: `Försäljning faktura ${invoiceTagText}`,
     })
 
     const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
@@ -124,7 +139,7 @@ function generatePerRateLines(
         account_number: vatAccount,
         debit_amount: 0,
         credit_amount: roundedVat,
-        line_description: `Utgående moms ${rate}%`,
+        line_description: `Utgående moms ${rate}% faktura ${invoiceTagText}`,
       })
     }
   }
@@ -167,13 +182,14 @@ export async function createInvoiceJournalEntry(
 
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
+  const tag = invoiceTag(invoice)
 
   // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
   const creditLines: CreateJournalEntryLineInput[] = []
 
   if (invoice.items && invoice.items.length > 0) {
     creditLines.push(...generatePerRateLines(
-      invoice.items, invoice.vat_treatment, entityType, invoice.invoice_number,
+      invoice.items, invoice.vat_treatment, entityType, tag,
       invoice.currency, invoice.exchange_rate
     ))
   } else {
@@ -185,7 +201,7 @@ export async function createInvoiceJournalEntry(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura',
+      line_description: `Försäljning faktura ${tag}`,
     })
 
     if (invoice.vat_amount > 0) {
@@ -196,7 +212,7 @@ export async function createInvoiceJournalEntry(
           account_number: vatAccount,
           debit_amount: 0,
           credit_amount: vatSek,
-          line_description: invoice.invoice_number ? `Utgående moms faktura ${invoice.invoice_number}` : 'Utgående moms faktura',
+          line_description: `Utgående moms faktura ${tag}`,
         })
       } else {
         const vatLines = generateSalesVatLines({
@@ -219,7 +235,7 @@ export async function createInvoiceJournalEntry(
     account_number: '1510',
     debit_amount: debitAmount,
     credit_amount: 0,
-    line_description: invoice.invoice_number ? `Faktura ${invoice.invoice_number}` : 'Faktura',
+    line_description: `Faktura ${tag}`,
     ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
   })
 
@@ -228,7 +244,7 @@ export async function createInvoiceJournalEntry(
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: invoice.invoice_date,
-    description: buildInvoiceDescription('Kundfaktura', invoice.invoice_number, customerName),
+    description: buildInvoiceDescription('Kundfaktura', invoice.invoice_number, customerName, invoice.id),
     source_type: 'invoice_created',
     source_id: invoice.id,
     lines,
@@ -263,7 +279,8 @@ export async function createInvoicePaymentJournalEntry(
   const desc = buildInvoiceDescription(
     isPartial ? 'Delbetalning kundfaktura' : 'Inbetalning kundfaktura',
     invoice.invoice_number,
-    customerName
+    customerName,
+    invoice.id,
   )
 
   // When paymentAmount is provided, use it for the 1930/1510 line amounts.
@@ -366,6 +383,7 @@ export async function createCreditNoteJournalEntry(
   }
 
   const lines: CreateJournalEntryLineInput[] = []
+  const tag = invoiceTag(creditNote)
 
   // Generate reversed revenue + VAT lines per rate group (debit side for credit notes)
   const debitLines: CreateJournalEntryLineInput[] = []
@@ -373,7 +391,7 @@ export async function createCreditNoteJournalEntry(
   if (creditNote.items && creditNote.items.length > 0) {
     // Use absolute items for generatePerRateLines, then swap debit/credit
     const creditLines = generatePerRateLines(
-      creditNote.items, creditNote.vat_treatment, entityType, creditNote.invoice_number,
+      creditNote.items, creditNote.vat_treatment, entityType, tag,
       creditNote.currency, creditNote.exchange_rate
     )
     for (const line of creditLines) {
@@ -381,7 +399,7 @@ export async function createCreditNoteJournalEntry(
         ...line,
         debit_amount: Math.abs(line.credit_amount),
         credit_amount: Math.abs(line.debit_amount),
-        line_description: `Kreditfaktura ${creditNote.invoice_number}`,
+        line_description: `Kreditfaktura ${tag}`,
       })
     }
   } else {
@@ -394,7 +412,7 @@ export async function createCreditNoteJournalEntry(
       account_number: revenueAccount,
       debit_amount: absSubtotal,
       credit_amount: 0,
-      line_description: `Kreditfaktura ${creditNote.invoice_number}`,
+      line_description: `Kreditfaktura ${tag}`,
     })
 
     if (absVat > 0) {
@@ -403,7 +421,7 @@ export async function createCreditNoteJournalEntry(
         account_number: vatAccount,
         debit_amount: absVat,
         credit_amount: 0,
-        line_description: `Moms kreditfaktura ${creditNote.invoice_number}`,
+        line_description: `Moms kreditfaktura ${tag}`,
       })
     }
   }
@@ -416,13 +434,13 @@ export async function createCreditNoteJournalEntry(
     account_number: '1510',
     debit_amount: 0,
     credit_amount: Math.round(totalDebits * 100) / 100,
-    line_description: `Kreditfaktura ${creditNote.invoice_number}`,
+    line_description: `Kreditfaktura ${tag}`,
   })
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: creditNote.invoice_date,
-    description: buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName),
+    description: buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id),
     source_type: 'credit_note',
     source_id: creditNote.id,
     lines,
@@ -456,13 +474,14 @@ export async function createInvoiceCashEntry(
 
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = invoice.currency !== 'SEK'
+  const tag = invoiceTag(invoice)
 
   // Credit lines: revenue + VAT per rate group (compute first to guarantee balance)
   const creditLines: CreateJournalEntryLineInput[] = []
 
   if (invoice.items && invoice.items.length > 0) {
     creditLines.push(...generatePerRateLines(
-      invoice.items, invoice.vat_treatment, entityType, invoice.invoice_number,
+      invoice.items, invoice.vat_treatment, entityType, tag,
       invoice.currency, invoice.exchange_rate
     ))
   } else {
@@ -474,7 +493,7 @@ export async function createInvoiceCashEntry(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura',
+      line_description: `Försäljning faktura ${tag}`,
     })
 
     if (invoice.vat_amount > 0) {
@@ -484,7 +503,7 @@ export async function createInvoiceCashEntry(
         account_number: vatAccount,
         debit_amount: 0,
         credit_amount: vatSek,
-        line_description: `Utgående moms faktura ${invoice.invoice_number}`,
+        line_description: `Utgående moms faktura ${tag}`,
       })
     }
   }
@@ -495,7 +514,7 @@ export async function createInvoiceCashEntry(
     account_number: '1930',
     debit_amount: isForeign ? Math.round(totalCredits * 100) / 100 : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate),
     credit_amount: 0,
-    line_description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName),
+    line_description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
   })
 
   lines.push(...creditLines)
@@ -503,7 +522,7 @@ export async function createInvoiceCashEntry(
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: paymentDate,
-    description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName),
+    description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
     source_type: 'invoice_cash_payment',
     source_id: invoice.id,
     lines,
