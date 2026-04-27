@@ -1260,6 +1260,8 @@ export interface BalansrapportReport {
   groups: BalansrapportGroup[]
   total_assets_ub: number
   total_equity_liabilities_ub: number
+  beraknat_resultat: number
+  is_balanced: boolean
   period: { start: string; end: string }
 }
 

@@ -1095,6 +1095,35 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
           </div>
         </CardContent>
       </Card>
+
+      <Card className="border-2">
+        <CardContent className="py-4 space-y-2">
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Summa tillgångar</span>
+            <span className="tabular-nums">{formatAmount(data.total_assets_ub)} kr</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Summa eget kapital och skulder</span>
+            <span className="tabular-nums">{formatAmount(data.total_equity_liabilities_ub)} kr</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Beräknat resultat</span>
+            <span className="tabular-nums">{formatAmount(data.beraknat_resultat)} kr</span>
+          </div>
+          <div className="flex justify-between items-center pt-2 border-t">
+            <span className="font-bold text-lg">Balanscheck</span>
+            {data.is_balanced ? (
+              <Badge className="bg-success/10 text-success text-base px-3 py-1">
+                Balanserar
+              </Badge>
+            ) : (
+              <Badge variant="destructive" className="text-base px-3 py-1">
+                Balanserar ej
+              </Badge>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

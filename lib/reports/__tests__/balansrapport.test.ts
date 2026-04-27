@@ -123,6 +123,63 @@ describe('generateBalansrapport', () => {
 
     expect(report.total_assets_ub).toBe(87500)
     expect(report.total_equity_liabilities_ub).toBe(87500)
+    // 2099 already absorbs prior+current result, residual is 0
+    expect(report.beraknat_resultat).toBe(0)
+    expect(report.is_balanced).toBe(true)
+  })
+
+  it('beräknat resultat equals total_assets - total_eq_liab during running year', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    // Mid-year, before any 2099 update: assets 80 000, liabs 30 000.
+    // P&L (3001 - 5010) = 50 000 sits in P&L accounts and equals the residual.
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 80000 }),
+        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, closing_credit: 30000 }),
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 70000 }),
+        makeRow({ account_number: '5010', account_name: 'Rent', account_class: 5, closing_debit: 20000 }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.total_assets_ub).toBe(80000)
+    expect(report.total_equity_liabilities_ub).toBe(30000)
+    expect(report.beraknat_resultat).toBe(50000)
+    // Trial balance still balances — double-entry guarantees this.
+    expect(report.is_balanced).toBe(true)
+  })
+
+  it('is_balanced reflects trial balance balance state', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+      error: null,
+    })
+
+    // Manually construct an unbalanced trial balance (in practice the DB
+    // trigger prevents this, but a continuity break or missing IB row would
+    // surface here).
+    mockTrialBalance.mockResolvedValueOnce({
+      rows: [
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, closing_debit: 80000 }),
+        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, closing_credit: 70000 }),
+      ],
+      totalDebit: 80000,
+      totalCredit: 70000,
+      isBalanced: false,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.is_balanced).toBe(false)
   })
 
   it('ignores P&L accounts (class 3-8)', async () => {
@@ -228,5 +285,7 @@ describe('generateBalansrapport', () => {
     expect(report.groups).toEqual([])
     expect(report.total_assets_ub).toBe(0)
     expect(report.total_equity_liabilities_ub).toBe(0)
+    expect(report.beraknat_resultat).toBe(0)
+    expect(report.is_balanced).toBe(true)
   })
 })

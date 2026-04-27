@@ -39,8 +39,8 @@ export async function generateBalansrapport(
     throw new Error('Fiscal period not found')
   }
 
-  const { rows: tbRows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
-  const balanceRows = tbRows.filter((r) => r.account_class === 1 || r.account_class === 2)
+  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const balanceRows = trialBalance.rows.filter((r) => r.account_class === 1 || r.account_class === 2)
 
   const groups: BalansrapportGroup[] = []
   for (const klass of [1, 2] as const) {
@@ -81,10 +81,19 @@ export async function generateBalansrapport(
   const totalAssetsUb = groups.find((g) => g.class === 1)?.subtotal_ub ?? 0
   const totalEquityLiabilitiesUb = groups.find((g) => g.class === 2)?.subtotal_ub ?? 0
 
+  // Beräknat resultat (Fortnox/Visma convention): the residual on the balance
+  // side. During a running year, current-year profit lives in P&L accounts
+  // and 2099 still holds the prior year's accumulated result, so the residual
+  // equals current-year P&L net result. After year-end closing posts result
+  // into 2099, residual is 0 and total_assets == total_eq_liab.
+  const beraknatResultat = round2(totalAssetsUb - totalEquityLiabilitiesUb)
+
   return {
     groups,
     total_assets_ub: totalAssetsUb,
     total_equity_liabilities_ub: totalEquityLiabilitiesUb,
+    beraknat_resultat: beraknatResultat,
+    is_balanced: trialBalance.isBalanced,
     period: { start: period.period_start, end: period.period_end },
   }
 }
