@@ -157,7 +157,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             <li>En ny verifikation med dina rättade uppgifter</li>
           </ol>
           <p className="mt-2">
-            Båda verifikationerna får datum <strong>{entry.entry_date}</strong> så rättelsen hamnar i samma räkenskapsår som originalet.
+            Rättelsen bokförs i samma räkenskapsperiod som originalet — du hittar den under originalets räkenskapsår.
           </p>
         </div>
 
