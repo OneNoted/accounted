@@ -1,25 +1,28 @@
 /**
  * Agent-inkorg feature flag.
  *
- * The AI bookkeeping agent isn't ready for general availability in production.
- * This helper gates the whole feature — sidebar link, page, API routes, and
- * orchestrator event handlers — behind either:
- *
- *   1. NODE_ENV === 'development'        (local dev: always on)
- *   2. NEXT_PUBLIC_AGENT_INBOX_ENABLED=true (opt-in for staging/prod QA)
- *
- * The escape hatch lets us flip the feature on for a specific Vercel
- * deployment (staging) without a code change, and keeps prod deployments
- * safely dark until we explicitly enable it.
- *
- * Mirrors the pattern used for Salary in components/dashboard/DashboardNav.tsx.
+ * The AI bookkeeping agent isn't ready for general availability. It is
+ * strictly local-dev only — sidebar link, page, API routes, and orchestrator
+ * event handlers all return 404 / are hidden on any deployed (Vercel) build.
  */
 
 import { NextResponse } from 'next/server'
 
 export function isAgentInboxEnabled(): boolean {
-  if (process.env.NODE_ENV === 'development') return true
-  return process.env.NEXT_PUBLIC_AGENT_INBOX_ENABLED === 'true'
+  return process.env.NODE_ENV === 'development'
+}
+
+/**
+ * Auto-booking of bank transactions during ingest.
+ *
+ * Mapping-rule-driven creation of journal entries on import is a future
+ * feature. It must NEVER run on the deployed Vercel production build —
+ * users have to explicitly book each transaction. Allowed only in local
+ * dev (and in the test environment so the auto-book pipeline stays under
+ * test coverage). No env-var escape hatch.
+ */
+export function isAutoBookEnabled(): boolean {
+  return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'
 }
 
 /**

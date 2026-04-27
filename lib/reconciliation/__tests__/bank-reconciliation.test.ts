@@ -73,9 +73,9 @@ describe('tryReconcileTransaction', () => {
   })
 
   // ------------------------------------------------------------------
-  // Pass 2: Exact amount + reference match
+  // Pass 2: Exact amount + OCR/reference match (within ±90 days)
   // ------------------------------------------------------------------
-  it('matches on exact amount with reference match', () => {
+  it('matches on exact amount with OCR reference match within 90 days', () => {
     const tx = makeTransaction({
       amount: 3500,
       date: '2024-06-20',
@@ -93,6 +93,47 @@ describe('tryReconcileTransaction', () => {
     expect(result).not.toBeNull()
     expect(result!.method).toBe('auto_reference')
     expect(result!.confidence).toBe(0.90)
+  })
+
+  // Regression: viktor@frnzn.com — recurring monthly bank fee from 2026 was
+  // wrongly reconciled to a 2024 SIE-imported voucher because description +
+  // amount collided. auto_reference must require a real OCR token AND a
+  // bounded date window — description alone, no date check, is not enough.
+  it('does NOT match recurring charge across years on description alone', () => {
+    const tx = makeTransaction({
+      amount: -149,
+      date: '2026-01-31',
+      currency: 'SEK',
+      description: 'Månadsavgift Baspaket',
+      reference: null,
+    })
+    const line = makeGLLine({
+      credit_amount: 149,
+      entry_date: '2024-03-31',
+      entry_description: 'Bankavgifter Månadsavgift Baspaket',
+    })
+
+    const result = tryReconcileTransaction(tx, [line])
+
+    expect(result).toBeNull()
+  })
+
+  it('does NOT match on OCR reference when dates are >90 days apart', () => {
+    const tx = makeTransaction({
+      amount: 3500,
+      date: '2026-06-20',
+      currency: 'SEK',
+      reference: '12345678',
+    })
+    const line = makeGLLine({
+      debit_amount: 3500,
+      entry_date: '2024-06-10',
+      entry_description: 'Payment ref 12345678',
+    })
+
+    const result = tryReconcileTransaction(tx, [line])
+
+    expect(result).toBeNull()
   })
 
   // ------------------------------------------------------------------

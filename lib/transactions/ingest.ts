@@ -1,14 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { isAutoBookEnabled } from '@/lib/ai/feature-flag'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
-import { tryReconcileTransaction, fetchUnlinkedGLLines } from '@/lib/reconciliation/bank-reconciliation'
 import { fetchMultipleRates } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import type { UnlinkedGLLine } from '@/lib/reconciliation/bank-reconciliation'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 // Re-export types for backward compatibility
@@ -142,20 +141,12 @@ export async function ingestTransactions(
     return aiFlowEnabledCache
   }
 
-  // When rawInsertOnly is set (viewer imports), skip pre-fetching GL lines,
-  // supplier invoices, and exchange rates — they are not used.
-  let glLinePool: UnlinkedGLLine[] = []
+  // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
+  // invoices and exchange rates — they are not used.
   let unpaidSupplierInvoices: SupplierInvoice[] = []
   let exchangeRates = new Map<Currency, ExchangeRate>()
 
   if (!options?.rawInsertOnly) {
-  // Pre-fetch unlinked GL lines for reconciliation (non-critical)
-  try {
-    glLinePool = await fetchUnlinkedGLLines(supabase, companyId, undefined, undefined, options?.settlementAccount)
-  } catch {
-    // Non-critical — reconciliation will be skipped
-  }
-
   // Pre-fetch unpaid supplier invoices for expense matching (non-critical)
   try {
     unpaidSupplierInvoices = await fetchAllRows<SupplierInvoice>(({ from, to }) =>
@@ -275,32 +266,13 @@ export async function ingestTransactions(
     result.imported++
     result.transaction_ids.push(newTransaction.id)
 
-    // rawInsertOnly: skip reconciliation, invoice matching, and auto-categorization
+    // rawInsertOnly: skip invoice matching, and auto-categorization
     if (options?.rawInsertOnly) continue
 
-    // 2.5. Try reconciliation against pre-fetched unlinked GL lines
-    if (glLinePool.length > 0) {
-      try {
-        const match = tryReconcileTransaction(newTransaction as Transaction, glLinePool)
-        if (match) {
-          await supabase
-            .from('transactions')
-            .update({
-              journal_entry_id: match.glLine.journal_entry_id,
-              reconciliation_method: match.method,
-              is_business: true,
-            })
-            .eq('id', newTransaction.id)
-
-          // Remove matched GL line from pool to prevent double-matching
-          glLinePool = glLinePool.filter((l) => l.line_id !== match.glLine.line_id)
-          result.reconciled++
-          continue // Skip invoice matching and auto-categorization
-        }
-      } catch {
-        // Non-critical — fall through to normal flow
-      }
-    }
+    // Reconciliation against existing GL lines is intentionally NOT run on
+    // import — auto-linking made imported transactions appear "bokförda" to
+    // the user without any explicit action. Reconciliation is now a manual
+    // operation (BankReconciliationView / runReconciliation / manualLink).
 
     // 3. For income transactions, try invoice matching
     if (newTransaction.amount > 0) {
@@ -391,12 +363,12 @@ export async function ingestTransactions(
     }
 
     // 4. Evaluate mapping rules for auto-categorization
-    // Skipped when SIE-imported entries overlap the sync range — prevents
-    // double-booking. Reconciliation (step 2.5) still links transactions to
-    // existing GL lines; only the "create new journal entry" path is suppressed.
-    // Also skipped when the company has opted into the AI agent flow — every
-    // uncategorized transaction must become a proposal, not a silent post.
-    if (!options?.skipAutoCategorization && !(await isAiFlowEnabled())) {
+    // Production-disabled: auto-booking only runs in local dev (isAutoBookEnabled).
+    // Users must explicitly book each transaction on the deployed app.
+    // Also skipped when the company has opted into the AI agent flow (proposals)
+    // and when SIE-imported entries overlap the sync range (prevents double-book).
+    // Reconciliation (step 2.5) still links transactions to existing GL lines.
+    if (isAutoBookEnabled() && !options?.skipAutoCategorization && !(await isAiFlowEnabled())) {
       try {
         const mappingResult = await evaluateMappingRules(
           supabase,

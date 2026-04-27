@@ -28,13 +28,6 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
   getBestInvoiceMatch: (...args: unknown[]) => mockGetBestInvoiceMatch(...args),
 }))
 
-const mockTryReconcileTransaction = vi.fn()
-const mockFetchUnlinkedGLLines = vi.fn()
-vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
-  tryReconcileTransaction: (...args: unknown[]) => mockTryReconcileTransaction(...args),
-  fetchUnlinkedGLLines: (...args: unknown[]) => mockFetchUnlinkedGLLines(...args),
-}))
-
 // ---------------------------------------------------------------------------
 // Queue-based Supabase mock
 // ---------------------------------------------------------------------------
@@ -125,9 +118,6 @@ function makeMappingResult(overrides: Record<string, unknown> = {}) {
 describe('ingestTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // Default: no GL lines for reconciliation
-    mockFetchUnlinkedGLLines.mockResolvedValue([])
-    mockTryReconcileTransaction.mockReturnValue(null)
   })
 
   // -----------------------------------------------------------------------
@@ -571,9 +561,12 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
-  // Reconciliation: matched transactions skip auto-categorization
+  // Imports never auto-link to existing journal entries.
+  // Reconciliation must be an explicit user action (manualLink / runReconciliation).
+  // Regression: viktor@frnzn.com — bank txns from 2026 were silently linked
+  // to SIE-imported vouchers, surfacing them as "bokförda" without action.
   // -----------------------------------------------------------------------
-  it('reconciles transactions against GL lines and skips auto-categorization', async () => {
+  it('never auto-reconciles imported transactions to existing GL lines', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -500, external_id: 'ext-recon' })
     const inserted = makeTransaction({
@@ -583,75 +576,6 @@ describe('ingestTransactions', () => {
       currency: 'SEK',
     })
 
-    const glLine = {
-      line_id: 'line-1',
-      journal_entry_id: 'je-1',
-      debit_amount: 0,
-      credit_amount: 500,
-      line_description: null,
-      entry_date: '2024-06-15',
-      voucher_number: 1,
-      voucher_series: 'A',
-      entry_description: 'Test entry',
-      source_type: 'import',
-    }
-
-    // Pre-fetch returns GL lines
-    mockFetchUnlinkedGLLines.mockResolvedValue([glLine])
-    // tryReconcileTransaction returns a match
-    mockTryReconcileTransaction.mockReturnValue({
-      transaction: inserted,
-      glLine,
-      method: 'auto_exact',
-      confidence: 0.95,
-    })
-
-    // Booked transaction map query
-    enqueue({ data: [], error: null })
-    // Unbooked bank-synced transaction map query
-    enqueue({ data: [], error: null })
-    // Supplier invoices fetch
-    enqueue({ data: [], error: null })
-    // Batch external_id dedup query (no matches)
-    enqueue({ data: [], error: null })
-    // Insert
-    enqueue({ data: inserted, error: null })
-    // Reconciliation update
-    enqueue({ data: null, error: null })
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
-
-    expect(result.imported).toBe(1)
-    expect(result.reconciled).toBe(1)
-    // Should NOT have attempted auto-categorization
-    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
-    expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
-  })
-
-  // -----------------------------------------------------------------------
-  // Reconciliation: falls through when no GL matches
-  // -----------------------------------------------------------------------
-  it('falls through to auto-categorization when reconciliation finds no match', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({ amount: -200 })
-    const inserted = makeTransaction({ id: 'tx-no-recon', amount: -200 })
-
-    mockFetchUnlinkedGLLines.mockResolvedValue([
-      {
-        line_id: 'line-other',
-        journal_entry_id: 'je-other',
-        debit_amount: 999,
-        credit_amount: 0,
-        entry_date: '2024-01-01',
-        voucher_number: 1,
-        voucher_series: 'A',
-        entry_description: 'Unrelated',
-        source_type: 'import',
-        line_description: null,
-      },
-    ])
-    mockTryReconcileTransaction.mockReturnValue(null)
-
     // Booked transaction map query
     enqueue({ data: [], error: null })
     // Unbooked bank-synced transaction map query
@@ -669,38 +593,6 @@ describe('ingestTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.reconciled).toBe(0)
-    // Should have fallen through to auto-categorization
-    expect(mockEvaluateMappingRules).toHaveBeenCalled()
-  })
-
-  // -----------------------------------------------------------------------
-  // Reconciliation: error is non-critical
-  // -----------------------------------------------------------------------
-  it('continues when reconciliation throws an error', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({ amount: -300 })
-    const inserted = makeTransaction({ id: 'tx-recon-err', amount: -300 })
-
-    mockFetchUnlinkedGLLines.mockRejectedValue(new Error('RPC error'))
-
-    // Booked transaction map query
-    enqueue({ data: [], error: null })
-    // Unbooked bank-synced transaction map query
-    enqueue({ data: [], error: null })
-    // Supplier invoices fetch
-    enqueue({ data: [], error: null })
-    // Batch external_id dedup query (no matches)
-    enqueue({ data: [], error: null })
-    // Insert
-    enqueue({ data: inserted, error: null })
-
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
-
-    expect(result.imported).toBe(1)
-    expect(result.reconciled).toBe(0)
-    expect(result.errors).toBe(0)
   })
 
   // -----------------------------------------------------------------------
@@ -735,8 +627,6 @@ describe('ingestTransactions', () => {
     expect(result.auto_categorized).toBe(0)
     expect(result.auto_matched_invoices).toBe(0)
     // Should NOT have attempted any post-insert operations
-    expect(mockFetchUnlinkedGLLines).not.toHaveBeenCalled()
-    expect(mockTryReconcileTransaction).not.toHaveBeenCalled()
     expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
     expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
   })

@@ -69,7 +69,6 @@ export function tryReconcileTransaction(
 
   const txAmount = transaction.amount
   const txDate = transaction.date
-  const txDescription = (transaction.description || '').toLowerCase()
   const txReference = (transaction.reference || '').toLowerCase()
 
   let bestMatch: ReconciliationMatch | null = null
@@ -82,7 +81,12 @@ export function tryReconcileTransaction(
     const fuzzyAmountMatches = Math.abs(Math.abs(txAmount) - Math.abs(lineAmount)) <= 0.01
     const exactDateMatch = txDate === line.entry_date
     const dateWithinRange = isDateWithinRange(txDate, line.entry_date, 3)
-    const referenceMatch = hasReferenceMatch(txDescription, txReference, line)
+    // Reference matches require BOTH a real OCR/reference token AND a bounded
+    // date window. Never description-only — that collides on recurring monthly
+    // charges (same description, same amount, different year). Never cross-year.
+    const referenceMatch =
+      hasOcrReferenceMatch(txReference, line) &&
+      isDateWithinRange(txDate, line.entry_date, 90)
 
     let method: ReconciliationMethod | null = null
     let confidence = 0
@@ -92,7 +96,7 @@ export function tryReconcileTransaction(
       method = 'auto_exact'
       confidence = 0.95
     }
-    // Pass 2: Exact amount + reference match
+    // Pass 2: Exact amount + OCR/reference match within ±90 days
     else if (amountMatches && referenceMatch) {
       method = 'auto_reference'
       confidence = 0.90
@@ -484,6 +488,19 @@ function isDirectionCompatible(txAmount: number, line: UnlinkedGLLine): boolean 
   return false
 }
 
+/**
+ * OCR/reference-number match. Requires a non-trivial reference token (≥4 chars)
+ * on the transaction that appears in the GL line/entry description. Description
+ * substring matching is intentionally NOT done here — that collided on recurring
+ * monthly charges across years (same description, same amount, different year).
+ */
+function hasOcrReferenceMatch(txReference: string, line: UnlinkedGLLine): boolean {
+  if (!txReference || txReference.length < 4) return false
+  const lineDesc = (line.line_description || '').toLowerCase()
+  const entryDesc = (line.entry_description || '').toLowerCase()
+  return lineDesc.includes(txReference) || entryDesc.includes(txReference)
+}
+
 /** Check if two dates are within ±dayRange of each other */
 function isDateWithinRange(date1: string, date2: string, dayRange: number): boolean {
   const d1 = new Date(date1)
@@ -491,32 +508,6 @@ function isDateWithinRange(date1: string, date2: string, dayRange: number): bool
   const diffMs = Math.abs(d1.getTime() - d2.getTime())
   const diffDays = diffMs / (1000 * 60 * 60 * 24)
   return diffDays <= dayRange
-}
-
-/** Check if transaction description/reference matches the GL line description */
-function hasReferenceMatch(
-  txDescription: string,
-  txReference: string,
-  line: UnlinkedGLLine
-): boolean {
-  const lineDesc = (line.line_description || '').toLowerCase()
-  const entryDesc = (line.entry_description || '').toLowerCase()
-
-  if (!txReference && !txDescription) return false
-
-  // Check OCR/reference number match
-  if (txReference && txReference.length >= 4) {
-    if (lineDesc.includes(txReference) || entryDesc.includes(txReference)) return true
-  }
-
-  // Check description overlap (at least 8 chars matching substring)
-  if (txDescription && txDescription.length >= 8) {
-    if (lineDesc.includes(txDescription) || entryDesc.includes(txDescription)) return true
-    if (txDescription.includes(lineDesc) && lineDesc.length >= 8) return true
-    if (txDescription.includes(entryDesc) && entryDesc.length >= 8) return true
-  }
-
-  return false
 }
 
 /**
