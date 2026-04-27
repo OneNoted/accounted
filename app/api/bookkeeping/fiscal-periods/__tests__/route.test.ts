@@ -32,6 +32,7 @@ function buildMockSupabase(options: {
   user?: { id: string } | null
   allPeriods?: Period[]
   openPeriods?: Array<{ name: string; period_start: string; period_end: string }>
+  bookkeepingLockedThrough?: string | null
   overlapping?: Array<{ id: string; name: string }>
   insertResult?: { data: unknown; error: unknown }
 }) {
@@ -39,6 +40,7 @@ function buildMockSupabase(options: {
     user = { id: 'user-1' },
     allPeriods = [],
     openPeriods = [],
+    bookkeepingLockedThrough = null,
     overlapping = [],
     insertResult = { data: { id: 'new-period', name: 'FY 2025' }, error: null },
   } = options
@@ -50,7 +52,19 @@ function buildMockSupabase(options: {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user } }),
     },
-    from: vi.fn().mockImplementation(() => {
+    from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'company_settings') {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({
+                data: { bookkeeping_locked_through: bookkeepingLockedThrough },
+                error: null,
+              }),
+            }),
+          }),
+        }
+      }
       fpCallIndex++
       const callNum = fpCallIndex
 
@@ -196,6 +210,39 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.data).toBeDefined()
   })
 
+  // Regression: a real user (Egon Johansson, 2026-04-27) set the company-wide
+  // bookkeeping_locked_through to 2024-12-31 but never set locked_at on the
+  // FY 2024 period. From their perspective and from the enforce_company_lock_date
+  // trigger's perspective, the period is locked. The creation check must agree.
+  it('allows forward period creation when prior period is covered by company-wide lock-through', async () => {
+    buildMockSupabase({
+      allPeriods: [{ id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
+      openPeriods: [{ name: 'Räkenskapsår 2024', period_start: '2024-01-01', period_end: '2024-12-31' }],
+      bookkeepingLockedThrough: '2024-12-31',
+      overlapping: [],
+    })
+    const req = createMockRequest({ name: 'Räkenskapsår 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
+    const res = await POST(req)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toBeDefined()
+  })
+
+  // Partial coverage: lock-through covers only part of the period — must still block.
+  it('rejects forward period creation when company-wide lock only partially covers prior period', async () => {
+    buildMockSupabase({
+      allPeriods: [{ id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: false }],
+      openPeriods: [{ name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' }],
+      bookkeepingLockedThrough: '2024-06-30',
+      overlapping: [],
+    })
+    const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' })
+    const res = await POST(req)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toMatch(/FY 2024/)
+  })
+
   it('allows backward period creation', async () => {
     buildMockSupabase({
       allPeriods: [{ id: 'p1', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false }],
@@ -273,7 +320,19 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     let fpCallIndex = 0
     const supabase = {
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
-      from: vi.fn().mockImplementation(() => {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: { bookkeeping_locked_through: null },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
         fpCallIndex++
         const callNum = fpCallIndex
         return {
@@ -337,7 +396,19 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     let fpCallIndex = 0
     const supabase = {
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
-      from: vi.fn().mockImplementation(() => {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: { bookkeeping_locked_through: null },
+                  error: null,
+                }),
+              }),
+            }),
+          }
+        }
         fpCallIndex++
         const callNum = fpCallIndex
         return {
