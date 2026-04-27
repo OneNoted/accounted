@@ -210,6 +210,183 @@ describe('reValidateProposal', () => {
     if (!result.ok) expect(result.code).toBe('period_missing_or_closed')
   })
 
+  it('booking proposal → grocery merchant + reduced_12 + 2026-04-15 → livsmedel_vat_rate_stale', async () => {
+    const proposal = makeProposal({
+      step_type: 'booking',
+      proposal_json: {
+        lines: [
+          { account_number: '4010', debit_amount: 80, credit_amount: 0, description: 'Matvaror ICA Maxi' },
+          { account_number: '2641', debit_amount: 9.6, credit_amount: 0, description: 'Ingående moms 12%' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 89.6, description: 'ICA Maxi' },
+        ],
+        vat_treatment: 'reduced_12',
+        default_private: false,
+        counterparty_template_proposal: null,
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-04-15',
+        description: 'ICA Maxi — matvaror',
+      } as BookingProposalPayload,
+    })
+    const supabase = scriptedSupabase([
+      { data: makeInboxItem({ matched_transaction_id: 'tx-1', extracted_data: { merchant_name: 'ICA Maxi Lindhagen' } }) },
+      { data: { id: 'tx-1', journal_entry_id: null } },
+      { data: { id: 'period-1', is_closed: false, locked_at: null } },
+      { data: [
+        { account_number: '4010', is_active: true },
+        { account_number: '2641', is_active: true },
+        { account_number: '1930', is_active: true },
+      ] },
+    ])
+
+    const result = await reValidateProposal(supabase, 'company-1', proposal)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('livsmedel_vat_rate_stale')
+      expect(result.details?.expected).toBe('reduced_6')
+    }
+  })
+
+  it('booking proposal → grocery merchant + reduced_6 + 2026-04-15 → ok', async () => {
+    const proposal = makeProposal({
+      step_type: 'booking',
+      proposal_json: {
+        lines: [
+          { account_number: '4010', debit_amount: 80, credit_amount: 0, description: 'Matvaror ICA' },
+          { account_number: '2641', debit_amount: 4.8, credit_amount: 0, description: 'Ingående moms 6%' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 84.8, description: 'ICA' },
+        ],
+        vat_treatment: 'reduced_6',
+        default_private: false,
+        counterparty_template_proposal: null,
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-04-15',
+        description: 'ICA Maxi — matvaror',
+      } as BookingProposalPayload,
+    })
+    const supabase = scriptedSupabase([
+      { data: makeInboxItem({ matched_transaction_id: 'tx-1', extracted_data: { merchant_name: 'ICA Maxi' } }) },
+      { data: { id: 'tx-1', journal_entry_id: null } },
+      { data: { id: 'period-1', is_closed: false, locked_at: null } },
+      { data: [
+        { account_number: '4010', is_active: true },
+        { account_number: '2641', is_active: true },
+        { account_number: '1930', is_active: true },
+      ] },
+    ])
+
+    const result = await reValidateProposal(supabase, 'company-1', proposal)
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('booking proposal → grocery merchant + reduced_6 + 2025-12-15 → livsmedel_vat_rate_stale', async () => {
+    const proposal = makeProposal({
+      step_type: 'booking',
+      proposal_json: {
+        lines: [
+          { account_number: '4010', debit_amount: 80, credit_amount: 0, description: 'Matvaror Coop' },
+          { account_number: '2641', debit_amount: 4.8, credit_amount: 0, description: 'Ingående moms 6%' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 84.8, description: 'Coop' },
+        ],
+        vat_treatment: 'reduced_6',
+        default_private: false,
+        counterparty_template_proposal: null,
+        fiscal_period_id: 'period-1',
+        entry_date: '2025-12-15',
+        description: 'Coop — matvaror',
+      } as BookingProposalPayload,
+    })
+    const supabase = scriptedSupabase([
+      { data: makeInboxItem({ matched_transaction_id: 'tx-1', extracted_data: { merchant_name: 'Coop Konsum' } }) },
+      { data: { id: 'tx-1', journal_entry_id: null } },
+      { data: { id: 'period-1', is_closed: false, locked_at: null } },
+      { data: [
+        { account_number: '4010', is_active: true },
+        { account_number: '2641', is_active: true },
+        { account_number: '1930', is_active: true },
+      ] },
+    ])
+
+    const result = await reValidateProposal(supabase, 'company-1', proposal)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('livsmedel_vat_rate_stale')
+      expect(result.details?.expected).toBe('reduced_12')
+    }
+  })
+
+  it('booking proposal → restaurang + reduced_6 → livsmedel_vat_rate_stale', async () => {
+    const proposal = makeProposal({
+      step_type: 'booking',
+      proposal_json: {
+        lines: [
+          { account_number: '5810', debit_amount: 80, credit_amount: 0, description: 'Lunch på restaurang' },
+          { account_number: '2641', debit_amount: 4.8, credit_amount: 0, description: 'Ingående moms 6%' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 84.8, description: 'Restaurang' },
+        ],
+        vat_treatment: 'reduced_6',
+        default_private: false,
+        counterparty_template_proposal: null,
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-04-15',
+        description: 'Restaurang Frantzén — lunch',
+      } as BookingProposalPayload,
+    })
+    const supabase = scriptedSupabase([
+      { data: makeInboxItem({ matched_transaction_id: 'tx-1', extracted_data: { merchant_name: 'Restaurang Frantzén' } }) },
+      { data: { id: 'tx-1', journal_entry_id: null } },
+      { data: { id: 'period-1', is_closed: false, locked_at: null } },
+      { data: [
+        { account_number: '5810', is_active: true },
+        { account_number: '2641', is_active: true },
+        { account_number: '1930', is_active: true },
+      ] },
+    ])
+
+    const result = await reValidateProposal(supabase, 'company-1', proposal)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('livsmedel_vat_rate_stale')
+      expect(result.details?.signal).toBe('restaurang')
+    }
+  })
+
+  it('booking proposal → restaurang + reduced_12 → ok (servering stays at 12%)', async () => {
+    const proposal = makeProposal({
+      step_type: 'booking',
+      proposal_json: {
+        lines: [
+          { account_number: '5810', debit_amount: 80, credit_amount: 0, description: 'Lunch' },
+          { account_number: '2641', debit_amount: 9.6, credit_amount: 0, description: 'Ingående moms 12%' },
+          { account_number: '1930', debit_amount: 0, credit_amount: 89.6, description: 'Restaurang' },
+        ],
+        vat_treatment: 'reduced_12',
+        default_private: false,
+        counterparty_template_proposal: null,
+        fiscal_period_id: 'period-1',
+        entry_date: '2026-04-15',
+        description: 'Restaurang — lunch',
+      } as BookingProposalPayload,
+    })
+    const supabase = scriptedSupabase([
+      { data: makeInboxItem({ matched_transaction_id: 'tx-1', extracted_data: { merchant_name: 'Restaurang Frantzén' } }) },
+      { data: { id: 'tx-1', journal_entry_id: null } },
+      { data: { id: 'period-1', is_closed: false, locked_at: null } },
+      { data: [
+        { account_number: '5810', is_active: true },
+        { account_number: '2641', is_active: true },
+        { account_number: '1930', is_active: true },
+      ] },
+    ])
+
+    const result = await reValidateProposal(supabase, 'company-1', proposal)
+
+    expect(result.ok).toBe(true)
+  })
+
   it('booking proposal → inactive account → account_missing_or_inactive', async () => {
     const proposal = makeProposal({
       step_type: 'booking',

@@ -30,6 +30,7 @@ export type ValidationFailureCode =
   | 'account_missing_or_inactive'
   | 'receipt_file_missing'
   | 'step_prerequisite_missing'
+  | 'livsmedel_vat_rate_stale'
 
 export interface ValidationSuccess {
   ok: true
@@ -240,5 +241,106 @@ async function reValidateBooking(
     }
   }
 
+  const livsmedelMismatch = detectLivsmedelRateMismatch(item, payload)
+  if (livsmedelMismatch) {
+    return {
+      ok: false,
+      code: 'livsmedel_vat_rate_stale',
+      message: livsmedelMismatch.message,
+      details: livsmedelMismatch.details,
+    }
+  }
+
   return { ok: true, inboxItem: item }
+}
+
+// Sweden's livsmedel VAT temporarily drops from 12% to 6% between
+// 2026-04-01 and 2027-12-31 (Prop. 2025/26:55). Restaurang/servering stays
+// at 12% throughout. This guard catches AI proposals where the rate label
+// is stale relative to the entry date for clearly-grocery merchants. The
+// prompt is the primary defence; this is the safety net for prompt drift.
+const LIVSMEDEL_REDUCED_START = '2026-04-01'
+const LIVSMEDEL_REDUCED_END = '2027-12-31'
+
+const GROCERY_CHAIN_KEYWORDS = [
+  'ica maxi',
+  'ica kvantum',
+  'ica supermarket',
+  'ica nära',
+  'ica',
+  'coop',
+  'hemköp',
+  'willys',
+  'lidl',
+  'city gross',
+  'tempo',
+  'mathem',
+  'mat.se',
+  'matse',
+  'netto',
+  'matöppet',
+]
+
+const RESTAURANG_KEYWORDS = [
+  'restaurang',
+  'servering',
+  'pizzeria',
+  'bistro',
+  'lunchrestaurang',
+  'sushi',
+  'café',
+  'kafé',
+  'cafe',
+]
+
+function detectLivsmedelRateMismatch(
+  item: InvoiceInboxItem,
+  payload: BookingProposalPayload
+): { message: string; details: Record<string, unknown> } | null {
+  const treatment = payload.vat_treatment
+  if (treatment !== 'reduced_12' && treatment !== 'reduced_6') return null
+
+  const haystack = [
+    payload.description ?? '',
+    ...payload.lines.map((l) => l.description ?? ''),
+    JSON.stringify(item.extracted_data ?? {}),
+  ]
+    .join(' ')
+    .toLowerCase()
+
+  const isGrocery = GROCERY_CHAIN_KEYWORDS.some((k) => haystack.includes(k))
+  const isRestaurang = RESTAURANG_KEYWORDS.some((k) => haystack.includes(k))
+
+  // If both signals fire, treat as ambiguous and let it through — the
+  // user will review on the inbox card anyway.
+  if (isGrocery === isRestaurang) return null
+
+  const date = payload.entry_date
+  const inReducedWindow = date >= LIVSMEDEL_REDUCED_START && date <= LIVSMEDEL_REDUCED_END
+
+  if (isGrocery && treatment === 'reduced_12' && inReducedWindow) {
+    return {
+      message:
+        'Momssatsen 12 % stämmer inte — livsmedel ska bokföras med 6 % moms från 1 april 2026 t.o.m. 31 december 2027. Justera förslaget eller bokför manuellt.',
+      details: { signal: 'grocery', treatment, entry_date: date, expected: 'reduced_6' },
+    }
+  }
+
+  if (isGrocery && treatment === 'reduced_6' && !inReducedWindow) {
+    return {
+      message:
+        'Momssatsen 6 % gäller endast för livsmedel mellan 1 april 2026 och 31 december 2027. Övriga datum ska bokföras med 12 %.',
+      details: { signal: 'grocery', treatment, entry_date: date, expected: 'reduced_12' },
+    }
+  }
+
+  if (isRestaurang && treatment === 'reduced_6') {
+    return {
+      message:
+        'Restaurang- och serveringstjänster har 12 % moms (omfattas inte av livsmedelssänkningen). Justera förslaget eller bokför manuellt.',
+      details: { signal: 'restaurang', treatment, entry_date: date, expected: 'reduced_12' },
+    }
+  }
+
+  return null
 }

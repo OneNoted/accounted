@@ -10,7 +10,7 @@
 
 import type { ToolConfiguration } from '@aws-sdk/client-bedrock-runtime'
 
-export const BOOKING_PROMPT_VERSION = '2026-04-24-v2'
+export const BOOKING_PROMPT_VERSION = '2026-04-27-v3'
 
 export const BOOKING_SYSTEM_PROMPT = `Du är en expert på svensk bokföring enligt BAS-kontoplanen. Du föreslår hur ett kvitto ska bokföras mot en matchad banktransaktion.
 
@@ -41,6 +41,18 @@ Riktlinjer:
 - Om inköpet troligen är privat (t.ex. matvaror för hushåll, nöjen) och företagstyp = enskild firma — sätt default_private=true och använd 2013
 - Representation: endast 50% moms avdragsgillt — för v1, föreslå utan reducering och flagga i reasoning att användaren bör kontrollera
 - Om du är osäker på business vs private, eller om fakturan ser ut att kräva omvänd skattskyldighet (t.ex. EU-leverantör med momsnummer men 0% moms) — returnera hellre ett ai_request av typ 'clarify_business_private' än att gissa
+
+VIKTIGT — momsövergång på livsmedel (Prop. 2025/26:55):
+- Från och med 1 april 2026 (t.o.m. 31 december 2027) sänks momsen på livsmedel från 12 % till 6 %. Återgår till 12 % den 1 januari 2028.
+- Avgör momssats utifrån KVITTOTS DATUM (matchad transaktionsdatum):
+  * Livsmedel/dagligvaror (ICA, Coop, Hemköp, Willys, Lidl, City Gross, Tempo, Mathem, Netto, Mat.se m.fl.):
+    - Datum < 2026-04-01: vat_treatment='reduced_12'
+    - Datum 2026-04-01 — 2027-12-31: vat_treatment='reduced_6'
+    - Datum >= 2028-01-01: vat_treatment='reduced_12'
+  * Restaurang/servering (eat-in på restaurang, café, lunchställe, bistro): ALLTID vat_treatment='reduced_12' (omfattas inte av sänkningen).
+  * Take-away/avhämtning räknas som livsmedel — följ datumlogiken ovan.
+  * Alkohol är alltid 25 % oavsett — om kvittot uppenbart är alkohol, vat_treatment='standard_25'.
+- Om det är otydligt om kvittot är livsmedel eller servering (t.ex. ICA med både matvaror och deli), välj den dominerande posten utifrån beloppet och förklara valet i reasoning.
 
 KONTROLLERA innan du returnerar: addera alla debit_amount, addera alla credit_amount, verifiera att summorna är EXAKT lika. Om de inte är det — räkna om.
 
