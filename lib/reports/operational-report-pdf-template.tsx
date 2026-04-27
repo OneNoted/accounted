@@ -322,10 +322,13 @@ export function ResultatrapportPDF({ report, company, generatedAt }: Resultatrap
         </View>
 
         {report.groups.map((group) => (
-          <View key={group.class} wrap={false}>
+          // No wrap={false} on the outer View — large account classes (80+
+          // active accounts) would otherwise be silently clipped instead of
+          // flowing onto the next page.
+          <View key={group.class}>
             <Text style={styles.groupHeading}>{group.class_label}</Text>
             {group.rows.map((row) => (
-              <View key={row.account_number} style={styles.row}>
+              <View key={row.account_number} style={styles.row} wrap={false}>
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
                 <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
@@ -334,7 +337,7 @@ export function ResultatrapportPDF({ report, company, generatedAt }: Resultatrap
                 )}
               </View>
             ))}
-            <View style={styles.subtotalRow}>
+            <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
               <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_current)}</Text>
               {hasPrior && (
@@ -387,10 +390,12 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
         </View>
 
         {report.groups.map((group) => (
-          <View key={group.class} wrap={false}>
+          // See ResultatrapportPDF: outer View must wrap so large classes
+          // flow across pages instead of being clipped.
+          <View key={group.class}>
             <Text style={styles.groupHeading}>{group.class_label}</Text>
             {group.rows.map((row) => (
-              <View key={row.account_number} style={styles.row}>
+              <View key={row.account_number} style={styles.row} wrap={false}>
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
                 <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
@@ -398,7 +403,7 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
                 <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
               </View>
             ))}
-            <View style={styles.subtotalRow}>
+            <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
               <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
               <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_ub)}</Text>

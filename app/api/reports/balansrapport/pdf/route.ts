@@ -58,7 +58,11 @@ export async function GET(request: Request) {
       })
     )
 
-    const filename = `balansrapport-${report.period.end}.pdf`
+    // Anchor on period.start to match the convention used by every other
+    // report PDF route in this repo (resultatrapport, balance-sheet,
+    // income-statement). A balansrapport is a snapshot at period end, but
+    // consistent filenames let users sort and script-rename predictably.
+    const filename = `balansrapport-${report.period.start}.pdf`
 
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {
