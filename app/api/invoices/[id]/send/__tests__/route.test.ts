@@ -240,6 +240,69 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(body.success).toBe(true)
   })
 
+  it('assigns an invoice number when sending a draft with no number', async () => {
+    const draftWithoutNumber = makeInvoice({
+      id: 'inv-1',
+      status: 'draft',
+      invoice_number: null,
+      customer,
+      items: invoice.items,
+    })
+
+    // Fetch invoice (no number)
+    enqueue({ data: draftWithoutNumber, error: null })
+    // Fetch company settings
+    enqueue({ data: company, error: null })
+    // ensureInvoiceNumber: rpc generate_invoice_number
+    enqueue({ data: 'F-2026010', error: null })
+    // ensureInvoiceNumber: update with new number
+    enqueue({ data: { invoice_number: 'F-2026010' }, error: null })
+
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-99' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    // Update status to 'sent'
+    enqueue({ data: null, error: null })
+    // Update with journal_entry_id
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('generate_invoice_number', {
+      p_company_id: 'company-1',
+    })
+    // The journal entry should see the freshly-assigned number
+    expect(mockCreateInvoiceJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ invoice_number: 'F-2026010' }),
+      'enskild_firma'
+    )
+  })
+
+  it('does not re-assign number when draft already has one (idempotency)', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-100' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-2' })
+
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+  })
+
   it('returns 500 when email sending fails', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })

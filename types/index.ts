@@ -591,8 +591,8 @@ export interface Invoice {
   company_id: string
   customer_id: string
 
-  // Invoice number (auto-generated)
-  invoice_number: string
+  // Invoice number (auto-generated at first send; null while draft)
+  invoice_number: string | null
 
   // Dates
   invoice_date: string

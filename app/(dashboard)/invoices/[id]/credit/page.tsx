@@ -311,7 +311,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
           <Input
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
-            placeholder={invoice.invoice_number}
+            placeholder={invoice.invoice_number ?? undefined}
             className={cn(
               confirmText && confirmText !== invoice.invoice_number && 'border-destructive'
             )}

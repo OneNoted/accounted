@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import {
   Loader2,
@@ -278,7 +278,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `faktura-${invoice.invoice_number}.pdf`
+      a.download = `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
@@ -286,7 +286,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       toast({
         title: 'PDF nedladdad',
-        description: `Faktura ${invoice.invoice_number} har laddats ner`,
+        description: invoice.invoice_number
+          ? `Faktura ${invoice.invoice_number} har laddats ner`
+          : 'Utkastet har laddats ner',
       })
     } catch (error) {
       toast({
@@ -316,7 +318,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       toast({
         title: 'Faktura borttagen',
-        description: `Utkast ${invoice.invoice_number} har tagits bort`,
+        description: invoice.invoice_number
+          ? `Utkast ${invoice.invoice_number} har tagits bort`
+          : 'Utkastet har tagits bort',
       })
 
       router.push('/invoices')
@@ -361,7 +365,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className="font-display text-2xl sm:text-3xl font-medium tracking-tight">{invoice.invoice_number}</h1>
+              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</h1>
               {isProforma && (
                 <Badge variant="secondary" className="bg-primary/10 text-primary">Proforma</Badge>
               )}
@@ -618,7 +622,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <CardContent className="space-y-4">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Fakturanummer</span>
-                <span className="font-medium">{invoice.invoice_number}</span>
+                <span className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Fakturadatum</span>
@@ -948,7 +952,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           <DialogHeader>
             <DialogTitle>Ta bort fakturautkast</DialogTitle>
             <DialogDescription>
-              Är du säker på att du vill ta bort utkast {invoice.invoice_number}? Detta kan inte ångras.
+              Är du säker på att du vill ta bort {invoice.invoice_number ? `utkast ${invoice.invoice_number}` : 'utkastet'}? Detta kan inte ångras.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

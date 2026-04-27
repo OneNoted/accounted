@@ -12,6 +12,7 @@ import {
 } from '@/lib/email/invoice-templates'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
@@ -81,6 +82,19 @@ export async function POST(
     return NextResponse.json(
       { error: 'Företagsinställningar saknas' },
       { status: 404 }
+    )
+  }
+
+  // Assign invoice number now if this is a draft being sent for the first time.
+  // Mutates `invoice.invoice_number` so the rest of this flow (PDF render,
+  // email subject, journal entry description) sees the new value.
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    console.error('Failed to assign invoice number on send:', err)
+    return NextResponse.json(
+      { error: 'Kunde inte tilldela fakturanummer. Försök igen.' },
+      { status: 500 }
     )
   }
 

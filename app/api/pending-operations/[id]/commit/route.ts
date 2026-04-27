@@ -30,6 +30,7 @@ import {
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type {
@@ -391,10 +392,8 @@ async function commitCreateInvoice(
   const uniqueRates = new Set(items.map((item) => item.vat_rate ?? vatRules.rate))
   const isMixedRate = uniqueRates.size > 1
 
-  // Generate invoice number
-  const { data: invoiceNumber } = await supabase.rpc('generate_invoice_number', {
-    p_company_id: companyId,
-  })
+  // Invoice number is assigned later when the draft is sent — leave null here
+  // so a discarded draft never consumes a number.
 
   // Create invoice
   const { data: invoice, error: invoiceError } = await supabase
@@ -403,7 +402,7 @@ async function commitCreateInvoice(
       user_id: userId,
       company_id: companyId,
       customer_id: customerId,
-      invoice_number: invoiceNumber,
+      invoice_number: null,
       invoice_date: (params.invoice_date as string) || new Date().toISOString().split('T')[0],
       due_date: (params.due_date as string) || null,
       currency,
@@ -472,7 +471,7 @@ async function commitCreateInvoice(
     })
   }
 
-  return { data: { invoice_id: invoice.id, invoice_number: invoiceNumber } }
+  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
 }
 
 async function commitMarkInvoicePaid(
@@ -569,6 +568,14 @@ async function commitSendInvoice(
     .single()
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
+
+  // Assign invoice number now if this draft doesn't have one yet —
+  // mutates `invoice.invoice_number` so PDF, email, JE all see it.
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
+  }
 
   const items = (invoice.items as InvoiceItem[]).sort(
     (a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order
@@ -681,6 +688,12 @@ async function commitMarkInvoiceSent(
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
+
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
+  }
 
   const { error: updateError } = await supabase
     .from('invoices')

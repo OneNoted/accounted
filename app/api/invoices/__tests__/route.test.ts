@@ -187,9 +187,7 @@ describe('POST /api/invoices (create invoice)', () => {
 
     // Fetch customer
     enqueue({ data: customer, error: null })
-    // RPC generate_invoice_number
-    enqueue({ data: 'F-2024001' })
-    // Insert invoice
+    // Insert invoice (no number generated for drafts — assigned at send time)
     enqueue({ data: createdInvoice, error: null })
     // Insert items
     enqueue({ data: null, error: null })
@@ -237,7 +235,6 @@ describe('POST /api/invoices (create invoice)', () => {
     ])
 
     enqueue({ data: customer, error: null })
-    enqueue({ data: 'F-2024001' })
     enqueue({ data: createdInvoice, error: null })
     // Items insertion fails
     enqueue({ data: null, error: { message: 'Items insert failed' } })

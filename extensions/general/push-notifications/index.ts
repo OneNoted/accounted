@@ -166,7 +166,7 @@ async function handleInvoiceSent(
 
   const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
   const notificationPayload = createInvoiceSentPayload(
-    invoice.invoice_number,
+    invoice.invoice_number ?? '(Utkast)',
     invoice.id
   )
 

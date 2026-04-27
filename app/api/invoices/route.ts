@@ -166,20 +166,15 @@ export async function POST(request: Request) {
     }
   }
 
-  // Generate document number from the appropriate sequence
-  let invoiceNumber: string
+  // Generate document number — eagerly for delivery notes (separate sequence,
+  // separate UX), lazily for invoices and proformas (assigned at first send so
+  // discarded drafts never consume a number).
+  let invoiceNumber: string | null = null
   if (documentType === 'delivery_note') {
     const { data: dnNumber } = await supabase.rpc('generate_delivery_note_number', {
       p_company_id: companyId,
     })
     invoiceNumber = dnNumber
-  } else {
-    const { data: baseNumber } = await supabase.rpc('generate_invoice_number', {
-      p_company_id: companyId,
-    })
-    invoiceNumber = documentType === 'proforma'
-      ? `PF-${baseNumber}`
-      : baseNumber
   }
 
   // Create invoice

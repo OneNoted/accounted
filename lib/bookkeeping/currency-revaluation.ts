@@ -133,7 +133,7 @@ export async function previewCurrencyRevaluation(
     items.push({
       type: 'receivable',
       source_id: inv.id,
-      reference: inv.invoice_number,
+      reference: inv.invoice_number ?? '',
       currency: inv.currency,
       amount_in_currency: amountInCurrency,
       original_rate: inv.exchange_rate,

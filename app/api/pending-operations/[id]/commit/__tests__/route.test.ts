@@ -217,20 +217,20 @@ describe('POST /api/pending-operations/:id/commit', () => {
       enqueueMany([
         { data: pendingOp },                          // fetch pending op
         { data: customer },                           // fetch customer
-        { data: '20260001' },                         // generate invoice number (rpc)
-        { data: { id: 'inv-1' } },                    // insert invoice
+        { data: { id: 'inv-1', invoice_number: null } }, // insert invoice (no number — assigned at send)
         { data: null, error: null },                  // insert items
-        { data: { id: 'inv-1', customer: customer, items: [] } }, // fetch complete invoice
+        { data: { id: 'inv-1', invoice_number: null, customer: customer, items: [] } }, // fetch complete invoice
         { data: null, error: null },                  // update pending op status
       ])
 
       const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
       const response = await POST(request, routeParams)
-      const { status, body } = await parseJsonResponse<{ data: { invoice_id: string; invoice_number: string } }>(response)
+      const { status, body } = await parseJsonResponse<{ data: { invoice_id: string; invoice_number: string | null } }>(response)
 
       expect(status).toBe(200)
       expect(body.data.invoice_id).toBe('inv-1')
-      expect(body.data.invoice_number).toBe('20260001')
+      // Drafts no longer reserve a number — assigned at send time instead
+      expect(body.data.invoice_number).toBeNull()
     })
 
     it('returns 404 when customer not found', async () => {

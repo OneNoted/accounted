@@ -12,7 +12,7 @@ import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
 
 export interface ProposeSendLinesInput {
   invoice: {
-    invoice_number: string
+    invoice_number: string | null
     total: number
     total_sek?: number | null
     subtotal: number
@@ -43,7 +43,7 @@ export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   const { invoice, entityType } = input
   const lines: FormLine[] = []
   const isForeign = invoice.currency !== 'SEK'
-  const desc = `Försäljning faktura ${invoice.invoice_number}`
+  const desc = invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'
 
   const toSek = (amount: number): number => {
     if (!isForeign) return amount
@@ -134,7 +134,7 @@ export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
         account_number: vatAccount,
         debit_amount: '',
         credit_amount: toFormAmount(vatSek),
-        line_description: `Utgående moms faktura ${invoice.invoice_number}`,
+        line_description: (invoice.invoice_number ? `Utgående moms faktura ${invoice.invoice_number}` : 'Utgående moms faktura'),
       })
     }
   }

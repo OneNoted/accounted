@@ -87,7 +87,7 @@ export default function InvoicesPage() {
 
   const filteredInvoices = invoices.filter((invoice) => {
     const matchesSearch =
-      invoice.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (invoice.invoice_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (invoice.customer as { name: string })?.name?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const isCreditNote = !!invoice.credited_invoice_id
@@ -282,7 +282,7 @@ export default function InvoicesPage() {
                   <CardContent className="py-4">
                     <div className="min-w-0">
                         <div className="flex items-start sm:items-center justify-between gap-2">
-                          <p className="font-medium truncate">{invoice.invoice_number}</p>
+                          <p className={cn('font-medium truncate', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</p>
                           <p className={`font-medium tabular-nums shrink-0 ${isCreditNote ? 'text-destructive' : ''}`}>
                             {formatCurrency(Number(invoice.total), invoice.currency)}
                           </p>

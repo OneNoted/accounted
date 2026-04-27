@@ -212,7 +212,7 @@ export default function PaymentBookingDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>Bokför betalning — {invoice.invoice_number}</DialogTitle>
+          <DialogTitle>Bokför betalning{invoice.invoice_number ? ` — ${invoice.invoice_number}` : ''}</DialogTitle>
           <DialogDescription>
             {formatCurrency(invoice.total, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (

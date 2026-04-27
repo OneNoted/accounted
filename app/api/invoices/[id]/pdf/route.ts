@@ -81,9 +81,10 @@ export async function GET(
 
     // Return PDF as response
     const isCreditNote = !!invoice.credited_invoice_id
+    const filenameNumber = invoice.invoice_number ?? `utkast-${String(invoice.id).slice(0, 8)}`
     const filename = isCreditNote
-      ? `kreditfaktura-${invoice.invoice_number}.pdf`
-      : `faktura-${invoice.invoice_number}.pdf`
+      ? `kreditfaktura-${filenameNumber}.pdf`
+      : `faktura-${filenameNumber}.pdf`
 
     return new NextResponse(uint8Array, {
       status: 200,

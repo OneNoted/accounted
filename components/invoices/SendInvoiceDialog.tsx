@@ -188,7 +188,7 @@ export default function SendInvoiceDialog({
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>
-            {mode === 'email' ? 'Skicka faktura' : 'Markera som skickad'} — {invoice.invoice_number}
+            {mode === 'email' ? 'Skicka faktura' : 'Markera som skickad'}{invoice.invoice_number ? ` — ${invoice.invoice_number}` : ''}
           </DialogTitle>
           <DialogDescription>
             {formatCurrency(invoice.total, invoice.currency)}
@@ -215,7 +215,7 @@ export default function SendInvoiceDialog({
                 <JournalEntryReviewContent
                   periodName={periodName}
                   entryDate={invoice.invoice_date}
-                  description={`Försäljning faktura ${invoice.invoice_number}${invoice.customer.name ? `, ${invoice.customer.name}` : ''}`}
+                  description={`Försäljning faktura${invoice.invoice_number ? ` ${invoice.invoice_number}` : ''}${invoice.customer.name ? `, ${invoice.customer.name}` : ''}`}
                   lines={proposedLines}
                   totalDebit={totalDebit}
                   totalCredit={totalCredit}

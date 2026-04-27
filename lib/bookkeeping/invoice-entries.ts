@@ -21,11 +21,12 @@ const log = createLogger('invoice-entries')
  * Falls back to prefix + invoiceNumber if name is not provided (backward compat).
  */
 function buildInvoiceDescription(
-  prefix: string, invoiceNumber: string, counterpartyName?: string
+  prefix: string, invoiceNumber: string | null, counterpartyName?: string
 ): string {
+  const numberPart = invoiceNumber ? ` ${invoiceNumber}` : ''
   return counterpartyName
-    ? `${prefix} ${invoiceNumber}, ${counterpartyName}`
-    : `${prefix} ${invoiceNumber}`
+    ? `${prefix}${numberPart}, ${counterpartyName}`
+    : `${prefix}${numberPart}`
 }
 
 /**
@@ -36,7 +37,7 @@ function generatePerRateLines(
   items: InvoiceItem[],
   invoiceVatTreatment: VatTreatment,
   entityType: EntityType,
-  invoiceNumber: string,
+  invoiceNumber: string | null,
   currency?: string | null,
   exchangeRate?: number | null
 ): CreateJournalEntryLineInput[] {
@@ -64,7 +65,7 @@ function generatePerRateLines(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${invoiceNumber}`,
+      line_description: invoiceNumber ? `Försäljning faktura ${invoiceNumber}` : 'Försäljning faktura',
     })
 
     const totalVat = items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
@@ -113,7 +114,7 @@ function generatePerRateLines(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: roundedSubtotal,
-      line_description: `Försäljning faktura ${invoiceNumber}`,
+      line_description: invoiceNumber ? `Försäljning faktura ${invoiceNumber}` : 'Försäljning faktura',
     })
 
     const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
@@ -184,7 +185,7 @@ export async function createInvoiceJournalEntry(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${invoice.invoice_number}`,
+      line_description: invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura',
     })
 
     if (invoice.vat_amount > 0) {
@@ -195,7 +196,7 @@ export async function createInvoiceJournalEntry(
           account_number: vatAccount,
           debit_amount: 0,
           credit_amount: vatSek,
-          line_description: `Utgående moms faktura ${invoice.invoice_number}`,
+          line_description: invoice.invoice_number ? `Utgående moms faktura ${invoice.invoice_number}` : 'Utgående moms faktura',
         })
       } else {
         const vatLines = generateSalesVatLines({
@@ -218,7 +219,7 @@ export async function createInvoiceJournalEntry(
     account_number: '1510',
     debit_amount: debitAmount,
     credit_amount: 0,
-    line_description: `Faktura ${invoice.invoice_number}`,
+    line_description: invoice.invoice_number ? `Faktura ${invoice.invoice_number}` : 'Faktura',
     ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
   })
 
@@ -473,7 +474,7 @@ export async function createInvoiceCashEntry(
       account_number: revenueAccount,
       debit_amount: 0,
       credit_amount: subtotalSek,
-      line_description: `Försäljning faktura ${invoice.invoice_number}`,
+      line_description: invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura',
     })
 
     if (invoice.vat_amount > 0) {

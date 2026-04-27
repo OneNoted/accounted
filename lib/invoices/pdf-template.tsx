@@ -311,7 +311,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             <Text style={[styles.title, isCreditNote ? styles.creditNoteTitle : {}]}>
               {getDocumentTitle(invoice)}
             </Text>
-            <Text style={{ marginTop: 5, color: '#666' }}>{invoice.invoice_number}</Text>
+            <Text style={{ marginTop: 5, color: '#666' }}>{invoice.invoice_number ?? 'FÖRHANDSGRANSKNING'}</Text>
           </View>
           <View style={styles.companyInfo}>
             {company.logo_url && (
@@ -567,7 +567,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {(company.invoice_show_ocr ?? true) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>OCR/Referens:</Text>
-                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{generateOcrReference(invoice.invoice_number)}</Text>
+                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? generateOcrReference(invoice.invoice_number) : '—'}</Text>
               </View>
             )}
           </View>

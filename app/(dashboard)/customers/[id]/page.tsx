@@ -26,6 +26,7 @@ import {
   Lock,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { cn } from '@/lib/utils'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 
 const customerTypeLabels: Record<CustomerType, string> = {
@@ -44,7 +45,7 @@ const customerTypeIcons: Record<CustomerType, React.ElementType> = {
 
 interface RelatedInvoice {
   id: string
-  invoice_number: string
+  invoice_number: string | null
   invoice_date: string
   due_date: string
   status: string
@@ -349,7 +350,7 @@ export default function CustomerDetailPage({
                   className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
                 >
                   <div>
-                    <p className="font-medium">{invoice.invoice_number}</p>
+                    <p className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoice.invoice_number ?? '(Utkast)'}</p>
                     <p className="text-sm text-muted-foreground">{invoice.invoice_date}</p>
                   </div>
                   <div className="flex items-center gap-3">

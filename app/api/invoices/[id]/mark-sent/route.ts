@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
@@ -49,6 +50,17 @@ export async function POST(
     return NextResponse.json(
       { error: 'Endast utkast kan markeras som skickade' },
       { status: 400 }
+    )
+  }
+
+  // Assign invoice number now if this draft doesn't have one yet
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    console.error('Failed to assign invoice number on mark-sent:', err)
+    return NextResponse.json(
+      { error: 'Kunde inte tilldela fakturanummer. Försök igen.' },
+      { status: 500 }
     )
   }
 

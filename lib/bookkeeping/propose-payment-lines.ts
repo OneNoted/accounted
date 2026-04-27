@@ -12,7 +12,7 @@ import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
 
 export interface ProposePaymentLinesInput {
   invoice: {
-    invoice_number: string
+    invoice_number: string | null
     total: number
     total_sek?: number | null
     subtotal: number
@@ -44,7 +44,7 @@ function toFormAmount(n: number): string {
 export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[] {
   const { invoice, accountingMethod, entityType, exchangeRateDifference } = input
   const paymentAccount = input.paymentAccount || '1930'
-  const desc = `Betalning faktura ${invoice.invoice_number}`
+  const desc = invoice.invoice_number ? `Betalning faktura ${invoice.invoice_number}` : 'Betalning faktura'
 
   if (accountingMethod === 'accrual') {
     return proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference)
@@ -148,7 +148,7 @@ function proposeCashLines(
         account_number: revenueAccount,
         debit_amount: '',
         credit_amount: toFormAmount(toSek(subtotal)),
-        line_description: `Försäljning faktura ${invoice.invoice_number}`,
+        line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
       })
 
       const totalVat = invoice.items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
@@ -182,7 +182,7 @@ function proposeCashLines(
           account_number: revenueAccount,
           debit_amount: '',
           credit_amount: toFormAmount(Math.round(toSek(group.subtotal) * 100) / 100),
-          line_description: `Försäljning faktura ${invoice.invoice_number}`,
+          line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
         })
 
         const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100
@@ -205,7 +205,7 @@ function proposeCashLines(
       account_number: revenueAccount,
       debit_amount: '',
       credit_amount: toFormAmount(subtotalSek),
-      line_description: `Försäljning faktura ${invoice.invoice_number}`,
+      line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
     })
 
     if (invoice.vat_amount > 0) {
@@ -215,7 +215,7 @@ function proposeCashLines(
         account_number: vatAccount,
         debit_amount: '',
         credit_amount: toFormAmount(vatSek),
-        line_description: `Utgående moms faktura ${invoice.invoice_number}`,
+        line_description: (invoice.invoice_number ? `Utgående moms faktura ${invoice.invoice_number}` : 'Utgående moms faktura'),
       })
     }
   }
