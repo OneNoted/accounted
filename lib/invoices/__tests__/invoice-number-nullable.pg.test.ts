@@ -12,8 +12,8 @@ describe('invoices.invoice_number nullable + partial unique index', () => {
     const id = randomUUID()
     const customerId = randomUUID()
     await getPool().query(
-      `INSERT INTO public.customers (id, user_id, company_id, name, customer_type)
-       VALUES ($1, $2, $3, 'Test Customer', 'swedish_business')`,
+      `INSERT INTO public.customers (id, user_id, company_id, name)
+       VALUES ($1, $2, $3, 'Test Customer')`,
       [customerId, params.userId, params.companyId],
     )
     await getPool().query(
