@@ -164,20 +164,30 @@ Föreslå ett balanserat verifikat. Transaktionens belopp är bruttobeloppet som
     return null
   }
 
-  const lines = extractLines(proposalRaw.lines)
+  const rawLines = extractLines(proposalRaw.lines)
   const vatTreatment = extractVatTreatment(proposalRaw.vat_treatment)
   const defaultPrivate = Boolean(proposalRaw.default_private)
   const counterpartyTpl = extractCounterpartyTemplate(proposalRaw.counterparty_template_proposal)
 
-  // Safety: the engine will reject an unbalanced entry. Catch it early and
-  // degrade to clarify rather than forwarding a broken proposal.
+  // Claude often returns lines that are off by a cent or two due to the way
+  // it does 25% VAT math on awkward totals (e.g. 183,30 split as net 146,64
+  // + VAT 36,66 — fine — but sometimes 146,64 + 36,67 from rounding up).
+  // Repair those silently; the journal engine can't post unbalanced entries
+  // anyway, and the human-facing answer (same accounts, same rate) is identical.
+  const { lines, repaired } = repairRounding(rawLines)
+
   if (!linesBalanced(lines)) {
+    const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
+    const totalCredit = lines.reduce((s, l) => s + l.credit_amount, 0)
+    console.warn('[ai-agent/generate-booking] unbalanced proposal', {
+      totalDebit, totalCredit, diff: totalDebit - totalCredit, lines,
+    })
     return {
       kind: 'request',
       request: {
         request_type: 'needs_manual',
         message:
-          'AI:n producerade ett obalanserat verifikat — bokför manuellt så dokumenteras det korrekt.',
+          `AI:n producerade ett obalanserat verifikat (debet ${totalDebit.toFixed(2)} vs kredit ${totalCredit.toFixed(2)}). Bokför manuellt eller försök igen via Bearbeta befintliga.`,
       },
       provenance: {
         model: getModelId(),
@@ -186,6 +196,9 @@ Föreslå ett balanserat verifikat. Transaktionens belopp är bruttobeloppet som
         output_tokens: usage.output_tokens,
       },
     }
+  }
+  if (repaired) {
+    console.log('[ai-agent/generate-booking] auto-repaired rounding on booking lines')
   }
 
   const payload: BookingProposalPayload = {
@@ -272,6 +285,38 @@ function linesBalanced(lines: BookingProposalLine[]): boolean {
   const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   return Math.abs(totalDebit - totalCredit) < 0.005 && totalDebit > 0
+}
+
+// Adjust sub-5-öre discrepancies silently by nudging the largest debit
+// line. Only repairs imbalances up to 0.05 kr — anything larger is treated
+// as a real error (Claude got confused, not just a rounding quirk) and
+// bubbles up via the existing needs_manual fallback.
+function repairRounding(lines: BookingProposalLine[]): { lines: BookingProposalLine[]; repaired: boolean } {
+  if (lines.length < 2) return { lines, repaired: false }
+  const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+  const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+  const diff = totalDebit - totalCredit
+  const absDiff = Math.abs(diff)
+
+  if (absDiff < 0.005) return { lines, repaired: false }
+  if (absDiff > 0.05) return { lines, repaired: false }
+
+  // Pick the single biggest debit line to absorb the adjustment — usually
+  // the expense account, not the VAT line. Subtract if debit is over,
+  // add if debit is under. Round to öre precision.
+  const withIndex = lines.map((l, idx) => ({ l, idx }))
+  const biggestDebit = withIndex
+    .filter((x) => x.l.debit_amount > 0)
+    .sort((a, b) => b.l.debit_amount - a.l.debit_amount)[0]
+  if (!biggestDebit) return { lines, repaired: false }
+
+  const adjusted = [...lines]
+  const current = adjusted[biggestDebit.idx]
+  adjusted[biggestDebit.idx] = {
+    ...current,
+    debit_amount: Math.round((current.debit_amount - diff) * 100) / 100,
+  }
+  return { lines: adjusted, repaired: true }
 }
 
 function buildDescription(ctx: GenerateBookingContext): string {
