@@ -74,7 +74,6 @@ async function fetchEnrichmentSafely(sessionId: string): Promise<EnrichmentData 
       // Log the full response shape (sans secureUrl — time-limited token)
       // so we can diagnose why a real-user enrichment comes back non-usable.
       const { secureUrl: _omit, ...responseDiagnostic } = enrichment
-      void _omit
 
       // Interpret common failure shapes into actionable hints so developers
       // don't have to re-trace this every time. TIC returns these as body
