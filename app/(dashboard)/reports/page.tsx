@@ -915,6 +915,17 @@ function ResultatrapportView({ periodId, onNavigateToAccount }: { periodId: stri
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/resultatrapport/pdf?period_id=${periodId}`, '_blank')}
+        >
+          <Download className="h-4 w-4 mr-2" />
+          Ladda ner PDF
+        </Button>
+      </div>
+
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -1042,6 +1053,17 @@ function BalansrapportView({ periodId, onNavigateToAccount }: { periodId: string
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => window.open(`/api/reports/balansrapport/pdf?period_id=${periodId}`, '_blank')}
+        >
+          <Download className="h-4 w-4 mr-2" />
+          Ladda ner PDF
+        </Button>
+      </div>
+
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
