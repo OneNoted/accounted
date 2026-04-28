@@ -59,6 +59,7 @@ export async function DELETE(
   })
 
   if (error) {
+    console.error('[delete_last_voucher] error:', error)
     return NextResponse.json(
       { error: getErrorMessage(error, { context: 'journal_entry', statusCode: 400 }) },
       { status: 400 }
