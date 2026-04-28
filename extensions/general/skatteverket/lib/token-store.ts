@@ -87,11 +87,17 @@ export async function storeTokens(
   // remember its company_id and reuse it on INSERT.
   let resolvedCompanyId = companyId
   if (!resolvedCompanyId) {
-    const { data: existing } = await db
+    const { data: existing, error: selectError } = await db
       .from('skatteverket_tokens')
       .select('company_id')
       .eq('user_id', userId)
       .maybeSingle()
+    // Throw before the destructive DELETE: a transient read failure here
+    // would otherwise wipe the existing row and then fail the INSERT on the
+    // NOT NULL company_id, leaving the user with no token at all.
+    if (selectError) {
+      throw new Error(`Failed to read existing token row: ${selectError.message}`)
+    }
     if (existing?.company_id) resolvedCompanyId = existing.company_id
   }
 
