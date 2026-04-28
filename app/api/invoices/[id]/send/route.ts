@@ -110,6 +110,7 @@ export async function POST(
       .from('invoices')
       .select('invoice_number')
       .eq('id', invoice.credited_invoice_id)
+      .eq('company_id', companyId)
       .single()
 
     if (originalInvoice) {
