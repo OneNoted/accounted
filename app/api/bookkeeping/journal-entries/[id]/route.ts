@@ -5,6 +5,9 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { createLogger } from '@/lib/logger'
+
+const logger = createLogger('journal-entries')
 
 ensureInitialized()
 
@@ -59,7 +62,7 @@ export async function DELETE(
   })
 
   if (error) {
-    console.error('[delete_last_voucher] error:', error)
+    logger.error('delete_last_voucher failed', { entryId: id, error })
     return NextResponse.json(
       { error: getErrorMessage(error, { context: 'journal_entry', statusCode: 400 }) },
       { status: 400 }
