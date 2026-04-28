@@ -224,10 +224,15 @@ const styles = StyleSheet.create({
 })
 
 function formatAmount(amount: number): string {
+  // Intl emits U+2212 (true minus). The bundled @react-pdf/renderer
+  // Helvetica/Courier fonts lack that glyph and silently drop it, so
+  // negatives would render as positives. Map to ASCII hyphen.
   return new Intl.NumberFormat('sv-SE', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount)
+  })
+    .format(amount)
+    .replace(/\u2212/g, '-')
 }
 
 function formatOrgNumber(orgNumber: string): string {
