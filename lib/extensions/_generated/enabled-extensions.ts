@@ -7,6 +7,5 @@ export const ENABLED_EXTENSION_IDS: ReadonlySet<string> = new Set([
   'tic',
   'mcp-server',
   'cloud-backup',
-  'invoice-inbox',
-  'ai-agent',
+  'skatteverket',
 ])

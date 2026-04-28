@@ -38,21 +38,27 @@ export interface SkatteverketMomsuppgift {
   momsImportUtgaendeLag?: number        // Box 62
 }
 
-/** Validation result from Skatteverket /kontrollera or /utkast */
-export interface SkatteverketKontrollresultat {
-  kontroller?: SkatteverketKontroll[]
+/**
+ * Validation result from Skatteverket /kontrollera or /utkast.
+ * Field names match Momsdeklaration v1.0.24 RAML — note SKV's mixed casing
+ * on `kontrollResultat` and `signeringsLank`.
+ */
+export interface SkatteverketKontrollResultat {
+  status?: 'OK' | 'WARNING' | 'ERROR'
+  resultat?: SkatteverketKontroll[]
 }
 
 export interface SkatteverketKontroll {
-  id: string        // FK001, RK002, etc.
-  typ: 'ERROR' | 'WARNING'
-  text: string
+  kod: string             // e.g. "49"
+  status: 'ERROR' | 'WARNING'
+  beskrivning: string
 }
 
 /** Response from saving a draft */
 export interface SkatteverketUtkastResponse {
-  kontrollresultat?: SkatteverketKontrollresultat
-  signeringslank?: string
+  kontrollResultat?: SkatteverketKontrollResultat
+  signeringsLank?: string
+  locked?: boolean
 }
 
 /** Response from fetching submitted declarations */
@@ -158,7 +164,7 @@ export interface SkatteverketSubmission {
   status: DeclarationStatus
   kvittensnummer: string | null
   signeringslank: string | null
-  kontrollresultat: SkatteverketKontrollresultat | null
+  kontrollresultat: SkatteverketKontrollResultat | null
   momsuppgift: SkatteverketMomsuppgift
   created_at: string
   updated_at: string

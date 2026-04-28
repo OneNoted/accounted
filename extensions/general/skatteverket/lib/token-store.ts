@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type { SkatteverketTokens } from '../types'
 
 /**
@@ -9,7 +9,28 @@ import type { SkatteverketTokens } from '../types'
  * role key) to encrypt tokens at rest in the skatteverket_tokens table.
  *
  * Pattern mirrors lib/auth/oauth-codes.ts but adapted for persistent storage.
+ *
+ * All DB operations route through a service-role client. The original RLS
+ * design (auth.uid() = user_id) is correct, but at least one deployed
+ * environment is missing the INSERT/UPDATE/DELETE policies and the
+ * UNIQUE(user_id) constraint, so user-session writes get rejected. The
+ * service-role client bypasses RLS, and the calling handlers (the OAuth
+ * callback in particular) verify the user identity via cookies before
+ * passing user_id here, so the access-control invariant is upheld at the
+ * application layer.
  */
+
+let _serviceClient: SupabaseClient | null = null
+function getServiceClient(): SupabaseClient {
+  if (_serviceClient) return _serviceClient
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) {
+    throw new Error('skatteverket token-store requires NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY')
+  }
+  _serviceClient = createClient(url, key, { auth: { persistSession: false } })
+  return _serviceClient
+}
 
 const ALGORITHM = 'aes-256-gcm'
 
@@ -40,32 +61,64 @@ function decrypt(ciphertext: string): string {
 }
 
 /**
- * Store (upsert) Skatteverket tokens for a user.
+ * Store (replace) Skatteverket tokens for a user.
  * Both access_token and refresh_token are encrypted at rest.
+ *
+ * Implemented as DELETE + INSERT instead of UPSERT because some environments
+ * are missing the UNIQUE(user_id) constraint that ON CONFLICT requires. The
+ * delete-then-insert pattern is safe because OAuth callbacks for a given user
+ * are not concurrent (the user can only sign in with BankID once at a time).
  */
 export async function storeTokens(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   userId: string,
-  tokens: SkatteverketTokens
+  tokens: SkatteverketTokens,
+  companyId?: string,
 ): Promise<void> {
   const encryptedAccess = encrypt(tokens.access_token)
   const encryptedRefresh = tokens.refresh_token ? encrypt(tokens.refresh_token) : null
+  const db = getServiceClient()
 
-  const { error } = await supabase
+  // The multi-tenant refactor (migration 20260330130000) put a NOT NULL
+  // company_id on every table. Tokens are conceptually user-scoped (one
+  // BankID identity), but the schema requires a company_id. The OAuth
+  // callback passes one explicitly. Token-refresh flows (called from
+  // skvRequest) don't pass one, so before we DELETE the existing row we
+  // remember its company_id and reuse it on INSERT.
+  let resolvedCompanyId = companyId
+  if (!resolvedCompanyId) {
+    const { data: existing, error: selectError } = await db
+      .from('skatteverket_tokens')
+      .select('company_id')
+      .eq('user_id', userId)
+      .maybeSingle()
+    // Throw before the destructive DELETE: a transient read failure here
+    // would otherwise wipe the existing row and then fail the INSERT on the
+    // NOT NULL company_id, leaving the user with no token at all.
+    if (selectError) {
+      throw new Error(`Failed to read existing token row: ${selectError.message}`)
+    }
+    if (existing?.company_id) resolvedCompanyId = existing.company_id
+  }
+
+  const { error: deleteError } = await db
     .from('skatteverket_tokens')
-    .upsert(
-      {
-        user_id: userId,
-        access_token: encryptedAccess,
-        refresh_token: encryptedRefresh,
-        expires_at: new Date(tokens.expires_at).toISOString(),
-        refresh_count: tokens.refresh_count,
-        scope: tokens.scope,
-      },
-      { onConflict: 'user_id' }
-    )
+    .delete()
+    .eq('user_id', userId)
+  if (deleteError) throw new Error(`Failed to clear existing tokens: ${deleteError.message}`)
 
-  if (error) throw new Error(`Failed to store tokens: ${error.message}`)
+  const row: Record<string, unknown> = {
+    user_id: userId,
+    access_token: encryptedAccess,
+    refresh_token: encryptedRefresh,
+    expires_at: new Date(tokens.expires_at).toISOString(),
+    refresh_count: tokens.refresh_count,
+    scope: tokens.scope,
+  }
+  if (resolvedCompanyId) row.company_id = resolvedCompanyId
+
+  const { error: insertError } = await db.from('skatteverket_tokens').insert(row)
+  if (insertError) throw new Error(`Failed to store tokens: ${insertError.message}`)
 }
 
 /**
@@ -73,13 +126,14 @@ export async function storeTokens(
  * Returns null if no tokens are stored.
  */
 export async function getTokens(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   userId: string
 ): Promise<SkatteverketTokens | null> {
-  const { data, error } = await supabase
+  const db = getServiceClient()
+  const { data, error } = await db
     .from('skatteverket_tokens')
     .select('access_token, refresh_token, expires_at, refresh_count, scope')
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .single()
 
   if (error || !data) return null
@@ -102,11 +156,12 @@ export async function getTokens(
  * Delete stored tokens (disconnect from Skatteverket).
  */
 export async function deleteTokens(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   userId: string
 ): Promise<void> {
-  await supabase
+  const db = getServiceClient()
+  await db
     .from('skatteverket_tokens')
     .delete()
-    .eq('company_id', userId)
+    .eq('user_id', userId)
 }

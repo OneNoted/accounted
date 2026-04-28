@@ -81,37 +81,14 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "subscriptionNotice": "Kräver ett Google-konto. Uppladdningar sker direkt till din Drive — ingen data lagras hos tredje part utöver Google."
     },
     {
-          "slug": "invoice-inbox",
-          "name": "Dokumentinkorg",
-          "sector": "general",
-          "category": "import",
-          "icon": "Inbox",
-          "dataPattern": "both",
-          "description": "AI-klassificering och extraktion av leverantörsfakturor och kvitton",
-          "longDescription": "Varje bolag får en unik fakturainkorg-adress. Fakturor som skickas dit fångas automatiskt, klassificeras med AI (leverantör, belopp, moms) och matchas mot transaktioner. Kräver AWS Bedrock och Resend.",
-          "readsCoreTables": [
-                "document_attachments",
-                "suppliers",
-                "transactions"
-          ],
-          "hasOwnData": true
-    },
-    {
-          "slug": "ai-agent",
-          "name": "AI-agent (beta)",
+          "slug": "skatteverket",
+          "name": "Skatteverket Integration",
           "sector": "general",
           "category": "operations",
-          "icon": "Sparkles",
+          "icon": "FileCheck",
           "dataPattern": "core",
-          "description": "Autonom bokföring — AI föreslår match + bokföring, du godkänner.",
-          "longDescription": "När ett kvitto kommer in föreslår AI-agenten först vilken banktransaktion som matchar, sedan hur det ska bokföras. Du granskar och godkänner varje steg — inget bokförs automatiskt. Om AI:n inte kan producera ett förslag (oläslig bild, ingen matchande transaktion, osäker moms) frågar den dig specifikt vad som behövs.",
-          "readsCoreTables": [
-                "invoice_inbox_items",
-                "transactions",
-                "ai_proposals",
-                "ai_requests",
-                "processing_history"
-          ]
+          "description": "Skicka momsdeklaration direkt till Skatteverket via BankID.",
+          "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från gnubok. Spara utkast, validera, lås och signera — utan att lämna appen."
     },
   ],
 }

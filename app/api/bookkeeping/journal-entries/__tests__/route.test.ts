@@ -123,6 +123,23 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(body.count).toBe(2)
   })
 
+  it('forwards explicit ?status=cancelled to the RPC', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', status: 'cancelled' },
+    })
+    await GET(request)
+
+    // The RPC itself hides cancelled entries unless p_status='cancelled' is
+    // passed explicitly (see migration 20260428153500). The behavior of the
+    // hide-by-default logic lives in SQL and is covered by pg-real tests.
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'list_fiscal_period_entries_with_related',
+      expect.objectContaining({ p_status: 'cancelled' })
+    )
+  })
+
   it('returns 500 on database error', async () => {
     enqueue({ data: null, error: { message: 'DB error' } })
 

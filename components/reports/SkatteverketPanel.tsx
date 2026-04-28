@@ -8,7 +8,9 @@ import { Badge } from '@/components/ui/badge'
 import {
   AlertCircle,
   CheckCircle2,
+  Download,
   ExternalLink,
+  Gavel,
   Link2,
   Link2Off,
   Loader2,
@@ -17,6 +19,7 @@ import {
   Unlock,
   Send,
   ShieldAlert,
+  Trash2,
 } from 'lucide-react'
 import type { VatPeriodType } from '@/types'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
@@ -29,10 +32,12 @@ interface SkatteverketStatus {
   expiresAt?: string
 }
 
+// Shape per Skatteverket Momsdeklaration v1.0.24 RAML
+// (kontrollResultat.resultat[].{kod, status, beskrivning})
 interface KontrollResult {
-  id: string
-  typ: 'ERROR' | 'WARNING'
-  text: string
+  kod: string
+  status: 'ERROR' | 'WARNING'
+  beskrivning: string
 }
 
 interface SkatteverketPanelProps {
@@ -141,12 +146,12 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
       if (result.error) {
         setError(result.error)
       } else {
-        const controls = result.data?.kontrollresultat?.kontroller || []
+        const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
         setKontroller(controls)
         if (controls.length === 0) {
           setSuccess('Valideringen godkänd — inga fel eller varningar')
         } else {
-          const errors = controls.filter((k: KontrollResult) => k.typ === 'ERROR')
+          const errors = controls.filter(k => k.status === 'ERROR')
           if (errors.length > 0) {
             setError(`${errors.length} valideringsfel hittades`)
           } else {
@@ -174,9 +179,9 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
       if (result.error) {
         setError(result.error)
       } else {
-        const controls = result.data?.kontrollresultat?.kontroller || []
+        const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
         setKontroller(controls)
-        const errors = controls.filter((k: KontrollResult) => k.typ === 'ERROR')
+        const errors = controls.filter(k => k.status === 'ERROR')
         if (errors.length === 0) {
           setSuccess('Utkast sparat i Eget utrymme hos Skatteverket')
         } else {
@@ -203,8 +208,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
       const result = await res.json()
       if (result.error) {
         setError(result.error)
-      } else if (result.data?.signeringslank) {
-        setSigneringslank(result.data.signeringslank)
+      } else if (result.data?.signeringsLank) {
+        setSigneringslank(result.data.signeringsLank)
         setSuccess('Utkastet är låst. Öppna signeringslänken för att signera med BankID.')
       }
     } catch {
@@ -263,6 +268,84 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
     }
   }
 
+  const handleDeleteDraft = async () => {
+    setActionLoading('delete')
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/declaration/draft?redovisare=${encodeURIComponent(
+          await getRedovisare()
+        )}&redovisningsperiod=${getRedovisningsperiod()}`,
+        { method: 'DELETE' }
+      )
+      if (res.status === 204 || res.ok) {
+        setKontroller([])
+        setSigneringslank(null)
+        setSuccess('Utkastet har raderats från Eget utrymme')
+      } else {
+        const result = await res.json().catch(() => ({}))
+        setError(result.error || `Kunde inte radera utkast (${res.status})`)
+      }
+    } catch {
+      setError('Kunde inte radera utkast')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleFetchDraft = async () => {
+    setActionLoading('fetchDraft')
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/declaration/draft?redovisare=${encodeURIComponent(
+          await getRedovisare()
+        )}&redovisningsperiod=${getRedovisningsperiod()}`
+      )
+      const result = await res.json()
+      if (result.error) {
+        setError(result.error)
+      } else if (!result.data) {
+        setSuccess('Inget sparat utkast hittades för perioden')
+      } else {
+        const locked = result.data?.locked ? ' (låst)' : ''
+        const summa = result.data?.momsuppgift?.summaMoms
+        const summaLabel = summa !== undefined ? `, summaMoms = ${formatAmount(summa)}` : ''
+        setSuccess(`Sparat utkast hittades${locked}${summaLabel}`)
+      }
+    } catch {
+      setError('Kunde inte hämta utkast')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  const handleFetchDecided = async () => {
+    setActionLoading('fetchDecided')
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/declaration/decided?redovisare=${encodeURIComponent(
+          await getRedovisare()
+        )}&redovisningsperiod=${getRedovisningsperiod()}`
+      )
+      const result = await res.json()
+      if (result.error) {
+        setError(result.error)
+      } else if (!result.data) {
+        setSuccess('Inget beslut hittades för perioden')
+      } else {
+        const tid = result.data?.beslutadTidpunkt
+        const tidLabel = tid ? ` (beslutad ${new Date(tid).toLocaleDateString('sv-SE')})` : ''
+        setSuccess(`Beslut hittades${tidLabel}`)
+      }
+    } catch {
+      setError('Kunde inte hämta beslutade uppgifter')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   // Helper to get redovisare from settings
   const getRedovisare = async (): Promise<string> => {
     const res = await fetch('/api/settings')
@@ -316,8 +399,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
   }
 
   // Connected — show actions
-  const hasErrors = kontroller.some(k => k.typ === 'ERROR')
-  const hasWarnings = kontroller.some(k => k.typ === 'WARNING')
+  const hasErrors = kontroller.some(k => k.status === 'ERROR')
+  const hasWarnings = kontroller.some(k => k.status === 'WARNING')
 
   return (
     <Card>
@@ -364,21 +447,21 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
             </p>
             {kontroller.map((k, i) => (
               <div
-                key={`${k.id}-${i}`}
+                key={`${k.kod}-${i}`}
                 className={`flex items-start gap-2 text-sm rounded-lg p-2.5 ${
-                  k.typ === 'ERROR'
+                  k.status === 'ERROR'
                     ? 'bg-destructive/5 text-destructive'
                     : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
                 }`}
               >
-                {k.typ === 'ERROR' ? (
+                {k.status === 'ERROR' ? (
                   <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
                 ) : (
                   <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
                 )}
                 <div>
-                  <span className="font-mono text-xs mr-1.5">{k.id}</span>
-                  {k.text}
+                  <span className="font-mono text-xs mr-1.5">{k.kod}</span>
+                  {k.beskrivning}
                 </div>
               </div>
             ))}
@@ -424,7 +507,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
           </div>
         )}
 
-        {/* Action buttons */}
+        {/* Forward-lifecycle buttons */}
         <div className="flex flex-wrap gap-2 pt-1">
           <Button
             variant="outline"
@@ -456,44 +539,47 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
             Spara utkast
           </Button>
 
-          {!signeringslank ? (
-            <Button
-              size="sm"
-              onClick={handleLock}
-              disabled={!hasData || hasErrors || actionLoading !== null}
-              className="gap-1.5"
-              title={hasErrors ? 'Valideringsfel måste åtgärdas först' : ''}
-            >
-              {actionLoading === 'lock' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Lock className="h-3.5 w-3.5" />
-              )}
-              Lås och signera
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleUnlock}
-              disabled={actionLoading !== null}
-              className="gap-1.5"
-            >
-              {actionLoading === 'unlock' ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Unlock className="h-3.5 w-3.5" />
-              )}
-              Lås upp
-            </Button>
-          )}
+          <Button
+            size="sm"
+            onClick={handleLock}
+            disabled={!hasData || hasErrors || actionLoading !== null}
+            className="gap-1.5"
+            title={hasErrors ? 'Valideringsfel måste åtgärdas först' : ''}
+          >
+            {actionLoading === 'lock' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Lock className="h-3.5 w-3.5" />
+            )}
+            Lås och signera
+          </Button>
+        </div>
+
+        {/* Read-only fetches from Skatteverket. */}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleFetchDraft}
+            disabled={actionLoading !== null}
+            className="gap-1.5 text-muted-foreground"
+            title="Hämta sparat utkast från Eget utrymme"
+          >
+            {actionLoading === 'fetchDraft' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            Hämta utkast
+          </Button>
 
           <Button
             variant="ghost"
             size="sm"
             onClick={handleCheckSubmitted}
             disabled={actionLoading !== null}
-            className="gap-1.5"
+            className="gap-1.5 text-muted-foreground"
+            title="Kontrollera om en signerad deklaration har lämnats in"
           >
             {actionLoading === 'check' ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -501,6 +587,61 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
               <CheckCircle2 className="h-3.5 w-3.5" />
             )}
             Kontrollera inlämning
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleFetchDecided}
+            disabled={actionLoading !== null}
+            className="gap-1.5 text-muted-foreground"
+            title="Hämta Skatteverkets beslut för perioden"
+          >
+            {actionLoading === 'fetchDecided' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Gavel className="h-3.5 w-3.5" />
+            )}
+            Hämta beslut
+          </Button>
+        </div>
+
+        {/* Recovery / cleanup buttons. Always visible when connected so
+           the user can back out of a locked or stale draft state without
+           depending on local UI state surviving a reload. SKV returns
+           404/409 if the action isn't applicable; we surface that as an
+           error message rather than hiding the button. */}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleUnlock}
+            disabled={actionLoading !== null}
+            className="gap-1.5 text-muted-foreground"
+            title="Lås upp en låst period så att utkastet kan ändras eller raderas"
+          >
+            {actionLoading === 'unlock' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Unlock className="h-3.5 w-3.5" />
+            )}
+            Lås upp
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleDeleteDraft}
+            disabled={actionLoading !== null}
+            className="gap-1.5 text-muted-foreground"
+            title="Radera sparat utkast från Skatteverkets Eget utrymme"
+          >
+            {actionLoading === 'delete' ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="h-3.5 w-3.5" />
+            )}
+            Radera utkast
           </Button>
         </div>
 
