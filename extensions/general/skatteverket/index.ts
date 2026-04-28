@@ -148,7 +148,7 @@ export const skatteverketExtension: Extension = {
 
         try {
           const tokens = await exchangeCodeForTokens(code, redirectUri)
-          await storeTokens(supabase, user.id, tokens)
+          await storeTokens(supabase, user.id, tokens, companyId)
 
           // Clean up CSRF state
           await supabase
@@ -186,7 +186,7 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
 
-        const tokens = await getTokens(ctx.supabase, ctx.companyId)
+        const tokens = await getTokens(ctx.supabase, ctx.userId)
         if (!tokens) {
           return NextResponse.json({ connected: false })
         }
@@ -213,7 +213,7 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
         }
 
-        await deleteTokens(ctx.supabase, ctx.companyId)
+        await deleteTokens(ctx.supabase, ctx.userId)
         return NextResponse.json({ success: true })
       },
     },
@@ -241,7 +241,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'POST',
             `/kontrollera/${redovisare}/${redovisningsperiod}`,
             momsuppgift
@@ -287,7 +287,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'POST',
             `/utkast/${redovisare}/${redovisningsperiod}`,
             momsuppgift
@@ -337,7 +337,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'GET',
             `/utkast/${redovisare}/${redovisningsperiod}`
           )
@@ -376,7 +376,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'DELETE',
             `/utkast/${redovisare}/${redovisningsperiod}`
           )
@@ -413,7 +413,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'PUT',
             `/las/${redovisare}/${redovisningsperiod}`
           )
@@ -434,7 +434,7 @@ export const skatteverketExtension: Extension = {
               status: 'draft_locked',
               redovisare,
               redovisningsperiod,
-              signeringslank: data.signeringslank,
+              signeringsLank: data.signeringsLank,
               updatedAt: new Date().toISOString(),
             })
           )
@@ -460,7 +460,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'DELETE',
             `/las/${redovisare}/${redovisningsperiod}`
           )
@@ -504,7 +504,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'GET',
             `/inlamnat/${redovisare}/${redovisningsperiod}`
           )
@@ -543,7 +543,7 @@ export const skatteverketExtension: Extension = {
 
           const response = await skvRequest(
             ctx.supabase,
-            ctx.companyId,
+            ctx.userId,
             'GET',
             `/beslutat/${redovisare}/${redovisningsperiod}`
           )

@@ -6,8 +6,7 @@ import { arcimMigrationExtension } from '@/extensions/general/arcim-migration'
 import { ticExtension } from '@/extensions/general/tic'
 import { mcpServerExtension } from '@/extensions/general/mcp-server'
 import { cloudBackupExtension } from '@/extensions/general/cloud-backup'
-import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { aiAgentExtension } from '@/extensions/general/ai-agent'
+import { skatteverketExtension } from '@/extensions/general/skatteverket'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   enableBankingExtension,
@@ -16,6 +15,5 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   ticExtension,
   mcpServerExtension,
   cloudBackupExtension,
-  invoiceInboxExtension,
-  aiAgentExtension,
+  skatteverketExtension,
 ]

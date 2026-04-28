@@ -84,6 +84,8 @@ export async function GET(request: Request) {
 
   if (status) {
     query = query.eq('status', status)
+  } else {
+    query = query.neq('status', 'cancelled')
   }
 
   if (dateFrom) {
