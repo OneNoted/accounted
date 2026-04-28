@@ -954,6 +954,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DialogTitle>Ta bort fakturautkast</DialogTitle>
             <DialogDescription>
               Är du säker på att du vill ta bort {invoice.invoice_number ? `utkast ${invoice.invoice_number}` : 'utkastet'}? Detta kan inte ångras.
+              {invoice.invoice_number ? (
+                <span className="mt-2 block text-destructive">
+                  Löpnummer {invoice.invoice_number} är redan reserverat och kommer att bli ett permanent hopp i fakturaserien.
+                </span>
+              ) : (
+                <span className="mt-2 block text-muted-foreground">
+                  Inget löpnummer har tilldelats — fakturaserien påverkas inte.
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

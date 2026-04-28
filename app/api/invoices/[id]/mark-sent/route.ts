@@ -1,11 +1,14 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { renderToBuffer } from '@react-pdf/renderer'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { ensureInitialized } from '@/lib/init'
+import { InvoicePDF } from '@/lib/invoices/pdf-template'
+import { uploadDocument } from '@/lib/core/documents/document-service'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import type { EntityType, Invoice } from '@/types'
+import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 
 ensureInitialized()
 
@@ -75,10 +78,10 @@ export async function POST(
     return NextResponse.json({ error: 'Kunde inte uppdatera status' }, { status: 500 })
   }
 
-  // Fetch accounting method
+  // Fetch full company settings for PDF rendering and accounting method
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('accounting_method, entity_type')
+    .select('*')
     .eq('company_id', companyId)
     .single()
 
@@ -106,6 +109,52 @@ export async function POST(
       }
     } catch (err) {
       console.error('Failed to create invoice journal entry on mark-sent:', err)
+    }
+  }
+
+  // Render and archive the PDF as underlag so it remains retrievable even if
+  // the invoice row is later cancelled. Mirrors the send route.
+  if (isRealInvoice && settings) {
+    try {
+      const items = (invoice.items as InvoiceItem[] | null ?? []).slice().sort(
+        (a, b) => a.sort_order - b.sort_order
+      )
+
+      let originalInvoiceNumber: string | undefined
+      if (invoice.credited_invoice_id) {
+        const { data: originalInvoice } = await supabase
+          .from('invoices')
+          .select('invoice_number')
+          .eq('id', invoice.credited_invoice_id)
+          .single()
+        originalInvoiceNumber = originalInvoice?.invoice_number ?? undefined
+      }
+
+      const pdfBuffer = await renderToBuffer(
+        InvoicePDF({
+          invoice: invoice as Invoice,
+          customer: invoice.customer as Customer,
+          items,
+          company: settings as CompanySettings,
+          originalInvoiceNumber,
+        })
+      )
+
+      const filename = invoice.credited_invoice_id
+        ? `kreditfaktura-${invoice.invoice_number}.pdf`
+        : `faktura-${invoice.invoice_number}.pdf`
+
+      const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
+      await uploadDocument(supabase, user.id, companyId, {
+        name: filename,
+        buffer: pdfArrayBuffer,
+        type: 'application/pdf',
+      }, {
+        upload_source: 'system',
+        journal_entry_id: journalEntryId ?? undefined,
+      })
+    } catch (err) {
+      console.error('Failed to archive invoice PDF on mark-sent:', err)
     }
   }
 
