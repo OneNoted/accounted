@@ -51,6 +51,15 @@ async function enforceRateLimit(): Promise<void> {
   }
 }
 
+// Coalesce concurrent refresh attempts within this Node.js process. Without
+// this, two parallel SKV requests from the same user (e.g. rapid UI clicks)
+// would both call SKV's /token endpoint with the same refresh_token; SKV
+// rotates that token on first use, so the second call would fail with 401.
+// Cross-process races (separate Vercel function instances) are mitigated by
+// the re-read inside the critical section: if another process refreshed
+// while we waited on the network, we just use that newer token.
+const refreshInFlight = new Map<string, Promise<string>>()
+
 /**
  * Get a valid access token, refreshing if needed.
  * Throws if no tokens exist or refresh is exhausted.
@@ -72,14 +81,39 @@ async function getValidToken(
     return tokens.access_token
   }
 
-  // Need refresh
+  // Need refresh — coalesce concurrent attempts.
+  const inFlight = refreshInFlight.get(userId)
+  if (inFlight) return inFlight
+
+  const promise = refreshTokenForUser(supabase, userId)
+    .finally(() => refreshInFlight.delete(userId))
+  refreshInFlight.set(userId, promise)
+  return promise
+}
+
+async function refreshTokenForUser(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<string> {
+  // Re-read after entering the critical section. Another process may have
+  // refreshed while we were waiting; if so, the row now has a new
+  // refresh_token and a future expiry — just hand it back.
+  const tokens = await getTokens(supabase, userId)
+  if (!tokens) {
+    throw new SkatteverketAuthError(
+      'Inte ansluten till Skatteverket. Anslut med BankID först.',
+      'NOT_CONNECTED'
+    )
+  }
+  if (tokens.expires_at > Date.now() + TOKEN_REFRESH_MARGIN_MS) {
+    return tokens.access_token
+  }
   if (!tokens.refresh_token) {
     throw new SkatteverketAuthError(
       'Sessionen har gått ut. Logga in med BankID igen.',
       'SESSION_EXPIRED'
     )
   }
-
   if (tokens.refresh_count >= MAX_REFRESH_COUNT) {
     throw new SkatteverketAuthError(
       'Maximalt antal förnyelser uppnått. Logga in med BankID igen.',
@@ -87,14 +121,12 @@ async function getValidToken(
     )
   }
 
-  // Refresh — returns NEW refresh_token that must be stored
   const refreshed = await refreshAccessToken(tokens.refresh_token, tokens.refresh_count)
   const updatedTokens: SkatteverketTokens = {
     ...refreshed,
     scope: tokens.scope,
   }
   await storeTokens(supabase, userId, updatedTokens)
-
   return updatedTokens.access_token
 }
 

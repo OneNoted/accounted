@@ -308,7 +308,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
       } else if (!result.data) {
         setSuccess('Inget sparat utkast hittades för perioden')
       } else {
-        const locked = result.data?.last ? ' (låst)' : ''
+        const locked = result.data?.locked ? ' (låst)' : ''
         const summa = result.data?.momsuppgift?.summaMoms
         const summaLabel = summa !== undefined ? `, summaMoms = ${formatAmount(summa)}` : ''
         setSuccess(`Sparat utkast hittades${locked}${summaLabel}`)

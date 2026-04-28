@@ -16,16 +16,20 @@ BEGIN
       AND contype = 'u'
       AND pg_get_constraintdef(oid) ILIKE '%(user_id)%'
   ) THEN
-    -- Defensive: if duplicates somehow exist, keep the most recent row per user.
+    -- Defensive: if duplicates somehow exist, keep one row per user.
+    -- Uses ctid (Postgres physical row identifier) to break ties when
+    -- multiple rows share the same created_at timestamp — without this,
+    -- duplicates inserted in the same second wouldn't be deduped and the
+    -- ALTER TABLE … ADD CONSTRAINT below would fail.
     DELETE FROM public.skatteverket_tokens t
     USING (
-      SELECT user_id, max(created_at) AS keep_created_at
+      SELECT user_id, max(ctid) AS keep_ctid
       FROM public.skatteverket_tokens
       GROUP BY user_id
       HAVING count(*) > 1
     ) d
     WHERE t.user_id = d.user_id
-      AND t.created_at < d.keep_created_at;
+      AND t.ctid <> d.keep_ctid;
 
     ALTER TABLE public.skatteverket_tokens
       ADD CONSTRAINT skatteverket_tokens_user_id_key UNIQUE (user_id);
