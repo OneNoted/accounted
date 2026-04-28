@@ -196,8 +196,10 @@ describe('generateBalansrapport', () => {
     const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
 
     const equity = report.groups.find((g) => g.class === 2)!
-    expect(equity.rows.every((r) => r.ib <= 0)).toBe(true)
-    expect(equity.rows.every((r) => r.ub <= 0)).toBe(true)
+    // Strict < 0: every fixture row has a nonzero credit balance, so the
+    // convention requires every row to be strictly negative.
+    expect(equity.rows.every((r) => r.ib < 0)).toBe(true)
+    expect(equity.rows.every((r) => r.ub < 0)).toBe(true)
     expect(equity.subtotal_ib).toBeLessThan(0)
     expect(equity.subtotal_ub).toBeLessThan(0)
     expect(report.total_equity_liabilities_ub).toBeLessThan(0)
