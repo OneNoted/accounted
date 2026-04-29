@@ -57,7 +57,7 @@ export function generateKU10Xml(
 
   // Avsändare
   lines.push('  <Avsandare>')
-  lines.push(`    <Programnamn>${getBranding().appName.toLowerCase()}</Programnamn>`)
+  lines.push(`    <Programnamn>${escapeXml(getBranding().appName.toLowerCase())}</Programnamn>`)
   lines.push(`    <Organisationsnummer>${orgNr}</Organisationsnummer>`)
   lines.push('    <TekniskKontaktperson>')
   lines.push(`      <Namn>${escapeXml(company.contactName)}</Namn>`)
