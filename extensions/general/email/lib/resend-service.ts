@@ -6,6 +6,7 @@
 
 import { Resend } from 'resend'
 import { createLogger } from '@/lib/logger'
+import { getBranding } from '@/lib/branding/service'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
 
 const log = createLogger('email')
@@ -36,9 +37,10 @@ export class ResendEmailService implements EmailService {
       return { success: false, error: 'Email service is not configured' }
     }
 
+    const { appName } = getBranding()
     const from = fromName
-      ? `${fromName} via Gnubok <${DEFAULT_FROM_EMAIL}>`
-      : `Gnubok <${DEFAULT_FROM_EMAIL}>`
+      ? `${fromName} via ${appName} <${DEFAULT_FROM_EMAIL}>`
+      : `${appName} <${DEFAULT_FROM_EMAIL}>`
 
     try {
       const resend = getResendClient()
