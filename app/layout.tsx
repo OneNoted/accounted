@@ -4,6 +4,7 @@ import { Fraunces } from "next/font/google";
 import Script from "next/script";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
+import { getBranding } from "@/lib/branding/service";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -22,19 +23,21 @@ const fraunces = Fraunces({
   display: "swap",
 });
 
+const branding = getBranding();
+
 export const metadata: Metadata = {
-  title: "Gnubok",
-  description: "Ekonomihantering",
-  manifest: "/manifest.json",
+  title: branding.appName,
+  description: branding.appDescription,
+  manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Gnubok",
+    title: branding.appName,
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#304D83",
+  themeColor: branding.themeColor,
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -49,7 +52,7 @@ export default function RootLayout({
     <html lang="sv" translate="no" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable}`}>
       <head>
         <meta name="google" content="notranslate" />
-        <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+        <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
         <script
           src="https://cdn.recapt.app/browser/glimt.js"
           async
