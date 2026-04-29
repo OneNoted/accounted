@@ -1,5 +1,9 @@
 import type { MetadataRoute } from 'next'
+import { ensureInitialized } from '@/lib/init'
 import { getBranding } from '@/lib/branding/service'
+
+// Guarantee branding extensions have registered before the manifest is built.
+ensureInitialized()
 
 export default function manifest(): MetadataRoute.Manifest {
   const b = getBranding()

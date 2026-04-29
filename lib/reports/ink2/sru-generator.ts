@@ -104,7 +104,7 @@ function generateInfoSru(declaration: INK2Declaration, now: Date): string {
   lines.push('#DATABESKRIVNING_START')
   lines.push('#PRODUKT SRU')
   lines.push(`#SKAPAD ${formatDate(now)} ${formatTime(now)}`)
-  lines.push(`#PROGRAM ${getBranding().appName.toLowerCase()} ${PROGRAM_VERSION}`)
+  lines.push(`#PROGRAM ${sanitizeString(getBranding().appName.toLowerCase())} ${PROGRAM_VERSION}`)
   lines.push('#FILNAMN BLANKETTER.SRU')
   lines.push('#DATABESKRIVNING_SLUT')
 
