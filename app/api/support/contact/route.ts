@@ -4,6 +4,7 @@ import { getEmailService } from '@/lib/email/service'
 import { SUPPORT_RECIPIENT_EMAIL } from '@/lib/support'
 import { requireCompanyId } from '@/lib/company/context'
 import { ensureInitialized } from '@/lib/init'
+import { getBranding } from '@/lib/branding/service'
 
 ensureInitialized()
 
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
 
   const result = await emailService.sendEmail({
     to: SUPPORT_RECIPIENT_EMAIL,
-    subject: `[gnubok support] ${subject}`,
+    subject: `[${getBranding().appName.toLowerCase()} support] ${subject}`,
     replyTo: user.email,
     html: `
       <p><strong>Från:</strong> ${escapeHtml(user.email || '')}</p>
