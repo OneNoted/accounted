@@ -27,6 +27,10 @@ import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { RECEIPT_MATCHER_HTML } from './widget-html'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { shouldAutoCommit } from '@/lib/pending-operations/should-auto-commit'
+import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import { toToolError } from './tool-result'
+import type { PendingOperation } from '@/types'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
@@ -116,6 +120,13 @@ const VALID_VAT_TREATMENTS = [
 
 // ── Pending operations staging ───────────────────────────────
 
+interface StageNextHint {
+  description: string
+  tool?: string
+  args?: Record<string, unknown>
+  resource?: string
+}
+
 async function stagePendingOperation(
   supabase: SupabaseClient,
   companyId: string,
@@ -124,16 +135,33 @@ async function stagePendingOperation(
   title: string,
   params: Record<string, unknown>,
   previewData: Record<string, unknown>,
-  actor: ActorContext = { type: 'user' }
+  actor: ActorContext = { type: 'user' },
+  next?: StageNextHint
 ): Promise<{
   staged: true
   operation_id: string
   risk_level: 'low' | 'medium' | 'high'
   actor: ActorContext
+  auto_committed: boolean
+  auto_commit_reason?: string
+  result?: Record<string, unknown>
   message: string
   preview: Record<string, unknown>
+  next?: StageNextHint
 }> {
   const riskLevel = getRiskLevel(operationType)
+
+  // Decide auto-commit eligibility BEFORE insert so we can persist the flag.
+  const previewAmount =
+    typeof previewData.amount === 'number' ? previewData.amount as number :
+    typeof previewData.total === 'number' ? previewData.total as number :
+    null
+
+  const decision = await shouldAutoCommit(supabase, companyId, {
+    operationType,
+    actorType: actor.type,
+    amount: previewAmount,
+  })
 
   const { data, error } = await supabase
     .from('pending_operations')
@@ -148,19 +176,52 @@ async function stagePendingOperation(
       actor_id: actor.id ?? null,
       actor_label: actor.label ?? null,
       risk_level: riskLevel,
+      auto_commit_eligible: decision.eligible,
     })
-    .select('id')
+    .select('*')
     .single()
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
+
+  const branding = getBranding().appName.toLowerCase()
+
+  if (!decision.eligible) {
+    return {
+      staged: true,
+      operation_id: data.id,
+      risk_level: riskLevel,
+      actor,
+      auto_committed: false,
+      auto_commit_reason: decision.reason,
+      message: `Operation staged for review (risk: ${riskLevel}). Open the ${branding} web app to approve or reject it.`,
+      preview: previewData,
+      ...(next ? { next } : {}),
+    }
+  }
+
+  // Auto-commit path: invoke the dispatcher inline so the same audit
+  // trail/event-emission logic runs as for human approvals.
+  const commitResult = await commitPendingOperation(
+    supabase,
+    userId,
+    companyId,
+    data as PendingOperation,
+    { isAutoCommit: true }
+  )
 
   return {
     staged: true,
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Operation staged for review (risk: ${riskLevel}). Open the ${getBranding().appName.toLowerCase()} web app to approve or reject it.`,
+    auto_committed: commitResult.status === 'committed',
+    auto_commit_reason: decision.reason,
+    result: commitResult.data,
+    message: commitResult.status === 'committed'
+      ? `Auto-committed by ${actor.label ?? actor.type} (risk: ${riskLevel}).`
+      : `Auto-commit failed: ${commitResult.error ?? 'unknown'}. Review in the ${branding} web app.`,
     preview: previewData,
+    ...(next ? { next } : {}),
   }
 }
 
@@ -703,7 +764,11 @@ const tools: McpTool[] = [
         `Ny kund: ${params.name}`,
         params,
         params, // params ARE the preview for customers
-        actor
+        actor,
+        {
+          description: 'Once approved, you can invoice this customer with gnubok_create_invoice using the returned customer_id.',
+          tool: 'gnubok_create_invoice',
+        }
       )
     },
   },
@@ -931,7 +996,11 @@ const tools: McpTool[] = [
           invoice_date: invoiceDate,
           due_date: dueDate,
         },
-        actor
+        actor,
+        {
+          description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
+          tool: 'gnubok_send_invoice',
+        }
       )
     },
   },
@@ -2644,7 +2713,12 @@ const tools: McpTool[] = [
           closing_entry_id: period.closing_entry_id,
           irreversible: true,
         },
-        actor
+        actor,
+        {
+          description: 'Closing is irreversible. Verify the balance sheet and income statement first.',
+          tool: 'gnubok_get_balance_sheet',
+          args: { fiscal_period_id: fiscalPeriodId },
+        }
       )
     },
   },
@@ -2709,7 +2783,12 @@ const tools: McpTool[] = [
           period_end: period.period_end,
           unbooked_business_transactions: 0,
         },
-        actor
+        actor,
+        {
+          description: 'After locking, run year-end closing before the period can be closed via gnubok_close_period. Verify balances first with gnubok_get_trial_balance.',
+          tool: 'gnubok_get_trial_balance',
+          args: { fiscal_period_id: fiscalPeriodId },
+        }
       )
     },
   },
@@ -2983,11 +3062,18 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
-      // Enforce scope
+      // Enforce scope — surface structured error so the agent can dispatch.
       const requiredScope = TOOL_SCOPE_MAP[toolName]
       if (requiredScope && !hasScope(keyScopes, requiredScope)) {
+        const scopeError = toToolError(
+          new Error(`Insufficient scope: this API key does not have the "${requiredScope}" scope`),
+          { toolName }
+        )
         return NextResponse.json(
-          jsonRpcError(id ?? null, -32600, `Insufficient scope: this API key does not have the "${requiredScope}" scope`)
+          jsonRpc(id ?? null, {
+            content: [{ type: 'text', text: JSON.stringify(scopeError, null, 2) }],
+            isError: true,
+          })
         )
       }
 
@@ -3001,10 +3087,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
         return NextResponse.json(jsonRpc(id ?? null, response))
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Tool execution failed'
+        const structured = toToolError(err, { toolName })
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            content: [{ type: 'text', text: JSON.stringify({ error: message }) }],
+            content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
             isError: true,
           })
         )
