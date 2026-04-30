@@ -29,6 +29,12 @@ import { dataResources, findResource, parseResourceQuery } from './resources'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { shouldAutoCommit } from '@/lib/pending-operations/should-auto-commit'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
+import {
+  checkIdempotencyKey,
+  storeIdempotencyResponse,
+  hashRequest,
+  IdempotencyKeyReuseError,
+} from '@/lib/api/idempotency'
 import { toToolError } from './tool-result'
 import type { PendingOperation } from '@/types'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
@@ -127,6 +133,21 @@ interface StageNextHint {
   resource?: string
 }
 
+interface StageOptions {
+  /**
+   * When true, validate inputs and return the would-be preview without
+   * inserting into pending_operations or executing any side-effects. Used
+   * by agents to preflight an operation before committing to it.
+   */
+  dryRun?: boolean
+  /**
+   * Per-operation idempotency key. When supplied, repeat calls with the same
+   * key + same payload return the original response and never re-execute.
+   * Different payload + same key returns IDEMPOTENCY_KEY_REUSE.
+   */
+  idempotencyKey?: string
+}
+
 async function stagePendingOperation(
   supabase: SupabaseClient,
   companyId: string,
@@ -136,10 +157,13 @@ async function stagePendingOperation(
   params: Record<string, unknown>,
   previewData: Record<string, unknown>,
   actor: ActorContext = { type: 'user' },
-  next?: StageNextHint
+  next?: StageNextHint,
+  options: StageOptions = {}
 ): Promise<{
-  staged: true
-  operation_id: string
+  staged: boolean
+  dry_run?: boolean
+  idempotency_replay?: boolean
+  operation_id?: string
   risk_level: 'low' | 'medium' | 'high'
   actor: ActorContext
   auto_committed: boolean
@@ -150,6 +174,40 @@ async function stagePendingOperation(
   next?: StageNextHint
 }> {
   const riskLevel = getRiskLevel(operationType)
+  const branding = getBranding().appName.toLowerCase()
+
+  // ── Dry-run path: skip both the cache and the insert. Return the preview
+  //    so the agent sees exactly what would happen without committing.
+  if (options.dryRun) {
+    return {
+      staged: false,
+      dry_run: true,
+      risk_level: riskLevel,
+      actor,
+      auto_committed: false,
+      message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.`,
+      preview: previewData,
+      ...(next ? { next } : {}),
+    }
+  }
+
+  // ── Idempotency check: same key + same payload → return cached response.
+  const requestHash = options.idempotencyKey
+    ? hashRequest({ operationType, params })
+    : null
+  if (options.idempotencyKey && requestHash) {
+    const cached = await checkIdempotencyKey(supabase, userId, options.idempotencyKey, requestHash)
+    if (cached) {
+      return {
+        ...(cached.body as Record<string, unknown>),
+        idempotency_replay: true,
+        risk_level: riskLevel,
+        actor,
+        message: `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
+        preview: previewData,
+      } as Awaited<ReturnType<typeof stagePendingOperation>>
+    }
+  }
 
   // Decide auto-commit eligibility BEFORE insert so we can persist the flag.
   const previewAmount =
@@ -183,10 +241,8 @@ async function stagePendingOperation(
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
-  const branding = getBranding().appName.toLowerCase()
-
   if (!decision.eligible) {
-    return {
+    const response = {
       staged: true,
       operation_id: data.id,
       risk_level: riskLevel,
@@ -196,7 +252,15 @@ async function stagePendingOperation(
       message: `Operation staged for review (risk: ${riskLevel}). Open the ${branding} web app to approve or reject it.`,
       preview: previewData,
       ...(next ? { next } : {}),
+    } as const
+
+    if (options.idempotencyKey && requestHash) {
+      await storeIdempotencyResponse(
+        supabase, userId, companyId, options.idempotencyKey, requestHash,
+        'success', { staged: true, operation_id: data.id, auto_committed: false, preview: previewData }
+      )
     }
+    return response
   }
 
   // Auto-commit path: invoke the dispatcher inline so the same audit
@@ -209,7 +273,7 @@ async function stagePendingOperation(
     { isAutoCommit: true }
   )
 
-  return {
+  const response = {
     staged: true,
     operation_id: data.id,
     risk_level: riskLevel,
@@ -222,7 +286,22 @@ async function stagePendingOperation(
       : `Auto-commit failed: ${commitResult.error ?? 'unknown'}. Review in the ${branding} web app.`,
     preview: previewData,
     ...(next ? { next } : {}),
+  } as const
+
+  if (options.idempotencyKey && requestHash) {
+    await storeIdempotencyResponse(
+      supabase, userId, companyId, options.idempotencyKey, requestHash,
+      commitResult.status === 'committed' ? 'success' : 'error',
+      {
+        staged: true,
+        operation_id: data.id,
+        auto_committed: commitResult.status === 'committed',
+        result: commitResult.data,
+        preview: previewData,
+      }
+    )
   }
+  return response
 }
 
 // ── Shared categorization logic ──────────────────────────────
@@ -729,13 +808,21 @@ const tools: McpTool[] = [
         postal_code: { type: 'string' },
         city: { type: 'string' },
         country: { type: 'string', description: 'Country (default Sweden)' },
+        dry_run: {
+          type: 'boolean',
+          description: 'If true, validate inputs and return the would-be preview without staging or creating. No DB writes, no side-effects.',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+        },
       },
       required: ['name', 'customer_type'],
     },
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: false,
+      idempotentHint: true, // safe to retry with idempotency_key
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase, actor) {
@@ -768,6 +855,10 @@ const tools: McpTool[] = [
         {
           description: 'Once approved, you can invoice this customer with gnubok_create_invoice using the returned customer_id.',
           tool: 'gnubok_create_invoice',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
         }
       )
     },

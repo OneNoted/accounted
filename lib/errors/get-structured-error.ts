@@ -88,6 +88,9 @@ const ERROR_CODE_REMEDIATION: Record<string, StructuredErrorRemediation> = {
   INVOICE_ALREADY_SENT: {
     description: 'The invoice is already sent or paid; sending again would create a duplicate.',
   },
+  IDEMPOTENCY_KEY_REUSE: {
+    description: 'This idempotency_key was previously used with a different request body. Use a fresh UUID for a new operation, or send the original request body to replay.',
+  },
 }
 
 /**
