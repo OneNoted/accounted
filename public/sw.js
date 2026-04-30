@@ -32,7 +32,7 @@ self.addEventListener('push', (event) => {
   }
 
   event.waitUntil(
-    self.registration.showNotification(title || 'Ekonomi', options)
+    self.registration.showNotification(title || '__NEXT_PUBLIC_BRANDING_APP_NAME__', options)
   )
 })
 
