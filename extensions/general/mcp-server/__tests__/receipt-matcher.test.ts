@@ -209,17 +209,24 @@ describe('MCP Receipt Matcher', () => {
   // ── Protocol: resources/list ──
 
   describe('resources/list', () => {
-    it('returns the receipt-matcher resource', async () => {
+    it('includes the receipt-matcher widget alongside data resources', async () => {
       const res = await handleMcpRequest(mcpRequest('resources/list'))
       const result = await parseResult(res)
 
-      expect(result.resources).toHaveLength(1)
-      expect(result.resources[0]).toEqual({
+      const widget = result.resources.find(
+        (r: { uri: string }) => r.uri === 'ui://receipt-matcher/app.html'
+      )
+      expect(widget).toEqual({
         uri: 'ui://receipt-matcher/app.html',
         name: 'Receipt Matcher',
         description: 'Interactive widget for matching receipts to uncategorized transactions',
         mimeType: 'text/html;profile=mcp-app',
       })
+
+      // Data resources (added in Stream 3 Phase 1) should also be listed.
+      const uris = result.resources.map((r: { uri: string }) => r.uri)
+      expect(uris).toContain('gnubok://company/current')
+      expect(uris).toContain('gnubok://capabilities')
     })
   })
 

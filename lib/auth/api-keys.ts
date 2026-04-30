@@ -7,13 +7,14 @@ const KEY_PREFIX = 'gnubok_sk_'
 
 export const API_KEY_SCOPES = {
   'transactions:read':  { label: 'Transaktioner — läs',  description: 'Lista transaktioner, mallförslag, kategoriförslag (3 verktyg)' },
-  'transactions:write': { label: 'Transaktioner — skriv', description: 'Kategorisera, kvittomatchning, koppling mot faktura (3 verktyg)' },
+  'transactions:write': { label: 'Transaktioner — skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura (4 verktyg)' },
   'customers:read':     { label: 'Kunder — läs',         description: 'Lista kunder (1 verktyg)' },
   'customers:write':    { label: 'Kunder — skriv',       description: 'Skapa kunder (1 verktyg)' },
   'invoices:read':      { label: 'Fakturor — läs',       description: 'Lista fakturor (1 verktyg)' },
   'invoices:write':     { label: 'Fakturor — skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
   'suppliers:read':     { label: 'Leverantörer — läs',   description: 'Lista leverantörer och leverantörsfakturor (2 verktyg)' },
-  'reports:read':       { label: 'Rapporter — läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning (11 verktyg)' },
+  'reports:read':       { label: 'Rapporter — läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
+  'bookkeeping:write':  { label: 'Bokföring — skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar' },
   'payroll:read':       { label: 'Löner — läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
   'payroll:write':      { label: 'Löner — skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
 } as const
@@ -38,6 +39,7 @@ export const SCOPE_GROUPS = [
   { domain: 'invoices',     label: 'Fakturor',       read: 'invoices:read' as const,     write: 'invoices:write' as const },
   { domain: 'suppliers',    label: 'Leverantörer',   read: 'suppliers:read' as const,    write: null },
   { domain: 'reports',      label: 'Rapporter',      read: 'reports:read' as const,      write: null },
+  { domain: 'bookkeeping',  label: 'Bokföring',      read: null,                          write: 'bookkeeping:write' as const },
   { domain: 'payroll',      label: 'Löner',          read: 'payroll:read' as const,      write: 'payroll:write' as const },
 ] as const
 
@@ -85,6 +87,13 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_salary_run:               'payroll:write',
   gnubok_calculate_salary_run:            'payroll:write',
   gnubok_generate_agi:                    'payroll:write',
+  // Bookkeeping write (Stream 1 Phase 1) — high-risk, always staged
+  gnubok_close_period:                    'bookkeeping:write',
+  gnubok_lock_period:                     'bookkeeping:write',
+  // Transaction reversal (medium-risk)
+  gnubok_uncategorize_transaction:        'transactions:write',
+  // SIE export (read-only)
+  gnubok_export_sie:                      'reports:read',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {
@@ -126,12 +135,27 @@ export function extractBearerToken(request: Request): string | null {
 /**
  * Validate an API key and enforce rate limiting.
  * Uses the DB RPC for atomic check + increment.
- * Returns the user_id and effective scopes on success, or an error with HTTP status.
+ * Returns the user_id, company_id, api_key_id, name, and effective scopes on
+ * success, or an error with HTTP status.
  * null scopes in DB → DEFAULT_SCOPES (read-only).
+ *
+ * api_key_id and api_key_name are returned so callers (e.g. the MCP server)
+ * can record actor attribution on pending_operations and audit_log.
+ * They may be undefined when the deployed DB hasn't yet run the migration
+ * that adds them to the RPC return shape.
  */
 export async function validateApiKey(
   key: string
-): Promise<{ userId: string; companyId: string; scopes: ApiKeyScope[] } | { error: string; status: number }> {
+): Promise<
+  | {
+      userId: string
+      companyId: string
+      apiKeyId?: string
+      apiKeyName?: string
+      scopes: ApiKeyScope[]
+    }
+  | { error: string; status: number }
+> {
   if (!key.startsWith(KEY_PREFIX)) {
     return { error: 'Invalid API key format', status: 401 }
   }
@@ -156,6 +180,8 @@ export async function validateApiKey(
   return {
     userId: row.user_id,
     companyId: row.company_id,
+    apiKeyId: row.api_key_id,
+    apiKeyName: row.api_key_name,
     scopes: validateScopes(row.scopes) ?? DEFAULT_SCOPES,
   }
 }

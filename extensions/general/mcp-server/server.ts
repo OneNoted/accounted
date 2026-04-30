@@ -25,12 +25,17 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { RECEIPT_MATCHER_HTML } from './widget-html'
+import { dataResources, findResource, parseResourceQuery } from './resources'
+import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { closePeriod, lockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { generateSIEExport } from '@/lib/reports/sie-export'
+import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { getSuggestedCategories } from '@/lib/transactions/category-suggestions'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
@@ -45,6 +50,14 @@ import { uploadDocument, MAX_DOCUMENT_SIZE } from '@/lib/core/documents/document
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler — no duplicate call needed here.
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem } from '@/types'
+
+// ── Actor context ────────────────────────────────────────────
+
+interface ActorContext {
+  type: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
+  id?: string
+  label?: string
+}
 
 // ── JSON-RPC types ───────────────────────────────────────────
 
@@ -81,7 +94,8 @@ interface McpTool {
     args: Record<string, unknown>,
     companyId: string,
     userId: string,
-    supabase: SupabaseClient
+    supabase: SupabaseClient,
+    actor?: ActorContext
   ) => Promise<unknown>
 }
 
@@ -109,8 +123,18 @@ async function stagePendingOperation(
   operationType: string,
   title: string,
   params: Record<string, unknown>,
-  previewData: Record<string, unknown>
-): Promise<{ staged: true; operation_id: string; message: string; preview: Record<string, unknown> }> {
+  previewData: Record<string, unknown>,
+  actor: ActorContext = { type: 'user' }
+): Promise<{
+  staged: true
+  operation_id: string
+  risk_level: 'low' | 'medium' | 'high'
+  actor: ActorContext
+  message: string
+  preview: Record<string, unknown>
+}> {
+  const riskLevel = getRiskLevel(operationType)
+
   const { data, error } = await supabase
     .from('pending_operations')
     .insert({
@@ -120,6 +144,10 @@ async function stagePendingOperation(
       title,
       params,
       preview_data: previewData,
+      actor_type: actor.type,
+      actor_id: actor.id ?? null,
+      actor_label: actor.label ?? null,
+      risk_level: riskLevel,
     })
     .select('id')
     .single()
@@ -129,7 +157,9 @@ async function stagePendingOperation(
   return {
     staged: true,
     operation_id: data.id,
-    message: `Operation staged for review. Open the ${getBranding().appName.toLowerCase()} web app to approve or reject it.`,
+    risk_level: riskLevel,
+    actor,
+    message: `Operation staged for review (risk: ${riskLevel}). Open the ${getBranding().appName.toLowerCase()} web app to approve or reject it.`,
     preview: previewData,
   }
 }
@@ -466,7 +496,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
         args.transaction_id as string,
@@ -511,7 +541,8 @@ const tools: McpTool[] = [
           currency: result.currency,
           vat_lines: result.vat_lines || [],
           category: result.category,
-        }
+        },
+        actor
       )
     },
   },
@@ -646,7 +677,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const name = args.name as string
       const customerType = args.customer_type as string
 
@@ -671,7 +702,8 @@ const tools: McpTool[] = [
       return stagePendingOperation(supabase, companyId, userId, 'create_customer',
         `Ny kund: ${params.name}`,
         params,
-        params // params ARE the preview for customers
+        params, // params ARE the preview for customers
+        actor
       )
     },
   },
@@ -805,7 +837,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const customerId = args.customer_id as string
       const items = args.items as Array<{
         description: string
@@ -898,7 +930,8 @@ const tools: McpTool[] = [
           vat_treatment: vatRules.treatment,
           invoice_date: invoiceDate,
           due_date: dueDate,
-        }
+        },
+        actor
       )
     },
   },
@@ -1358,7 +1391,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
 
@@ -1385,7 +1418,8 @@ const tools: McpTool[] = [
           total: invoice.total,
           currency: invoice.currency,
           payment_date: paymentDate,
-        }
+        },
+        actor
       )
     },
   },
@@ -1420,7 +1454,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: true,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
 
@@ -1450,7 +1484,8 @@ const tools: McpTool[] = [
           customer_email: customer.email,
           total: invoice.total,
           currency: invoice.currency,
-        }
+        },
+        actor
       )
     },
   },
@@ -1481,7 +1516,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
 
@@ -1503,7 +1538,8 @@ const tools: McpTool[] = [
           customer_name: invoice.customer?.name,
           total: invoice.total,
           currency: invoice.currency,
-        }
+        },
+        actor
       )
     },
   },
@@ -1983,7 +2019,7 @@ const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const invoiceId = args.invoice_id as string
       if (!transactionId || !invoiceId) throw new Error('transaction_id and invoice_id are required')
@@ -2025,7 +2061,8 @@ const tools: McpTool[] = [
           invoice_total: invoice.total,
           invoice_currency: invoice.currency,
           customer_name: (invoice.customer as Record<string, unknown>)?.name as string,
-        }
+        },
+        actor
       )
     },
   },
@@ -2556,6 +2593,239 @@ const tools: McpTool[] = [
       }
     },
   },
+
+  // ── Stream 1 Phase 1: Bookkeeping write (high-risk, always staged) ──
+
+  {
+    name: 'gnubok_close_period',
+    description:
+      'Stage a "close fiscal period" proposal for human approval. Closing a period is irreversible per BFL — it requires the period to already be locked AND the year-end closing entry to be posted.\n\n' +
+      'Args:\n' +
+      '  - fiscal_period_id (string, required): UUID of the fiscal period\n\n' +
+      'Returns: { staged: true, operation_id, risk_level: "high", preview }\n\n' +
+      'High-risk: never auto-committed regardless of trust level. Always requires human approval in the web app.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to close' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const { data: period, error: fetchError } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end, is_closed, locked_at, closing_entry_id')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !period) throw new Error('Fiscal period not found')
+      if (period.is_closed) throw new Error('Period is already closed')
+      if (!period.locked_at) throw new Error('Period must be locked before closing — call gnubok_lock_period first')
+      if (!period.closing_entry_id) throw new Error('Year-end closing entry must exist before the period can be closed')
+
+      return stagePendingOperation(supabase, companyId, userId, 'close_period',
+        `Stäng period: ${period.name} (${period.period_start} – ${period.period_end})`,
+        { fiscal_period_id: fiscalPeriodId },
+        {
+          period_name: period.name,
+          period_start: period.period_start,
+          period_end: period.period_end,
+          locked_at: period.locked_at,
+          closing_entry_id: period.closing_entry_id,
+          irreversible: true,
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_lock_period',
+    description:
+      'Stage a "lock fiscal period" proposal for human approval. Locking prevents new entries from being posted into the period. Requires zero unbooked business transactions.\n\n' +
+      'Args:\n' +
+      '  - fiscal_period_id (string, required): UUID of the fiscal period\n\n' +
+      'Returns: { staged: true, operation_id, risk_level: "high", preview }\n\n' +
+      'High-risk: never auto-committed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to lock' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const { data: period, error: fetchError } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end, is_closed, locked_at')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !period) throw new Error('Fiscal period not found')
+      if (period.is_closed) throw new Error('Period is already closed')
+      if (period.locked_at) throw new Error('Period is already locked')
+
+      const { count: unbookedCount } = await supabase
+        .from('transactions')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .eq('is_business', true)
+        .gte('date', period.period_start)
+        .lte('date', period.period_end)
+
+      if (unbookedCount && unbookedCount > 0) {
+        throw new Error(
+          `Kan inte låsa period: ${unbookedCount} affärstransaktion(er) saknar bokföring. Bokför alla transaktioner först.`
+        )
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'lock_period',
+        `Lås period: ${period.name} (${period.period_start} – ${period.period_end})`,
+        { fiscal_period_id: fiscalPeriodId },
+        {
+          period_name: period.name,
+          period_start: period.period_start,
+          period_end: period.period_end,
+          unbooked_business_transactions: 0,
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_uncategorize_transaction',
+    description:
+      'Stage an "uncategorize transaction" proposal for human approval. Reverses the journal entry via storno (legal — never deletes) and clears the transaction\'s category.\n\n' +
+      'Use when a previous categorization needs to be undone before re-categorizing.\n\n' +
+      'Args:\n' +
+      '  - transaction_id (string, required): UUID of the transaction\n\n' +
+      'Returns: { staged: true, operation_id, risk_level: "medium", preview }',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transaction_id: { type: 'string', description: 'UUID of the transaction to uncategorize' },
+      },
+      required: ['transaction_id'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      if (!transactionId) throw new Error('transaction_id is required')
+
+      const { data: tx, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, category, journal_entry_id')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (txError || !tx) throw new Error('Transaction not found')
+      if (!tx.journal_entry_id) throw new Error('Transaction has no journal entry to reverse')
+
+      const { data: entry } = await supabase
+        .from('journal_entries')
+        .select('id, voucher_number, voucher_series, status')
+        .eq('id', tx.journal_entry_id)
+        .eq('company_id', companyId)
+        .single()
+
+      if (!entry || entry.status !== 'posted') {
+        throw new Error('Linked journal entry is not posted — nothing to reverse')
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'uncategorize_transaction',
+        `Återta kategorisering: ${tx.merchant_name || tx.description || transactionId}`,
+        { transaction_id: transactionId, journal_entry_id: tx.journal_entry_id },
+        {
+          transaction_description: tx.merchant_name || tx.description,
+          amount: tx.amount,
+          currency: tx.currency,
+          date: tx.date,
+          current_category: tx.category,
+          will_reverse_voucher: `${entry.voucher_series}${entry.voucher_number}`,
+          method: 'storno (reversal entry, never deletes)',
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_export_sie',
+    description:
+      'Generate a SIE-4 file for the given fiscal period. Returns the SIE content as text — the agent can save it locally or hand it to the user.\n\n' +
+      'SIE-4 is the standard Swedish bookkeeping interchange format (cp437/utf-8). Include this when migrating between systems or handing data to an auditor.\n\n' +
+      'Args:\n' +
+      '  - fiscal_period_id (string, required): UUID of the fiscal period to export\n\n' +
+      'Returns: { content, byte_size, fiscal_period_id, company_name, generated_at }',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to export' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const { data: company } = await supabase
+        .from('company_settings')
+        .select('company_name, org_number')
+        .eq('company_id', companyId)
+        .single()
+
+      if (!company) throw new Error('Company settings not found')
+
+      const sieContent = await generateSIEExport(supabase, companyId, {
+        fiscal_period_id: fiscalPeriodId,
+        company_name: company.company_name || 'Unknown',
+        org_number: company.org_number,
+      })
+
+      return {
+        content: sieContent,
+        byte_size: Buffer.byteLength(sieContent, 'utf8'),
+        fiscal_period_id: fiscalPeriodId,
+        company_name: company.company_name,
+        org_number: company.org_number,
+        generated_at: new Date().toISOString(),
+      }
+    },
+  },
 ]
 
 // ── MCP Protocol Handler ─────────────────────────────────────
@@ -2625,8 +2895,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     })
   }
 
-  const { userId, companyId, scopes: keyScopes } = authResult
+  const { userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName } = authResult
   const supabase = createServiceClientNoCookies()
+  const actor: ActorContext = {
+    type: 'api_key',
+    id: apiKeyId,
+    label: apiKeyName ?? 'Unnamed API key',
+  }
 
   // ── Parse JSON-RPC ──
   let body: JsonRpcRequest
@@ -2717,7 +2992,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       try {
-        const result = await tool.execute(toolArgs, companyId, userId, supabase)
+        const result = await tool.execute(toolArgs, companyId, userId, supabase, actor)
         const response: Record<string, unknown> = {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         }
@@ -2746,6 +3021,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               description: 'Interactive widget for matching receipts to uncategorized transactions',
               mimeType: 'text/html;profile=mcp-app',
             },
+            ...dataResources.map((r) => ({
+              uri: r.uri,
+              name: r.name,
+              description: r.description,
+              mimeType: r.mimeType,
+            })),
           ],
         })
       )
@@ -2765,6 +3046,36 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           })
         )
       }
+
+      const dataResource = findResource(uri)
+      if (dataResource) {
+        try {
+          const result = await dataResource.read({
+            supabase,
+            companyId,
+            userId,
+            scopes: keyScopes,
+            query: parseResourceQuery(uri),
+          })
+          return NextResponse.json(
+            jsonRpc(id ?? null, {
+              contents: [
+                {
+                  uri,
+                  mimeType: dataResource.mimeType,
+                  text: JSON.stringify(result, null, 2),
+                },
+              ],
+            })
+          )
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Resource read failed'
+          return NextResponse.json(
+            jsonRpcError(id ?? null, -32603, `Resource read error: ${message}`)
+          )
+        }
+      }
+
       return NextResponse.json(
         jsonRpcError(id ?? null, -32602, `Resource not found: "${uri}"`)
       )
