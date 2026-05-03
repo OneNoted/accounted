@@ -18,6 +18,8 @@ import {
   Receipt,
   CheckCircle2,
   XCircle,
+  Bot,
+  Sparkles,
 } from 'lucide-react'
 import type { PendingOperation, PendingOperationStatus } from '@/types'
 
@@ -297,9 +299,26 @@ export default function PendingOperationsPage() {
                     onClick={() => setExpandedId(isExpanded ? null : op.id)}
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <Badge variant={config.variant}>{config.label}</Badge>
-                        {op.status === 'committed' && (
+                        {op.risk_level === 'high' && (
+                          <Badge variant="outline" className="border-terracotta/40 text-terracotta">
+                            Hög risk
+                          </Badge>
+                        )}
+                        {op.actor_type && op.actor_type !== 'user' && (
+                          <Badge variant="outline" className="text-xs">
+                            <Bot className="h-3 w-3 mr-1" />
+                            {op.actor_label || op.actor_type}
+                          </Badge>
+                        )}
+                        {op.auto_committed_at && (
+                          <Badge variant="outline" className="bg-sage/10 border-sage/40 text-sage-foreground">
+                            <Sparkles className="h-3 w-3 mr-1" />
+                            Auto-godkänd
+                          </Badge>
+                        )}
+                        {op.status === 'committed' && !op.auto_committed_at && (
                           <Badge variant="default" className="bg-emerald-500/10 text-emerald-600 border-emerald-200">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
                             Godkänd

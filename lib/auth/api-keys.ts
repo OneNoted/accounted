@@ -13,6 +13,7 @@ export const API_KEY_SCOPES = {
   'invoices:read':      { label: 'Fakturor — läs',       description: 'Lista fakturor (1 verktyg)' },
   'invoices:write':     { label: 'Fakturor — skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
   'suppliers:read':     { label: 'Leverantörer — läs',   description: 'Lista leverantörer och leverantörsfakturor (2 verktyg)' },
+  'suppliers:write':    { label: 'Leverantörer — skriv', description: 'Godkänn och kreditera leverantörsfakturor (2 verktyg)' },
   'reports:read':       { label: 'Rapporter — läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
   'bookkeeping:write':  { label: 'Bokföring — skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar' },
   'payroll:read':       { label: 'Löner — läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
@@ -37,7 +38,7 @@ export const SCOPE_GROUPS = [
   { domain: 'transactions', label: 'Transaktioner',  read: 'transactions:read' as const, write: 'transactions:write' as const },
   { domain: 'customers',    label: 'Kunder',         read: 'customers:read' as const,    write: 'customers:write' as const },
   { domain: 'invoices',     label: 'Fakturor',       read: 'invoices:read' as const,     write: 'invoices:write' as const },
-  { domain: 'suppliers',    label: 'Leverantörer',   read: 'suppliers:read' as const,    write: null },
+  { domain: 'suppliers',    label: 'Leverantörer',   read: 'suppliers:read' as const,    write: 'suppliers:write' as const },
   { domain: 'reports',      label: 'Rapporter',      read: 'reports:read' as const,      write: null },
   { domain: 'bookkeeping',  label: 'Bokföring',      read: null,                          write: 'bookkeeping:write' as const },
   { domain: 'payroll',      label: 'Löner',          read: 'payroll:read' as const,      write: 'payroll:write' as const },
@@ -90,10 +91,20 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Bookkeeping write (Stream 1 Phase 1) — high-risk, always staged
   gnubok_close_period:                    'bookkeeping:write',
   gnubok_lock_period:                     'bookkeeping:write',
+  gnubok_run_year_end:                    'bookkeeping:write',
+  gnubok_set_opening_balances:            'bookkeeping:write',
+  gnubok_run_currency_revaluation:        'bookkeeping:write',
+  gnubok_explain_voucher_gap:             'bookkeeping:write',
+  gnubok_list_voucher_gaps:               'reports:read',
   // Transaction reversal (medium-risk)
   gnubok_uncategorize_transaction:        'transactions:write',
   // SIE export (read-only)
   gnubok_export_sie:                      'reports:read',
+  // Supplier invoice lifecycle
+  gnubok_approve_supplier_invoice:        'suppliers:write',
+  gnubok_credit_supplier_invoice:         'suppliers:write',
+  // Invoice conversion
+  gnubok_convert_invoice:                 'invoices:write',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {

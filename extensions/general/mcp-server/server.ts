@@ -2996,6 +2996,327 @@ const tools: McpTool[] = [
       }
     },
   },
+
+  // ── Stream 1 Phase 1 follow-up: year-end, opening balances, revaluation,
+  //    voucher gaps, supplier-invoice lifecycle, proforma conversion ──
+
+  {
+    name: 'gnubok_run_year_end',
+    description:
+      'Stage a year-end closing proposal for human approval. Year-end zeros class 3-8 result accounts into 2099, locks the period, creates the next period, and seeds opening balances. Always high-risk.\n\n' +
+      'Args: fiscal_period_id (required)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to close out' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const { data: period } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end, is_closed, locked_at')
+        .eq('id', fiscalPeriodId).eq('company_id', companyId).single()
+
+      if (!period) throw new Error('Fiscal period not found')
+      if (period.is_closed) throw new Error('Period is already closed')
+
+      return stagePendingOperation(supabase, companyId, userId, 'run_year_end',
+        `Bokslut: ${period.name}`,
+        { fiscal_period_id: fiscalPeriodId },
+        {
+          period_name: period.name,
+          period_start: period.period_start,
+          period_end: period.period_end,
+          will: 'zero result accounts into 2099, lock period, create next period, generate opening balances',
+        },
+        actor,
+        {
+          description: 'After year-end, the period is locked and ready for closing via gnubok_close_period.',
+          tool: 'gnubok_close_period',
+          args: { fiscal_period_id: fiscalPeriodId },
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_set_opening_balances',
+    description:
+      'Stage an "opening balances" proposal: copy class 1-2 closing balances from a closed period into the next period as opening balances.\n\n' +
+      'Args: closed_period_id, next_period_id (both required)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        closed_period_id: { type: 'string', description: 'UUID of the closed source period' },
+        next_period_id: { type: 'string', description: 'UUID of the next (target) period' },
+      },
+      required: ['closed_period_id', 'next_period_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const closedId = args.closed_period_id as string
+      const nextId = args.next_period_id as string
+      if (!closedId || !nextId) throw new Error('closed_period_id and next_period_id are required')
+
+      return stagePendingOperation(supabase, companyId, userId, 'set_opening_balances',
+        `Ingående balans: ${nextId}`,
+        { closed_period_id: closedId, next_period_id: nextId },
+        { closed_period_id: closedId, next_period_id: nextId, will: 'create opening balance entry from closed-period trial balance' },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_run_currency_revaluation',
+    description:
+      'Stage a currency revaluation: revalue open foreign-currency receivables and payables to the closing-date FX rate. Posts to 3960/7960. Throws if a revaluation already exists for the period.\n\n' +
+      'Args: fiscal_period_id, closing_date (required, YYYY-MM-DD)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period' },
+        closing_date: { type: 'string', description: 'Revaluation date (YYYY-MM-DD)' },
+      },
+      required: ['fiscal_period_id', 'closing_date'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      const closingDate = args.closing_date as string
+      if (!fiscalPeriodId || !closingDate) throw new Error('fiscal_period_id and closing_date are required')
+
+      return stagePendingOperation(supabase, companyId, userId, 'run_currency_revaluation',
+        `Valutaomvärdering ${closingDate}`,
+        { fiscal_period_id: fiscalPeriodId, closing_date: closingDate },
+        { fiscal_period_id: fiscalPeriodId, closing_date: closingDate, posts_to: ['3960', '7960'] },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_list_voucher_gaps',
+    description:
+      'List voucher number gaps in a fiscal period (BFNAR 2013:2 audit requirement). Each gap may have an existing explanation.\n\n' +
+      'Args: fiscal_period_id (required), voucher_series (optional)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string' },
+        voucher_series: { type: 'string', description: 'Optional series filter (e.g. "A")' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      const voucherSeries = args.voucher_series as string | undefined
+
+      let seriesQuery = supabase
+        .from('voucher_sequences').select('voucher_series')
+        .eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
+      if (voucherSeries) seriesQuery = seriesQuery.eq('voucher_series', voucherSeries)
+
+      const { data: seriesRows } = await seriesQuery
+      if (!seriesRows || seriesRows.length === 0) {
+        return { gaps: [], total_gaps: 0, unexplained_gaps: 0 }
+      }
+
+      const allGaps: Array<{ series: string; gap_start: number; gap_end: number; explanation: unknown }> = []
+      for (const row of seriesRows) {
+        const { data: gaps } = await supabase.rpc('detect_voucher_gaps', {
+          p_company_id: companyId,
+          p_fiscal_period_id: fiscalPeriodId,
+          p_series: row.voucher_series,
+        })
+        if (gaps) {
+          for (const gap of gaps as Array<{ gap_start: number; gap_end: number }>) {
+            allGaps.push({ series: row.voucher_series, gap_start: gap.gap_start, gap_end: gap.gap_end, explanation: null })
+          }
+        }
+      }
+
+      if (allGaps.length > 0) {
+        const { data: explanations } = await supabase
+          .from('voucher_gap_explanations')
+          .select('id, voucher_series, gap_start, gap_end, explanation, created_at')
+          .eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
+        if (explanations) {
+          const map = new Map(explanations.map((e) => [`${e.voucher_series}:${e.gap_start}:${e.gap_end}`, e]))
+          for (const g of allGaps) {
+            g.explanation = map.get(`${g.series}:${g.gap_start}:${g.gap_end}`) ?? null
+          }
+        }
+      }
+
+      return {
+        gaps: allGaps,
+        total_gaps: allGaps.length,
+        unexplained_gaps: allGaps.filter((g) => !g.explanation).length,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_explain_voucher_gap',
+    description:
+      'Stage an explanation for a voucher number gap. Required for BFNAR 2013:2 compliance — every gap must have a documented reason.\n\n' +
+      'Args: fiscal_period_id, voucher_series, gap_start, gap_end, explanation (all required)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string' },
+        voucher_series: { type: 'string' },
+        gap_start: { type: 'number' },
+        gap_end: { type: 'number' },
+        explanation: { type: 'string', description: 'Swedish prose: why the gap exists' },
+      },
+      required: ['fiscal_period_id', 'voucher_series', 'gap_start', 'gap_end', 'explanation'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const explanation = args.explanation as string
+      if (!explanation?.trim()) throw new Error('explanation is required')
+
+      return stagePendingOperation(supabase, companyId, userId, 'explain_voucher_gap',
+        `Förklara verifikationslucka ${args.voucher_series}:${args.gap_start}-${args.gap_end}`,
+        {
+          fiscal_period_id: args.fiscal_period_id,
+          voucher_series: args.voucher_series,
+          gap_start: args.gap_start,
+          gap_end: args.gap_end,
+          explanation: explanation.trim(),
+        },
+        {
+          voucher_series: args.voucher_series,
+          gap_start: args.gap_start,
+          gap_end: args.gap_end,
+          explanation: explanation.trim(),
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_approve_supplier_invoice',
+    description:
+      'Stage approval of a registered supplier invoice. Moves status from "registered" to "approved". High-risk: never auto-committed.\n\n' +
+      'Args: supplier_invoice_id (required)',
+    inputSchema: {
+      type: 'object',
+      properties: { supplier_invoice_id: { type: 'string' } },
+      required: ['supplier_invoice_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const id = args.supplier_invoice_id as string
+      if (!id) throw new Error('supplier_invoice_id is required')
+
+      const { data: inv } = await supabase
+        .from('supplier_invoices')
+        .select('id, supplier_invoice_number, total, currency, status, supplier:suppliers(name)')
+        .eq('id', id).eq('company_id', companyId).single()
+      if (!inv) throw new Error('Supplier invoice not found')
+      if (inv.status !== 'registered') throw new Error('Kan bara godkänna registrerade fakturor')
+
+      return stagePendingOperation(supabase, companyId, userId, 'approve_supplier_invoice',
+        `Godkänn leverantörsfaktura ${inv.supplier_invoice_number}`,
+        { supplier_invoice_id: id },
+        {
+          supplier_invoice_number: inv.supplier_invoice_number,
+          supplier_name: (inv.supplier as { name?: string } | null)?.name,
+          total: inv.total,
+          currency: inv.currency,
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_credit_supplier_invoice',
+    description:
+      'Stage a credit-note (kreditfaktura) for an existing supplier invoice. Creates a mirror invoice with negative effect and reverses the registration JE under accrual method.\n\n' +
+      'Args: supplier_invoice_id (required)',
+    inputSchema: {
+      type: 'object',
+      properties: { supplier_invoice_id: { type: 'string' } },
+      required: ['supplier_invoice_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const id = args.supplier_invoice_id as string
+      if (!id) throw new Error('supplier_invoice_id is required')
+
+      const { data: inv } = await supabase
+        .from('supplier_invoices')
+        .select('id, supplier_invoice_number, total, currency, status, supplier:suppliers(name)')
+        .eq('id', id).eq('company_id', companyId).single()
+      if (!inv) throw new Error('Supplier invoice not found')
+      if (inv.status === 'credited') throw new Error('Fakturan har redan krediterats')
+
+      return stagePendingOperation(supabase, companyId, userId, 'credit_supplier_invoice',
+        `Kreditera leverantörsfaktura ${inv.supplier_invoice_number}`,
+        { supplier_invoice_id: id },
+        {
+          supplier_invoice_number: inv.supplier_invoice_number,
+          supplier_name: (inv.supplier as { name?: string } | null)?.name,
+          total: inv.total,
+          currency: inv.currency,
+          method: 'creates KREDIT- mirror invoice + reverses registration JE (accrual)',
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_convert_invoice',
+    description:
+      'Stage conversion of a proforma invoice to a real invoice. Allocates an F-series number, copies items, marks the proforma cancelled. Medium-risk.\n\n' +
+      'Args: invoice_id (required, must be proforma)',
+    inputSchema: {
+      type: 'object',
+      properties: { invoice_id: { type: 'string' } },
+      required: ['invoice_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const id = args.invoice_id as string
+      if (!id) throw new Error('invoice_id is required')
+
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, document_type, status, total, currency, customer:customers(name)')
+        .eq('id', id).eq('company_id', companyId).single()
+      if (!inv) throw new Error('Invoice not found')
+      if (inv.document_type !== 'proforma') throw new Error('Endast proformafakturor kan konverteras')
+      if (inv.status === 'cancelled') throw new Error('Denna proformafaktura har redan makuleras')
+
+      return stagePendingOperation(supabase, companyId, userId, 'convert_invoice',
+        `Konvertera proforma → faktura`,
+        { invoice_id: id },
+        {
+          customer_name: (inv.customer as { name?: string } | null)?.name,
+          total: inv.total,
+          currency: inv.currency,
+          will: 'allocate F-series number, copy items, cancel proforma',
+        },
+        actor,
+        {
+          description: 'After conversion, send the new invoice with gnubok_send_invoice.',
+          tool: 'gnubok_send_invoice',
+        }
+      )
+    },
+  },
 ]
 
 // ── MCP Protocol Handler ─────────────────────────────────────

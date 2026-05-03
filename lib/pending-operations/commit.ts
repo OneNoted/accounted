@@ -27,6 +27,13 @@ import {
   createInvoiceJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { closePeriod, lockPeriod } from '@/lib/core/bookkeeping/period-service'
+import {
+  executeYearEndClosing,
+  generateOpeningBalances,
+} from '@/lib/core/bookkeeping/year-end-service'
+import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
+import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getEmailService } from '@/lib/email/service'
 import {
@@ -771,6 +778,401 @@ async function commitMatchTransactionInvoice(
   return { data: { invoice_status: newStatus, paid_amount: newPaidAmount, journal_entry_id: journalEntryId } }
 }
 
+// ── Stream 1 Phase 1 + follow-up executors ───────────────────────
+
+async function commitClosePeriod(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+  try {
+    const period = await closePeriod(supabase, companyId, userId, id)
+    return { data: { period_id: period.id, closed_at: period.closed_at } }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Close failed', status: 400 }
+  }
+}
+
+async function commitLockPeriod(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+  try {
+    const period = await lockPeriod(supabase, companyId, userId, id)
+    return { data: { period_id: period.id, locked_at: period.locked_at } }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Lock failed', status: 400 }
+  }
+}
+
+async function commitUncategorizeTransaction(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const txId = params.transaction_id as string
+  const journalEntryId = params.journal_entry_id as string
+  if (!txId || !journalEntryId) return { error: 'transaction_id and journal_entry_id are required', status: 400 }
+
+  try {
+    await reverseEntry(supabase, companyId, userId, journalEntryId)
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Reversal failed', status: 500 }
+  }
+
+  const { error: updateError } = await supabase
+    .from('transactions')
+    .update({ is_business: null, category: null, journal_entry_id: null })
+    .eq('id', txId)
+    .eq('company_id', companyId)
+
+  if (updateError) return { error: 'Failed to reset transaction', status: 500 }
+
+  return { data: { transaction_id: txId, reversed_journal_entry_id: journalEntryId } }
+}
+
+async function commitRunYearEnd(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+
+  try {
+    const result = await executeYearEndClosing(supabase, companyId, userId, id)
+    return {
+      data: {
+        closing_entry_id: result.closingEntry?.id ?? null,
+        next_period_id: result.nextPeriod?.id ?? null,
+        opening_balance_entry_id: result.openingBalanceEntry?.id ?? null,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Year-end failed', status: 400 }
+  }
+}
+
+async function commitSetOpeningBalances(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const closedId = params.closed_period_id as string
+  const nextId = params.next_period_id as string
+  if (!closedId || !nextId) return { error: 'closed_period_id and next_period_id are required', status: 400 }
+
+  try {
+    const entry = await generateOpeningBalances(supabase, companyId, userId, closedId, nextId)
+    return { data: { opening_balance_entry_id: entry.id } }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Opening balances failed', status: 400 }
+  }
+}
+
+async function commitRunCurrencyRevaluation(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  const closingDate = params.closing_date as string
+  if (!id || !closingDate) return { error: 'fiscal_period_id and closing_date are required', status: 400 }
+
+  try {
+    const result = await executeCurrencyRevaluation(supabase, companyId, closingDate, id, userId)
+    return {
+      data: result
+        ? { entry_id: result.entry.id, items_revalued: result.preview.items.length }
+        : { entry_id: null, items_revalued: 0, message: 'No foreign-currency items to revalue' },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Revaluation failed', status: 400 }
+  }
+}
+
+async function commitExplainVoucherGap(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const fiscalPeriodId = params.fiscal_period_id as string
+  const voucherSeries = params.voucher_series as string
+  const gapStart = Number(params.gap_start)
+  const gapEnd = Number(params.gap_end)
+  const explanation = params.explanation as string
+  if (!fiscalPeriodId || !voucherSeries || !gapStart || !gapEnd || !explanation?.trim()) {
+    return { error: 'fiscal_period_id, voucher_series, gap_start, gap_end, and explanation are required', status: 400 }
+  }
+
+  const { data, error } = await supabase
+    .from('voucher_gap_explanations')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      fiscal_period_id: fiscalPeriodId,
+      voucher_series: voucherSeries,
+      gap_start: gapStart,
+      gap_end: gapEnd,
+      explanation: explanation.trim(),
+    })
+    .select('id')
+    .single()
+
+  if (error) return { error: error.message, status: 500 }
+  return { data: { explanation_id: data.id } }
+}
+
+async function commitApproveSupplierInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.supplier_invoice_id as string
+  if (!id) return { error: 'supplier_invoice_id is required', status: 400 }
+
+  const { data: invoice } = await supabase
+    .from('supplier_invoices').select('*').eq('id', id).eq('company_id', companyId).single()
+
+  if (!invoice) return { error: 'Supplier invoice not found', status: 404 }
+  if (invoice.status !== 'registered') {
+    return { error: 'Kan bara godkänna registrerade fakturor', status: 400 }
+  }
+
+  const { data, error } = await supabase
+    .from('supplier_invoices')
+    .update({ status: 'approved' })
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .select()
+    .single()
+
+  if (error) return { error: error.message, status: 500 }
+
+  try {
+    await eventBus.emit({
+      type: 'supplier_invoice.approved',
+      payload: { supplierInvoice: data, companyId, userId },
+    })
+  } catch { /* non-blocking */ }
+
+  return { data: { supplier_invoice_id: id, status: 'approved' } }
+}
+
+async function commitCreditSupplierInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.supplier_invoice_id as string
+  if (!id) return { error: 'supplier_invoice_id is required', status: 400 }
+
+  const { data: original, error: fetchError } = await supabase
+    .from('supplier_invoices')
+    .select('*, supplier:suppliers(*), items:supplier_invoice_items(*)')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !original) return { error: 'Supplier invoice not found', status: 404 }
+  if (original.status === 'credited') return { error: 'Fakturan har redan krediterats', status: 409 }
+
+  const { data: arrivalNum } = await supabase.rpc('get_next_arrival_number', { p_company_id: companyId })
+
+  const { data: creditNote, error: creditError } = await supabase
+    .from('supplier_invoices')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      supplier_id: original.supplier_id,
+      arrival_number: arrivalNum,
+      supplier_invoice_number: `KREDIT-${original.supplier_invoice_number}`,
+      invoice_date: new Date().toISOString().split('T')[0],
+      due_date: new Date().toISOString().split('T')[0],
+      status: 'registered',
+      currency: original.currency,
+      exchange_rate: original.exchange_rate,
+      vat_treatment: original.vat_treatment,
+      reverse_charge: original.reverse_charge,
+      subtotal: original.subtotal,
+      subtotal_sek: original.subtotal_sek,
+      vat_amount: original.vat_amount,
+      vat_amount_sek: original.vat_amount_sek,
+      total: original.total,
+      total_sek: original.total_sek,
+      remaining_amount: 0,
+      is_credit_note: true,
+      credited_invoice_id: id,
+    })
+    .select()
+    .single()
+
+  if (creditError || !creditNote) return { error: creditError?.message ?? 'Failed to create credit note', status: 500 }
+
+  const creditItems = (original.items ?? []).map((item: Record<string, unknown>) => ({
+    supplier_invoice_id: creditNote.id,
+    sort_order: item.sort_order,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    line_total: item.line_total,
+    account_number: item.account_number,
+    vat_code: item.vat_code,
+    vat_rate: item.vat_rate,
+    vat_amount: item.vat_amount,
+  }))
+  await supabase.from('supplier_invoice_items').insert(creditItems)
+
+  const { data: settings } = await supabase
+    .from('company_settings').select('accounting_method').eq('company_id', companyId).single()
+  const accountingMethod = settings?.accounting_method || 'accrual'
+
+  let journalEntryId: string | null = null
+  if (accountingMethod === 'accrual') {
+    try {
+      const je = await createSupplierCreditNoteEntry(
+        supabase,
+        companyId,
+        userId,
+        creditNote,
+        creditItems as never,
+        original.supplier?.supplier_type || 'swedish_business',
+        original.supplier?.name
+      )
+      if (je) {
+        journalEntryId = je.id
+        await supabase
+          .from('supplier_invoices')
+          .update({ registration_journal_entry_id: je.id })
+          .eq('id', creditNote.id)
+      }
+    } catch (err) {
+      await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
+      if (isBookkeepingError(err)) throw err
+      return { error: err instanceof Error ? err.message : 'Failed to book credit note', status: 500 }
+    }
+  }
+
+  const newRemaining = Math.max(0, original.remaining_amount - original.total)
+  const newStatus = newRemaining <= 0 ? 'credited' : original.status
+
+  await supabase
+    .from('supplier_invoices')
+    .update({ status: newStatus, remaining_amount: newRemaining })
+    .eq('id', id)
+
+  try {
+    await eventBus.emit({
+      type: 'supplier_invoice.credited',
+      payload: { supplierInvoice: original, creditNote, companyId, userId },
+    })
+  } catch { /* non-blocking */ }
+
+  return { data: { credit_note_id: creditNote.id, journal_entry_id: journalEntryId } }
+}
+
+async function commitConvertInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.invoice_id as string
+  if (!id) return { error: 'invoice_id is required', status: 400 }
+
+  const { data: proforma, error: proformaError } = await supabase
+    .from('invoices').select('*, items:invoice_items(*)').eq('id', id).eq('company_id', companyId).single()
+
+  if (proformaError || !proforma) return { error: 'Proformafakturan hittades inte', status: 404 }
+  if (proforma.document_type !== 'proforma') {
+    return { error: 'Endast proformafakturor kan konverteras', status: 400 }
+  }
+  if (proforma.status === 'cancelled') {
+    return { error: 'Denna proformafaktura har redan makuleras', status: 409 }
+  }
+
+  const { data: invoice, error: invoiceError } = await supabase
+    .from('invoices')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      customer_id: proforma.customer_id,
+      invoice_number: null,
+      invoice_date: new Date().toISOString().split('T')[0],
+      due_date: proforma.due_date,
+      currency: proforma.currency,
+      exchange_rate: proforma.exchange_rate,
+      exchange_rate_date: proforma.exchange_rate_date,
+      subtotal: proforma.subtotal,
+      subtotal_sek: proforma.subtotal_sek,
+      vat_amount: proforma.vat_amount,
+      vat_amount_sek: proforma.vat_amount_sek,
+      total: proforma.total,
+      total_sek: proforma.total_sek,
+      vat_treatment: proforma.vat_treatment,
+      vat_rate: proforma.vat_rate,
+      moms_ruta: proforma.moms_ruta,
+      reverse_charge_text: proforma.reverse_charge_text,
+      your_reference: proforma.your_reference,
+      our_reference: proforma.our_reference,
+      notes: proforma.notes,
+      document_type: 'invoice',
+      converted_from_id: id,
+    })
+    .select()
+    .single()
+
+  if (invoiceError) return { error: invoiceError.message, status: 500 }
+
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    await supabase.from('invoices').delete().eq('id', invoice.id)
+    return { error: err instanceof Error ? err.message : 'Failed to assign invoice number', status: 500 }
+  }
+
+  const items = (proforma.items ?? []).map((item: Record<string, unknown>) => ({
+    invoice_id: invoice.id,
+    sort_order: item.sort_order,
+    description: item.description,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price: item.unit_price,
+    line_total: item.line_total,
+  }))
+
+  if (items.length > 0) {
+    const { error: itemsError } = await supabase.from('invoice_items').insert(items)
+    if (itemsError) {
+      await supabase.from('invoices').delete().eq('id', invoice.id)
+      return { error: itemsError.message, status: 500 }
+    }
+  }
+
+  await supabase.from('invoices').update({ status: 'cancelled' }).eq('id', id)
+
+  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -818,6 +1220,36 @@ export async function commitPendingOperation(
         break
       case 'match_transaction_invoice':
         result = await commitMatchTransactionInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'close_period':
+        result = await commitClosePeriod(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'lock_period':
+        result = await commitLockPeriod(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'uncategorize_transaction':
+        result = await commitUncategorizeTransaction(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'run_year_end':
+        result = await commitRunYearEnd(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'set_opening_balances':
+        result = await commitSetOpeningBalances(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'run_currency_revaluation':
+        result = await commitRunCurrencyRevaluation(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'explain_voucher_gap':
+        result = await commitExplainVoucherGap(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'approve_supplier_invoice':
+        result = await commitApproveSupplierInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'credit_supplier_invoice':
+        result = await commitCreditSupplierInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'convert_invoice':
+        result = await commitConvertInvoice(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {
