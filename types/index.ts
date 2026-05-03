@@ -262,6 +262,12 @@ export interface CompanySettings {
   ai_flow_enabled: boolean
   ai_backfill_cancel_requested: boolean
 
+  // Agent auto-commit. When enabled, low-risk pending_operations staged by
+  // trusted agents (api_key, mcp_oauth) skip human review. High-risk ops
+  // (period close, year-end, send_invoice, etc.) always require approval.
+  agent_auto_commit_enabled: boolean
+  agent_auto_commit_max_amount: number | null
+
   // Timestamps
   created_at: string
   updated_at: string
@@ -2183,6 +2189,8 @@ export interface AuditLogEntry {
   table_name: string | null
   record_id: string | null
   actor_id: string | null
+  actor_type: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | null
+  actor_label: string | null
   old_state: Record<string, unknown> | null
   new_state: Record<string, unknown> | null
   description: string | null

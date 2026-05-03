@@ -91,6 +91,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Bookkeeping write (Stream 1 Phase 1) — high-risk, always staged
   gnubok_close_period:                    'bookkeeping:write',
   gnubok_lock_period:                     'bookkeeping:write',
+  gnubok_unlock_period:                   'bookkeeping:write',
   gnubok_run_year_end:                    'bookkeeping:write',
   gnubok_set_opening_balances:            'bookkeeping:write',
   gnubok_run_currency_revaluation:        'bookkeeping:write',
@@ -98,13 +99,15 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_voucher_gaps:               'reports:read',
   // Transaction reversal (medium-risk)
   gnubok_uncategorize_transaction:        'transactions:write',
-  // SIE export (read-only)
+  // SIE export (read-only) + import (write)
   gnubok_export_sie:                      'reports:read',
+  gnubok_import_sie:                      'bookkeeping:write',
   // Supplier invoice lifecycle
   gnubok_approve_supplier_invoice:        'suppliers:write',
   gnubok_credit_supplier_invoice:         'suppliers:write',
-  // Invoice conversion
+  // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
+  gnubok_credit_invoice:                  'invoices:write',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {

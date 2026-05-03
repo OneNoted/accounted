@@ -3317,6 +3317,165 @@ const tools: McpTool[] = [
       )
     },
   },
+
+  {
+    name: 'gnubok_unlock_period',
+    description:
+      'Stage an "unlock fiscal period" proposal for human approval. Clears `locked_at` so new entries can be posted into the period. Cannot unlock a closed period — only one that is locked but not closed.\n\n' +
+      'Args: fiscal_period_id (required)\n\n' +
+      'High-risk: never auto-committed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to unlock' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const { data: period, error: fetchError } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end, is_closed, locked_at')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !period) throw new Error('Fiscal period not found')
+      if (period.is_closed) throw new Error('Cannot unlock a closed period')
+      if (!period.locked_at) throw new Error('Period is not locked')
+
+      return stagePendingOperation(supabase, companyId, userId, 'unlock_period',
+        `Lås upp period: ${period.name} (${period.period_start} – ${period.period_end})`,
+        { fiscal_period_id: fiscalPeriodId },
+        {
+          period_name: period.name,
+          period_start: period.period_start,
+          period_end: period.period_end,
+          locked_at: period.locked_at,
+          will: 'clear locked_at — new entries can be posted into the period again',
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_credit_invoice',
+    description:
+      'Stage a credit note (kreditfaktura) for an existing customer invoice. Creates a `KR-` prefixed mirror invoice with negated amounts and reverses the original JE under accrual method. Original must be sent/paid/overdue and not already credited.\n\n' +
+      'Args: invoice_id (required), reason (optional Swedish-language note)\n\n' +
+      'High-risk: never auto-committed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        invoice_id: { type: 'string', description: 'UUID of the invoice to credit' },
+        reason: { type: 'string', description: 'Optional reason note (Swedish, shown on the credit note)' },
+      },
+      required: ['invoice_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const id = args.invoice_id as string
+      const reason = args.reason as string | undefined
+      if (!id) throw new Error('invoice_id is required')
+
+      const { data: inv } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, document_type, status, total, currency, customer:customers(name)')
+        .eq('id', id).eq('company_id', companyId).single()
+
+      if (!inv) throw new Error('Invoice not found')
+      if (inv.document_type && inv.document_type !== 'invoice') {
+        throw new Error('Credit notes can only be created from standard invoices')
+      }
+      if (inv.status === 'credited') throw new Error('Fakturan har redan krediterats')
+      if (!['sent', 'paid', 'overdue'].includes(inv.status)) {
+        throw new Error('Endast skickade, betalda eller förfallna fakturor kan krediteras')
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'credit_invoice',
+        `Kreditera faktura ${inv.invoice_number}`,
+        { invoice_id: id, reason },
+        {
+          invoice_number: inv.invoice_number,
+          customer_name: (inv.customer as { name?: string } | null)?.name,
+          total: inv.total,
+          currency: inv.currency,
+          reason: reason || null,
+          method: 'creates KR- mirror invoice + reverses original JE (accrual)',
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_import_sie',
+    description:
+      'Stage a SIE file import proposal for human approval. Parses an SIE file (types 1-4, CP437/UTF-8/Latin-1) and stages a job that, on commit, creates the fiscal period, opening balances, and journal entries.\n\n' +
+      'Args:\n' +
+      '  - file_content (string, required): Full SIE file contents as a string\n' +
+      '  - filename (string, required): Original filename (used for the import record + dedup)\n' +
+      '  - mappings (array, required): Account mappings with { sourceAccount, sourceName, targetAccount, targetName, confidence, matchType, isOverride }. Use gnubok_export_sie or the import wizard to derive these first.\n' +
+      '  - create_fiscal_period (bool, optional, default false)\n' +
+      '  - import_opening_balances (bool, optional, default false)\n' +
+      '  - import_transactions (bool, optional, default false)\n' +
+      '  - voucher_series (string, optional): Override voucher series for imported vouchers\n\n' +
+      'High-risk: never auto-committed. Large file_content payloads are stored on the pending_operation row — keep files reasonable in size.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_content: { type: 'string', description: 'Full SIE file contents' },
+        filename: { type: 'string', description: 'Original filename' },
+        mappings: {
+          type: 'array',
+          description: 'Account mappings (AccountMapping[])',
+          items: { type: 'object' },
+        },
+        create_fiscal_period: { type: 'boolean' },
+        import_opening_balances: { type: 'boolean' },
+        import_transactions: { type: 'boolean' },
+        voucher_series: { type: 'string' },
+      },
+      required: ['file_content', 'filename', 'mappings'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const fileContent = args.file_content as string
+      const filename = args.filename as string
+      const mappings = args.mappings as unknown[] | undefined
+
+      if (!fileContent || !filename || !Array.isArray(mappings)) {
+        throw new Error('file_content, filename, and mappings are required')
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'import_sie',
+        `SIE-import: ${filename}`,
+        {
+          file_content: fileContent,
+          filename,
+          mappings,
+          create_fiscal_period: Boolean(args.create_fiscal_period),
+          import_opening_balances: Boolean(args.import_opening_balances),
+          import_transactions: Boolean(args.import_transactions),
+          voucher_series: args.voucher_series,
+        },
+        {
+          filename,
+          file_size_bytes: fileContent.length,
+          mappings_count: mappings.length,
+          create_fiscal_period: Boolean(args.create_fiscal_period),
+          import_opening_balances: Boolean(args.import_opening_balances),
+          import_transactions: Boolean(args.import_transactions),
+          will: 'parse SIE on commit, create fiscal period + opening balances + journal entries',
+        },
+        actor
+      )
+    },
+  },
 ]
 
 // ── MCP Protocol Handler ─────────────────────────────────────

@@ -168,14 +168,21 @@ function OperationPreview({ op }: { op: PendingOperation }) {
   }
 }
 
+type SourceFilter = 'all' | 'agent' | 'auto_committed' | 'high_risk'
+
+const AUTO_COMMIT_BANNER_DISMISS_KEY = 'gnubok.pending.autoCommitBannerDismissedAt'
+
 export default function PendingOperationsPage() {
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
+  const [recentAutoCommits, setRecentAutoCommits] = useState<PendingOperation[]>([])
+  const [bannerDismissedAt, setBannerDismissedAt] = useState<number | null>(null)
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
 
@@ -194,6 +201,38 @@ export default function PendingOperationsPage() {
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
+
+  useEffect(() => {
+    const stored = typeof window !== 'undefined'
+      ? window.localStorage.getItem(AUTO_COMMIT_BANNER_DISMISS_KEY)
+      : null
+    setBannerDismissedAt(stored ? Number(stored) : null)
+
+    fetch('/api/pending-operations?status=committed&limit=50')
+      .then((r) => r.json())
+      .then((json) => {
+        const ops: PendingOperation[] = json.data ?? []
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000
+        setRecentAutoCommits(
+          ops.filter((o) => o.auto_committed_at && new Date(o.auto_committed_at).getTime() > cutoff)
+        )
+      })
+      .catch(() => { /* silent */ })
+  }, [])
+
+  function dismissAutoCommitBanner() {
+    const now = Date.now()
+    setBannerDismissedAt(now)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(AUTO_COMMIT_BANNER_DISMISS_KEY, String(now))
+    }
+  }
+
+  const newAutoCommits = recentAutoCommits.filter((o) =>
+    bannerDismissedAt == null ||
+    (o.auto_committed_at != null &&
+      new Date(o.auto_committed_at).getTime() > bannerDismissedAt)
+  )
 
   async function handleCommit() {
     if (!selectedOp) return
@@ -241,12 +280,69 @@ export default function PendingOperationsPage() {
     create_invoice: '',
   }
 
+  const filteredOperations = operations.filter((op) => {
+    switch (sourceFilter) {
+      case 'agent':
+        return op.actor_type === 'api_key' || op.actor_type === 'mcp_oauth' || op.actor_type === 'cron'
+      case 'auto_committed':
+        return Boolean(op.auto_committed_at)
+      case 'high_risk':
+        return op.risk_level === 'high'
+      case 'all':
+      default:
+        return true
+    }
+  })
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Granskning"
         description="Operationer från din AI-agent som väntar på godkännande"
       />
+
+      {newAutoCommits.length > 0 && (
+        <Card className="border-sage/40 bg-sage/5">
+          <CardContent className="flex items-start justify-between gap-4 py-3">
+            <div className="flex items-start gap-3">
+              <Sparkles className="h-4 w-4 mt-0.5 text-sage-foreground" />
+              <div className="text-sm">
+                <p className="font-medium">
+                  {newAutoCommits.length === 1
+                    ? '1 åtgärd auto-godkändes'
+                    : `${newAutoCommits.length} åtgärder auto-godkändes`}{' '}
+                  senaste dygnet
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Granska vad agenten utförde utan din direkta godkännande.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 px-3 text-xs"
+                onClick={() => {
+                  setActiveTab('committed')
+                  setSourceFilter('auto_committed')
+                  dismissAutoCommitBanner()
+                }}
+              >
+                Visa
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 px-3 text-xs"
+                onClick={dismissAutoCommitBanner}
+              >
+                Dölj
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
         <TabsList>
@@ -256,13 +352,22 @@ export default function PendingOperationsPage() {
         </TabsList>
       </Tabs>
 
+      <Tabs value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>
+        <TabsList>
+          <TabsTrigger value="all">Alla</TabsTrigger>
+          <TabsTrigger value="agent">Från agent</TabsTrigger>
+          <TabsTrigger value="auto_committed">Auto-godkända</TabsTrigger>
+          <TabsTrigger value="high_risk">Hög risk</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       {isLoading ? (
         <Card>
           <CardContent className="flex items-center justify-center py-16">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </CardContent>
         </Card>
-      ) : operations.length === 0 ? (
+      ) : filteredOperations.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
@@ -284,7 +389,7 @@ export default function PendingOperationsPage() {
         </Card>
       ) : (
         <div className="space-y-2">
-          {operations.map((op) => {
+          {filteredOperations.map((op) => {
             const config = operationLabels[op.operation_type] || { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
             const isExpanded = expandedId === op.id
 
