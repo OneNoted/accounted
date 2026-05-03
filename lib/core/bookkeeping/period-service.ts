@@ -73,6 +73,57 @@ export async function lockPeriod(
 }
 
 /**
+ * Unlock a fiscal period — clears `locked_at` so new entries can be posted.
+ * Requires: period exists, belongs to company, is currently locked, not closed.
+ */
+export async function unlockPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string
+): Promise<FiscalPeriod> {
+  const { data: period, error: fetchError } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !period) {
+    throw new Error('Fiscal period not found')
+  }
+
+  if (period.is_closed) {
+    throw new Error('Cannot unlock a closed period')
+  }
+
+  if (!period.locked_at) {
+    throw new Error('Period is not locked')
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from('fiscal_periods')
+    .update({ locked_at: null })
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .select()
+    .single()
+
+  if (updateError || !updated) {
+    throw new Error(`Failed to unlock period: ${updateError?.message}`)
+  }
+
+  const result = updated as FiscalPeriod
+
+  await eventBus.emit({
+    type: 'period.unlocked',
+    payload: { period: result, companyId, userId },
+  })
+
+  return result
+}
+
+/**
  * Close a fiscal period — marks it as permanently closed.
  * Requires: period is locked AND closing_entry_id is set (year-end must run first).
  */

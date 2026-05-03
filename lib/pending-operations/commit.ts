@@ -25,15 +25,19 @@ import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
   createInvoiceJournalEntry,
+  createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { closePeriod, lockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { closePeriod, lockPeriod, unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
   executeYearEndClosing,
   generateOpeningBalances,
 } from '@/lib/core/bookkeeping/year-end-service'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { parseSIEFile } from '@/lib/import/sie-parser'
+import { executeSIEImport } from '@/lib/import/sie-import'
+import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getEmailService } from '@/lib/email/service'
 import {
@@ -58,6 +62,8 @@ import type {
   PendingOperation,
   CompanySettings,
   InvoiceItem,
+  AccountingMethod,
+  CreditNote,
 } from '@/types'
 
 const log = createLogger('pending-operations/commit')
@@ -812,6 +818,22 @@ async function commitLockPeriod(
   }
 }
 
+async function commitUnlockPeriod(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.fiscal_period_id as string
+  if (!id) return { error: 'fiscal_period_id is required', status: 400 }
+  try {
+    const period = await unlockPeriod(supabase, companyId, userId, id)
+    return { data: { period_id: period.id, locked_at: period.locked_at } }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Unlock failed', status: 400 }
+  }
+}
+
 async function commitUncategorizeTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -1090,6 +1112,152 @@ async function commitCreditSupplierInvoice(
   return { data: { credit_note_id: creditNote.id, journal_entry_id: journalEntryId } }
 }
 
+async function commitCreditInvoice(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const id = params.invoice_id as string
+  const reason = params.reason as string | undefined
+  if (!id) return { error: 'invoice_id is required', status: 400 }
+
+  const { data: original, error: fetchError } = await supabase
+    .from('invoices')
+    .select('*, items:invoice_items(*)')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !original) return { error: 'Original invoice not found', status: 404 }
+  if (original.document_type && original.document_type !== 'invoice') {
+    return { error: 'Credit notes can only be created from standard invoices', status: 400 }
+  }
+  if (original.status === 'credited') return { error: 'Invoice has already been credited', status: 409 }
+  if (!['sent', 'paid', 'overdue'].includes(original.status)) {
+    return { error: 'Only sent, paid, or overdue invoices can be credited', status: 400 }
+  }
+
+  const today = new Date().toISOString().split('T')[0]
+  const creditNoteNumber = `KR-${original.invoice_number}`
+
+  const { data: creditNote, error: creditNoteError } = await supabase
+    .from('invoices')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      customer_id: original.customer_id,
+      invoice_number: creditNoteNumber,
+      invoice_date: today,
+      due_date: today,
+      delivery_date: original.delivery_date ?? null,
+      currency: original.currency,
+      exchange_rate: original.exchange_rate,
+      exchange_rate_date: original.exchange_rate_date,
+      subtotal: -Math.abs(original.subtotal),
+      subtotal_sek: original.subtotal_sek != null ? -Math.abs(original.subtotal_sek) : null,
+      vat_amount: -Math.abs(original.vat_amount),
+      vat_amount_sek: original.vat_amount_sek != null ? -Math.abs(original.vat_amount_sek) : null,
+      total: -Math.abs(original.total),
+      total_sek: original.total_sek != null ? -Math.abs(original.total_sek) : null,
+      vat_treatment: original.vat_treatment,
+      vat_rate: original.vat_rate,
+      moms_ruta: original.moms_ruta,
+      reverse_charge_text: original.reverse_charge_text,
+      your_reference: original.your_reference,
+      our_reference: original.our_reference,
+      notes: reason || `Krediterar faktura ${original.invoice_number}`,
+      credited_invoice_id: id,
+      status: 'sent',
+    })
+    .select()
+    .single()
+
+  if (creditNoteError || !creditNote) {
+    return { error: creditNoteError?.message ?? 'Failed to create credit note', status: 500 }
+  }
+
+  const creditItems = (original.items || []).map((item: {
+    sort_order: number
+    description: string
+    quantity: number
+    unit: string
+    unit_price: number
+    line_total: number
+    vat_rate?: number
+    vat_amount?: number
+  }) => ({
+    invoice_id: creditNote.id,
+    sort_order: item.sort_order,
+    description: item.description,
+    quantity: -Math.abs(item.quantity),
+    unit: item.unit,
+    unit_price: item.unit_price,
+    line_total: -Math.abs(item.line_total),
+    vat_rate: item.vat_rate ?? 0,
+    vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+  }))
+
+  const { error: itemsError } = await supabase
+    .from('invoice_items')
+    .insert(creditItems)
+
+  if (itemsError) {
+    await supabase.from('invoices').delete().eq('id', creditNote.id)
+    return { error: itemsError.message, status: 500 }
+  }
+
+  await supabase.from('invoices').update({ status: 'credited' }).eq('id', id)
+
+  const { data: completeCreditNote } = await supabase
+    .from('invoices')
+    .select('*, customer:customers(*), items:invoice_items(*)')
+    .eq('id', creditNote.id)
+    .single()
+
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('entity_type, accounting_method')
+    .eq('company_id', companyId)
+    .single()
+
+  const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+  const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
+
+  let journalEntryId: string | null = null
+  if (completeCreditNote && accountingMethod === 'accrual') {
+    try {
+      const journalEntry = await createCreditNoteJournalEntry(
+        supabase,
+        companyId,
+        userId,
+        completeCreditNote as Invoice,
+        entityType,
+        completeCreditNote.customer?.name
+      )
+      if (journalEntry) {
+        journalEntryId = journalEntry.id
+        await supabase
+          .from('invoices')
+          .update({ journal_entry_id: journalEntry.id })
+          .eq('id', creditNote.id)
+      }
+    } catch (err) {
+      if (isBookkeepingError(err)) throw err
+      log.error('Failed to create credit note journal entry:', err)
+    }
+
+    try {
+      await eventBus.emit({
+        type: 'credit_note.created',
+        payload: { creditNote: completeCreditNote as CreditNote, companyId, userId },
+      })
+    } catch { /* non-blocking */ }
+  }
+
+  return { data: { credit_note_id: creditNote.id, journal_entry_id: journalEntryId } }
+}
+
 async function commitConvertInvoice(
   supabase: SupabaseClient,
   userId: string,
@@ -1173,6 +1341,60 @@ async function commitConvertInvoice(
   return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number } }
 }
 
+async function commitImportSie(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const fileContent = params.file_content as string
+  const filename = params.filename as string
+  const mappings = params.mappings as AccountMapping[] | undefined
+  const createFiscalPeriod = Boolean(params.create_fiscal_period)
+  const importOpeningBalances = Boolean(params.import_opening_balances)
+  const importTransactions = Boolean(params.import_transactions)
+  const voucherSeries = params.voucher_series as string | undefined
+
+  if (!fileContent || !filename || !Array.isArray(mappings)) {
+    return { error: 'file_content, filename, and mappings are required', status: 400 }
+  }
+
+  let parsed
+  try {
+    parsed = parseSIEFile(fileContent)
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to parse SIE file', status: 400 }
+  }
+
+  try {
+    const result = await executeSIEImport(supabase, companyId, userId, parsed, mappings, {
+      filename,
+      fileContent,
+      createFiscalPeriod,
+      importOpeningBalances,
+      importTransactions,
+      voucherSeries,
+    })
+
+    if (!result.success) {
+      return { error: result.errors.join('; ') || 'SIE import failed', status: 400 }
+    }
+
+    return {
+      data: {
+        import_id: result.importId,
+        fiscal_period_id: result.fiscalPeriodId,
+        opening_balance_entry_id: result.openingBalanceEntryId,
+        journal_entries_created: result.journalEntriesCreated,
+        warnings: result.warnings,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'SIE import failed', status: 500 }
+  }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -1227,6 +1449,9 @@ export async function commitPendingOperation(
       case 'lock_period':
         result = await commitLockPeriod(supabase, userId, companyId, pendingOp.params)
         break
+      case 'unlock_period':
+        result = await commitUnlockPeriod(supabase, userId, companyId, pendingOp.params)
+        break
       case 'uncategorize_transaction':
         result = await commitUncategorizeTransaction(supabase, userId, companyId, pendingOp.params)
         break
@@ -1250,6 +1475,12 @@ export async function commitPendingOperation(
         break
       case 'convert_invoice':
         result = await commitConvertInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'credit_invoice':
+        result = await commitCreditInvoice(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'import_sie':
+        result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {

@@ -78,7 +78,7 @@ describe('pending_operations: actor model + risk + auto-commit columns', () => {
   it('accepts the expanded operation_type enum (close_period, run_year_end, …)', async () => {
     const { userId, companyId } = await seedCompany()
     const expandedTypes = [
-      'close_period', 'lock_period', 'run_year_end', 'set_opening_balances',
+      'close_period', 'lock_period', 'unlock_period', 'run_year_end', 'set_opening_balances',
       'run_currency_revaluation', 'explain_voucher_gap', 'uncategorize_transaction',
       'approve_supplier_invoice', 'credit_supplier_invoice',
       'credit_invoice', 'convert_invoice', 'import_sie',

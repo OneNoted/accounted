@@ -38,6 +38,7 @@ export type CoreEvent =
   | { type: 'transaction.reconciled'; payload: { transaction: Transaction; journalEntryId: string; method: ReconciliationMethod; userId: string; companyId: string } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
+  | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.year_closed'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   // Customers
   | { type: 'customer.created'; payload: { customer: Customer; userId: string; companyId: string } }

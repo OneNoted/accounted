@@ -38,6 +38,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   unlock_period: 'high',
   set_opening_balances: 'high',
   run_year_end: 'high',
+  run_currency_revaluation: 'high',
   import_sie: 'high',
   explain_voucher_gap: 'medium',
   uncategorize_transaction: 'medium',

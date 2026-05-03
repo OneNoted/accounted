@@ -29,7 +29,7 @@ function makeClient() {
   }
 }
 
-import { lockPeriod, closePeriod, createNextPeriod } from '../period-service'
+import { lockPeriod, unlockPeriod, closePeriod, createNextPeriod } from '../period-service'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -120,6 +120,55 @@ describe('closePeriod', () => {
     const supabase = makeClient()
     await expect(closePeriod(supabase as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
       'Year-end closing must be executed'
+    )
+  })
+})
+
+describe('unlockPeriod', () => {
+  it('clears locked_at and emits period.unlocked', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      locked_at: '2024-12-31T23:59:59Z',
+      is_closed: false,
+    })
+    const unlocked = { ...period, locked_at: null }
+
+    results = [
+      { data: period, error: null },
+      { data: unlocked, error: null },
+    ]
+
+    const handler = vi.fn()
+    eventBus.on('period.unlocked', handler)
+
+    const supabase = makeClient()
+    const result = await unlockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.locked_at).toBeNull()
+    expect(handler).toHaveBeenCalledOnce()
+  })
+
+  it('rejects period that is not locked', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', locked_at: null, is_closed: false })
+
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(unlockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow('not locked')
+  })
+
+  it('rejects closed period', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      locked_at: '2024-12-31T23:59:59Z',
+      is_closed: true,
+    })
+
+    results = [{ data: period, error: null }]
+
+    const supabase = makeClient()
+    await expect(unlockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1')).rejects.toThrow(
+      'Cannot unlock a closed period'
     )
   })
 })
