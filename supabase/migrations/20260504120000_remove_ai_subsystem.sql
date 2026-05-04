@@ -20,9 +20,13 @@
 --
 -- Apply via Supabase preview branch first, never directly to production.
 
--- ai_proposals has FKs to ai_requests and journal_entries
--- (both ON DELETE SET NULL); journal_entries has a reverse FK to
--- ai_proposals (also ON DELETE SET NULL), so dropping the table is safe.
+-- journal_entries.source_proposal_id has an FK to ai_proposals
+-- (ON DELETE SET NULL — applies to row deletes, not DROP TABLE).
+-- Drop the constraint explicitly so the table drop succeeds; the
+-- column itself stays as a dead column per the note above.
+ALTER TABLE public.journal_entries
+  DROP CONSTRAINT IF EXISTS journal_entries_source_proposal_id_fkey;
+
 DROP TABLE IF EXISTS public.ai_proposals;
 DROP TABLE IF EXISTS public.ai_requests;
 DROP TABLE IF EXISTS public.ai_usage_tracking;
