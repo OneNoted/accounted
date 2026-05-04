@@ -5,6 +5,7 @@ import { periodActiveResource } from './period-active'
 import { recentActivityResource } from './recent-activity'
 import { capabilitiesResource } from './capabilities'
 import { vatTreatmentsResource } from './vat-treatments'
+import { attentionResource } from './attention'
 
 export const dataResources: McpResource[] = [
   companyCurrentResource,
@@ -13,6 +14,7 @@ export const dataResources: McpResource[] = [
   recentActivityResource,
   capabilitiesResource,
   vatTreatmentsResource,
+  attentionResource,
 ]
 
 export function findResource(uri: string): McpResource | null {

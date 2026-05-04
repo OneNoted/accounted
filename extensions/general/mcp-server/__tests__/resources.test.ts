@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { dataResources, findResource, parseResourceQuery } from '../resources'
 
 describe('mcp resource registry', () => {
-  it('exposes all six data resources with required fields', () => {
-    expect(dataResources).toHaveLength(6)
+  it('exposes all data resources with required fields', () => {
+    expect(dataResources).toHaveLength(7)
     const uris = dataResources.map((r) => r.uri).sort()
     expect(uris).toEqual([
+      'gnubok://attention',
       'gnubok://capabilities',
       'gnubok://chart-of-accounts',
       'gnubok://company/current',
