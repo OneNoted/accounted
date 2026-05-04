@@ -168,7 +168,15 @@ export async function skvRequest(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
 
-  // Handle Skatteverket-specific auth errors
+  // Handle Skatteverket-specific auth/throttle errors uniformly so callers
+  // can catch a single error type rather than parsing status codes inline.
+  if (response.status === 401) {
+    throw new SkatteverketAuthError(
+      'Sessionen har gått ut. Logga in med BankID igen.',
+      'SESSION_EXPIRED'
+    )
+  }
+
   if (response.status === 403) {
     const text = await response.text()
     // Behörighet saknas — user is authenticated but not authorized for this company
@@ -185,10 +193,15 @@ export async function skvRequest(
     )
   }
 
-  if (response.status === 401) {
+  if (response.status === 429) {
+    // Skatteverket may include a Retry-After header. We surface a generic
+    // Swedish message — callers can inspect the header on the thrown error
+    // if they need to schedule a retry. The 4 req/sec local rate limiter
+    // should normally prevent this; a 429 here implies the per-consumer
+    // gateway quota was exceeded.
     throw new SkatteverketAuthError(
-      'Sessionen har gått ut. Logga in med BankID igen.',
-      'SESSION_EXPIRED'
+      'Skatteverket är överbelastat eller har strypt anropen. Försök igen om en stund.',
+      'RATE_LIMITED'
     )
   }
 
@@ -196,8 +209,19 @@ export async function skvRequest(
 }
 
 /**
- * Structured error for Skatteverket auth/access issues.
+ * Structured error for Skatteverket auth/access/throttle issues.
  * The `code` field helps the frontend show appropriate UI.
+ *
+ * Codes:
+ *   NOT_CONNECTED      — no tokens stored; user needs to run BankID flow
+ *   SESSION_EXPIRED    — 401 from SKV; refresh exhausted or token rejected
+ *   REFRESH_EXHAUSTED  — refresh count hit cap (10) before user re-auth
+ *   BEHORIGHET_SAKNAS  — 403 with "Behörighet" body; user not authorized
+ *                        for this company at SKV (firmatecknare / ombud)
+ *   ACCESS_DENIED      — generic 403
+ *   RATE_LIMITED       — 429 from SKV API gateway
+ *   TOKEN_CORRUPTED    — stored tokens cannot be decrypted (key rotated
+ *                        or row tampered with); user must reconnect
  */
 export class SkatteverketAuthError extends Error {
   constructor(
@@ -208,6 +232,8 @@ export class SkatteverketAuthError extends Error {
       | 'REFRESH_EXHAUSTED'
       | 'BEHORIGHET_SAKNAS'
       | 'ACCESS_DENIED'
+      | 'RATE_LIMITED'
+      | 'TOKEN_CORRUPTED'
   ) {
     super(message)
     this.name = 'SkatteverketAuthError'

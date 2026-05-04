@@ -1,6 +1,10 @@
 import crypto from 'crypto'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import type { SkatteverketTokens } from '../types'
+import { SkatteverketAuthError } from './api-client'
+
+const log = createLogger('skatteverket-token-store')
 
 /**
  * Encrypted token storage for Skatteverket OAuth2 tokens.
@@ -138,6 +142,12 @@ export async function getTokens(
 
   if (error || !data) return null
 
+  // Distinguish three states:
+  //   1. No row → caller treats as NOT_CONNECTED (return null above)
+  //   2. Decryption error → log + throw TOKEN_CORRUPTED so the caller can
+  //      tell the user to reconnect. Previously returned null silently
+  //      which masked the real problem (key rotation, tampering, or a
+  //      schema-level bug) as "not connected".
   try {
     return {
       access_token: decrypt(data.access_token),
@@ -146,9 +156,15 @@ export async function getTokens(
       refresh_count: data.refresh_count ?? 0,
       scope: data.scope,
     }
-  } catch {
-    // Decryption failed — key may have rotated, tokens are invalid
-    return null
+  } catch (err) {
+    log.error('decryption failed for stored tokens', {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw new SkatteverketAuthError(
+      'Tokens kunde inte läsas. Anslut igen med BankID.',
+      'TOKEN_CORRUPTED'
+    )
   }
 }
 
