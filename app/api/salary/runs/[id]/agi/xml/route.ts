@@ -179,14 +179,18 @@ export async function GET(
   // employees. Day 1 is karens (unpaid); day 15+ is Försäkringskassan, so
   // neither counts as an employer sjuklön cost.
   //
-  // Sjuklön cost = dailyRate × sjuklönRate × day-2-14 count.
+  // Sjuklön cost = dailyRate × sjuklonRate × day-2-14 count.
   // The line item `amount` is the *net deduction* (lostPay − sjuklön), not
   // the cost — using its quantity field plus the employee's monthly salary
   // gives the correct sjuklön cost regardless of the line-item amount
-  // convention. Sjuklönrate is 80% per Sjuklönelagen (overridable in payroll
-  // config; we hardcode 0.80 here because the run's payroll config is in
-  // calculation_params and decoding it just for this is overkill).
-  const SJUKLON_RATE = 0.80
+  // convention.
+  //
+  // sjuklonRate is read from the run's calculation_params snapshot (taken at
+  // calc time), so an operator override (e.g. for a CBA-specific rate) is
+  // honored. Falls back to 0.80 (Sjuklönelagen default) for older runs that
+  // don't have the snapshot.
+  const calcParams = (run.calculation_params ?? {}) as { sjuklonRate?: number; sjuklon_rate?: number }
+  const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.80
   let totalSjuklonekostnad = 0
   for (const sre of runEmployees) {
     const monthly = (sre.employee as { monthly_salary?: number } | null)?.monthly_salary ?? 0
@@ -196,7 +200,7 @@ export async function GET(
     for (const li of lineItems) {
       if (li.item_type === 'sick_day2_14') {
         const days = (li.quantity as number) || 0
-        totalSjuklonekostnad += dailyRate * SJUKLON_RATE * days
+        totalSjuklonekostnad += dailyRate * sjuklonRate * days
       }
     }
   }

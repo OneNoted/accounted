@@ -260,7 +260,7 @@ export function AGIPanel(props: AGIPanelProps) {
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
               Skatteverket-integrationen är inaktiverad i denna miljö. Aktivera
-              <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">NEXT_PUBLIC_SKATTEVERKET_ENABLED</code>
+              <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">SKATTEVERKET_ENABLED</code>
               för att skicka AGI direkt till Skatteverket.
             </p>
           </div>

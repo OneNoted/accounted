@@ -32,7 +32,7 @@ export async function GET(request: Request) {
 
   // Respect the runtime extension toggle. When the integration is disabled
   // the cron should no-op rather than spam Skatteverket with stale tokens.
-  if (process.env.NEXT_PUBLIC_SKATTEVERKET_ENABLED !== 'true') {
+  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
 

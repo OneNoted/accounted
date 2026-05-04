@@ -63,7 +63,8 @@ CREATE POLICY "Users insert skattekonto transactions for their companies"
 
 CREATE POLICY "Users update skattekonto transactions for their companies"
   ON public.skattekonto_transactions FOR UPDATE
-  USING (company_id IN (SELECT public.user_company_ids()));
+  USING (company_id IN (SELECT public.user_company_ids()))
+  WITH CHECK (company_id IN (SELECT public.user_company_ids()));
 
 CREATE POLICY "Users delete skattekonto transactions for their companies"
   ON public.skattekonto_transactions FOR DELETE

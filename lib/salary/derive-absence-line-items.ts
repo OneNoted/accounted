@@ -186,8 +186,21 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     const allSickDates = [...input.lookbackSickDates, ...periodSickDates]
     const segments = buildSjukloneperioder(allSickDates)
 
-    // High-risk-skydd cap: how many karensavdrag has the employee already
-    // incurred in the rolling 12-month window strictly before periodMin?
+    // Allmänt högriskskydd (Sjuklönelagen 11§): from the 11th sjuklöneperiod
+    // within a rolling 12-month window, no karensavdrag is made.
+    //
+    // Interpretation: we count *sjuklöneperioder* in the lookback window. The
+    // law's phrasing — "från och med den 11:e sjukperioden under en
+    // tolvmånadersperiod görs inget karensavdrag" — keys the cap to the
+    // period count. An alternative reading is that cap-suppressed periods
+    // shouldn't count toward future windows (only periods that actually
+    // had karens deducted). That requires persisting per-period karens-
+    // deduction state, which gnubok doesn't yet do. The period-count
+    // reading can over-suppress karens for an employee who hits the cap
+    // repeatedly — softer error than the opposite.
+    //
+    // TODO: persist per-period karens deduction state if the period-count
+    // reading produces complaints in the field.
     const cap = payrollConfig.maxKarensavdragPerYear ?? 10
     const cutoff = addDays(periodMin, -365)
     const lookbackOnlySegments = buildSjukloneperioder(

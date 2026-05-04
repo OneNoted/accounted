@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
@@ -9,6 +10,8 @@ import {
 } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 
 ensureInitialized()
 
@@ -122,8 +125,13 @@ export async function POST(
   return NextResponse.json({ data }, { status: 201 })
 }
 
-const DeleteQuerySchema = AbsenceRangeQuerySchema.partial().extend({
-  date: AbsenceRangeQuerySchema.shape.from.optional(),
+// Two modes: ?date=YYYY-MM-DD&type=... (single row) or ?from=…&to=… (range).
+// We don't reuse AbsenceRangeQuerySchema.partial() because Zod refuses
+// `.partial()` on a schema with refinements (the from<=to check).
+const DeleteQuerySchema = z.object({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+  date: isoDate.optional(),
   type: AbsenceTypeSchema.optional(),
 })
 

@@ -18,10 +18,16 @@ export const maxDuration = 300
  *
  * The flag is checked on every request. If the env var is not exactly the
  * string "true", the dispatcher returns 503 with `code: 'EXTENSION_DISABLED'`.
+ *
+ * Server-side env vars only — no NEXT_PUBLIC_ prefix. Next.js inlines
+ * NEXT_PUBLIC_* into the client bundle at build time, so a flip on Vercel
+ * without a redeploy would create split-brain (server returns 503,
+ * client still renders the enabled flow). UI panels detect the 503 by
+ * response code, not by reading the flag directly.
  */
 const EXTENSION_FEATURE_FLAGS: Record<string, { envVar: string; disabledMessage: string }> = {
   skatteverket: {
-    envVar: 'NEXT_PUBLIC_SKATTEVERKET_ENABLED',
+    envVar: 'SKATTEVERKET_ENABLED',
     disabledMessage: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
   },
 }
