@@ -774,6 +774,39 @@ export const CreateSalaryLineItemSchema = z.object({
 
 export const UpdateSalaryLineItemSchema = CreateSalaryLineItemSchema.partial().omit({ salary_run_employee_id: true })
 
+// ── Absence (frånvaro) per-day records ──────────────────────────────
+//
+// Drives sjuklönelagen calculations (karensavdrag boundary, återinsjuknande
+// 5-day merge, högriskskydd 12-month cap, day 14/15 FK transition) and AGI
+// 2025+ <Frånvarouppgift> per-event reporting. The salary calculator derives
+// line items from these rows; users do not enter absence as line items.
+
+export const AbsenceTypeSchema = z.enum([
+  'sick',
+  'vab',
+  'parental',
+  'pregnancy',
+  'care_relative',
+  'study',
+  'other_leave',
+])
+
+export const UpsertAbsenceDaySchema = z.object({
+  absence_date: isoDate,
+  absence_type: AbsenceTypeSchema,
+  hours: z.number().positive().max(24).default(8),
+  notes: z.string().max(2000).optional(),
+  salary_run_employee_id: uuid.optional(),
+})
+
+export const AbsenceRangeQuerySchema = z.object({
+  from: isoDate,
+  to: isoDate,
+}).refine((data) => data.from <= data.to, {
+  message: '`from` måste vara före eller lika med `to`',
+  path: ['from'],
+})
+
 // ============================================================
 // AI agent flow schemas
 // ============================================================
