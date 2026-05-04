@@ -169,3 +169,100 @@ export interface SkatteverketSubmission {
   created_at: string
   updated_at: string
 }
+
+// ── Skattekonto (tax account) types ────────────────────────────
+//
+// Field names match Skatteverket's Skattekonto API v2.1.0 JSON schema.
+// Spec: dev_docs/skattekonto(2.1.0)/skattekonto-extern.raml
+// Amount fields are in SEK (whole or decimal); negative = debt to SKV.
+
+/** Response from GET /skattekonton/{omfragad}/saldo */
+export interface SkatteverketSaldoResponse {
+  /** Next reconciliation date (YYYY-MM-DD) */
+  nastaAvstamningsdatum: string
+  /** Last update timestamp (ISO 8601) */
+  senastUppdaterad: string
+  /** Free-text info messages (max 200 chars each) */
+  informationstext: string[]
+  /** Current balance at Skatteverket (negative = debt) */
+  saldoSkatteverket: number
+  /** Balance moved to Kronofogden (negative = enforcement debt) */
+  saldoKronofogden: number
+  /** Preliminary interest accrued at Skatteverket */
+  rantaSkatteverket: number
+  /** Preliminary interest accrued at Kronofogden */
+  rantaKronofogden: number
+  /** OCR reference for paying the balance */
+  ocrNummer: string
+}
+
+/** Booked transaction (tidigareTransaktioner) */
+export interface SkatteverketBookedTransaction {
+  /** Stable identity from Skatteverket — primary dedup key */
+  transaktionsidentitet: number
+  /** Booking date (YYYY-MM-DD) */
+  transaktionsdatum: string
+  /** Interest calculation date (YYYY-MM-DD) */
+  ranteberakningsdatum: string | null
+  /** Description (e.g. "Inbetalning bokförd 190412") */
+  transaktionstext: string
+  /** Amount at Skatteverket (positive = credit, negative = debit) */
+  beloppSkatteverket: number
+  /** Amount moved to Kronofogden (rare) */
+  beloppKronofogden: number | null
+}
+
+/** Future / scheduled transaction (kommandeTransaktioner) */
+export interface SkatteverketUpcomingTransaction {
+  /** Posting date (YYYY-MM-DD) */
+  transaktionsdatum: string
+  /** Due date for payment (YYYY-MM-DD) */
+  forfallodatum: string
+  /** Interest calculation date (YYYY-MM-DD) */
+  ranteberakningsdatum: string | null
+  /** Description */
+  transaktionstext: string
+  /** Amount at Skatteverket */
+  beloppSkatteverket: number
+  /** Amount at Kronofogden */
+  beloppKronofogden: number | null
+  /** Often null on kommande — fall back to dedup_key */
+  transaktionsidentitet: number | null
+}
+
+/** Response from GET /skattekonton/{omfragad}/transaktioner */
+export interface SkatteverketTransaktionerResponse {
+  tidigareTransaktioner: SkatteverketBookedTransaction[]
+  kommandeTransaktioner: SkatteverketUpcomingTransaction[]
+}
+
+/** Skatteverket error envelope (felkod 1–5) */
+export interface SkatteverketFel {
+  felkod: number
+  felmeddelande: string
+}
+
+/** Row shape for the skattekonto_transactions table (DB → app) */
+export interface StoredSkattekontoTransaction {
+  id: string
+  company_id: string
+  transaktionsidentitet: number | null
+  dedup_key: string
+  transaktionsdatum: string
+  forfallodatum: string | null
+  ranteberakningsdatum: string | null
+  transaktionstext: string
+  belopp_skatteverket: number
+  belopp_kronofogden: number | null
+  status: 'booked' | 'upcoming'
+  journal_entry_id: string | null
+  imported_at: string
+  updated_at: string
+}
+
+/** Cached snapshot stored in extension_data under key skattekonto_balance_snapshot */
+export interface SkattekontoBalanceSnapshot {
+  saldo: SkatteverketSaldoResponse
+  /** Unix ms when this snapshot was fetched from Skatteverket */
+  fetchedAt: number
+}

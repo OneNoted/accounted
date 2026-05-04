@@ -17,7 +17,7 @@ import {
  */
 
 const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1/per'
-const DEFAULT_SCOPES = 'momsdeklaration inkforetag ska skahmst'
+const DEFAULT_SCOPES = 'momsdeklaration inkforetag ska skahmst skattekonto'
 
 function getOAuthBaseUrl(): string {
   return process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL
