@@ -65,9 +65,9 @@ export default function BookkeepingSettingsPage() {
               <option value="cash">Kontantmetoden</option>
             </select>
             <p className="text-xs text-muted-foreground">
-              {settings.entity_type === 'aktiebolag'
-                ? 'Aktiebolag med omsättning över 3 MSEK måste använda faktureringsmetoden.'
-                : 'Kontantmetoden är tillgänglig för enskild firma med omsättning under 3 MSEK.'}
+              Kontantmetoden får användas om årlig nettoomsättning normalt är högst
+              3 MSEK (BFL 5 kap. 2 §). Obetalda fordringar och skulder ska bokföras
+              vid räkenskapsårets utgång.
             </p>
           </div>
         </section>
