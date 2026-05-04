@@ -92,13 +92,14 @@ describe('POST /api/pending-operations/:id/commit', () => {
         preview_data: {},
       },
     })
+    enqueue({ data: null, error: null }) // CAS UPDATE returns 0 rows since status != 'pending'
 
     const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
     const response = await POST(request, routeParams)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toContain('already committed')
+    expect(body.error).toMatch(/already (committed|claimed|resolved)/i)
   })
 
   describe('categorize_transaction', () => {
@@ -122,6 +123,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       enqueueMany([
         { data: pendingOp },                         // fetch pending op
+        { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction
         { data: settings },                           // fetch company settings
         { data: [{ id: 'fp-1' }] },                  // fiscal period check
@@ -144,6 +146,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       enqueueMany([
         { data: pendingOp },                         // fetch pending op
+        { data: { id: 'op-1' } },                    // CAS claim
         { data: tx },                                 // fetch transaction (already has JE)
         { data: null, error: null },                  // auto-reject update
       ])
@@ -175,6 +178,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
     it('commits successfully', async () => {
       enqueueMany([
         { data: pendingOp },                         // fetch pending op
+        { data: { id: 'op-1' } },                    // CAS claim
         { data: { id: 'cust-1', name: 'Acme AB' } }, // insert customer
         { data: null, error: null },                  // update pending op status
       ])
@@ -216,6 +220,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
       enqueueMany([
         { data: pendingOp },                          // fetch pending op
+        { data: { id: 'op-1' } },                     // CAS claim
         { data: customer },                           // fetch customer
         { data: { id: 'inv-1', invoice_number: null } }, // insert invoice (no number — assigned at send)
         { data: null, error: null },                  // insert items
@@ -236,6 +241,7 @@ describe('POST /api/pending-operations/:id/commit', () => {
     it('returns 404 when customer not found', async () => {
       enqueueMany([
         { data: pendingOp },                          // fetch pending op
+        { data: { id: 'op-1' } },                     // CAS claim
         { data: null, error: { message: 'not found' } }, // customer not found
         { data: null, error: null },                  // auto-reject update
       ])

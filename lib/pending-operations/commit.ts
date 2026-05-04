@@ -1224,6 +1224,23 @@ async function commitCreditInvoice(
   const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
   const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
 
+  // Resolve the original verifikation reference so the credit-note JE can
+  // point back to the corrected entry per BFL 5 kap. 5 §. We tolerate
+  // missing-JE on the original (legacy data) — the description simply omits
+  // the voucher reference and keeps the invoice-number reference.
+  let originalVoucherRef: string | undefined
+  if (original.journal_entry_id) {
+    const { data: origJe } = await supabase
+      .from('journal_entries')
+      .select('voucher_series, voucher_number')
+      .eq('id', original.journal_entry_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (origJe?.voucher_series && origJe?.voucher_number != null) {
+      originalVoucherRef = `${origJe.voucher_series}-${origJe.voucher_number}`
+    }
+  }
+
   let journalEntryId: string | null = null
   if (completeCreditNote && accountingMethod === 'accrual') {
     try {
@@ -1233,7 +1250,8 @@ async function commitCreditInvoice(
         userId,
         completeCreditNote as Invoice,
         entityType,
-        completeCreditNote.customer?.name
+        completeCreditNote.customer?.name,
+        originalVoucherRef
       )
       if (journalEntry) {
         journalEntryId = journalEntry.id
@@ -1411,10 +1429,28 @@ export async function commitPendingOperation(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
-  if (pendingOp.status !== 'pending') {
+  // ── Atomic claim: flip status pending → committing in a single conditional
+  //    update. If 0 rows are affected, another caller (auto-commit ↔ human
+  //    approval, or two parallel approvals) already claimed this op and we
+  //    must not run side-effects. Without this, both callers can pass the
+  //    in-memory status check and double-book journal entries, send duplicate
+  //    emails, etc.
+  const { data: claimed, error: claimError } = await supabase
+    .from('pending_operations')
+    .update({ status: 'committing' })
+    .eq('id', pendingOp.id)
+    .eq('status', 'pending')
+    .select('id')
+    .maybeSingle()
+
+  if (claimError) {
+    log.error('Failed to claim pending_operation:', claimError)
+    return { status: 'failed', error: 'Failed to claim operation', http_status: 500 }
+  }
+  if (!claimed) {
     return {
       status: 'failed',
-      error: `Operation already ${pendingOp.status}`,
+      error: 'Operation already claimed or resolved by another caller',
       http_status: 409,
     }
   }
@@ -1490,32 +1526,39 @@ export async function commitPendingOperation(
         }
     }
   } catch (err) {
-    if (isBookkeepingError(err)) {
-      return {
-        status: 'failed',
-        error: err instanceof Error ? err.message : 'Bookkeeping error',
-        http_status: 400,
-      }
-    }
-    log.error('Executor threw unexpectedly:', err)
+    const isBkErr = isBookkeepingError(err)
+    const message = err instanceof Error ? err.message : (isBkErr ? 'Bookkeeping error' : 'Executor failed')
+    // Release the claim by transitioning to 'rejected' so the row never gets
+    // stuck in 'committing'. The error text is persisted in result_data for
+    // audit/debug.
+    await supabase
+      .from('pending_operations')
+      .update({
+        status: 'rejected',
+        resolved_at: new Date().toISOString(),
+        result_data: { error: message, threw: true },
+      })
+      .eq('id', pendingOp.id)
     return {
       status: 'failed',
-      error: err instanceof Error ? err.message : 'Executor failed',
-      http_status: 500,
+      error: message,
+      http_status: isBkErr ? 400 : 500,
     }
   }
 
   if (result.error) {
     const isAutoReject = result.status === 404 || result.status === 409
+    await supabase
+      .from('pending_operations')
+      .update({
+        status: 'rejected',
+        resolved_at: new Date().toISOString(),
+        result_data: isAutoReject
+          ? { auto_rejected: true, reason: result.error }
+          : { error: result.error, http_status: result.status },
+      })
+      .eq('id', pendingOp.id)
     if (isAutoReject) {
-      await supabase
-        .from('pending_operations')
-        .update({
-          status: 'rejected',
-          resolved_at: new Date().toISOString(),
-          result_data: { auto_rejected: true, reason: result.error },
-        })
-        .eq('id', pendingOp.id)
       return {
         status: 'rejected',
         auto_rejected: true,

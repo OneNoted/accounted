@@ -187,4 +187,192 @@ describe('idempotency_keys table', () => {
       ),
     ).rejects.toThrow(/check constraint|response_status/i)
   })
+
+  it('rejects NULL company_id (multi-tenant scoping)', async () => {
+    const { userId } = await seedCompany()
+    await expect(
+      getPool().query(
+        `INSERT INTO public.idempotency_keys
+           (user_id, company_id, key, request_hash, scope, response_status, response_body)
+         VALUES ($1, NULL, 'k1', 'h1', 'mcp_tool', 'success', '{}')`,
+        [userId],
+      ),
+    ).rejects.toThrow(/null value|not.null/i)
+  })
+
+  it('allows the same key across two companies (scoped uniqueness)', async () => {
+    const { userId, companyId: company1 } = await seedCompany()
+    const { companyId: company2 } = await seedCompany()
+    const sameKey = 'shared-key-abc'
+
+    await getPool().query(
+      `INSERT INTO public.idempotency_keys
+         (user_id, company_id, key, request_hash, scope, response_status, response_body)
+       VALUES ($1, $2, $3, 'h1', 'mcp_tool', 'success', '{}')`,
+      [userId, company1, sameKey],
+    )
+    // Same user + same key but different company must NOT collide.
+    await expect(
+      getPool().query(
+        `INSERT INTO public.idempotency_keys
+           (user_id, company_id, key, request_hash, scope, response_status, response_body)
+         VALUES ($1, $2, $3, 'h2', 'mcp_tool', 'success', '{}')`,
+        [userId, company2, sameKey],
+      ),
+    ).resolves.toBeTruthy()
+  })
+})
+
+describe('pending_operations: CAS + post-commit immutability', () => {
+  it('accepts the new committing transient status', async () => {
+    const { userId, companyId } = await seedCompany()
+    const result = await getPool().query<{ id: string; status: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data)
+       VALUES ($1, $2, 'create_customer', 'committing', 'pg-real', '{}', '{}')
+       RETURNING id, status`,
+      [userId, companyId],
+    )
+    expect(result.rows[0]?.status).toBe('committing')
+  })
+
+  it('CAS pattern (UPDATE … WHERE status=pending) only claims unclaimed rows', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data)
+       VALUES ($1, $2, 'create_customer', 'pending', 'cas-test', '{}', '{}')
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    // First claim succeeds.
+    const first = await getPool().query(
+      `UPDATE public.pending_operations SET status = 'committing'
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [id],
+    )
+    expect(first.rowCount).toBe(1)
+
+    // Second concurrent claim sees status='committing' and returns 0 rows.
+    const second = await getPool().query(
+      `UPDATE public.pending_operations SET status = 'committing'
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [id],
+    )
+    expect(second.rowCount).toBe(0)
+  })
+
+  it('blocks UPDATE on rows in terminal status (committed)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data, resolved_at)
+       VALUES ($1, $2, 'create_customer', 'committed', 'imm-test', '{}', '{}', now())
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    await expect(
+      getPool().query(
+        `UPDATE public.pending_operations SET title = 'tampered' WHERE id = $1`,
+        [id],
+      ),
+    ).rejects.toThrow(/terminal state|BFL 7/i)
+  })
+
+  it('blocks UPDATE on rows in terminal status (rejected)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data, resolved_at)
+       VALUES ($1, $2, 'create_customer', 'rejected', 'imm-test', '{}', '{}', now())
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    await expect(
+      getPool().query(
+        `UPDATE public.pending_operations SET params = '{"x":1}' WHERE id = $1`,
+        [id],
+      ),
+    ).rejects.toThrow(/terminal state|BFL 7/i)
+  })
+
+  it('blocks DELETE on rows in terminal status', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data, resolved_at)
+       VALUES ($1, $2, 'create_customer', 'committed', 'del-test', '{}', '{}', now())
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    await expect(
+      getPool().query(`DELETE FROM public.pending_operations WHERE id = $1`, [id]),
+    ).rejects.toThrow(/terminal state|BFL 7/i)
+  })
+
+  it('blocks UPDATE of params on non-terminal rows (BFL 7 underlag-immutability)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data)
+       VALUES ($1, $2, 'create_customer', 'pending', 'frozen-test', '{"name":"original"}', '{}')
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    await expect(
+      getPool().query(
+        `UPDATE public.pending_operations SET params = '{"name":"tampered"}' WHERE id = $1`,
+        [id],
+      ),
+    ).rejects.toThrow(/frozen|underlag/i)
+  })
+
+  it('blocks UPDATE of operation_type on non-terminal rows', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data)
+       VALUES ($1, $2, 'create_customer', 'pending', 'op-type-frozen', '{}', '{}')
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    await expect(
+      getPool().query(
+        `UPDATE public.pending_operations SET operation_type = 'send_invoice' WHERE id = $1`,
+        [id],
+      ),
+    ).rejects.toThrow(/frozen/i)
+  })
+
+  it('allows committing → committed transition', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ins = await getPool().query<{ id: string }>(
+      `INSERT INTO public.pending_operations
+         (user_id, company_id, operation_type, status, title, params, preview_data)
+       VALUES ($1, $2, 'create_customer', 'committing', 'transition-test', '{}', '{}')
+       RETURNING id`,
+      [userId, companyId],
+    )
+    const id = ins.rows[0]!.id
+
+    const upd = await getPool().query(
+      `UPDATE public.pending_operations
+         SET status = 'committed', resolved_at = now(), result_data = '{"ok":true}'
+       WHERE id = $1 RETURNING id`,
+      [id],
+    )
+    expect(upd.rowCount).toBe(1)
+  })
 })

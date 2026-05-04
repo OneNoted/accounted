@@ -31,7 +31,9 @@ function mockClient(maybeSingleResult: { data: Record<string, unknown> | null; e
   const select = vi.fn().mockReturnValue({
     eq: vi.fn().mockReturnValue({
       eq: vi.fn().mockReturnValue({
-        maybeSingle: vi.fn().mockResolvedValue(maybeSingleResult),
+        eq: vi.fn().mockReturnValue({
+          maybeSingle: vi.fn().mockResolvedValue(maybeSingleResult),
+        }),
       }),
     }),
   })
@@ -58,7 +60,7 @@ describe('checkIdempotencyKey', () => {
 
   it('returns null when no cached row exists', async () => {
     const { client } = mockClient({ data: null, error: null })
-    const result = await checkIdempotencyKey(client, 'user-1', 'key-1', 'hash-1')
+    const result = await checkIdempotencyKey(client, 'user-1', 'company-1', 'key-1', 'hash-1')
     expect(result).toBeNull()
   })
 
@@ -73,7 +75,7 @@ describe('checkIdempotencyKey', () => {
       },
       error: null,
     })
-    const result = await checkIdempotencyKey(client, 'user-1', 'key-1', 'hash-1')
+    const result = await checkIdempotencyKey(client, 'user-1', 'company-1', 'key-1', 'hash-1')
     expect(result).toEqual({ status: 'success', body: { foo: 'bar' } })
   })
 
@@ -89,7 +91,7 @@ describe('checkIdempotencyKey', () => {
       error: null,
     })
     await expect(
-      checkIdempotencyKey(client, 'user-1', 'key-1', 'hash-new')
+      checkIdempotencyKey(client, 'user-1', 'company-1', 'key-1', 'hash-new')
     ).rejects.toBeInstanceOf(IdempotencyKeyReuseError)
   })
 
@@ -104,7 +106,7 @@ describe('checkIdempotencyKey', () => {
       },
       error: null,
     })
-    const result = await checkIdempotencyKey(client, 'user-1', 'key-1', 'hash-1')
+    const result = await checkIdempotencyKey(client, 'user-1', 'company-1', 'key-1', 'hash-1')
     expect(result).toBeNull()
   })
 })
@@ -130,7 +132,7 @@ describe('storeIdempotencyResponse', () => {
     const { client, insert } = mockClient({ data: null, error: null })
     insert.mockResolvedValueOnce({ error: { code: '23505', message: 'unique_violation' } })
     await expect(
-      storeIdempotencyResponse(client, 'user-1', null, 'key-1', 'hash-1', 'success', {})
+      storeIdempotencyResponse(client, 'user-1', 'company-1', 'key-1', 'hash-1', 'success', {})
     ).resolves.toBeUndefined()
   })
 })

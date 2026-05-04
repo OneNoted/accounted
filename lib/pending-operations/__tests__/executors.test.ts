@@ -82,6 +82,7 @@ describe('commitPendingOperation: unlock_period', () => {
     vi.mocked(unlockPeriod).mockResolvedValueOnce(period)
 
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null }) // dispatcher's pending_operations update
 
     const op = makePendingOp({
@@ -97,7 +98,9 @@ describe('commitPendingOperation: unlock_period', () => {
   })
 
   it('rejects when fiscal_period_id is missing', async () => {
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
     const op = makePendingOp({ operation_type: 'unlock_period', params: {} })
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
@@ -110,7 +113,9 @@ describe('commitPendingOperation: unlock_period', () => {
   it('surfaces underlying service errors', async () => {
     vi.mocked(unlockPeriod).mockRejectedValueOnce(new Error('Period is not locked'))
 
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update on throw
     const op = makePendingOp({
       operation_type: 'unlock_period',
       params: { fiscal_period_id: 'fp-1' },
@@ -140,6 +145,7 @@ describe('commitPendingOperation: import_sie', () => {
     })
 
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null }) // dispatcher's update
 
     const op = makePendingOp({
@@ -166,7 +172,9 @@ describe('commitPendingOperation: import_sie', () => {
   })
 
   it('rejects when required params are missing', async () => {
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
     const op = makePendingOp({ operation_type: 'import_sie', params: { filename: 'x.sie' } })
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
@@ -189,7 +197,9 @@ describe('commitPendingOperation: import_sie', () => {
       warnings: [],
     })
 
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
     const op = makePendingOp({
       operation_type: 'import_sie',
       params: {
@@ -233,6 +243,8 @@ describe('commitPendingOperation: credit_invoice', () => {
     const completeCreditNote = { ...creditNoteRow, customer: { name: 'Acme AB' }, items: [] }
 
     const { supabase, enqueue } = createQueuedMockSupabase()
+    // 0: CAS claim
+    enqueue({ data: { id: 'op-1' }, error: null })
     // 1: fetch original with items
     enqueue({ data: originalWithItems, error: null })
     // 2: insert credit note
@@ -271,6 +283,7 @@ describe('commitPendingOperation: credit_invoice', () => {
     const completeCreditNote = { ...creditNoteRow, customer: null, items: [] }
 
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: originalWithItems, error: null })
     enqueue({ data: creditNoteRow, error: null })
     enqueue({ data: null, error: null })
@@ -295,6 +308,7 @@ describe('commitPendingOperation: credit_invoice', () => {
   it('auto-rejects when invoice is already credited (409)', async () => {
     const original = makeInvoice({ id: 'inv-1', status: 'credited', document_type: 'invoice' })
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { ...original, items: [] }, error: null })
     // dispatcher auto-reject path also does an update
     enqueue({ data: null, error: null })
@@ -312,7 +326,9 @@ describe('commitPendingOperation: credit_invoice', () => {
   })
 
   it('rejects when invoice_id is missing', async () => {
-    const { supabase } = createQueuedMockSupabase()
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
     const op = makePendingOp({ operation_type: 'credit_invoice', params: {} })
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
@@ -324,7 +340,9 @@ describe('commitPendingOperation: credit_invoice', () => {
   it('rejects invoices with status outside sent/paid/overdue', async () => {
     const original = makeInvoice({ id: 'inv-1', status: 'draft', document_type: 'invoice' })
     const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { ...original, items: [] }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
 
     const op = makePendingOp({
       operation_type: 'credit_invoice',

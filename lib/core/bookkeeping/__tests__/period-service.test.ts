@@ -136,6 +136,7 @@ describe('unlockPeriod', () => {
     results = [
       { data: period, error: null },
       { data: unlocked, error: null },
+      { data: null, error: null }, // audit_log insert
     ]
 
     const handler = vi.fn()

@@ -191,12 +191,15 @@ async function stagePendingOperation(
     }
   }
 
-  // ── Idempotency check: same key + same payload → return cached response.
+  // ── Idempotency check: same key + same payload + same company → return
+  //    cached response. companyId is folded into the canonical hash so the
+  //    same key UUID submitted under a different company is treated as a
+  //    fresh request, not a replay.
   const requestHash = options.idempotencyKey
-    ? hashRequest({ operationType, params })
+    ? hashRequest({ operationType, params, companyId })
     : null
   if (options.idempotencyKey && requestHash) {
-    const cached = await checkIdempotencyKey(supabase, userId, options.idempotencyKey, requestHash)
+    const cached = await checkIdempotencyKey(supabase, userId, companyId, options.idempotencyKey, requestHash)
     if (cached) {
       return {
         ...(cached.body as Record<string, unknown>),

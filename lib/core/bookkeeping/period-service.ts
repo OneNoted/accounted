@@ -101,6 +101,8 @@ export async function unlockPeriod(
     throw new Error('Period is not locked')
   }
 
+  const priorLockedAt = period.locked_at
+
   const { data: updated, error: updateError } = await supabase
     .from('fiscal_periods')
     .update({ locked_at: null })
@@ -114,6 +116,21 @@ export async function unlockPeriod(
   }
 
   const result = updated as FiscalPeriod
+
+  // BFNAR 2013:2 kap. 8 (behandlingshistorik): unlocking a locked period is a
+  // sensitive control change. Persist it to the immutable audit_log (not just
+  // event_log, which has 30-day TTL) so an auditor can reconstruct who
+  // unlocked which period and when, even years later.
+  await supabase.from('audit_log').insert({
+    user_id: userId,
+    company_id: companyId,
+    action: 'UPDATE',
+    table_name: 'fiscal_periods',
+    record_id: fiscalPeriodId,
+    description: `Period unlocked: ${result.name} (${result.period_start} – ${result.period_end})`,
+    old_state: { locked_at: priorLockedAt },
+    new_state: { locked_at: null },
+  })
 
   await eventBus.emit({
     type: 'period.unlocked',

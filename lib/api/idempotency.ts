@@ -13,8 +13,9 @@
  *   4. Hit + different hash → throw IdempotencyKeyReuseError (409 in HTTP).
  *   5. Miss → proceed; on success, persist the response.
  *
- * Keys are scoped per user (an agent in account A can't collide with an
- * unrelated agent in account B that reused the same UUID).
+ * Keys are scoped per (user, company): the same key UUID across two
+ * companies cannot collide, and a multi-company user replaying a key in
+ * the wrong company can never receive the other company's cached response.
  *
  * 24-hour TTL is enforced by an `expires_at` column + a cleanup cron. After
  * 24h, the same key may be reused safely — agents that retry that long after
@@ -68,6 +69,7 @@ function canonicalJson(value: unknown): string {
 export async function checkIdempotencyKey(
   supabase: SupabaseClient,
   userId: string,
+  companyId: string,
   key: string,
   requestHash: string
 ): Promise<IdempotencyHit | null> {
@@ -75,6 +77,7 @@ export async function checkIdempotencyKey(
     .from('idempotency_keys')
     .select('request_hash, response_status, response_body, expires_at')
     .eq('user_id', userId)
+    .eq('company_id', companyId)
     .eq('key', key)
     .maybeSingle()
 
@@ -103,7 +106,7 @@ export async function checkIdempotencyKey(
 export async function storeIdempotencyResponse(
   supabase: SupabaseClient,
   userId: string,
-  companyId: string | null,
+  companyId: string,
   key: string,
   requestHash: string,
   status: 'success' | 'error',

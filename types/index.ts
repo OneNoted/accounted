@@ -1343,7 +1343,7 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
-export type PendingOperationStatus = 'pending' | 'committed' | 'rejected'
+export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'

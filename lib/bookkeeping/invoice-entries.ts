@@ -374,7 +374,14 @@ export async function createCreditNoteJournalEntry(
   userId: string,
   creditNote: Invoice,
   entityType: EntityType = 'enskild_firma',
-  customerName?: string
+  customerName?: string,
+  /**
+   * Original voucher reference (e.g. "A-42") to embed in the JE description and
+   * line-level descriptions. BFL 5 kap. 5 § requires a correction to point back
+   * to the corrected verifikation; the invoice number alone is insufficient
+   * because it doesn't identify the entry in the verifikationsserie.
+   */
+  originalVoucherRef?: string
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -384,6 +391,7 @@ export async function createCreditNoteJournalEntry(
 
   const lines: CreateJournalEntryLineInput[] = []
   const tag = invoiceTag(creditNote)
+  const lineSuffix = originalVoucherRef ? ` (avser ${originalVoucherRef})` : ''
 
   // Generate reversed revenue + VAT lines per rate group (debit side for credit notes)
   const debitLines: CreateJournalEntryLineInput[] = []
@@ -399,7 +407,7 @@ export async function createCreditNoteJournalEntry(
         ...line,
         debit_amount: Math.abs(line.credit_amount),
         credit_amount: Math.abs(line.debit_amount),
-        line_description: `Kreditfaktura ${tag}`,
+        line_description: `Kreditfaktura ${tag}${lineSuffix}`,
       })
     }
   } else {
@@ -421,7 +429,7 @@ export async function createCreditNoteJournalEntry(
         account_number: vatAccount,
         debit_amount: absVat,
         credit_amount: 0,
-        line_description: `Moms kreditfaktura ${tag}`,
+        line_description: `Moms kreditfaktura ${tag}${lineSuffix}`,
       })
     }
   }
@@ -437,10 +445,13 @@ export async function createCreditNoteJournalEntry(
     line_description: `Kreditfaktura ${tag}`,
   })
 
+  const baseDescription = buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id)
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: creditNote.invoice_date,
-    description: buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id),
+    description: originalVoucherRef
+      ? `${baseDescription} (avser verifikation ${originalVoucherRef})`
+      : baseDescription,
     source_type: 'credit_note',
     source_id: creditNote.id,
     lines,
