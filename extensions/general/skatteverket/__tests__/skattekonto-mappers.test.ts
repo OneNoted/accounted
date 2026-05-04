@@ -1,26 +1,77 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { computeDedupKey } from '../lib/skattekonto-sync'
 import type {
   SkatteverketSaldoResponse,
   SkatteverketTransaktionerResponse,
 } from '../types'
 
-// Spec dir has parens in the name, so import attribute would fail in some
-// bundlers. Read the JSON at test time with fs instead.
-const examplesDir = join(
-  process.cwd(),
-  'dev_docs',
-  'skattekonto(2.1.0)',
-  'examples',
-)
-const saldoResponseExample = JSON.parse(
-  readFileSync(join(examplesDir, 'saldoResponse.json'), 'utf8'),
-)
-const transaktionerResponseExample = JSON.parse(
-  readFileSync(join(examplesDir, 'transaktionerResponse.json'), 'utf8'),
-)
+// Fixtures inlined verbatim from Skatteverket's official Skattekonto v2.1.0
+// API examples (dev_docs/skattekonto(2.1.0)/examples/*.json). The dev_docs
+// directory is gitignored, so the fixtures must live alongside the test.
+const saldoResponseExample = {
+  nastaAvstamningsdatum: '2019-06-01',
+  senastUppdaterad: '2019-05-06T03:04:05Z',
+  informationstext: [],
+  saldoSkatteverket: -14487,
+  saldoKronofogden: -145409,
+  rantaSkatteverket: -12,
+  rantaKronofogden: -10,
+  ocrNummer: '1948040320946',
+}
+
+const transaktionerResponseExample = {
+  nastaAvstamningsdatum: '2019-06-01',
+  senastUppdaterad: '2019-05-06T03:04:05Z',
+  informationstext: ['Test av informationstext'],
+  ocrNummer: '1948040320946',
+  datumFrom: '2017-10-28',
+  tidigareTransaktioner: [
+    {
+      transaktionsidentitet: 746876987,
+      transaktionsdatum: '2019-04-16',
+      ranteberakningsdatum: '2019-04-13',
+      transaktionstext: 'Inbetalning bokförd 190412',
+      beloppSkatteverket: 1292,
+    },
+    {
+      transaktionsidentitet: 746876988,
+      transaktionsdatum: '2019-04-16',
+      ranteberakningsdatum: '2019-04-13',
+      transaktionstext: 'Debiterad preliminärskatt',
+      beloppSkatteverket: -1292,
+    },
+    {
+      transaktionsidentitet: 746876989,
+      transaktionsdatum: '2019-04-16',
+      ranteberakningsdatum: '2019-04-12',
+      transaktionstext: 'Inbetalning bokförd 190411',
+      beloppSkatteverket: 5402,
+    },
+    {
+      transaktionsidentitet: 746876990,
+      transaktionsdatum: '2019-04-16',
+      ranteberakningsdatum: '2019-04-13',
+      transaktionstext: 'Avdragen skatt mars 2019',
+      beloppSkatteverket: -3000,
+    },
+    {
+      transaktionsidentitet: 746876991,
+      transaktionsdatum: '2019-04-16',
+      ranteberakningsdatum: '2019-04-13',
+      transaktionstext: 'Arbetsgivaravgift mars 2019',
+      beloppSkatteverket: -2402,
+    },
+  ],
+  kommandeTransaktioner: [
+    {
+      transaktionsdatum: '2019-03-13',
+      forfallodatum: '2019-05-13',
+      ranteberakningsdatum: '2019-05-14',
+      transaktionstext: 'Debiterad prelimniärskatt',
+      beloppSkatteverket: -1292,
+    },
+  ],
+}
 
 describe('skattekonto example payloads', () => {
   it('saldoResponse.json fits SkatteverketSaldoResponse', () => {
