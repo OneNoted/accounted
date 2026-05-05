@@ -1654,11 +1654,8 @@ export interface SIEAccountMapping {
 // Invoice Inbox Types
 // ============================================================
 
-export type InboxItemStatus = 'pending' | 'processing' | 'ready' | 'confirmed' | 'rejected' | 'error'
+export type InboxItemStatus = 'received' | 'error'
 export type InboxItemSource = 'email' | 'upload'
-
-// Document classification type for unified inbox routing
-export type DocumentClassificationType = 'supplier_invoice' | 'receipt' | 'government_letter' | 'unknown'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
 
@@ -1687,25 +1684,10 @@ export interface InvoiceInboxItem {
   resend_attachment_id: string | null
   document_id: string | null
   extracted_data: Record<string, unknown> | null
-  confidence: number | null
   matched_supplier_id: string | null
   created_supplier_invoice_id: string | null
   error_message: string | null
-
-  // Unified document inbox fields
-  document_type: DocumentClassificationType
-  linked_receipt_id: string | null
   raw_email_payload: Record<string, unknown> | null
-
-  // AI template suggestion
-  suggested_template_id: string | null
-  suggested_template_confidence: number | null
-
-  // Transaction matching
-  matched_transaction_id: string | null
-  match_confidence: number | null
-  match_method: 'payment_reference' | 'amount_date' | 'amount_merchant' | 'receipt_match' | 'llm' | 'pending_transaction' | null
-  match_reasoning: string | null
 
   // Audit chain (processing_history correlation)
   correlation_id: string | null
@@ -1717,7 +1699,6 @@ export interface InvoiceInboxItem {
   document?: DocumentAttachment
   supplier?: Supplier
   supplier_invoice?: SupplierInvoice
-  receipt?: Receipt
 }
 
 // ============================================================
