@@ -114,14 +114,15 @@ export async function POST(
 
     const submitData = await submitResponse.json()
 
-    // Mark the run as having started AGI submission. The final
-    // agi_submitted_at timestamp is stamped when the extension observes
-    // a kvittens via /agi/kvittenser; this earlier timestamp keeps the UI
-    // showing "submitted process started".
-    await supabase
-      .from('salary_runs')
-      .update({ agi_submitted_at: new Date().toISOString() })
-      .eq('id', id)
+    // Don't stamp salary_runs.agi_submitted_at here. The underlag has only
+    // been ingested; the user still has to pass kontrollresultat, save,
+    // produce a granskningsunderlag, and sign with BankID before the AGI is
+    // actually filed. Recording the submission time at ingest would make the
+    // audit trail lie about when filing completed.
+    //
+    // The real timestamp is set by the kvittenser handler in the extension
+    // (extensions/general/skatteverket/index.ts /agi/kvittenser route) when
+    // it observes a uuidKvittens for the period, mirroring SKV's signeradTid.
 
     await eventBus.emit({
       type: 'agi.submitted',

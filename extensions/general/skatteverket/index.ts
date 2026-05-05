@@ -659,11 +659,11 @@ export const skatteverketExtension: Extension = {
             }),
           )
 
-          await ctx.supabase
-            .from('agi_declarations')
-            .update({ status: 'exported' })
-            .eq('salary_run_id', salaryRunId)
-            .eq('company_id', ctx.companyId)
+          // Don't flip agi_declarations.status to 'exported' here. SKV's
+          // kontrollresultat may still come back DONE_REJECTED, in which case
+          // nothing landed in Eget utrymme. The transition belongs in
+          // /agi/spara below, after the user (or auto-spara on success) has
+          // committed the underlag.
 
           return NextResponse.json({ data: result.data })
         } catch (err) {
@@ -706,6 +706,11 @@ export const skatteverketExtension: Extension = {
     // ── AGI: Save underlag into Eget utrymme ────────────────────────
     // Body: { inlamningId, salaryRunId? }. Only meaningful between
     // POST /underlag and skapaGranskningsunderlag.
+    //
+    // Flips agi_declarations.status to 'exported' on success — this is the
+    // first point at which the underlag is durable on Skatteverket's side.
+    // /agi/submit deliberately does NOT update the row, because a
+    // DONE_REJECTED kontrollresultat would leave it incorrectly exported.
     {
       method: 'POST',
       path: '/agi/spara',
@@ -727,6 +732,40 @@ export const skatteverketExtension: Extension = {
               { status: result.status },
             )
           }
+
+          // Promote the matching declaration to 'exported'. salaryRunId is
+          // accepted in the body for the happy path; if missing we can still
+          // fall back to the locally-cached submission state, which always
+          // carries it (we wrote it in /agi/submit).
+          let runId = body.salaryRunId
+          if (!runId) {
+            // Last-resort lookup: scan recent agi_submission_* keys for a
+            // matching inlamningId. Cheap because there's at most one active
+            // submission per period and the operator typically has very few.
+            const { data: rows } = await ctx.supabase
+              .from('extension_data')
+              .select('value')
+              .eq('company_id', ctx.companyId)
+              .eq('extension_id', 'skatteverket')
+              .like('key', 'agi_submission_%')
+            for (const row of rows ?? []) {
+              try {
+                const v = JSON.parse(row.value as string) as { inlamningId?: number; salaryRunId?: string }
+                if (v.inlamningId === inlamningId && v.salaryRunId) {
+                  runId = v.salaryRunId
+                  break
+                }
+              } catch { /* skip malformed */ }
+            }
+          }
+          if (runId) {
+            await ctx.supabase
+              .from('agi_declarations')
+              .update({ status: 'exported' })
+              .eq('salary_run_id', runId)
+              .eq('company_id', ctx.companyId)
+          }
+
           return NextResponse.json({ data: result.data })
         } catch (err) {
           return handleSkvError(err)
@@ -735,7 +774,12 @@ export const skatteverketExtension: Extension = {
     },
 
     // ── AGI: Avbryt underlag (before spara) ─────────────────────────
-    // Query: ?inlamningId=...
+    // Query: ?inlamningId=...&period=YYYYMM (period optional but recommended)
+    //
+    // The `period` param lets the handler clear the locally-cached
+    // `agi_submission_{period}` record so the UI doesn't sit on a stale
+    // `underlag_submitted` state. If the caller doesn't pass it we fall
+    // back to scanning recent submission keys for the matching inlamningId.
     {
       method: 'DELETE',
       path: '/agi/underlag',
@@ -746,6 +790,7 @@ export const skatteverketExtension: Extension = {
         try {
           const url = new URL(request.url)
           const inlamningId = Number(url.searchParams.get('inlamningId'))
+          const period = url.searchParams.get('period')
           if (!Number.isFinite(inlamningId) || inlamningId <= 0) {
             return NextResponse.json({ error: 'Saknar parameter: inlamningId' }, { status: 400 })
           }
@@ -756,6 +801,38 @@ export const skatteverketExtension: Extension = {
               { status: result.status },
             )
           }
+
+          // Clear locally-cached submission state so the UI doesn't keep
+          // showing `underlag_submitted` for an inlamning that no longer
+          // exists at SKV. Direct path: caller passed period.
+          if (period) {
+            await ctx.settings.set(`agi_submission_${period}`, null)
+          } else {
+            // Fallback: find the period by matching inlamningId across
+            // recent submission keys. Cheap because there's at most one
+            // active submission per period.
+            const { data: rows } = await ctx.supabase
+              .from('extension_data')
+              .select('key, value')
+              .eq('company_id', ctx.companyId)
+              .eq('extension_id', 'skatteverket')
+              .like('key', 'agi_submission_%')
+            for (const row of rows ?? []) {
+              try {
+                const v = JSON.parse(row.value as string) as { inlamningId?: number }
+                if (v.inlamningId === inlamningId) {
+                  await ctx.supabase
+                    .from('extension_data')
+                    .delete()
+                    .eq('company_id', ctx.companyId)
+                    .eq('extension_id', 'skatteverket')
+                    .eq('key', row.key as string)
+                  break
+                }
+              } catch { /* skip malformed */ }
+            }
+          }
+
           return NextResponse.json({ success: true })
         } catch (err) {
           return handleSkvError(err)
@@ -908,10 +985,14 @@ export const skatteverketExtension: Extension = {
 
             // Pin the receipt to the most recent declaration for this period
             // (id desc) so a correction chain doesn't get its kvittens written
-            // onto a superseded row.
+            // onto a superseded row. Also stamp salary_runs.agi_submitted_at
+            // here, mirroring SKV's signeradTid — this is the only place we
+            // know the AGI was actually filed (the orchestrator deliberately
+            // doesn't stamp on underlag-ingest, see route.ts comment).
+            const submittedAt = kvittens.signeradTid || new Date().toISOString()
             const { data: latest } = await ctx.supabase
               .from('agi_declarations')
-              .select('id')
+              .select('id, salary_run_id')
               .eq('company_id', ctx.companyId)
               .eq('period_year', periodYear)
               .eq('period_month', periodMonth)
@@ -924,10 +1005,18 @@ export const skatteverketExtension: Extension = {
                 .update({
                   status: 'submitted',
                   kvittensnummer: kvittens.uuidKvittens,
-                  submitted_at: kvittens.signeradTid || new Date().toISOString(),
+                  submitted_at: submittedAt,
                   submitted_by: ctx.userId,
                 })
                 .eq('id', latest.id)
+
+              if (latest.salary_run_id) {
+                await ctx.supabase
+                  .from('salary_runs')
+                  .update({ agi_submitted_at: submittedAt })
+                  .eq('id', latest.salary_run_id)
+                  .eq('company_id', ctx.companyId)
+              }
             }
           }
 
@@ -1246,6 +1335,27 @@ async function loadAGIXml(
   const salaryRunId = body.salaryRunId
   if (!salaryRunId) {
     throw new Error('Saknar obligatoriskt fält: salaryRunId')
+  }
+
+  // Status guard — must mirror the orchestrator at
+  // app/api/salary/runs/[id]/agi/submit/route.ts. The extension endpoint
+  // is also reachable directly from AGIPanel, so the check has to live here
+  // too. Per BFL 5 kap and SFL 26 kap, AGI must reflect finalised payroll
+  // data; submitting from a draft/cancelled run would emit incorrect figures
+  // and require a costly rättelse.
+  const { data: run, error: runError } = await ctx.supabase
+    .from('salary_runs')
+    .select('status')
+    .eq('id', salaryRunId)
+    .eq('company_id', ctx.companyId)
+    .single()
+
+  if (runError || !run) {
+    throw new Error('Lönekörning hittades inte')
+  }
+
+  if (!['review', 'approved', 'paid', 'booked'].includes(run.status)) {
+    throw new Error('AGI kan bara skickas till Skatteverket efter granskning')
   }
 
   const { data: settings } = await ctx.supabase

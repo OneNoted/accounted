@@ -255,7 +255,9 @@ export function AGIPanel(props: AGIPanelProps) {
         const sparaRes = await fetch('/api/extensions/ext/skatteverket/agi/spara', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ inlamningId }),
+          // Include salaryRunId so the handler can promote the matching
+          // agi_declarations row to status='exported' without a fallback scan.
+          body: JSON.stringify({ inlamningId, salaryRunId }),
         })
         const sparaJson = await sparaRes.json()
         if (!sparaRes.ok || sparaJson.error) {
@@ -426,6 +428,7 @@ export function AGIPanel(props: AGIPanelProps) {
   const subState = submission?.status
   const awaitingSigning = subState === 'awaiting_signing'
   const underlagSubmitted = subState === 'underlag_submitted'
+  const underlagRejected = subState === 'underlag_rejected'
   const isSigned = subState === 'signed' || !!agiSubmittedAt
 
   return (
@@ -466,6 +469,11 @@ export function AGIPanel(props: AGIPanelProps) {
           />
         </div>
 
+        {/* Signing link — only shown for the happy path. The link in
+            `signeringslank` is also reused by the INCORRECT_DATA branch
+            below to surface a felrapport URL, which deserves a distinct
+            treatment so the user understands they must fix errors before
+            BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
             <p className="text-sm font-medium">Utkastet är låst och redo att signeras</p>
@@ -479,6 +487,30 @@ export function AGIPanel(props: AGIPanelProps) {
               className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-amber-900 hover:underline dark:text-amber-200"
             >
               Öppna signeringslänk <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        )}
+
+        {/* INCORRECT_DATA branch — skapaGranskningsunderlag returned 409 with
+            a felrapport link. The user must open the link in Mina Sidor to
+            see what's wrong, fix it, and then re-submit. Without this UI the
+            link would be permanently unreachable even though the extension
+            persisted it. */}
+        {submission?.signeringslank && underlagRejected && (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+            <p className="text-sm font-medium text-destructive">
+              Felaktiga underlag — granskningsunderlag kunde inte signeras
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {submission.meddelande || 'Skatteverket avvisade underlaget. Öppna felrapporten för detaljer.'}
+            </p>
+            <a
+              href={submission.signeringslank}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-destructive hover:underline"
+            >
+              Öppna felrapport hos Skatteverket <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </div>
         )}

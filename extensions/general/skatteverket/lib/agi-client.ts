@@ -29,9 +29,12 @@ import type {
  * Optional period management on the hantera API:
  *   POST /arbetsgivare/{x}/redovisningsperioder/{y}/las     (lock)
  *   POST /arbetsgivare/{x}/redovisningsperioder/{y}/lasUpp  (unlock)
+ *
+ * Cleanup paths (both on the inlämning API, NOT hantera):
+ *   DELETE /underlag/{inlamningId}
+ *      — abort an unsaved underlag (use agiAvbrytUnderlag)
  *   DELETE /arbetsgivare/{x}/redovisningsperioder/{y}/inlamningar/{inlamningId}
- *      (remove a saved underlag — distinct from /underlag/{id} DELETE which
- *       only aborts an unsaved underlag)
+ *      — remove a SAVED underlag from Eget utrymme (use agiTaBortSparadInlamning)
  *
  * Note: skvRequest already maps 401/403/429 to SkatteverketAuthError. AGI
  * 400/404/409 carry the SkatteverketAGIErrorBody envelope, which we surface
