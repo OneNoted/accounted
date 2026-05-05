@@ -856,6 +856,45 @@ async function commitUncategorizeTransaction(
   return { data: { transaction_id: txId, reversed_journal_entry_id: journalEntryId } }
 }
 
+async function commitAttachDocumentToTransaction(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const txId = params.transaction_id as string
+  const documentId = params.document_id as string
+  if (!txId || !documentId) {
+    return { error: 'transaction_id and document_id are required', status: 400 }
+  }
+
+  const { data: tx, error: txError } = await supabase
+    .from('transactions')
+    .select('id')
+    .eq('id', txId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (txError || !tx) return { error: 'Transaction not found', status: 404 }
+
+  const { data: doc, error: docError } = await supabase
+    .from('document_attachments')
+    .select('id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (docError || !doc) return { error: 'Document not found', status: 404 }
+
+  const { error: updateError } = await supabase
+    .from('transactions')
+    .update({ document_id: documentId })
+    .eq('id', txId)
+    .eq('company_id', companyId)
+
+  if (updateError) return { error: 'Failed to attach document', status: 500 }
+
+  return { data: { transaction_id: txId, document_id: documentId } }
+}
+
 async function commitRunYearEnd(
   supabase: SupabaseClient,
   userId: string,
@@ -1484,6 +1523,9 @@ export async function commitPendingOperation(
         break
       case 'uncategorize_transaction':
         result = await commitUncategorizeTransaction(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'attach_document_to_transaction':
+        result = await commitAttachDocumentToTransaction(supabase, userId, companyId, pendingOp.params)
         break
       case 'run_year_end':
         result = await commitRunYearEnd(supabase, userId, companyId, pendingOp.params)

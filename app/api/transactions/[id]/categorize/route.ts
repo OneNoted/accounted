@@ -382,6 +382,19 @@ export async function POST(
     } catch (inboxErr) {
       console.error('[categorize] Failed to update inbox item:', inboxErr)
     }
+  } else if (journalEntryId && transaction.document_id) {
+    // Document was pinned to the transaction (via /attach-document or MCP) before
+    // categorization. Propagate the link to the journal entry so receipt-on-verifikation
+    // requirements are satisfied.
+    try {
+      await supabase
+        .from('document_attachments')
+        .update({ journal_entry_id: journalEntryId })
+        .eq('id', transaction.document_id)
+        .eq('company_id', companyId)
+    } catch (docErr) {
+      console.error('[categorize] Failed to link transaction document:', docErr)
+    }
   }
 
   // Update the transaction (CAS guard: only set journal_entry_id if still null)

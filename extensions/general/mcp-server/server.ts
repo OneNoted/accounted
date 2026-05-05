@@ -2680,6 +2680,246 @@ export const tools: McpTool[] = [
       return data
     },
   },
+
+  {
+    name: 'gnubok_list_unmatched_documents',
+    description: 'List documents from the inbox that are not yet attached to any bank transaction or supplier invoice. Returns extracted hints (vendor, amount, date) so the agent can match against transactions without reading the PDF.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max results (default 20, max 50)' },
+        cursor: { type: 'string', description: 'created_at ISO timestamp from previous page (exclusive)' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        items: { type: 'array', items: { type: 'object' } },
+        count: { type: 'number' },
+        next_cursor: { type: 'string', description: 'Pass as cursor on next call to continue' },
+      },
+      required: ['items', 'count'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
+      const cursor = typeof args.cursor === 'string' ? args.cursor : null
+
+      // Pull recent inbox items with a document, no supplier invoice yet, then
+      // filter out those whose document is already pinned to a transaction.
+      // Two-step query because PostgREST doesn't expose anti-joins.
+      let inboxQuery = supabase
+        .from('invoice_inbox_items')
+        .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at')
+        .eq('company_id', companyId)
+        .not('document_id', 'is', null)
+        .is('created_supplier_invoice_id', null)
+        .order('created_at', { ascending: false })
+        .limit(limit * 2)
+
+      if (cursor) inboxQuery = inboxQuery.lt('created_at', cursor)
+
+      const { data: inboxRows, error: inboxError } = await inboxQuery
+      if (inboxError) throw new Error(`Database error: ${inboxError.message}`)
+      if (!inboxRows || inboxRows.length === 0) {
+        return { items: [], count: 0 }
+      }
+
+      const docIds = inboxRows.map((r) => r.document_id).filter((d): d is string => d != null)
+      const { data: txMatches, error: txError } = await supabase
+        .from('transactions')
+        .select('document_id')
+        .eq('company_id', companyId)
+        .in('document_id', docIds)
+
+      if (txError) throw new Error(`Database error: ${txError.message}`)
+      const matchedDocIds = new Set((txMatches || []).map((t) => t.document_id))
+
+      const unmatched = inboxRows
+        .filter((r) => r.document_id && !matchedDocIds.has(r.document_id))
+        .slice(0, limit)
+        .map((item) => {
+          const extracted = item.extracted_data as Record<string, unknown> | null
+          let vendorName: string | null = null
+          let orgNumber: string | null = null
+          let amount: number | null = null
+          let invoiceDate: string | null = null
+          let paymentReference: string | null = null
+
+          if (extracted) {
+            const supplier = extracted.supplier as Record<string, unknown> | undefined
+            const invoice = extracted.invoice as Record<string, unknown> | undefined
+            const totals = extracted.totals as Record<string, unknown> | undefined
+            vendorName = (supplier?.name as string) || null
+            orgNumber = (supplier?.orgNumber as string) || null
+            amount = (totals?.total as number) || null
+            invoiceDate = (invoice?.invoiceDate as string) || null
+            paymentReference = (invoice?.paymentReference as string) || null
+          }
+
+          return {
+            inbox_item_id: item.id,
+            document_id: item.document_id,
+            source: item.source,
+            created_at: item.created_at,
+            email_from: item.email_from,
+            email_subject: item.email_subject,
+            email_received_at: item.email_received_at,
+            vendor_name: vendorName,
+            org_number: orgNumber,
+            amount,
+            invoice_date: invoiceDate,
+            payment_reference: paymentReference,
+          }
+        })
+
+      const nextCursor = unmatched.length === limit
+        ? unmatched[unmatched.length - 1].created_at
+        : null
+
+      return {
+        items: unmatched,
+        count: unmatched.length,
+        ...(nextCursor ? { next_cursor: nextCursor } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_get_document_content',
+    description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+      },
+      required: ['document_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        document_id: { type: 'string' },
+        file_name: { type: 'string' },
+        mime_type: { type: 'string' },
+        size_bytes: { type: 'number' },
+        signed_url: { type: 'string' },
+        expires_at: { type: 'string' },
+      },
+      required: ['document_id', 'file_name', 'signed_url', 'expires_at'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const documentId = args.document_id as string
+      if (!documentId) throw new Error('document_id is required')
+
+      const { data: doc, error: docError } = await supabase
+        .from('document_attachments')
+        .select('id, file_name, mime_type, file_size_bytes, storage_path')
+        .eq('id', documentId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (docError) throw new Error(`Database error: ${docError.message}`)
+      if (!doc) throw new Error('Document not found')
+
+      const ttlSeconds = 300
+      const { data: signed, error: signError } = await supabase.storage
+        .from('documents')
+        .createSignedUrl(doc.storage_path, ttlSeconds)
+
+      if (signError || !signed) {
+        throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)
+      }
+
+      const expiresAt = new Date(Date.now() + ttlSeconds * 1000).toISOString()
+
+      return {
+        document_id: doc.id,
+        file_name: doc.file_name,
+        mime_type: doc.mime_type,
+        size_bytes: doc.file_size_bytes,
+        signed_url: signed.signedUrl,
+        expires_at: expiresAt,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_attach_document_to_transaction',
+    description: 'Stage attaching a document to a bank transaction. The document is pinned to the tx; when the tx is later categorized the link propagates to the journal entry. Stages for approval.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        transaction_id: { type: 'string', description: 'UUID of the bank transaction' },
+        document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+        idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries' },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+      },
+      required: ['transaction_id', 'document_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      const documentId = args.document_id as string
+      if (!transactionId) throw new Error('transaction_id is required')
+      if (!documentId) throw new Error('document_id is required')
+
+      const { data: tx, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, document_id')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (txError || !tx) throw new Error('Transaction not found')
+
+      const { data: doc, error: docError } = await supabase
+        .from('document_attachments')
+        .select('id, file_name, mime_type')
+        .eq('id', documentId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (docError || !doc) throw new Error('Document not found')
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'attach_document_to_transaction',
+        `Koppla bilaga: ${doc.file_name} → ${tx.merchant_name || tx.description || transactionId}`,
+        { transaction_id: transactionId, document_id: documentId },
+        {
+          transaction_description: tx.merchant_name || tx.description,
+          transaction_amount: tx.amount,
+          transaction_currency: tx.currency,
+          transaction_date: tx.date,
+          document_file_name: doc.file_name,
+          document_mime_type: doc.mime_type,
+          will_overwrite_existing: tx.document_id != null && tx.document_id !== documentId,
+        },
+        actor,
+        undefined,
+        {
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dryRun: args.dry_run === true,
+        }
+      )
+    },
+  },
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_employees',
