@@ -174,9 +174,9 @@ describe('generateARReconciliation', () => {
     expect(result.unconverted_fx_count).toBe(0)
   })
 
-  it('flags unconverted_fx_count when an FX invoice has no exchange_rate', async () => {
+  it('excludes FX invoices without exchange_rate from the SEK total and counts them', async () => {
     results = [
-      // 0: invoices — 100 EUR without rate, 500 SEK control
+      // 0: invoices — 100 EUR without rate (excluded), 500 SEK control
       {
         data: [
           { total: 100, paid_amount: 0, currency: 'EUR', exchange_rate: null },
@@ -196,9 +196,10 @@ describe('generateARReconciliation', () => {
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
     expect(result.unconverted_fx_count).toBe(1)
-    expect(result.ar_ledger_total).toBe(600)
+    // EUR row excluded → ledger total is just the SEK 500
+    expect(result.ar_ledger_total).toBe(500)
     expect(result.account_1510_balance).toBe(500)
-    expect(result.is_reconciled).toBe(false)
+    expect(result.is_reconciled).toBe(true)
   })
 
   it('uses Math.round for monetary precision', async () => {

@@ -265,8 +265,10 @@ describe('generateSupplierLedger', () => {
     expect(report.total_outstanding).toBe(3537.5)
   })
 
-  it('falls back to original amount when exchange_rate is missing on FX invoice', async () => {
-    // Legacy data without an exchange rate. Documented limitation: row stays unconverted.
+  it('excludes FX invoices without exchange_rate from totals and counts them', async () => {
+    // Legacy data: an FX invoice without an exchange rate cannot be converted
+    // to SEK without falsifying the total. The row is excluded from sums and
+    // surfaced via unconverted_fx_count so the UI can warn the user.
     results = [
       {
         data: [
@@ -278,13 +280,23 @@ describe('generateSupplierLedger', () => {
             currency: 'EUR',
             exchange_rate: null,
           },
+          {
+            supplier_id: 'sup-2',
+            supplier: { id: 'sup-2', name: 'SEK supplier' },
+            due_date: '2024-06-01',
+            remaining_amount: 500,
+            currency: 'SEK',
+            exchange_rate: null,
+          },
         ],
         error: null,
       },
     ]
 
     const report = await generateSupplierLedger(supabase, 'company-1', '2024-06-15')
-    expect(report.total_outstanding).toBe(100)
+    expect(report.total_outstanding).toBe(500)
+    expect(report.unconverted_fx_count).toBe(1)
+    expect(report.entries.map(e => e.supplier_name)).toEqual(['SEK supplier'])
   })
 
   it('uses Math.round for monetary precision', async () => {

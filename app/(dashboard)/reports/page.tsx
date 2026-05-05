@@ -1589,6 +1589,7 @@ interface SupplierLedgerData {
     total_current: number
     total_overdue: number
     unpaid_count: number
+    unconverted_fx_count: number
   }
   reconciliation: {
     supplier_ledger_total: number
@@ -1670,6 +1671,11 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
           <CardContent>
             <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(ledger.total_outstanding)} kr</p>
             <p className="text-xs text-muted-foreground">{ledger.unpaid_count} fakturor</p>
+            {ledger.unconverted_fx_count > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {ledger.unconverted_fx_count} faktura i utländsk valuta utan växelkurs är inte med i totalen.
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>
@@ -2181,6 +2187,7 @@ interface ARLedgerData {
         total: number
         paid_amount: number
         outstanding: number
+        outstanding_sek: number | null
         days_overdue: number
         currency: string
       }[]
@@ -2195,6 +2202,7 @@ interface ARLedgerData {
     total_current: number
     total_overdue: number
     unpaid_count: number
+    unconverted_fx_count: number
   }
   reconciliation: {
     ar_ledger_total: number
@@ -2289,6 +2297,11 @@ function ARLedgerView({ periodId }: { periodId: string }) {
           <CardContent>
             <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(ledger.total_outstanding)} kr</p>
             <p className="text-xs text-muted-foreground">{ledger.unpaid_count} fakturor</p>
+            {ledger.unconverted_fx_count > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {ledger.unconverted_fx_count} faktura i utländsk valuta utan växelkurs är inte med i totalen.
+              </p>
+            )}
           </CardContent>
         </Card>
         <Card>

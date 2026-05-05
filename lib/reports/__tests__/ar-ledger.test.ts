@@ -242,12 +242,70 @@ describe('generateARLedger', () => {
     expect(entry.days_1_30).toBe(3475)
     expect(entry.total_outstanding).toBe(3475)
 
-    // Per-invoice detail keeps original currency
+    // Per-invoice detail keeps original currency for display, with the
+    // converted SEK value alongside so callers don't accidentally mix.
     const eurInv = entry.invoices.find(i => i.invoice_number === 'F100')!
     expect(eurInv.outstanding).toBe(225)
     expect(eurInv.currency).toBe('EUR')
+    expect(eurInv.outstanding_sek).toBe(2475)
+
+    const sekInv = entry.invoices.find(i => i.invoice_number === 'F101')!
+    expect(sekInv.outstanding_sek).toBe(1000)
 
     expect(report.total_outstanding).toBe(3475)
+    expect(report.unconverted_fx_count).toBe(0)
+  })
+
+  it('lists FX invoices without exchange_rate but excludes them from totals (outstanding_sek = null)', async () => {
+    results = [
+      {
+        data: [
+          // 100 EUR with no rate — listed in detail but excluded from buckets
+          {
+            id: 'inv-1',
+            customer_id: 'cust-a',
+            customer: { id: 'cust-a', name: 'Foreign AB' },
+            invoice_number: 'F200',
+            invoice_date: '2024-05-01',
+            due_date: '2024-06-01',
+            total: 100,
+            paid_amount: 0,
+            currency: 'EUR',
+            exchange_rate: null,
+            status: 'overdue',
+          },
+          // 500 SEK control
+          {
+            id: 'inv-2',
+            customer_id: 'cust-a',
+            customer: { id: 'cust-a', name: 'Foreign AB' },
+            invoice_number: 'F201',
+            invoice_date: '2024-05-01',
+            due_date: '2024-06-01',
+            total: 500,
+            paid_amount: 0,
+            currency: 'SEK',
+            exchange_rate: null,
+            status: 'overdue',
+          },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.unconverted_fx_count).toBe(1)
+    // EUR row excluded from total — only the 500 SEK invoice contributes
+    expect(report.total_outstanding).toBe(500)
+
+    const entry = report.entries[0]
+    expect(entry.total_outstanding).toBe(500)
+    // Both detail rows are still visible to the user
+    expect(entry.invoices).toHaveLength(2)
+    const eurInv = entry.invoices.find(i => i.invoice_number === 'F200')!
+    expect(eurInv.outstanding).toBe(100)
+    expect(eurInv.outstanding_sek).toBeNull()
   })
 
   it('uses Math.round for monetary precision', async () => {

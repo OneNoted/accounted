@@ -44,7 +44,12 @@ export async function generateReconciliation(
     .reduce((sum, inv) => {
       const isFx = inv.currency && inv.currency !== 'SEK'
       const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
-      if (isFx && !hasRate) unconvertedFxCount += 1
+      // Skip unconvertible FX rows from the sum — adding raw foreign amounts
+      // to a SEK total is arithmetically unsound. Counted instead.
+      if (isFx && !hasRate) {
+        unconvertedFxCount += 1
+        return sum
+      }
       const sek = resolveSekAmount(
         Number(inv.remaining_amount) || 0,
         null,

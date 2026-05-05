@@ -19,6 +19,12 @@ export interface SupplierLedgerReport {
   total_current: number
   total_overdue: number
   unpaid_count: number
+  /**
+   * Number of foreign-currency invoices excluded from the SEK totals because
+   * they had no exchange_rate. Adding them would mix currencies; surfacing
+   * the count lets the UI tell the user a row could not be converted.
+   */
+  unconverted_fx_count: number
 }
 
 /**
@@ -50,15 +56,27 @@ export async function generateSupplierLedger(
       total_current: 0,
       total_overdue: 0,
       unpaid_count: 0,
+      unconverted_fx_count: 0,
     }
   }
 
   // Group by supplier and calculate aging
   const bySupplier = new Map<string, SupplierLedgerEntry>()
+  let unconvertedFxCount = 0
 
   for (const inv of invoices) {
     const supplierId = inv.supplier_id
     const supplierName = inv.supplier?.name || 'Okänd leverantör'
+
+    // Foreign-currency invoice with no exchange_rate cannot be converted to
+    // SEK; adding the raw foreign amount to a SEK total would be unsound, so
+    // the row is excluded from sums and only counted.
+    const isFx = inv.currency && inv.currency !== 'SEK'
+    const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
+    if (isFx && !hasRate) {
+      unconvertedFxCount += 1
+      continue
+    }
 
     if (!bySupplier.has(supplierId)) {
       bySupplier.set(supplierId, {
@@ -113,5 +131,6 @@ export async function generateSupplierLedger(
     total_current: Math.round(total_current * 100) / 100,
     total_overdue: Math.round(total_overdue * 100) / 100,
     unpaid_count: invoices.length,
+    unconverted_fx_count: unconvertedFxCount,
   }
 }

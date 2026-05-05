@@ -288,6 +288,9 @@ export function BankReconciliationView() {
                 <Badge variant="destructive">Ej avstämd</Badge>
               )}
             </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Endast konto <AccountNumber number="1930" /> ingår i denna avstämning. Övriga bankkonton (t.ex. Plusgiro <AccountNumber number="1920" />, kreditkort <AccountNumber number="1940" /> eller valutakonton) måste avstämmas separat.
+            </p>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 text-sm">
