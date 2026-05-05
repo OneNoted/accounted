@@ -26,6 +26,7 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   categorize_transaction: 'medium',
   match_transaction_invoice: 'medium',
   create_invoice: 'medium', // creates as draft; sending is a separate op
+  create_transaction: 'medium', // ingests an uncategorized row; reversible by delete
 
   // ── High: irreversible, compliance-critical, or external side-effects
   send_invoice: 'high',          // emails the customer
