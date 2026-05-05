@@ -1363,6 +1363,8 @@ export interface OnboardingProgress {
   hasInvoices: boolean
   hasBankConnected: boolean
   hasSIEImport: boolean
+  /** True when the active user has a stored Skatteverket OAuth token. */
+  hasSkatteverketConnected: boolean
 }
 
 // Onboarding step data

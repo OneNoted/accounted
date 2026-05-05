@@ -23,6 +23,7 @@ const SCOPE_LABELS: Record<string, string> = {
   ska: 'Skatteinformation',
   skahmst: 'Hemortskommun',
   skattekonto: 'Skattekonto',
+  agd: 'Arbetsgivardeklaration',
 }
 
 export function SkatteverketConnectPanel() {

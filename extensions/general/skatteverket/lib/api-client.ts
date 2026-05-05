@@ -144,7 +144,7 @@ export async function skvRequest(
   method: string,
   path: string,
   body?: unknown,
-  options?: { baseUrl?: string }
+  options?: { baseUrl?: string; contentType?: string }
 ): Promise<Response> {
   const accessToken = await getValidToken(supabase, userId)
 
@@ -158,14 +158,20 @@ export async function skvRequest(
     'skv_client_correlation_id': crypto.randomUUID(),
   }
 
+  // contentType defaults to application/json, which is right for moms +
+  // skattekonto. AGI's POST /underlag takes application/xml — callers pass
+  // the XML as a string body and override contentType.
+  let serializedBody: string | undefined
   if (body !== undefined) {
-    headers['Content-Type'] = 'application/json'
+    const contentType = options?.contentType ?? 'application/json'
+    headers['Content-Type'] = contentType
+    serializedBody = typeof body === 'string' ? body : JSON.stringify(body)
   }
 
   const response = await fetch(url, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: serializedBody,
   })
 
   // Handle Skatteverket-specific auth/throttle errors uniformly so callers
