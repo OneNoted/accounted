@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
@@ -158,6 +158,60 @@ export function AGIPanel(props: AGIPanelProps) {
     fetchSubmission()
   }, [fetchStatus, fetchSubmission])
 
+  // Background kvittens-polling timers (see scheduleKvittensPolls below).
+  // Held in a ref so the unmount-cleanup effect can cancel them if the
+  // user leaves the page mid-signing.
+  const kvittensTimers = useRef<ReturnType<typeof setTimeout>[]>([])
+  useEffect(() => {
+    return () => {
+      for (const t of kvittensTimers.current) clearTimeout(t)
+      kvittensTimers.current = []
+    }
+  }, [])
+
+  /**
+   * Background-poll /agi/kvittenser at 30s, 2 min, and 5 min after the user
+   * receives a signing link. The kvittenser handler in the extension stamps
+   * salary_runs.agi_submitted_at when it observes a uuidKvittens, so this
+   * gives us a high-probability confirmation without depending on the user
+   * returning to the panel and clicking "Hämta kvittens" — which is critical
+   * for the audit trail (BFL 5 kap / BFNAR 2013:2): a NULL agi_submitted_at
+   * after a real filing would misrepresent the behandlingshistorik.
+   *
+   * Each poll silently refreshes local submission state on success and
+   * stops scheduling further polls once a kvittens is observed.
+   */
+  const scheduleKvittensPolls = useCallback(() => {
+    for (const t of kvittensTimers.current) clearTimeout(t)
+    kvittensTimers.current = []
+
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `/api/extensions/ext/skatteverket/agi/kvittenser?arbetsgivare=${encodeURIComponent(arbetsgivare)}&period=${period}`,
+        )
+        if (!res.ok) return
+        const json = await res.json()
+        const signed = !!json.data?.kvittenser?.[0]?.uuidKvittens
+        await fetchSubmission()
+        if (signed) {
+          // Cancel any remaining timers — the kvittens has been recorded
+          // server-side and further polls are wasted requests.
+          for (const t of kvittensTimers.current) clearTimeout(t)
+          kvittensTimers.current = []
+          onChange?.()
+        }
+      } catch {
+        // Silent: this is a background helper. The "Hämta kvittens" button
+        // remains the explicit recovery path.
+      }
+    }
+
+    kvittensTimers.current.push(setTimeout(poll, 30_000))
+    kvittensTimers.current.push(setTimeout(poll, 120_000))
+    kvittensTimers.current.push(setTimeout(poll, 300_000))
+  }, [arbetsgivare, period, fetchSubmission, onChange])
+
   const handleConnect = () => {
     window.location.href = '/api/extensions/ext/skatteverket/authorize'
   }
@@ -303,6 +357,11 @@ export function AGIPanel(props: AGIPanelProps) {
         setError(`${json.data.meddelande || 'Felaktiga underlag finns'} — öppna länken för felrapport.`)
       } else {
         setSuccess('Granskningsunderlag klart. Öppna signeringslänken för att signera med BankID.')
+        // The user typically opens the link, signs in Mina Sidor, then
+        // returns later (or never). Auto-poll so we capture the kvittens
+        // (and stamp agi_submitted_at) without forcing the user to come
+        // back and click "Hämta kvittens".
+        scheduleKvittensPolls()
       }
       await fetchSubmission()
     } catch (e) {
@@ -464,7 +523,7 @@ export function AGIPanel(props: AGIPanelProps) {
                 ? 'Granskningsunderlag klart — väntar på BankID-signatur i Mina Sidor.'
                 : underlagSubmitted
                   ? 'Underlag inläst hos Skatteverket. Skapa granskningsunderlag för att gå vidare till signering.'
-                  : 'Inte skickad till Skatteverket ännu. Deadline: 12:e i månaden efter utbetalning.'
+                  : 'Inte skickad till Skatteverket ännu. Deadline: 12:e i månaden efter utbetalning (17:e i januari/augusti för arbetsgivare med omsättning ≤ 40 MSEK).'
             }
           />
         </div>

@@ -707,10 +707,12 @@ export const skatteverketExtension: Extension = {
     // Body: { inlamningId, salaryRunId? }. Only meaningful between
     // POST /underlag and skapaGranskningsunderlag.
     //
-    // Flips agi_declarations.status to 'exported' on success — this is the
-    // first point at which the underlag is durable on Skatteverket's side.
-    // /agi/submit deliberately does NOT update the row, because a
-    // DONE_REJECTED kontrollresultat would leave it incorrectly exported.
+    // Flips agi_declarations.status to 'pending_signature' on success —
+    // the underlag is durable in SKV's Eget utrymme but is not yet a
+    // filed declaration. /agi/kvittenser later promotes it to 'submitted'
+    // when a uuidKvittens (signature receipt) is observed for the period.
+    // /agi/submit deliberately does NOT update status, because a
+    // DONE_REJECTED kontrollresultat would leave it falsely pending.
     {
       method: 'POST',
       path: '/agi/spara',
@@ -761,7 +763,7 @@ export const skatteverketExtension: Extension = {
           if (runId) {
             await ctx.supabase
               .from('agi_declarations')
-              .update({ status: 'exported' })
+              .update({ status: 'pending_signature' })
               .eq('salary_run_id', runId)
               .eq('company_id', ctx.companyId)
           }
@@ -1397,9 +1399,15 @@ async function loadAGIXml(
  */
 function handleSkvError(err: unknown): NextResponse {
   if (err instanceof SkatteverketAuthError) {
+    // MISSING_SCOPE returns 401 — the existing token works, but it doesn't
+    // grant access to this resource. Treating it as 401 (rather than 403)
+    // signals to the frontend that the right remediation is to reconnect,
+    // not to ask the user to gain new authorization at SKV.
     const status = err.code === 'NOT_CONNECTED' ? 401
       : err.code === 'BEHORIGHET_SAKNAS' ? 403
       : err.code === 'SESSION_EXPIRED' || err.code === 'REFRESH_EXHAUSTED' ? 401
+      : err.code === 'MISSING_SCOPE' ? 401
+      : err.code === 'TOKEN_CORRUPTED' ? 401
       : 403
 
     return NextResponse.json(
