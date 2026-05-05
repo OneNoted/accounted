@@ -51,10 +51,9 @@ Variable lines (overtime, weekend supplement, milage, traktamente, förmåner) a
 - **Bruttolön** (gross): sum of taxable salary lines
 - **Skatteavdrag**: tax-table lookup (skattetabell + kolumn → table column for the gross level)
 - **Nettolön** (net): bruttolön − skatteavdrag
-- **Sociala avgifter (arbetsgivaravgifter)**: 31.42 % of bruttolön (standard 2025). Reduced rates:
-  - Age 16–18: 11.78 %
-  - Age 66+ on 1 January (born 1958 or earlier): 10.21 % (only ålderspensionsavgift)
-  - First-time hire of young (växa-stöd): 10.21 % up to 25 000 SEK/month for 24 months
+- **Sociala avgifter (arbetsgivaravgifter)**: 31.42 % of bruttolön (standard 2025). Reduced rates apply to specific age groups — always check the current statutory rates before relying on these:
+  - **Age 66+ on 1 January of the income year (67+ from income year 2026)**: 10.21 % (only ålderspensionsavgift). The threshold rises with the riktålder; verify the cohort year for the current run rather than hard-coding a birth year.
+  - **växa-stöd / temporary youth reduction**: ages 19–23, salary ≤ 25 000 SEK/month, capped duration. The exact rate and window vary year-over-year (e.g. 20.81 % during 1 Apr 2026 – 30 Sep 2027 per Prop. 2025/26:34) — confirm against Skatteverket's current published table before applying.
 - **Semesterlöneskuld** (vacation accrual): 12 % of bruttolön (default). Booked monthly to 2920.
 - **Förmåner** (benefits): employer-paid taxable amounts (bilförmån, kostförmån, etc.) — added to skattegrundande lön but not to nettolön payment.
 

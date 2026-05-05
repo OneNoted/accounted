@@ -57,7 +57,15 @@ If the customer doesn't exist:
 | EU business without VAT number | \`standard_25\` | 25 % (treat as B2C) |
 | Non-EU business / private | \`export\` | 0 % |
 | Books, newspapers, transport | \`reduced_6\` | 6 % |
-| Restaurant, hotel | \`reduced_12\` | 12 % (drops to 6 % for food from 1 April 2026) |
+| Restaurant, hotel | \`reduced_12\` | 12 % — see footnote below |
+
+**Footnote on the 1 April 2026 livsmedel rate change** (Prop. 2025/26:55):
+
+- **Livsmedel sold in other forms** (grocery, takeaway sold by retailer, etc.) drops from 12 % → **6 %** from 1 April 2026.
+- **Restaurang och servering** (sit-down food and beverage service) **stays at 12 %** even after 1 April 2026.
+- Hotels: room nights remain at 12 %; on-site restaurant service is restaurang (12 %); minibar / shop is sale of varor (6 % if food, 25 % otherwise).
+
+When in doubt for an invoice issued on or after 1 April 2026, classify the supply per the above rather than defaulting to one rate for "restaurang/hotell".
 
 Use \`getAvailableVatRates(customerType, vatNumberValidated)\` semantics — gnubok handles this. Per-line override possible via \`vat_rate\` on each item.
 

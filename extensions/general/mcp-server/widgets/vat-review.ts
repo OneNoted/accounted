@@ -274,7 +274,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
     html += '<tbody>'
 
     html += '<tr class="section"><td colspan="3">Försäljning</td></tr>'
-    html += row('05', 'Momspliktig försäljning', '3001 + 3002 + 3003', r.ruta05)
+    html += row('05', 'Momspliktig försäljning', 'all momspliktig försäljning oavsett skattesats', r.ruta05)
     html += row('39', 'Försäljning av tjänster (EU)', '3308', r.ruta39)
     html += row('40', 'Export', '3305', r.ruta40)
 
@@ -283,8 +283,13 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
     html += row('11', 'Utgående moms 12 %', '2621', r.ruta11)
     html += row('12', 'Utgående moms 6 %', '2631', r.ruta12)
 
+    html += '<tr class="section"><td colspan="3">Utgående moms — omvänd betalningsskyldighet</td></tr>'
+    html += row('30', 'Utgående moms 25 % (reverse charge)', '2614', r.ruta30)
+    html += row('31', 'Utgående moms 12 % (reverse charge)', '2624', r.ruta31)
+    html += row('32', 'Utgående moms 6 % (reverse charge)', '2634', r.ruta32)
+
     html += '<tr class="section"><td colspan="3">Ingående moms</td></tr>'
-    html += row('48', 'Ingående moms', '2641 + 2645', r.ruta48)
+    html += row('48', 'Ingående moms', '2641 + 2645 + 2647', r.ruta48)
 
     html += '<tr class="total"><td class="ruta-code">49</td><td class="label">Att betala / återfå</td><td class="amount">' + fmt(ruta49) + '</td></tr>'
 
@@ -308,6 +313,9 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
         'Ruta 10: ' + fmt(r.ruta10),
         'Ruta 11: ' + fmt(r.ruta11),
         'Ruta 12: ' + fmt(r.ruta12),
+        'Ruta 30: ' + fmt(r.ruta30),
+        'Ruta 31: ' + fmt(r.ruta31),
+        'Ruta 32: ' + fmt(r.ruta32),
         'Ruta 39: ' + fmt(r.ruta39),
         'Ruta 40: ' + fmt(r.ruta40),
         'Ruta 48: ' + fmt(r.ruta48),

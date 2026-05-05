@@ -95,4 +95,57 @@ describe('gnubok_search_tools', () => {
     expect(limited.tools.length).toBe(3)
     expect(limited.total_matched).toBeGreaterThan(3)
   })
+
+  // Security: when the dispatcher fails to inject __keyScopes (rename, refactor
+  // regression, direct invocation outside the dispatcher), the search MUST fall
+  // back to a fail-closed default — only unscoped tools visible. The earlier
+  // permissive default leaked the full inventory.
+  it('fail-closed: hides scoped tools when __keyScopes is not injected', async () => {
+    // Bypass the helper which always injects __keyScopes — call execute() directly.
+    const result = (await searchTool.execute(
+      { limit: 50 }, // no __keyScopes
+      'company-id',
+      'user-id',
+      {} as never,
+      { type: 'api_key' }
+    )) as { tools: Array<{ name: string; scope: string | null }> }
+
+    const names = result.tools.map((t) => t.name)
+
+    // Only unscoped (discovery / skill) tools should appear.
+    expect(names).toContain('gnubok_search_tools')
+    expect(names).toContain('gnubok_list_skills')
+    expect(names).toContain('gnubok_load_skill')
+
+    // No scoped tool should leak — pick representatives from each scope domain.
+    expect(names).not.toContain('gnubok_create_invoice')         // invoices:write
+    expect(names).not.toContain('gnubok_get_trial_balance')      // reports:read
+    expect(names).not.toContain('gnubok_list_uncategorized_transactions') // transactions:read
+    expect(names).not.toContain('gnubok_create_salary_run')      // payroll:write
+    expect(names).not.toContain('gnubok_close_period')           // bookkeeping:write
+
+    // Sanity: every returned tool truly is unscoped.
+    for (const t of result.tools) {
+      expect(t.scope).toBeNull()
+    }
+  })
+
+  it('fail-closed: explicitly empty __keyScopes also hides scoped tools', async () => {
+    // The "scopes were checked, granted set is empty" case must behave the same
+    // as "scopes were not injected at all". Both indicate no scoped access.
+    const result = (await searchTool.execute(
+      { __keyScopes: [], limit: 50 },
+      'company-id',
+      'user-id',
+      {} as never,
+      { type: 'api_key' }
+    )) as { tools: Array<{ name: string; scope: string | null }> }
+
+    const names = result.tools.map((t) => t.name)
+    expect(names).not.toContain('gnubok_create_invoice')
+    expect(names).not.toContain('gnubok_get_trial_balance')
+    for (const t of result.tools) {
+      expect(t.scope).toBeNull()
+    }
+  })
 })

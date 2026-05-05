@@ -21,7 +21,7 @@ Before running year-end, post any year-end adjusting entries via the web app:
 
 - **Förutbetalda kostnader / upplupna intäkter** (1700/1800-series accruals)
 - **Avskrivningar** (depreciation): planenlig + räkenskapsenlig 30 % / 20 % rule, or restvärde 25 %
-- **Periodiseringsfond** (AB only, max 25 % of skattemässigt resultat; 6-year reversal)
+- **Periodiseringsfond** (AB only, max 25 % of överskott av näringsverksamhet **before** this year's avsättning per IL 30 kap.; 6-year mandatory reversal, oldest fond reversed first)
 - **Överavskrivning** (2150/8850 — bokföringsmässig avskrivning beyond skattemässig)
 - **Lagervärdering** (lägsta värdets princip)
 - **Skuld till företagaren / egenavgifter** (enskild firma)
@@ -57,7 +57,7 @@ If the company has open foreign-currency receivables/payables (1510/2440 in EUR/
 After year-end JE but before filing INK2:
 
 - **Bolagsskatt 20.6 %** of skattemässigt resultat (since 2021). Posted to 8910 → 2510.
-- **Periodiseringsfond:** max 25 % of resultat före avsättning. 6-year mandatory reversal; oldest reversed first.
+- **Periodiseringsfond:** max 25 % of överskott **before this year's avsättning** (IL 30 kap.). 6-year mandatory reversal; oldest fond reversed first to avoid statutory return.
 - **Räkenskapsenlig avskrivning:** must be applied consistently — switching method requires Skatteverket approval.
 
 ## Tax provisions (Enskild firma)

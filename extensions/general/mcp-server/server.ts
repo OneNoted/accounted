@@ -544,7 +544,7 @@ const STAGED_OPERATION_SCHEMA = {
     result: { type: 'object' },
     next: { type: 'object' },
   },
-  required: ['risk_level', 'actor', 'auto_committed', 'message', 'preview'],
+  required: ['staged', 'risk_level', 'actor', 'auto_committed', 'message', 'preview'],
 } as const
 
 function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> = { type: 'object' }) {
@@ -556,6 +556,132 @@ function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> =
     },
     required: [itemsKey, 'count', 'total_count', 'has_more'],
   } as const
+}
+
+// ── VAT report computation (shared by gnubok_get_vat_report + gnubok_vat_review_widget) ──
+//
+// Maps posted journal entry lines to SKV 4700 rutor. ruta49 covers domestic
+// output VAT (10/11/12) AND reverse-charge output VAT (30/31/32) per
+// ML 2023:200 — both must be displayed and netted against ruta48 (input VAT).
+//
+// Account → ruta map:
+//   3001/3002/3003 → ruta05  (all domestic taxable sales)
+//   2611           → ruta10  (output VAT 25%)
+//   2621           → ruta11  (output VAT 12%)
+//   2631           → ruta12  (output VAT 6%)
+//   2614           → ruta30  (reverse-charge output VAT 25%)
+//   2624           → ruta31  (reverse-charge output VAT 12%)
+//   2634           → ruta32  (reverse-charge output VAT 6%)
+//   3308           → ruta39  (EU services sold)
+//   3305           → ruta40  (export outside EU)
+//   2641/2645/2647 → ruta48  (all input VAT)
+async function computeVatReport(
+  args: Record<string, unknown>,
+  companyId: string,
+  supabase: SupabaseClient
+): Promise<Record<string, unknown>> {
+  const periodType = args.period_type as string
+  const year = Number(args.year)
+  const period = Number(args.period)
+
+  if (!['monthly', 'quarterly', 'yearly'].includes(periodType)) {
+    throw new Error('period_type must be: monthly, quarterly, yearly')
+  }
+  if (!year || year < 2000 || year > 2100) throw new Error('year must be between 2000 and 2100')
+  if (periodType === 'monthly' && (period < 1 || period > 12)) throw new Error('period must be 1–12 for monthly')
+  if (periodType === 'quarterly' && (period < 1 || period > 4)) throw new Error('period must be 1–4 for quarterly')
+
+  let startDate: string
+  let endDate: string
+
+  if (periodType === 'monthly') {
+    startDate = `${year}-${String(period).padStart(2, '0')}-01`
+    const lastDay = new Date(year, period, 0).getDate()
+    endDate = `${year}-${String(period).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  } else if (periodType === 'quarterly') {
+    const startMonth = (period - 1) * 3 + 1
+    const endMonth = period * 3
+    startDate = `${year}-${String(startMonth).padStart(2, '0')}-01`
+    const lastDay = new Date(year, endMonth, 0).getDate()
+    endDate = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
+  } else {
+    startDate = `${year}-01-01`
+    endDate = `${year}-12-31`
+  }
+
+  const { data: lines, error } = await supabase
+    .from('journal_entry_lines')
+    .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id)')
+    .eq('journal_entries.company_id', companyId)
+    .in('journal_entries.status', ['posted', 'reversed'])
+    .gte('journal_entries.entry_date', startDate)
+    .lte('journal_entries.entry_date', endDate)
+
+  if (error) throw new Error(`Database error: ${error.message}`)
+
+  const accountTotals = new Map<string, { debit: number; credit: number }>()
+  for (const line of lines ?? []) {
+    const acc = line.account_number
+    const existing = accountTotals.get(acc) ?? { debit: 0, credit: 0 }
+    existing.debit += Number(line.debit_amount) || 0
+    existing.credit += Number(line.credit_amount) || 0
+    accountTotals.set(acc, existing)
+  }
+
+  function creditBalance(acc: string): number {
+    const t = accountTotals.get(acc)
+    return t ? Math.round((t.credit - t.debit) * 100) / 100 : 0
+  }
+
+  function debitBalance(acc: string): number {
+    const t = accountTotals.get(acc)
+    return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
+  }
+
+  const ruta05 = creditBalance('3001') + creditBalance('3002') + creditBalance('3003')
+  const ruta10 = creditBalance('2611')
+  const ruta11 = creditBalance('2621')
+  const ruta12 = creditBalance('2631')
+  const ruta30 = creditBalance('2614')
+  const ruta31 = creditBalance('2624')
+  const ruta32 = creditBalance('2634')
+  const ruta39 = creditBalance('3308')
+  const ruta40 = creditBalance('3305')
+  const ruta48 = debitBalance('2641') + debitBalance('2645') + debitBalance('2647')
+  const ruta49 = Math.round(
+    (ruta10 + ruta11 + ruta12 + ruta30 + ruta31 + ruta32 - ruta48) * 100
+  ) / 100
+
+  const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
+    'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December']
+
+  let periodLabel: string
+  if (periodType === 'monthly') periodLabel = `${monthNames[period - 1]} ${year}`
+  else if (periodType === 'quarterly') periodLabel = `Q${period} ${year}`
+  else periodLabel = `${year}`
+
+  return {
+    period: { type: periodType, year, period, start: startDate, end: endDate },
+    period_label: periodLabel,
+    rutor: {
+      ruta05: Math.abs(ruta05),
+      ruta10: Math.abs(ruta10),
+      ruta11: Math.abs(ruta11),
+      ruta12: Math.abs(ruta12),
+      ruta30: Math.abs(ruta30),
+      ruta31: Math.abs(ruta31),
+      ruta32: Math.abs(ruta32),
+      ruta39: Math.abs(ruta39),
+      ruta40: Math.abs(ruta40),
+      ruta48: Math.abs(ruta48),
+      ruta49,
+    },
+    summary: ruta49 > 0
+      ? `Moms att betala: ${Math.abs(ruta49).toFixed(2)} kr`
+      : ruta49 < 0
+        ? `Moms att få tillbaka: ${Math.abs(ruta49).toFixed(2)} kr`
+        : 'Noll i moms',
+  }
 }
 
 // ── Tools ────────────────────────────────────────────────────
@@ -595,14 +721,27 @@ export const tools: McpTool[] = [
       const scopeFilter = args.scope as string | undefined
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
 
-      // Filter by caller's available scopes (uses outer `keyScopes` via closure when called from dispatcher).
-      // The dispatcher binds scope-checking before execute(), so any tool reachable here is already authorized.
-      // For search results, however, we must additionally filter to tools the caller could actually call.
-      const callerScopes = ((args as Record<string, unknown>).__keyScopes as string[]) || []
+      // Filter results to tools the caller is actually authorized to invoke.
+      //
+      // The dispatcher injects __keyScopes when it routes to gnubok_search_tools.
+      // If the marker is missing (refactor regression, direct execute() invocation
+      // outside the dispatcher, etc.), FAIL CLOSED — return only unscoped tools
+      // rather than leaking the full inventory. The marker presence is also part
+      // of the contract: an explicitly-empty array means "no scopes granted",
+      // which still hides scoped tools.
+      const rawKeyScopes = (args as Record<string, unknown>).__keyScopes
+      const callerScopes: string[] = Array.isArray(rawKeyScopes)
+        ? (rawKeyScopes as string[])
+        : []
+      const scopesInjected = Array.isArray(rawKeyScopes)
 
       let candidates = tools.filter((t) => {
         const required = TOOL_SCOPE_MAP[t.name]
-        if (required && callerScopes.length > 0 && !callerScopes.includes(required)) return false
+        if (required) {
+          // Scoped tool: visible only if scopes were injected AND the caller has it.
+          if (!scopesInjected) return false
+          if (!callerScopes.includes(required)) return false
+        }
         if (scopeFilter && required !== scopeFilter) return false
         return true
       })
@@ -1382,105 +1521,8 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, supabase) {
-      const periodType = args.period_type as string
-      const year = Number(args.year)
-      const period = Number(args.period)
-
-      if (!['monthly', 'quarterly', 'yearly'].includes(periodType)) {
-        throw new Error('period_type must be: monthly, quarterly, yearly')
-      }
-      if (!year || year < 2000 || year > 2100) throw new Error('year must be between 2000 and 2100')
-      if (periodType === 'monthly' && (period < 1 || period > 12)) throw new Error('period must be 1–12 for monthly')
-      if (periodType === 'quarterly' && (period < 1 || period > 4)) throw new Error('period must be 1–4 for quarterly')
-
-      // Calculate date range
-      let startDate: string
-      let endDate: string
-
-      if (periodType === 'monthly') {
-        startDate = `${year}-${String(period).padStart(2, '0')}-01`
-        const lastDay = new Date(year, period, 0).getDate()
-        endDate = `${year}-${String(period).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-      } else if (periodType === 'quarterly') {
-        const startMonth = (period - 1) * 3 + 1
-        const endMonth = period * 3
-        startDate = `${year}-${String(startMonth).padStart(2, '0')}-01`
-        const lastDay = new Date(year, endMonth, 0).getDate()
-        endDate = `${year}-${String(endMonth).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-      } else {
-        startDate = `${year}-01-01`
-        endDate = `${year}-12-31`
-      }
-
-      // Get all posted journal entry lines in the date range
-      const { data: lines, error } = await supabase
-        .from('journal_entry_lines')
-        .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id)')
-        .eq('journal_entries.company_id', companyId)
-        .in('journal_entries.status', ['posted', 'reversed'])
-        .gte('journal_entries.entry_date', startDate)
-        .lte('journal_entries.entry_date', endDate)
-
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      // Aggregate by account
-      const accountTotals = new Map<string, { debit: number; credit: number }>()
-      for (const line of lines ?? []) {
-        const acc = line.account_number
-        const existing = accountTotals.get(acc) ?? { debit: 0, credit: 0 }
-        existing.debit += Number(line.debit_amount) || 0
-        existing.credit += Number(line.credit_amount) || 0
-        accountTotals.set(acc, existing)
-      }
-
-      function creditBalance(acc: string): number {
-        const t = accountTotals.get(acc)
-        return t ? Math.round((t.credit - t.debit) * 100) / 100 : 0
-      }
-
-      function debitBalance(acc: string): number {
-        const t = accountTotals.get(acc)
-        return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
-      }
-
-      // Map accounts to rutor
-      const ruta05 = creditBalance('3001') + creditBalance('3002') + creditBalance('3003')
-      const ruta10 = creditBalance('2611')
-      const ruta11 = creditBalance('2621')
-      const ruta12 = creditBalance('2631')
-      const ruta39 = creditBalance('3308')
-      const ruta40 = creditBalance('3305')
-      const ruta48 = debitBalance('2641') + debitBalance('2645')
-      const ruta49 = Math.round((ruta10 + ruta11 + ruta12 - ruta48) * 100) / 100
-
-      const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
-        'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December']
-
-      let periodLabel: string
-      if (periodType === 'monthly') periodLabel = `${monthNames[period - 1]} ${year}`
-      else if (periodType === 'quarterly') periodLabel = `Q${period} ${year}`
-      else periodLabel = `${year}`
-
-      return {
-        period: { type: periodType, year, period, start: startDate, end: endDate },
-        period_label: periodLabel,
-        rutor: {
-          ruta05: Math.abs(ruta05),
-          ruta10: Math.abs(ruta10),
-          ruta11: Math.abs(ruta11),
-          ruta12: Math.abs(ruta12),
-          ruta39: Math.abs(ruta39),
-          ruta40: Math.abs(ruta40),
-          ruta48: Math.abs(ruta48),
-          ruta49,
-        },
-        summary: ruta49 > 0
-          ? `Moms att betala: ${Math.abs(ruta49).toFixed(2)} kr`
-          : ruta49 < 0
-            ? `Moms att få tillbaka: ${Math.abs(ruta49).toFixed(2)} kr`
-            : 'Noll i moms',
-      }
+    async execute(args, companyId, _userId, supabase) {
+      return computeVatReport(args, companyId, supabase)
     },
   },
 
@@ -1504,10 +1546,8 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     _meta: { ui: { resourceUri: 'ui://vat-review/app.html' } },
-    async execute(args, companyId, userId, supabase, actor) {
-      const reportTool = tools.find((t) => t.name === 'gnubok_get_vat_report')
-      if (!reportTool) throw new Error('gnubok_get_vat_report tool not found')
-      return reportTool.execute(args, companyId, userId, supabase, actor)
+    async execute(args, companyId, _userId, supabase) {
+      return computeVatReport(args, companyId, supabase)
     },
   },
 
