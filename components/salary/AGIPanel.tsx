@@ -524,7 +524,7 @@ export function AGIPanel(props: AGIPanelProps) {
                 ? 'Granskningsunderlag klart — väntar på BankID-signatur i Mina Sidor.'
                 : underlagSubmitted
                   ? 'Underlag inläst hos Skatteverket. Skapa granskningsunderlag för att gå vidare till signering.'
-                  : 'Inte skickad till Skatteverket ännu. Deadline: 12:e i månaden efter utbetalning (17:e i januari/augusti för arbetsgivare med omsättning ≤ 40 MSEK).'
+                  : 'Inte skickad till Skatteverket ännu. Deadline: 12:e i månaden efter utbetalning (17:e i januari/augusti för arbetsgivare med sammanlagd lönesumma ≤ 40 MSEK).'
             }
           />
         </div>

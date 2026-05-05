@@ -139,17 +139,20 @@ export async function GET(request: Request) {
 
       const submittedAt = kvittens.signeradTid || new Date().toISOString()
 
+      // Stamp submitted_by with the token-owning auth user. That row was
+      // created when the operator authenticated with BankID, and SKV's
+      // own kvittens.signeradAv is the same person's personnummer. Not
+      // writing the column at all would leave a NULL signer on rows
+      // reconciled by this cron, which conflicts with BFL 5 kap 6§
+      // (verifikationer must be traceable to an actor) and BFNAR 2013:2
+      // kap 8 (behandlingshistorik must record who triggered changes).
       await supabase
         .from('agi_declarations')
         .update({
           status: 'submitted',
           kvittensnummer: kvittens.uuidKvittens,
           submitted_at: submittedAt,
-          // Note: submitted_by intentionally not set here — the cron is
-          // a system actor, not a human signer. signeradAv (the BankID
-          // holder) is captured in agi_declarations via the user-triggered
-          // /agi/kvittenser handler when the operator returns; it isn't
-          // part of agi_declarations' columns today.
+          submitted_by: token.user_id,
         })
         .eq('id', declarationId)
 

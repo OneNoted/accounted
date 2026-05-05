@@ -675,6 +675,12 @@ export const skatteverketExtension: Extension = {
     // ── AGI: Poll kontrollresultat ──────────────────────────────────
     // Query: ?inlamningId=...
     // Returns { status: PROCESSING | DONE_SUCCESS | DONE_FAILED | DONE_REJECTED, ... }
+    //
+    // Side effect: when SKV reports a terminal failure (DONE_REJECTED or
+    // DONE_FAILED), promote the matching agi_declarations row to 'rejected'.
+    // Without this the row would sit at 'generated' indefinitely while SKV's
+    // own state shows the underlag as failed — misrepresenting the filing
+    // outcome (BFNAR 2013:2 kap 8 / BFL 5 kap 5§).
     {
       method: 'GET',
       path: '/agi/kontrollresultat',
@@ -696,6 +702,36 @@ export const skatteverketExtension: Extension = {
               { status: result.status },
             )
           }
+
+          if (result.data.status === 'DONE_REJECTED' || result.data.status === 'DONE_FAILED') {
+            // Recover the salaryRunId from cached submission state — same
+            // fallback mechanism /agi/spara uses. We only update when we can
+            // identify the row; a missing local cache means we silently skip
+            // (the alternative would be guessing which declaration to mark).
+            const { data: rows } = await ctx.supabase
+              .from('extension_data')
+              .select('value')
+              .eq('company_id', ctx.companyId)
+              .eq('extension_id', 'skatteverket')
+              .like('key', 'agi_submission_%')
+            for (const row of rows ?? []) {
+              try {
+                const v = JSON.parse(row.value as string) as { inlamningId?: number; salaryRunId?: string }
+                if (v.inlamningId === inlamningId && v.salaryRunId) {
+                  // Same monotonicity rule as /agi/spara — never regress
+                  // from a successful filing back to 'rejected'.
+                  await ctx.supabase
+                    .from('agi_declarations')
+                    .update({ status: 'rejected' })
+                    .eq('salary_run_id', v.salaryRunId)
+                    .eq('company_id', ctx.companyId)
+                    .in('status', ['generated', 'pending_signature', 'exported'])
+                  break
+                }
+              } catch { /* skip malformed */ }
+            }
+          }
+
           return NextResponse.json({ data: result.data })
         } catch (err) {
           return handleSkvError(err)
@@ -761,11 +797,18 @@ export const skatteverketExtension: Extension = {
             }
           }
           if (runId) {
+            // Monotonicity guard: only flip from a pre-spara state. If the
+            // kvittens cron or the interactive /agi/kvittenser handler has
+            // already promoted this row to 'submitted'/'accepted'/'rejected'
+            // (e.g. user signed quickly while a delayed /agi/spara retry was
+            // in flight), don't regress it. behandlingshistorik must move
+            // forward only — BFNAR 2013:2 kap 8.
             await ctx.supabase
               .from('agi_declarations')
               .update({ status: 'pending_signature' })
               .eq('salary_run_id', runId)
               .eq('company_id', ctx.companyId)
+              .in('status', ['generated', 'exported'])
           }
 
           return NextResponse.json({ data: result.data })
