@@ -222,6 +222,94 @@ describe('generateARLedger', () => {
     expect(report.total_outstanding).toBe(66.77)
   })
 
+  it('nets a credited invoice with its credit note to zero outstanding', async () => {
+    // Original was sent (unpaid) and then fully credited.
+    // Journal-level AR is 0; the ledger should match.
+    results = [
+      {
+        data: [
+          {
+            id: 'inv-1',
+            customer_id: 'cust-a',
+            customer: { id: 'cust-a', name: 'Test AB' },
+            invoice_number: '2026001',
+            invoice_date: '2026-05-05',
+            due_date: '2026-06-05',
+            total: 1241.25,
+            paid_amount: 0,
+            currency: 'SEK',
+            status: 'credited',
+          },
+          {
+            id: 'inv-2',
+            customer_id: 'cust-a',
+            customer: { id: 'cust-a', name: 'Test AB' },
+            invoice_number: 'KR-2026001',
+            invoice_date: '2026-05-05',
+            due_date: '2026-05-05',
+            total: -1241.25,
+            paid_amount: 0,
+            currency: 'SEK',
+            status: 'sent',
+            credited_invoice_id: 'inv-1',
+          },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-05-05')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+    expect(report.total_current).toBe(0)
+    expect(report.total_overdue).toBe(0)
+    expect(report.unpaid_count).toBe(0)
+  })
+
+  it('keeps a credit note outstanding when it offsets an already-paid invoice', async () => {
+    // Original was paid in full, then credited — we owe the customer the refund.
+    results = [
+      {
+        data: [
+          {
+            id: 'inv-1',
+            customer_id: 'cust-a',
+            customer: { id: 'cust-a', name: 'Test AB' },
+            invoice_number: '2026001',
+            invoice_date: '2026-04-01',
+            due_date: '2026-05-01',
+            total: 1000,
+            paid_amount: 1000,
+            currency: 'SEK',
+            status: 'credited',
+          },
+          {
+            id: 'inv-2',
+            customer_id: 'cust-a',
+            customer: { id: 'cust-a', name: 'Test AB' },
+            invoice_number: 'KR-2026001',
+            invoice_date: '2026-05-05',
+            due_date: '2026-05-05',
+            total: -1000,
+            paid_amount: 0,
+            currency: 'SEK',
+            status: 'sent',
+            credited_invoice_id: 'inv-1',
+          },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2026-05-05')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].total_outstanding).toBe(-1000)
+    expect(report.total_outstanding).toBe(-1000)
+    expect(report.unpaid_count).toBe(1)
+  })
+
   it('handles missing customer name gracefully', async () => {
     results = [
       {

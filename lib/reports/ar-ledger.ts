@@ -53,7 +53,7 @@ export async function generateARLedger(
         .from('invoices')
         .select('*, customer:customers(id, name)')
         .eq('company_id', companyId)
-        .in('status', ['sent', 'overdue'])
+        .in('status', ['sent', 'overdue', 'credited'])
         .range(from, to)
     )
   } catch {
@@ -123,17 +123,20 @@ export async function generateARLedger(
     entry.total_outstanding += outstanding
   }
 
-  // Round all amounts and sort invoices within each customer
-  const entries = Array.from(byCustomer.values()).map((entry) => ({
-    ...entry,
-    invoices: entry.invoices.sort((a, b) => a.due_date.localeCompare(b.due_date)),
-    current: Math.round(entry.current * 100) / 100,
-    days_1_30: Math.round(entry.days_1_30 * 100) / 100,
-    days_31_60: Math.round(entry.days_31_60 * 100) / 100,
-    days_61_90: Math.round(entry.days_61_90 * 100) / 100,
-    days_90_plus: Math.round(entry.days_90_plus * 100) / 100,
-    total_outstanding: Math.round(entry.total_outstanding * 100) / 100,
-  }))
+  // Round all amounts and sort invoices within each customer.
+  // Drop customers whose credit notes fully offset their open invoices (net 0).
+  const entries = Array.from(byCustomer.values())
+    .map((entry) => ({
+      ...entry,
+      invoices: entry.invoices.sort((a, b) => a.due_date.localeCompare(b.due_date)),
+      current: Math.round(entry.current * 100) / 100,
+      days_1_30: Math.round(entry.days_1_30 * 100) / 100,
+      days_31_60: Math.round(entry.days_31_60 * 100) / 100,
+      days_61_90: Math.round(entry.days_61_90 * 100) / 100,
+      days_90_plus: Math.round(entry.days_90_plus * 100) / 100,
+      total_outstanding: Math.round(entry.total_outstanding * 100) / 100,
+    }))
+    .filter((entry) => entry.total_outstanding !== 0)
 
   // Sort by total outstanding descending
   entries.sort((a, b) => b.total_outstanding - a.total_outstanding)
@@ -141,12 +144,16 @@ export async function generateARLedger(
   const total_outstanding = entries.reduce((sum, e) => sum + e.total_outstanding, 0)
   const total_current = entries.reduce((sum, e) => sum + e.current, 0)
   const total_overdue = total_outstanding - total_current
+  const unpaid_count = entries.reduce(
+    (sum, e) => sum + e.invoices.filter((i) => i.outstanding !== 0).length,
+    0
+  )
 
   return {
     entries,
     total_outstanding: Math.round(total_outstanding * 100) / 100,
     total_current: Math.round(total_current * 100) / 100,
     total_overdue: Math.round(total_overdue * 100) / 100,
-    unpaid_count: invoices.length,
+    unpaid_count,
   }
 }

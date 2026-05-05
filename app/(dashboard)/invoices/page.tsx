@@ -104,12 +104,14 @@ export default function InvoicesPage() {
     return matchesSearch && matchesTab
   })
 
+  const isOutstandingReceivable = (i: Invoice) =>
+    ['sent', 'overdue'].includes(i.status) && !i.credited_invoice_id
   const stats = {
-    unpaid: invoices.filter((i) => ['sent', 'overdue'].includes(i.status)).length,
+    unpaid: invoices.filter(isOutstandingReceivable).length,
     unpaidAmount: invoices
-      .filter((i) => ['sent', 'overdue'].includes(i.status))
+      .filter(isOutstandingReceivable)
       .reduce((sum, i) => sum + Number(i.total_sek || i.total), 0),
-    overdue: invoices.filter((i) => i.status === 'overdue').length,
+    overdue: invoices.filter((i) => i.status === 'overdue' && !i.credited_invoice_id).length,
   }
 
   return (
