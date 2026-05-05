@@ -186,6 +186,13 @@ export async function validateApiKey(
     }
   | { error: string; status: number }
 > {
+  if (isRefreshToken(key)) {
+    return {
+      error: 'Refresh token cannot be used as access token; exchange it at /api/mcp-oauth/token',
+      status: 401,
+    }
+  }
+
   if (!key.startsWith(KEY_PREFIX)) {
     return { error: 'Invalid API key format', status: 401 }
   }

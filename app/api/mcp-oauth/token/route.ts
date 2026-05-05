@@ -169,7 +169,14 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
     .eq('refresh_token_hash', presentedHash)
     .maybeSingle()
 
-  if (lookupError || !row) {
+  if (lookupError) {
+    return NextResponse.json(
+      { error: 'server_error', error_description: 'Failed to look up refresh token' },
+      { status: 500 }
+    )
+  }
+
+  if (!row) {
     return NextResponse.json(
       { error: 'invalid_grant', error_description: 'Invalid refresh token' },
       { status: 400 }
@@ -202,7 +209,14 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
     .eq('refresh_token_hash', presentedHash)
     .select('id')
 
-  if (updateError || !updated || updated.length === 0) {
+  if (updateError) {
+    return NextResponse.json(
+      { error: 'server_error', error_description: 'Failed to rotate refresh token' },
+      { status: 500 }
+    )
+  }
+
+  if (!updated || updated.length === 0) {
     return NextResponse.json(
       { error: 'invalid_grant', error_description: 'Refresh token already used' },
       { status: 400 }

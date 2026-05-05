@@ -212,6 +212,41 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.error_description).toContain('revoked')
     })
 
+    it('returns 500 when the lookup fails with a DB error', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: null, error: { message: 'connection reset' } })
+
+      const res = await POST(
+        formRequest({
+          grant_type: 'refresh_token',
+          refresh_token: 'gnubok_rt_anything',
+        })
+      )
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(body.error).toBe('server_error')
+    })
+
+    it('returns 500 when the rotation update fails with a DB error', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: { id: 'key-1', revoked_at: null }, error: null }, // SELECT
+        { data: null, error: { message: 'deadlock detected' } }, // UPDATE — DB error
+      ])
+
+      const res = await POST(
+        formRequest({
+          grant_type: 'refresh_token',
+          refresh_token: 'gnubok_rt_anything',
+        })
+      )
+      expect(res.status).toBe(500)
+      const body = await res.json()
+      expect(body.error).toBe('server_error')
+    })
+
     it('returns 400 when the CAS update affects 0 rows (concurrent reuse)', async () => {
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
