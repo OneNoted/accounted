@@ -2415,14 +2415,18 @@ export const tools: McpTool[] = [
     async execute(_args, companyId, userId, supabase) {
       const { data, error } = await supabase
         .from('fiscal_periods')
-        .select('id, name, period_start, period_end, is_closed, locked_at, closed_at, opening_balances_set')
+        .select('id, name, period_start, period_end, is_closed, locked_at, opening_balances_set')
         .eq('company_id', companyId)
         .order('period_start', { ascending: false })
 
       if (error) throw new Error(`Database error: ${error.message}`)
 
       const periods = (data ?? []).map((p) => ({
-        ...p,
+        id: p.id,
+        name: p.name,
+        period_start: p.period_start,
+        period_end: p.period_end,
+        opening_balances_set: p.opening_balances_set,
         status: p.is_closed ? 'closed' : p.locked_at ? 'locked' : 'active',
       }))
 
