@@ -171,6 +171,34 @@ describe('generateARReconciliation', () => {
     expect(result.account_1510_balance).toBe(3200)
     expect(result.difference).toBe(0)
     expect(result.is_reconciled).toBe(true)
+    expect(result.unconverted_fx_count).toBe(0)
+  })
+
+  it('flags unconverted_fx_count when an FX invoice has no exchange_rate', async () => {
+    results = [
+      // 0: invoices — 100 EUR without rate, 500 SEK control
+      {
+        data: [
+          { total: 100, paid_amount: 0, currency: 'EUR', exchange_rate: null },
+          { total: 500, paid_amount: 0, currency: 'SEK', exchange_rate: null },
+        ],
+        error: null,
+      },
+      // 1: 1510 balance reflects only the SEK invoice
+      {
+        data: [
+          { debit_amount: 500, credit_amount: 0, journal_entry_id: 'e1' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.unconverted_fx_count).toBe(1)
+    expect(result.ar_ledger_total).toBe(600)
+    expect(result.account_1510_balance).toBe(500)
+    expect(result.is_reconciled).toBe(false)
   })
 
   it('uses Math.round for monetary precision', async () => {

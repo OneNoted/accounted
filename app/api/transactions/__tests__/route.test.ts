@@ -40,7 +40,7 @@ describe('GET /api/transactions', () => {
     expect(body).toEqual({ error: 'Unauthorized' })
   })
 
-  it('returns transactions for the active company', async () => {
+  it('returns transactions for the active company with has_more=false when below the cap', async () => {
     const txs = [
       makeTransaction({ id: 'tx-1', amount: -100 }),
       makeTransaction({ id: 'tx-2', amount: 250 }),
@@ -49,11 +49,38 @@ describe('GET /api/transactions', () => {
 
     const request = createMockRequest('/api/transactions')
     const response = await GET(request)
-    const { status, body } = await parseJsonResponse<{ data: typeof txs }>(response)
+    const { status, body } = await parseJsonResponse<{
+      data: typeof txs
+      has_more: boolean
+      limit: number
+    }>(response)
 
     expect(status).toBe(200)
     expect(body.data).toHaveLength(2)
     expect(body.data[0].id).toBe('tx-1')
+    expect(body.has_more).toBe(false)
+    expect(body.limit).toBe(500)
+  })
+
+  it('signals has_more=true and truncates to the cap when more rows exist', async () => {
+    // Server requests MAX_ROWS+1 = 501 rows; if the DB returns 501 we know there's more.
+    const txs = Array.from({ length: 501 }, (_, i) =>
+      makeTransaction({ id: `tx-${i}`, amount: i }),
+    )
+    enqueue({ data: txs, error: null })
+
+    const request = createMockRequest('/api/transactions')
+    const response = await GET(request)
+    const { status, body } = await parseJsonResponse<{
+      data: typeof txs
+      has_more: boolean
+      limit: number
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toHaveLength(500)
+    expect(body.has_more).toBe(true)
+    expect(body.limit).toBe(500)
   })
 
   it('filters by unmatched=true', async () => {

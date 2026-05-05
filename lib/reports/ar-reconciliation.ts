@@ -6,11 +6,25 @@ export interface ARReconciliationResult {
   account_1510_balance: number
   difference: number
   is_reconciled: boolean
+  /**
+   * Number of foreign-currency invoices that lacked an exchange_rate, so their
+   * outstanding amount could not be converted to SEK. When > 0 the difference
+   * field may be misleading: any reported gap could be missing-data rather
+   * than a true reconciliation break.
+   */
+  unconverted_fx_count: number
 }
 
 /**
  * Compare sum of open customer invoices against account 1510 balance.
  * Account 1510 is debit-normal (asset): balance = debits - credits.
+ *
+ * Conversion uses each invoice's stored exchange_rate (the invoice-date rate),
+ * which matches what was originally posted to 1510. This means the report will
+ * diverge from the GL once partial payments settle at a different rate (the
+ * delta is correctly booked as valutakursvinst/-förlust to 3960/7960 per
+ * ML 8 kap 21–23 §). A subledger-derived total would reconcile through that
+ * difference; deferred to a follow-up.
  */
 export async function generateARReconciliation(
   supabase: SupabaseClient,
@@ -18,7 +32,6 @@ export async function generateARReconciliation(
   periodId: string
 ): Promise<ARReconciliationResult> {
 
-  // Get total outstanding from customer invoices.
   // total/paid_amount are stored in invoice currency; account 1510 is in SEK
   // (booked at invoice-date rate), so convert each row before summing.
   const { data: invoices } = await supabase
@@ -27,8 +40,12 @@ export async function generateARReconciliation(
     .eq('company_id', companyId)
     .in('status', ['sent', 'overdue'])
 
+  let unconvertedFxCount = 0
   const arLedgerTotal = (invoices || [])
     .reduce((sum, inv) => {
+      const isFx = inv.currency && inv.currency !== 'SEK'
+      const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
+      if (isFx && !hasRate) unconvertedFxCount += 1
       const outstanding = (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)
       const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
       return Math.round((sum + sek) * 100) / 100
@@ -67,5 +84,6 @@ export async function generateARReconciliation(
     account_1510_balance: Math.round(account1510Balance * 100) / 100,
     difference,
     is_reconciled: Math.abs(difference) < 0.01,
+    unconverted_fx_count: unconvertedFxCount,
   }
 }

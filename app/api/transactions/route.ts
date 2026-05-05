@@ -37,7 +37,8 @@ export async function GET(request: Request) {
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)
 
-  query = query.order('date', { ascending: false }).limit(MAX_ROWS)
+  // Fetch one extra row so we can tell the caller whether the result was truncated.
+  query = query.order('date', { ascending: false }).limit(MAX_ROWS + 1)
 
   const { data, error } = await query
 
@@ -45,5 +46,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ data: data || [] })
+  const rows = data || []
+  const hasMore = rows.length > MAX_ROWS
+  const truncated = hasMore ? rows.slice(0, MAX_ROWS) : rows
+
+  return NextResponse.json({ data: truncated, has_more: hasMore, limit: MAX_ROWS })
 }

@@ -171,6 +171,38 @@ describe('generateReconciliation', () => {
     expect(result.account_2440_balance).toBe(3475)
     expect(result.difference).toBe(0)
     expect(result.is_reconciled).toBe(true)
+    expect(result.unconverted_fx_count).toBe(0)
+  })
+
+  it('flags unconverted_fx_count when an FX invoice has no exchange_rate', async () => {
+    // Legacy data: an EUR invoice without an exchange rate falls through
+    // unconverted. The reconciliation surfaces this so the UI can warn that
+    // the difference may be a data gap, not a real reconciliation break.
+    results = [
+      // 0: supplier_invoices — 100 EUR with no rate, 1 000 SEK control
+      {
+        data: [
+          { remaining_amount: 100, currency: 'EUR', exchange_rate: null },
+          { remaining_amount: 1000, currency: 'SEK', exchange_rate: null },
+        ],
+        error: null,
+      },
+      // 1: 2440 balance reflects only the SEK invoice
+      {
+        data: [
+          { debit_amount: 0, credit_amount: 1000, journal_entry_id: 'e1' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.unconverted_fx_count).toBe(1)
+    // The unconverted EUR value (100) is added on top of SEK 1 000 → 1 100 ledger
+    expect(result.supplier_ledger_total).toBe(1100)
+    expect(result.account_2440_balance).toBe(1000)
+    expect(result.is_reconciled).toBe(false)
   })
 
   it('uses Math.round for monetary precision', async () => {

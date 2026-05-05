@@ -440,16 +440,18 @@ export async function unlinkReconciliation(
 // Helpers
 // ============================================================
 
-/** Fetch unlinked bank GL lines via the RPC function. Currently 1930-only. */
+/**
+ * Fetch unlinked bank GL lines for account 1930. Multi-account support
+ * (Plusgiro 1920, kreditkort 1940, EUR-konto 1931, etc.) requires a different
+ * RPC and is not yet implemented — until then this helper is intentionally
+ * scoped to 1930 so callers cannot silently lose data on other accounts.
+ */
 export async function fetchUnlinkedGLLines(
   supabase: SupabaseClient,
   companyId: string,
   dateFrom?: string,
   dateTo?: string,
-  bankAccount = '1930'
 ): Promise<UnlinkedGLLine[]> {
-  if (bankAccount !== '1930') return []
-
   const { data, error } = await supabase.rpc('get_unlinked_1930_lines', {
     p_company_id: companyId,
     p_date_from: dateFrom || null,

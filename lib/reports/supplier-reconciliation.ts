@@ -6,10 +6,24 @@ export interface ReconciliationResult {
   account_2440_balance: number
   difference: number
   is_reconciled: boolean
+  /**
+   * Number of foreign-currency invoices that lacked an exchange_rate, so their
+   * remaining_amount could not be converted to SEK. When > 0 the difference
+   * field may be misleading: any reported gap could be missing-data rather
+   * than a true reconciliation break.
+   */
+  unconverted_fx_count: number
 }
 
 /**
- * Compare sum of open supplier invoices against account 2440 balance
+ * Compare sum of open supplier invoices against account 2440 balance.
+ *
+ * Conversion uses each invoice's stored exchange_rate (the invoice-date rate),
+ * which matches what was originally posted to 2440. This means the report will
+ * diverge from the GL once partial payments settle at a different rate (the
+ * delta is correctly booked as valutakursvinst/-förlust to 3960/7960 per
+ * ML 8 kap 21–23 §). A subledger-derived total would reconcile through that
+ * difference; deferred to a follow-up.
  */
 export async function generateReconciliation(
   supabase: SupabaseClient,
@@ -17,7 +31,6 @@ export async function generateReconciliation(
   periodId: string
 ): Promise<ReconciliationResult> {
 
-  // Get total outstanding from supplier invoices.
   // remaining_amount is stored in invoice currency; account 2440 is in SEK
   // (booked at invoice-date rate), so convert each row before summing.
   const { data: invoices } = await supabase
@@ -26,8 +39,12 @@ export async function generateReconciliation(
     .eq('company_id', companyId)
     .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
 
+  let unconvertedFxCount = 0
   const supplierLedgerTotal = (invoices || [])
     .reduce((sum, inv) => {
+      const isFx = inv.currency && inv.currency !== 'SEK'
+      const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
+      if (isFx && !hasRate) unconvertedFxCount += 1
       const sek = resolveSekAmount(
         Number(inv.remaining_amount) || 0,
         null,
@@ -70,5 +87,6 @@ export async function generateReconciliation(
     account_2440_balance: Math.round(account2440Balance * 100) / 100,
     difference,
     is_reconciled: Math.abs(difference) < 0.01,
+    unconverted_fx_count: unconvertedFxCount,
   }
 }

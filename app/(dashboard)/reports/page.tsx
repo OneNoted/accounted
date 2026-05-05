@@ -1595,6 +1595,7 @@ interface SupplierLedgerData {
     account_2440_balance: number
     difference: number
     is_reconciled: boolean
+    unconverted_fx_count: number
   } | null
 }
 
@@ -1759,11 +1760,16 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
                   {formatAmount(reconciliation.difference)} kr
                 </span>
               </div>
-              <div className="pt-2">
+              <div className="pt-2 space-y-2">
                 {reconciliation.is_reconciled ? (
                   <Badge className="bg-success/10 text-success">Avstämd</Badge>
                 ) : (
                   <Badge variant="destructive">Ej avstämd - kontrollera bokföring</Badge>
+                )}
+                {reconciliation.unconverted_fx_count > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {reconciliation.unconverted_fx_count} leverantörsfaktura i utländsk valuta saknar växelkurs — differensen kan bero på saknade kursuppgifter snarare än felbokning.
+                  </p>
                 )}
               </div>
             </div>
@@ -2195,6 +2201,7 @@ interface ARLedgerData {
     account_1510_balance: number
     difference: number
     is_reconciled: boolean
+    unconverted_fx_count: number
   } | null
 }
 
@@ -2409,11 +2416,16 @@ function ARLedgerView({ periodId }: { periodId: string }) {
                   {formatAmount(reconciliation.difference)} kr
                 </span>
               </div>
-              <div className="pt-2">
+              <div className="pt-2 space-y-2">
                 {reconciliation.is_reconciled ? (
                   <Badge className="bg-success/10 text-success">Avstämd</Badge>
                 ) : (
                   <Badge variant="destructive">Ej avstämd - kontrollera bokföring</Badge>
+                )}
+                {reconciliation.unconverted_fx_count > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {reconciliation.unconverted_fx_count} kundfaktura i utländsk valuta saknar växelkurs — differensen kan bero på saknade kursuppgifter snarare än felbokning.
+                  </p>
                 )}
               </div>
             </div>
