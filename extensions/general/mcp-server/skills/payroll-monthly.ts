@@ -70,11 +70,13 @@ Errors at this stage usually mean missing tax-table data — fall back to \`getD
 The user marks the run \`approved\` → \`paid\` → \`booked\` in the web UI. Booking creates the JE:
 
 - Debit **7210** (lön tjänstemän) or **7010** (lön arbetare): bruttolön
-- Debit **7510** (sociala avgifter): 31.42 % × bruttolön
+- Debit **7510** (sociala avgifter): \`avgift_base × applicable_rate\` — **per employee**, using the rate from Step 4 (default 31.42 %, or a reduced rate when applicable: 10.21 % for 66+, växa-stöd, etc.)
 - Credit **2710** (källskatt): skatteavdrag
-- Credit **2730** (lagstadgade arbetsgivaravgifter): 31.42 % × bruttolön
+- Credit **2730** (lagstadgade arbetsgivaravgifter): same amount as the 7510 debit (the avgift cost is the same number as the avgift liability)
 - Credit **2920** (semesterlöneskuld): 12 % × bruttolön (debit 7290 to balance)
 - Credit **1930** (bank): nettolön (when paid)
+
+When a run mixes full-rate and reduced-rate employees, the 7510/2730 lines are summed across all employees — the *total* avgift line equals \`Σ(per-employee avgift_base × per-employee rate)\`, **not** \`Σ bruttolön × 31.42 %\`. \`gnubok_calculate_salary_run\` already does this aggregation.
 
 ### Step 7 — Generate AGI
 

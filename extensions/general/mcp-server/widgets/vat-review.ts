@@ -83,6 +83,23 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
     letter-spacing: 0.05em;
     color: var(--text-muted);
   }
+  .warnings {
+    background: var(--error-bg);
+    border: 1px solid var(--error);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: var(--error);
+  }
+  .warnings ul { margin: 0; padding-left: 20px; }
+  .warnings-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
   .summary-amount {
     font-size: 22px;
     font-weight: 600;
@@ -264,6 +281,18 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
     const summaryAmt = fmt(Math.abs(ruta49))
 
     let html = ''
+
+    // Pre-filing warnings (e.g. one-sided reverse charge) — surface before the summary.
+    const warnings = Array.isArray(report.warnings) ? report.warnings : []
+    if (warnings.length > 0) {
+      html += '<div class="warnings">'
+      html += '<div class="warnings-title">Att granska före inlämning</div>'
+      html += '<ul>'
+      for (const w of warnings) html += '<li>' + esc(String(w)) + '</li>'
+      html += '</ul>'
+      html += '</div>'
+    }
+
     html += '<div class="summary ' + summaryClass + '">'
     html += '  <div><div class="summary-label">' + esc(summaryLabel) + '</div></div>'
     html += '  <div class="summary-amount ' + summaryClass + '">' + esc(summaryAmt) + '</div>'

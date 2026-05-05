@@ -565,7 +565,7 @@ function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> =
 // ML 2023:200 — both must be displayed and netted against ruta48 (input VAT).
 //
 // Account → ruta map:
-//   3001/3002/3003 → ruta05  (all domestic taxable sales)
+//   3001-3008, 3041-3048, 3051-3058, 3071-3078 → ruta05  (all domestic taxable sales — common BAS revenue accounts)
 //   2611           → ruta10  (output VAT 25%)
 //   2621           → ruta11  (output VAT 12%)
 //   2631           → ruta12  (output VAT 6%)
@@ -575,11 +575,44 @@ function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> =
 //   3308           → ruta39  (EU services sold)
 //   3305           → ruta40  (export outside EU)
 //   2641/2645/2647 → ruta48  (all input VAT)
-async function computeVatReport(
+//
+// Posted+reversed status filter: a "reversed" original entry is still part of
+// its period's books (Skatteverket files VAT period-by-period). The matching
+// storno entry has status 'posted' on its own date; if cross-period, the
+// adjustment correctly lands in the later period. Across a year the two cancel.
+
+/** Common BAS taxable-revenue accounts that contribute to ruta 05. Conservative
+ *  expansion beyond 3001/3002/3003 — companies using non-standard accounts must
+ *  either book to one of these or extend the list. */
+const RUTA_05_ACCOUNTS = [
+  // Domestic sales by VAT rate
+  '3001', '3002', '3003', '3004', '3005', '3006', '3007', '3008',
+  // Domestic services (alternative numbering some companies use)
+  '3041', '3042', '3043', '3044', '3045', '3046', '3047', '3048',
+  // Domestic goods (alternative numbering)
+  '3051', '3052', '3053', '3054', '3055', '3056', '3057', '3058',
+  // Other domestic taxable
+  '3071', '3072', '3073', '3074', '3075', '3076', '3077', '3078',
+] as const
+
+export interface VatReportResult {
+  period: { type: string; year: number; period: number; start: string; end: string }
+  period_label: string
+  rutor: {
+    ruta05: number; ruta10: number; ruta11: number; ruta12: number
+    ruta30: number; ruta31: number; ruta32: number
+    ruta39: number; ruta40: number
+    ruta48: number; ruta49: number
+  }
+  summary: string
+  warnings: string[]
+}
+
+export async function computeVatReport(
   args: Record<string, unknown>,
   companyId: string,
   supabase: SupabaseClient
-): Promise<Record<string, unknown>> {
+): Promise<VatReportResult> {
   const periodType = args.period_type as string
   const year = Number(args.year)
   const period = Number(args.period)
@@ -638,7 +671,7 @@ async function computeVatReport(
     return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
   }
 
-  const ruta05 = creditBalance('3001') + creditBalance('3002') + creditBalance('3003')
+  const ruta05 = RUTA_05_ACCOUNTS.reduce((sum, acc) => sum + creditBalance(acc), 0)
   const ruta10 = creditBalance('2611')
   const ruta11 = creditBalance('2621')
   const ruta12 = creditBalance('2631')
@@ -647,7 +680,8 @@ async function computeVatReport(
   const ruta32 = creditBalance('2634')
   const ruta39 = creditBalance('3308')
   const ruta40 = creditBalance('3305')
-  const ruta48 = debitBalance('2641') + debitBalance('2645') + debitBalance('2647')
+  const calculatedInput2645 = debitBalance('2645')
+  const ruta48 = debitBalance('2641') + calculatedInput2645 + debitBalance('2647')
   const ruta49 = Math.round(
     (ruta10 + ruta11 + ruta12 + ruta30 + ruta31 + ruta32 - ruta48) * 100
   ) / 100
@@ -659,6 +693,17 @@ async function computeVatReport(
   if (periodType === 'monthly') periodLabel = `${monthNames[period - 1]} ${year}`
   else if (periodType === 'quarterly') periodLabel = `Q${period} ${year}`
   else periodLabel = `${year}`
+
+  // Pre-filing warnings — surface common compliance footguns.
+  const warnings: string[] = []
+  const totalReverseChargeOutput = ruta30 + ruta31 + ruta32
+  if (totalReverseChargeOutput > 0 && calculatedInput2645 === 0) {
+    warnings.push(
+      'Omvänd betalningsskyldighet: utgående moms har bokförts (rutor 30/31/32) men ingen ' +
+      'beräknad ingående moms (2645). Kontrollera att den motsvarande ingående bokningen finns — ' +
+      'båda sidor krävs enligt ML 2023:200.'
+    )
+  }
 
   return {
     period: { type: periodType, year, period, start: startDate, end: endDate },
@@ -681,6 +726,7 @@ async function computeVatReport(
       : ruta49 < 0
         ? `Moms att få tillbaka: ${Math.abs(ruta49).toFixed(2)} kr`
         : 'Noll i moms',
+    warnings,
   }
 }
 

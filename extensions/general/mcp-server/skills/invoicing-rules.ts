@@ -99,7 +99,12 @@ For consumer-targeted services (RUT: städning, RUT) or construction (ROT):
 - Use \`fakturamodellen\` (the customer pays the discounted amount; you reclaim the rest from Skatteverket)
 - Customer must have **personnummer** (or coordination number) on file
 - Add the property's **fastighetsbeteckning** (real estate ID) for ROT
-- 50 % deduction for RUT (max 75 000 SEK/year/person 2025), 30 % for ROT (max 50 000 SEK/year)
+- **RUT**: 50 % deduction, max 75 000 SEK/year/person (2025).
+- **ROT**: rate and ceiling have shifted year by year — verify against Skatteverket for the invoice date before applying:
+  - **Standard rate**: 30 %, max 50 000 SEK/year/person.
+  - **2024 H2 (1 Jul – 31 Dec 2024)**: temporary doubled ceiling, separate caps applied.
+  - **2025 May–Dec**: enhanced 50 % rate (still 50 000 SEK ceiling). Reverts to 30 % from 2026 unless extended.
+  - When in doubt for an invoice issued in May 2025 or later, default to the current Skatteverket-published rate rather than the 30 % baseline.
 
 This data goes on the invoice; gnubok's invoice template renders it automatically when set on the customer.
 
