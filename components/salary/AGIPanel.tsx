@@ -310,7 +310,8 @@ export function AGIPanel(props: AGIPanelProps) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           // Include salaryRunId so the handler can promote the matching
-          // agi_declarations row to status='exported' without a fallback scan.
+          // agi_declarations row to status='pending_signature' without
+          // doing a fallback lookup against locally-cached submission state.
           body: JSON.stringify({ inlamningId, salaryRunId }),
         })
         const sparaJson = await sparaRes.json()
