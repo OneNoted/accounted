@@ -131,7 +131,8 @@ export function BankReconciliationView() {
       setGlLines(glData.data || [])
       setUnmatchedTx(unmatchedData.data || [])
       setMatchedTx(matchedData.data || [])
-    } catch {
+    } catch (e) {
+      console.error('[reconciliation] fetchAll failed', e)
       setError('Kunde inte hämta avstämningsdata')
     } finally {
       setLoading(false)

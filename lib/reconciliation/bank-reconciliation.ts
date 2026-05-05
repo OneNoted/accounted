@@ -440,7 +440,7 @@ export async function unlinkReconciliation(
 // Helpers
 // ============================================================
 
-/** Fetch unlinked bank GL lines via the RPC function */
+/** Fetch unlinked bank GL lines via the RPC function. Currently 1930-only. */
 export async function fetchUnlinkedGLLines(
   supabase: SupabaseClient,
   companyId: string,
@@ -448,23 +448,13 @@ export async function fetchUnlinkedGLLines(
   dateTo?: string,
   bankAccount = '1930'
 ): Promise<UnlinkedGLLine[]> {
-  const { data, error } = await supabase.rpc('get_unlinked_bank_lines', {
+  if (bankAccount !== '1930') return []
+
+  const { data, error } = await supabase.rpc('get_unlinked_1930_lines', {
     p_company_id: companyId,
     p_date_from: dateFrom || null,
     p_date_to: dateTo || null,
-    p_account_number: bankAccount,
   })
-
-  // Fall back to legacy RPC if the new one doesn't exist yet
-  if (error && bankAccount === '1930') {
-    const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_unlinked_1930_lines', {
-      p_company_id: companyId,
-      p_date_from: dateFrom || null,
-      p_date_to: dateTo || null,
-    })
-    if (fallbackError || !fallbackData) return []
-    return fallbackData as UnlinkedGLLine[]
-  }
 
   if (error || !data) return []
   return data as UnlinkedGLLine[]

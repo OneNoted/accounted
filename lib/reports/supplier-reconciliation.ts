@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 
 export interface ReconciliationResult {
   supplier_ledger_total: number
@@ -16,15 +17,25 @@ export async function generateReconciliation(
   periodId: string
 ): Promise<ReconciliationResult> {
 
-  // Get total outstanding from supplier invoices
+  // Get total outstanding from supplier invoices.
+  // remaining_amount is stored in invoice currency; account 2440 is in SEK
+  // (booked at invoice-date rate), so convert each row before summing.
   const { data: invoices } = await supabase
     .from('supplier_invoices')
-    .select('remaining_amount')
+    .select('remaining_amount, currency, exchange_rate')
     .eq('company_id', companyId)
     .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
 
   const supplierLedgerTotal = (invoices || [])
-    .reduce((sum, inv) => Math.round((sum + (inv.remaining_amount || 0)) * 100) / 100, 0)
+    .reduce((sum, inv) => {
+      const sek = resolveSekAmount(
+        Number(inv.remaining_amount) || 0,
+        null,
+        inv.currency,
+        inv.exchange_rate
+      )
+      return Math.round((sum + sek) * 100) / 100
+    }, 0)
 
   // Get account 2440 balance from posted journal entry lines in this period
   const { data: journalLines } = await supabase

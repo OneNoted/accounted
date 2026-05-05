@@ -145,6 +145,34 @@ describe('generateARReconciliation', () => {
     expect(result.account_1510_balance).toBe(3000)
   })
 
+  it('converts foreign-currency outstanding to SEK before reconciliation', async () => {
+    results = [
+      // 0: invoices — 225 EUR at 11 (with 25 EUR paid) → 200 EUR → 2 200 SEK,
+      //    plus 1 000 SEK invoice (no payment)
+      {
+        data: [
+          { total: 225, paid_amount: 25, currency: 'EUR', exchange_rate: 11 },
+          { total: 1000, paid_amount: 0, currency: 'SEK', exchange_rate: null },
+        ],
+        error: null,
+      },
+      // 1: 1510 balance = 3 200 SEK
+      {
+        data: [
+          { debit_amount: 3200, credit_amount: 0, journal_entry_id: 'e1' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(3200)
+    expect(result.account_1510_balance).toBe(3200)
+    expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+
   it('uses Math.round for monetary precision', async () => {
     results = [
       {

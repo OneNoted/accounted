@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -93,6 +94,10 @@ export async function generateARLedger(
     const paidAmount = Number(inv.paid_amount) || 0
     const total = Number(inv.total) || 0
     const outstanding = Math.round((total - paidAmount) * 100) / 100
+    // Aging buckets and totals must be in SEK so they reconcile with account 1510
+    // (which is posted in SEK at the invoice-date rate). The per-invoice detail row
+    // keeps `outstanding` in the invoice's original currency for display.
+    const outstandingSek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
 
     // Add invoice detail
     entry.invoices.push({
@@ -107,20 +112,20 @@ export async function generateARLedger(
       currency: inv.currency || 'SEK',
     })
 
-    // Bucket by aging
+    // Bucket by aging (in SEK)
     if (daysOverdue <= 0) {
-      entry.current += outstanding
+      entry.current += outstandingSek
     } else if (daysOverdue <= 30) {
-      entry.days_1_30 += outstanding
+      entry.days_1_30 += outstandingSek
     } else if (daysOverdue <= 60) {
-      entry.days_31_60 += outstanding
+      entry.days_31_60 += outstandingSek
     } else if (daysOverdue <= 90) {
-      entry.days_61_90 += outstanding
+      entry.days_61_90 += outstandingSek
     } else {
-      entry.days_90_plus += outstanding
+      entry.days_90_plus += outstandingSek
     }
 
-    entry.total_outstanding += outstanding
+    entry.total_outstanding += outstandingSek
   }
 
   // Round all amounts and sort invoices within each customer.

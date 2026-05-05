@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 
 export interface SupplierLedgerEntry {
   supplier_id: string
@@ -75,7 +76,14 @@ export async function generateSupplierLedger(
     const entry = bySupplier.get(supplierId)!
     const dueDate = new Date(inv.due_date)
     const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-    const amount = inv.remaining_amount || 0
+    // remaining_amount is stored in invoice currency. The 2440 GL line was posted
+    // in SEK at the invoice-date rate, so we convert here for the reconciliation.
+    const amount = resolveSekAmount(
+      Number(inv.remaining_amount) || 0,
+      null,
+      inv.currency,
+      inv.exchange_rate
+    )
 
     if (daysOverdue <= 0) {
       entry.current += amount

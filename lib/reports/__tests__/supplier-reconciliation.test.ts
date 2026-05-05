@@ -144,6 +144,35 @@ describe('generateReconciliation', () => {
     expect(result.account_2440_balance).toBe(7000)
   })
 
+  it('converts foreign-currency remaining_amount to SEK before reconciliation', async () => {
+    // Reproduces the production bug: 225 EUR + 1 000 SEK was reported as 1 225
+    // against a 2440 balance of 3 475, flagging a false discrepancy.
+    results = [
+      // 0: supplier_invoices — 225 EUR at 11, plus 1 000 SEK
+      {
+        data: [
+          { remaining_amount: 225, currency: 'EUR', exchange_rate: 11 },
+          { remaining_amount: 1000, currency: 'SEK', exchange_rate: null },
+        ],
+        error: null,
+      },
+      // 1: 2440 balance = 3 475 SEK (matches converted ledger total)
+      {
+        data: [
+          { debit_amount: 0, credit_amount: 3475, journal_entry_id: 'e1' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.supplier_ledger_total).toBe(3475)
+    expect(result.account_2440_balance).toBe(3475)
+    expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+
   it('uses Math.round for monetary precision', async () => {
     results = [
       {
