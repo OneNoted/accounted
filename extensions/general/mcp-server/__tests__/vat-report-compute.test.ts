@@ -7,7 +7,7 @@
  * reverse-charge warning.
  */
 import { describe, it, expect } from 'vitest'
-import { computeVatReport } from '../server'
+import { computeVatReport, tools } from '../server'
 
 interface MockLine {
   account_number: string
@@ -86,11 +86,11 @@ describe('computeVatReport', () => {
     expect(result.warnings).toEqual([])
   })
 
-  it('emits a one-sided-reverse-charge warning when 2614 is booked without 2645', async () => {
+  it('emits a one-sided-reverse-charge warning when 2614 is booked without 2645 OR 2647', async () => {
     const lines: MockLine[] = [
       // Output booked but matching input missing (the most common reverse-charge error)
       { account_number: '2614', debit_amount: 0, credit_amount: 500 },
-      // 2645 not present
+      // Neither 2645 nor 2647 present
     ]
 
     const result = await computeVatReport(
@@ -105,7 +105,30 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta49).toBe(500)
     expect(result.warnings.length).toBe(1)
     expect(result.warnings[0]).toMatch(/Omvänd betalningsskyldighet/)
+    // Both 2645 (EU) and 2647 (domestic) are mentioned so users know what to look for.
     expect(result.warnings[0]).toMatch(/2645/)
+    expect(result.warnings[0]).toMatch(/2647/)
+  })
+
+  it('does NOT warn when reverse-charge output is balanced by 2647 (domestic, no 2645)', async () => {
+    // Domestic reverse charge per ML 16:13 (byggtjänster, electronics > 100k SEK) —
+    // matching input lands on 2647, not 2645. The earlier check missed this.
+    const lines: MockLine[] = [
+      { account_number: '2614', debit_amount: 0, credit_amount: 500 },  // ruta30
+      { account_number: '2647', debit_amount: 500, credit_amount: 0 },  // domestic input → ruta48
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'monthly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta30).toBe(500)
+    expect(result.rutor.ruta48).toBe(500)
+    expect(result.rutor.ruta49).toBe(0)
+    // No warning — the domestic mirror is correctly booked.
+    expect(result.warnings).toEqual([])
   })
 
   it('expanded ruta05 includes alternative BAS revenue accounts (3041/3051/3071)', async () => {
@@ -139,6 +162,27 @@ describe('computeVatReport', () => {
 
     expect(result.rutor.ruta49).toBe(-100)
     expect(result.summary).toContain('Moms att få tillbaka')
+  })
+
+  it('exposes a rich outputSchema on both VAT tools (not bare {type:object})', () => {
+    for (const name of ['gnubok_get_vat_report', 'gnubok_vat_review_widget']) {
+      const tool = tools.find((t) => t.name === name)
+      expect(tool, `tool ${name}`).toBeDefined()
+      const schema = tool!.outputSchema as Record<string, unknown> | undefined
+      expect(schema).toBeDefined()
+      expect(schema!.type).toBe('object')
+      const props = schema!.properties as Record<string, unknown>
+      // The schema must declare period, period_label, rutor, summary, warnings.
+      expect(props).toHaveProperty('period')
+      expect(props).toHaveProperty('rutor')
+      expect(props).toHaveProperty('summary')
+      expect(props).toHaveProperty('warnings')
+      // rutor must declare each ruta the runtime returns.
+      const rutorProps = (props.rutor as { properties: Record<string, unknown> }).properties
+      for (const r of ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta39', 'ruta40', 'ruta48', 'ruta49']) {
+        expect(rutorProps, `tool ${name} rutor.${r}`).toHaveProperty(r)
+      }
+    }
   })
 
   it('rejects bad period_type / out-of-range period / out-of-range year', async () => {

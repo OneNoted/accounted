@@ -54,7 +54,7 @@ File via Skatteverket e-tjänst (or skatteverket extension if enabled). After fi
 
 | Ruta | Description | Source accounts |
 |------|-------------|-----------------|
-| 05 | Momspliktig försäljning (taxable sales, all rates) | 3001 + 3002 + 3003 |
+| 05 | Momspliktig försäljning (taxable sales, all rates) | 3001–3008, 3041–3048, 3051–3058, 3071–3078 (common BAS taxable revenue accounts) |
 | 10 | Utgående moms 25 % | 2611 |
 | 11 | Utgående moms 12 % | 2621 |
 | 12 | Utgående moms 6 % | 2631 |

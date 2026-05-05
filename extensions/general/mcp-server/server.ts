@@ -558,6 +558,52 @@ function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> =
   } as const
 }
 
+const VAT_REPORT_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    period: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'] },
+        year: { type: 'number' },
+        period: { type: 'number' },
+        start: { type: 'string', description: 'Period start date (YYYY-MM-DD)' },
+        end: { type: 'string', description: 'Period end date (YYYY-MM-DD)' },
+      },
+      required: ['type', 'year', 'period', 'start', 'end'],
+    },
+    period_label: { type: 'string', description: 'Human-readable period label (e.g. "Q1 2026")' },
+    rutor: {
+      type: 'object',
+      description: 'SKV 4700 momsdeklaration boxes — absolute values, signs implied by box semantics',
+      properties: {
+        ruta05: { type: 'number', description: 'Total domestic taxable sales (all rates)' },
+        ruta10: { type: 'number', description: 'Output VAT 25 % (account 2611)' },
+        ruta11: { type: 'number', description: 'Output VAT 12 % (account 2621)' },
+        ruta12: { type: 'number', description: 'Output VAT 6 % (account 2631)' },
+        ruta30: { type: 'number', description: 'Reverse-charge output VAT 25 % (account 2614)' },
+        ruta31: { type: 'number', description: 'Reverse-charge output VAT 12 % (account 2624)' },
+        ruta32: { type: 'number', description: 'Reverse-charge output VAT 6 % (account 2634)' },
+        ruta39: { type: 'number', description: 'EU services sold (account 3308)' },
+        ruta40: { type: 'number', description: 'Export outside EU (account 3305)' },
+        ruta48: { type: 'number', description: 'Total input VAT (2641 + 2645 + 2647)' },
+        ruta49: {
+          type: 'number',
+          description: 'VAT to pay (positive) or refund (negative) = (10+11+12+30+31+32) − 48',
+        },
+      },
+      required: ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta39', 'ruta40', 'ruta48', 'ruta49'],
+    },
+    summary: { type: 'string', description: 'One-line Swedish summary string (att betala / att få tillbaka / noll)' },
+    warnings: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Pre-filing warnings (e.g. one-sided reverse charge). Empty when none.',
+    },
+  },
+  required: ['period', 'period_label', 'rutor', 'summary', 'warnings'],
+} as const
+
 // ── VAT report computation (shared by gnubok_get_vat_report + gnubok_vat_review_widget) ──
 //
 // Maps posted journal entry lines to SKV 4700 rutor. ruta49 covers domestic
@@ -681,7 +727,8 @@ export async function computeVatReport(
   const ruta39 = creditBalance('3308')
   const ruta40 = creditBalance('3305')
   const calculatedInput2645 = debitBalance('2645')
-  const ruta48 = debitBalance('2641') + calculatedInput2645 + debitBalance('2647')
+  const calculatedInput2647 = debitBalance('2647')
+  const ruta48 = debitBalance('2641') + calculatedInput2645 + calculatedInput2647
   const ruta49 = Math.round(
     (ruta10 + ruta11 + ruta12 + ruta30 + ruta31 + ruta32 - ruta48) * 100
   ) / 100
@@ -695,13 +742,19 @@ export async function computeVatReport(
   else periodLabel = `${year}`
 
   // Pre-filing warnings — surface common compliance footguns.
+  //
+  // The matching input for reverse-charge output (2614/2624/2634) lands on
+  // 2645 (EU acquisitions) or 2647 (domestic reverse charge per ML 16:13 —
+  // byggtjänster, electronics > 100k SEK, etc.). Either is a valid mirror;
+  // the warning must fire only when *both* are zero.
   const warnings: string[] = []
   const totalReverseChargeOutput = ruta30 + ruta31 + ruta32
-  if (totalReverseChargeOutput > 0 && calculatedInput2645 === 0) {
+  const totalReverseChargeInput = calculatedInput2645 + calculatedInput2647
+  if (totalReverseChargeOutput > 0 && totalReverseChargeInput === 0) {
     warnings.push(
       'Omvänd betalningsskyldighet: utgående moms har bokförts (rutor 30/31/32) men ingen ' +
-      'beräknad ingående moms (2645). Kontrollera att den motsvarande ingående bokningen finns — ' +
-      'båda sidor krävs enligt ML 2023:200.'
+      'beräknad ingående moms (varken 2645 EU eller 2647 inhemsk). Kontrollera att den ' +
+      'motsvarande ingående bokningen finns — båda sidor krävs enligt ML 2023:200.'
     )
   }
 
@@ -1547,7 +1600,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_vat_report',
     description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative).',
-    outputSchema: { type: 'object' },
+    outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1584,7 +1637,7 @@ export const tools: McpTool[] = [
       },
       required: ['period_type', 'year', 'period'],
     },
-    outputSchema: { type: 'object' },
+    outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
