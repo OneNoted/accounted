@@ -9,6 +9,9 @@ import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from '
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { agiSaveDraft, agiValidate, agiGetSubmission, agiDeleteDraft, agiLockPeriod, agiUnlockPeriod, agiGetSubmitted } from './lib/agi-client'
 import { buildAGIPayload } from './lib/agi-mappers'
+import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
+import type { SkattekontoBalanceSnapshot } from './types'
 import type { AGIEmployeeData, AGITotals } from '@/lib/salary/agi/xml-generator'
 import type { VatPeriodType } from '@/types'
 
@@ -56,9 +59,20 @@ export const skatteverketExtension: Extension = {
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
         const redirectUri = `${appUrl}/api/extensions/ext/skatteverket/callback`
 
+        // Optional: where to send the user after the BankID round-trip.
+        // Allowlisted to internal in-app paths to avoid open-redirect abuse.
+        const url = new URL(request.url)
+        const requestedReturn = url.searchParams.get('return_to')
+        const returnTo =
+          requestedReturn && requestedReturn.startsWith('/') && !requestedReturn.startsWith('//')
+            ? requestedReturn
+            : null
+
         // Store state for CSRF validation in callback
         await ctx.settings.set('oauth_state', state)
         await ctx.settings.set('oauth_redirect_uri', redirectUri)
+        if (returnTo) await ctx.settings.set('oauth_return_to', returnTo)
+        else await ctx.settings.set('oauth_return_to', null)
 
         const authorizeUrl = buildAuthorizeUrl(redirectUri, state)
 
@@ -146,21 +160,40 @@ export const skatteverketExtension: Extension = {
         const redirectUri = redirectData?.value ||
           `${appUrl}/api/extensions/ext/skatteverket/callback`
 
+        // Optional in-app destination set by /authorize?return_to=...
+        const { data: returnToData } = await supabase
+          .from('extension_data')
+          .select('value')
+          .eq('company_id', companyId)
+          .eq('extension_id', 'skatteverket')
+          .eq('key', 'oauth_return_to')
+          .maybeSingle()
+
+        const returnTo = (returnToData?.value as string | null) || null
+        const successPath = returnTo
+          ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_connected=true`
+          : `${appUrl}/reports?tab=vat-declaration&skv_connected=true`
+        const errorPath = (msg: string) =>
+          returnTo
+            ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_error=${encodeURIComponent(msg)}`
+            : `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
+
         try {
           const tokens = await exchangeCodeForTokens(code, redirectUri)
           await storeTokens(supabase, user.id, tokens, companyId)
 
-          // Clean up CSRF state
+          // Clean up CSRF state + the one-shot return_to.
           await supabase
             .from('extension_data')
             .delete()
             .eq('company_id', companyId)
             .eq('extension_id', 'skatteverket')
-            .eq('key', 'oauth_state')
+            .in('key', ['oauth_state', 'oauth_return_to'])
 
-          return NextResponse.redirect(
-            `${appUrl}/reports?tab=vat-declaration&skv_connected=true`
-          )
+          const success = returnTo
+            ? `${appUrl}${successPath}`
+            : successPath
+          return NextResponse.redirect(success)
         } catch (err) {
           console.error('[skatteverket] Token exchange failed:', err)
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
@@ -170,9 +203,8 @@ export const skatteverketExtension: Extension = {
             : err instanceof Error
               ? err.message
               : 'Token exchange misslyckades'
-          return NextResponse.redirect(
-            `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent(message)}`
-          )
+          const target = returnTo ? `${appUrl}${errorPath(message)}` : errorPath(message)
+          return NextResponse.redirect(target)
         }
       },
     },
@@ -922,6 +954,130 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ data: JSON.parse(statusJson) })
         } catch {
           return NextResponse.json({ data: null })
+        }
+      },
+    },
+
+    // ══════════════════════════════════════════════════════════════
+    // Skattekonto routes (read-only balance + transactions)
+    // ══════════════════════════════════════════════════════════════
+
+    // ── Saldo (cached snapshot) ────────────────────────────────────
+    // Returns the most recent saldoResponse cached in extension_data.
+    // The dashboard uses this for repeated renders without hitting SKV.
+    // Force a refresh by calling POST /skattekonto/sync first.
+    {
+      method: 'GET',
+      path: '/skattekonto/saldo',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const snapshot = await ctx.settings.get<SkattekontoBalanceSnapshot>(SKATTEKONTO_BALANCE_SNAPSHOT_KEY)
+        const lastSyncedAt = await ctx.settings.get<string>(SKATTEKONTO_LAST_SYNCED_AT_KEY)
+        return NextResponse.json({
+          data: snapshot?.saldo ?? null,
+          fetchedAt: snapshot ? new Date(snapshot.fetchedAt).toISOString() : null,
+          lastSyncedAt: lastSyncedAt ?? null,
+        })
+      },
+    },
+
+    // ── Transaktioner (from local table) ───────────────────────────
+    // Returns booked + upcoming transactions for the active company.
+    // Optional `from` query filters tidigare on transaktionsdatum >= from.
+    {
+      method: 'GET',
+      path: '/skattekonto/transaktioner',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+
+        let query = ctx.supabase
+          .from('skattekonto_transactions')
+          .select('*')
+          .eq('company_id', ctx.companyId)
+          .order('transaktionsdatum', { ascending: false })
+
+        if (from) query = query.gte('transaktionsdatum', from)
+
+        const { data, error } = await query
+        if (error) {
+          return NextResponse.json({ error: error.message }, { status: 500 })
+        }
+
+        return NextResponse.json({
+          data: {
+            booked: (data ?? []).filter(r => r.status === 'booked'),
+            upcoming: (data ?? []).filter(r => r.status === 'upcoming'),
+          },
+        })
+      },
+    },
+
+    // ── Manual sync ────────────────────────────────────────────────
+    // Pulls fresh saldo + transactions from Skatteverket and upserts.
+    {
+      method: 'POST',
+      path: '/skattekonto/sync',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        try {
+          const result = await syncSkattekonto(ctx)
+          return NextResponse.json({ data: result })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── Bokför one row → draft journal entry ──────────────────────
+    // Creates a DRAFT verifikat in /bookkeeping for the user to review
+    // and commit. The skattekonto_transactions row is linked via
+    // journal_entry_id so the UI can show "Bokförd" status.
+    {
+      method: 'POST',
+      path: '/skattekonto/transaktioner/:id/bokfor',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+
+        // Extract :id from the catch-all dispatcher's path-param convention
+        // (`_id` query string, set in app/api/extensions/ext/[...path]/route.ts).
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) {
+          return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
+        }
+
+        try {
+          const entry = await bokforSkattekontoTransaction(
+            ctx.supabase,
+            ctx.companyId,
+            ctx.userId,
+            id,
+          )
+          return NextResponse.json({ data: { entry } })
+        } catch (err) {
+          if (err instanceof SkattekontoBookingError) {
+            const status =
+              err.code === 'TRANSACTION_NOT_FOUND' ? 404
+              : err.code === 'ALREADY_BOOKED' ? 409
+              : err.code === 'PERIOD_LOCKED' ? 423
+              : err.code === 'NO_COUNTER_ACCOUNT' ? 422
+              : 400
+            return NextResponse.json(
+              { error: err.message, code: err.code },
+              { status },
+            )
+          }
+          return handleSkvError(err)
         }
       },
     },

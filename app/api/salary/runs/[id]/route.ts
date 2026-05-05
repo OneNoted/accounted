@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { formatRedovisare } from '@/lib/skatteverket/format'
 
 ensureInitialized()
 
@@ -35,9 +36,27 @@ export async function GET(
     .eq('salary_run_id', id)
     .order('created_at')
 
+  // Resolve Skatteverket arbetsgivare ID for AGI submission. We surface this
+  // in the run payload so the client doesn't need a second round-trip just to
+  // build extension URLs. Quietly null when the org number isn't set yet.
+  let arbetsgivare: string | null = null
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('org_number, entity_type')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (settings?.org_number && settings?.entity_type) {
+    try {
+      arbetsgivare = formatRedovisare(settings.org_number, settings.entity_type)
+    } catch {
+      arbetsgivare = null
+    }
+  }
+
   return NextResponse.json({
     data: {
       ...run,
+      arbetsgivare,
       employees: (employees || []).map(emp => ({
         ...emp,
         employee: emp.employee ? {

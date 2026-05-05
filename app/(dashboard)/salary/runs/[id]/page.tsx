@@ -7,14 +7,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
-  ArrowLeft, Plus, Calculator, Eye, Check, CreditCard, BookOpen,
-  ArrowLeftCircle, Loader2, Download, Send, CheckCircle2,
+  ArrowLeft, Calculator, Eye, Check, CreditCard, BookOpen,
+  ArrowLeftCircle, Loader2, Download,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { SalaryRun, SalaryRunEmployee, Employee, CreateJournalEntryLineInput } from '@/types'
+import { AGIPanel } from '@/components/salary/AGIPanel'
+
+type SalaryRunWithArbetsgivare = SalaryRun & { arbetsgivare?: string | null }
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Utkast',
@@ -172,45 +175,6 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     setActionLoading(null)
   }
 
-  async function handleSubmitAgi() {
-    setActionLoading('agi-submit')
-
-    // Generate AGI XML first if it hasn't been generated yet.
-    if (!run?.agi_generated_at) {
-      const xmlRes = await fetch(`/api/salary/runs/${id}/agi/xml`)
-      if (!xmlRes.ok) {
-        const result = await xmlRes.json().catch(() => ({ error: 'Kunde inte generera AGI-fil' }))
-        toast({
-          title: 'AGI kunde inte genereras',
-          description: getErrorMessage(result, { context: 'salary', statusCode: xmlRes.status }),
-          variant: 'destructive',
-        })
-        setActionLoading(null)
-        return
-      }
-    }
-
-    const res = await fetch(`/api/salary/runs/${id}/agi/submit`, { method: 'POST' })
-    const payload = await res.json().catch(() => ({}))
-
-    if (res.ok) {
-      await loadRun()
-      toast({
-        title: 'AGI skickad till Skatteverket',
-        description:
-          (payload?.data?.message as string | undefined) ??
-          'Signera med BankID hos Skatteverket för att slutföra inlämningen.',
-      })
-    } else {
-      toast({
-        title: 'Kunde inte skicka till Skatteverket',
-        description: getErrorMessage(payload, { context: 'salary', statusCode: res.status }),
-        variant: 'destructive',
-      })
-    }
-    setActionLoading(null)
-  }
-
   if (loading) {
     return (
       <div className="space-y-6">
@@ -310,20 +274,34 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                 </tr>
               </thead>
               <tbody>
-                {employees.map(sre => (
-                  <tr key={sre.id} className="border-b last:border-0">
-                    <td className="px-4 py-3 text-sm font-medium">
-                      {(sre as SalaryRunEmployee & { employee?: { first_name: string; last_name: string; personnummer: string } }).employee
-                        ? `${(sre as SalaryRunEmployee & { employee: { first_name: string; last_name: string } }).employee.first_name} ${(sre as SalaryRunEmployee & { employee: { first_name: string; last_name: string } }).employee.last_name}`
-                        : `Anställd ${sre.employee_id.slice(0, 8)}...`}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.gross_salary)}</td>
-                    <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.tax_withheld)}</td>
-                    <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.net_salary)}</td>
-                    <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.avgifter_amount)}</td>
-                    <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.vacation_accrual)}</td>
-                  </tr>
-                ))}
+                {employees.map(sre => {
+                  const employee = (sre as SalaryRunEmployee & { employee?: { first_name: string; last_name: string; personnummer: string } }).employee
+                  const name = employee
+                    ? `${employee.first_name} ${employee.last_name}`
+                    : `Anställd ${sre.employee_id.slice(0, 8)}...`
+                  return (
+                    <tr
+                      key={sre.id}
+                      className="cursor-pointer border-b transition-colors last:border-0 hover:bg-accent/40"
+                      onClick={() => router.push(`/salary/runs/${id}/employees/${sre.employee_id}`)}
+                    >
+                      <td className="px-4 py-3 text-sm font-medium">
+                        <Link
+                          href={`/salary/runs/${id}/employees/${sre.employee_id}`}
+                          className="hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {name}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.gross_salary)}</td>
+                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.tax_withheld)}</td>
+                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.net_salary)}</td>
+                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.avgifter_amount)}</td>
+                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.vacation_accrual)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}
@@ -403,68 +381,34 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
 
       {/* AGI (Arbetsgivardeklaration) — available once the run is booked */}
       {run.status === 'booked' && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Arbetsgivardeklaration (AGI)</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5 text-sm">
-              <div className="flex items-center gap-2">
-                {run.agi_generated_at ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                    <span className="text-muted-foreground">
-                      AGI-fil genererad {new Date(run.agi_generated_at).toLocaleString('sv-SE')}
-                    </span>
-                  </>
+        <div className="space-y-3">
+          <AGIPanel
+            salaryRunId={id}
+            arbetsgivare={(run as SalaryRunWithArbetsgivare).arbetsgivare ?? ''}
+            period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
+            agiGeneratedAt={run.agi_generated_at}
+            agiSubmittedAt={run.agi_submitted_at}
+            readOnly={!canWrite}
+            onChange={loadRun}
+          />
+          {canWrite && (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadAgi}
+                disabled={!!actionLoading}
+              >
+                {actionLoading === 'agi-download' ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
-                  <span className="text-muted-foreground">AGI-fil har inte genererats ännu.</span>
+                  <Download className="mr-2 h-4 w-4" />
                 )}
-              </div>
-              <div className="flex items-center gap-2">
-                {run.agi_submitted_at ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                    <span className="text-muted-foreground">
-                      Skickad till Skatteverket {new Date(run.agi_submitted_at).toLocaleString('sv-SE')}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">
-                    Inte skickad till Skatteverket ännu. Deadline: 12:e i månaden efter utbetalning.
-                  </span>
-                )}
-              </div>
+                Ladda ner AGI-fil (XML)
+              </Button>
             </div>
-            {canWrite && (
-              <div className="flex flex-wrap gap-3">
-                <Button
-                  variant="outline"
-                  onClick={handleDownloadAgi}
-                  disabled={!!actionLoading}
-                >
-                  {actionLoading === 'agi-download' ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Download className="mr-2 h-4 w-4" />
-                  )}
-                  Ladda ner AGI-fil
-                </Button>
-                <Button
-                  onClick={handleSubmitAgi}
-                  disabled={!!actionLoading || !!run.agi_submitted_at}
-                >
-                  {actionLoading === 'agi-submit' ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="mr-2 h-4 w-4" />
-                  )}
-                  Skicka till Skatteverket
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          )}
+        </div>
       )}
 
       {/* Actions */}

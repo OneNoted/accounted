@@ -71,10 +71,12 @@ export async function GET(
     .eq('id', user.id)
     .single()
 
-  // Load employees with their data
+  // Load employees with their data. We need monthly_salary on the employee
+  // record to derive FK499 sjuklönekostnad from per-day records (the line
+  // item `amount` is the net deduction, not the sjuklön cost).
   const { data: runEmployees } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(personnummer, specification_number, f_skatt_status), line_items:salary_line_items(*)')
+    .select('*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary), line_items:salary_line_items(*)')
     .eq('salary_run_id', id)
 
   if (!runEmployees || runEmployees.length === 0) {
@@ -94,6 +96,36 @@ export async function GET(
     contactEmail: (settings?.email || profile?.email || user.email || '').trim(),
   }
 
+  // Load per-day absence records for VAB + parental in the pay period.
+  // Sick days never reach AGI (they go to Försäkringskassan separately).
+  // The XML generator's Frånvarouppgift section consumes these per event.
+  const periodStart = `${run.period_year}-${String(run.period_month).padStart(2, '0')}-01`
+  const periodEndDate = new Date(Date.UTC(run.period_year, run.period_month, 0))
+  const periodEnd = periodEndDate.toISOString().slice(0, 10)
+  const employeeIds = runEmployees
+    .map(sre => sre.employee_id as string)
+    .filter(Boolean)
+  const absenceByEmployee = new Map<string, Array<{ date: string; type: 'vab' | 'parental'; hours: number }>>()
+  if (employeeIds.length > 0) {
+    const { data: absenceRows } = await supabase
+      .from('salary_absence_days')
+      .select('employee_id, absence_date, absence_type, hours')
+      .eq('company_id', companyId)
+      .in('absence_type', ['vab', 'parental'])
+      .gte('absence_date', periodStart)
+      .lte('absence_date', periodEnd)
+      .in('employee_id', employeeIds)
+    for (const row of (absenceRows ?? [])) {
+      const list = absenceByEmployee.get(row.employee_id) ?? []
+      list.push({
+        date: row.absence_date as string,
+        type: row.absence_type as 'vab' | 'parental',
+        hours: Number(row.hours ?? 8),
+      })
+      absenceByEmployee.set(row.employee_id, list)
+    }
+  }
+
   const employeeData: AGIEmployeeData[] = runEmployees.map(sre => {
     const emp = sre.employee as { personnummer: string; specification_number: number; f_skatt_status: string } | null
     const lineItems = (sre.line_items || []) as Array<Record<string, unknown>>
@@ -103,6 +135,8 @@ export async function GET(
     const benefitMeals = sumLineItemAmounts(lineItems, ['benefit_meals'])
     const benefitHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
     const benefitOther = sumLineItemAmounts(lineItems, ['benefit_wellness', 'benefit_other'])
+
+    const absenceEvents = absenceByEmployee.get(sre.employee_id as string)
 
     return {
       personnummer: emp?.personnummer || '',
@@ -118,6 +152,7 @@ export async function GET(
       sickDays: sre.sick_days > 0 ? sre.sick_days : undefined,
       vabDays: sre.vab_days > 0 ? sre.vab_days : undefined,
       parentalDays: sre.parental_days > 0 ? sre.parental_days : undefined,
+      absenceEvents: absenceEvents && absenceEvents.length > 0 ? absenceEvents : undefined,
     }
   })
 
@@ -140,15 +175,32 @@ export async function GET(
     0
   )
 
-  // FK499 TotalSjuklonekostnad — sum of sjuklön paid (days 2–14) across all
+  // FK499 TotalSjuklonekostnad — sum of *paid* sjuklön (days 2–14) across all
   // employees. Day 1 is karens (unpaid); day 15+ is Försäkringskassan, so
   // neither counts as an employer sjuklön cost.
+  //
+  // Sjuklön cost = dailyRate × sjuklonRate × day-2-14 count.
+  // The line item `amount` is the *net deduction* (lostPay − sjuklön), not
+  // the cost — using its quantity field plus the employee's monthly salary
+  // gives the correct sjuklön cost regardless of the line-item amount
+  // convention.
+  //
+  // sjuklonRate is read from the run's calculation_params snapshot (taken at
+  // calc time), so an operator override (e.g. for a CBA-specific rate) is
+  // honored. Falls back to 0.80 (Sjuklönelagen default) for older runs that
+  // don't have the snapshot.
+  const calcParams = (run.calculation_params ?? {}) as { sjuklonRate?: number; sjuklon_rate?: number }
+  const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.80
   let totalSjuklonekostnad = 0
   for (const sre of runEmployees) {
+    const monthly = (sre.employee as { monthly_salary?: number } | null)?.monthly_salary ?? 0
+    if (!monthly) continue
+    const dailyRate = monthly / 21
     const lineItems = (sre.line_items || []) as Array<Record<string, unknown>>
     for (const li of lineItems) {
       if (li.item_type === 'sick_day2_14') {
-        totalSjuklonekostnad += Math.abs((li.amount as number) || 0)
+        const days = (li.quantity as number) || 0
+        totalSjuklonekostnad += dailyRate * sjuklonRate * days
       }
     }
   }

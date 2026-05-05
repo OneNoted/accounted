@@ -6,7 +6,17 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { calculateSalary } from '@/lib/salary/calculation-engine'
 import { loadPayrollConfig, serializePayrollConfig } from '@/lib/salary/payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from '@/lib/salary/tax-tables'
+import { loadAndDeriveAbsence } from '@/lib/salary/derive-absence-line-items'
+import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import type { SalaryLineItemType } from '@/types'
+
+const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
+  'sick_karens',
+  'sick_day2_14',
+  'sick_day15_plus',
+  'vab',
+  'parental_leave',
+]
 
 ensureInitialized()
 
@@ -125,19 +135,91 @@ export async function POST(
     ytdByEmployee.set(prior.employee_id, current)
   }
 
+  // Pay period bounds — used to load per-day absence records.
+  const periodYear = run.period_year as number
+  const periodMonth = run.period_month as number
+  const periodStart = `${periodYear}-${String(periodMonth).padStart(2, '0')}-01`
+  const periodEndDate = new Date(Date.UTC(periodYear, periodMonth, 0)) // last day of month
+  const periodEnd = periodEndDate.toISOString().slice(0, 10)
+
   for (const sre of runEmployees) {
     const emp = sre.employee
     if (!emp) continue
 
-    const lineItems = (sre.line_items || []).map((li: Record<string, unknown>) => ({
+    // ── Derive absence line items from per-day records ─────────────────
+    // Sjuklöneperiod boundaries, återinsjuknande, högriskskydd, day-15
+    // FK transition all require dates — we can't compute them from
+    // aggregated quantities. Replace any existing derived absence rows on
+    // this sre with the freshly-computed ones, then merge into the
+    // in-memory lineItems array passed to calculateSalary.
+    const absenceResult = await loadAndDeriveAbsence({
+      supabase,
+      companyId,
+      employeeId: emp.id,
+      monthlySalary: emp.monthly_salary || 0,
+      payrollConfig: config,
+      periodStart,
+      periodEnd,
+    })
+
+    const { error: delAbsErr } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('salary_run_employee_id', sre.id)
+      .in('item_type', DERIVED_ABSENCE_TYPES)
+    if (delAbsErr) {
+      return NextResponse.json({ error: delAbsErr.message }, { status: 500 })
+    }
+
+    if (absenceResult.lineItems.length > 0) {
+      const rows = absenceResult.lineItems.map((li, idx) => ({
+        salary_run_employee_id: sre.id,
+        company_id: companyId,
+        item_type: li.item_type,
+        description: li.description,
+        quantity: li.quantity,
+        amount: Math.round(li.amount * 100) / 100,
+        is_taxable: li.is_taxable,
+        is_avgift_basis: li.is_avgift_basis,
+        is_vacation_basis: li.is_vacation_basis,
+        is_gross_deduction: li.is_gross_deduction,
+        is_net_deduction: false,
+        account_number: getLineItemAccount(li.item_type),
+        sort_order: 100 + idx, // sort derived items after manual ones
+      }))
+      const { error: insAbsErr } = await supabase
+        .from('salary_line_items')
+        .insert(rows)
+      if (insAbsErr) {
+        return NextResponse.json({ error: insAbsErr.message }, { status: 500 })
+      }
+    }
+
+    // Build the merged in-memory line items: keep non-derived items from
+    // the originally-loaded sre.line_items, then append the freshly-derived
+    // absence items.
+    const manualLineItems = (sre.line_items || [])
+      .filter((li: Record<string, unknown>) =>
+        !DERIVED_ABSENCE_TYPES.includes(li.item_type as SalaryLineItemType))
+      .map((li: Record<string, unknown>) => ({
+        itemType: li.item_type as SalaryLineItemType,
+        amount: li.amount as number,
+        isTaxable: li.is_taxable as boolean,
+        isAvgiftBasis: li.is_avgift_basis as boolean,
+        isVacationBasis: li.is_vacation_basis as boolean,
+        isGrossDeduction: li.is_gross_deduction as boolean,
+        isNetDeduction: li.is_net_deduction as boolean,
+      }))
+    const derivedLineItems = absenceResult.lineItems.map(li => ({
       itemType: li.item_type as SalaryLineItemType,
-      amount: li.amount as number,
-      isTaxable: li.is_taxable as boolean,
-      isAvgiftBasis: li.is_avgift_basis as boolean,
-      isVacationBasis: li.is_vacation_basis as boolean,
-      isGrossDeduction: li.is_gross_deduction as boolean,
-      isNetDeduction: li.is_net_deduction as boolean,
+      amount: li.amount,
+      isTaxable: li.is_taxable,
+      isAvgiftBasis: li.is_avgift_basis,
+      isVacationBasis: li.is_vacation_basis,
+      isGrossDeduction: li.is_gross_deduction,
+      isNetDeduction: false,
     }))
+    const lineItems = [...manualLineItems, ...derivedLineItems]
 
     const result = calculateSalary(
       {
@@ -175,17 +257,15 @@ export async function POST(
       }))
     )
 
-    // Count absence days from line items
-    const rawLines = (sre.line_items || []) as Array<Record<string, unknown>>
-    function sumQuantity(types: string[]): number {
-      return rawLines
-        .filter(li => types.includes(li.item_type as string))
-        .reduce((sum: number, li) => sum + ((li.quantity as number) || 0), 0)
-    }
-    const sickDays = sumQuantity(['sick_karens', 'sick_day2_14'])
-    const vabDays = sumQuantity(['vab'])
-    const parentalDays = sumQuantity(['parental_leave'])
-    const vacationDays = sumQuantity(['vacation'])
+    // Aggregated absence counts derived from per-day records (above).
+    // Vacation still comes from line items because it's user-entered, not
+    // calendar-tracked yet.
+    const sickDays = absenceResult.aggregated.sickDays
+    const vabDays = absenceResult.aggregated.vabDays
+    const parentalDays = absenceResult.aggregated.parentalDays
+    const vacationDays = (sre.line_items || [])
+      .filter((li: Record<string, unknown>) => li.item_type === 'vacation')
+      .reduce((sum: number, li: Record<string, unknown>) => sum + ((li.quantity as number) || 0), 0)
 
     // Update salary_run_employee with calculated results. If any individual
     // update fails we abort so run totals aren't written from partial data.

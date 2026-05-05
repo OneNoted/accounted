@@ -21,16 +21,48 @@ import { getBranding } from '@/lib/branding/service'
  * CRITICAL: FK570 (specifikationsnummer) must stay consistent per employee.
  * Corrections are detected by Skatteverket matching the same FK570.
  *
- * NOT HANDLED HERE (future work):
- *   - <Franvarouppgift>: separate top-level section for parental leave events
- *     (FK821 FranvaroDatum, FK823 FranvaroTyp={TILLFALLIG_FORALDRAPENNING|
- *     FORALDRAPENNING}, etc.). Requires per-event date records, not a simple
- *     day count. Per-employee sick days are NOT reported via AGI at all —
- *     they go to Försäkringskassan separately.
+ * Frånvarouppgift emission is implemented per Skatteverket SKV 4785 + the
+ * "Frånvarouppgift i samband med Arbetsgivardeklaration" technical doc:
+ *   - One <gem:Franvarouppgift> per (employee, date, specifikationsnummer)
+ *   - Sibling of <gem:Blankett>, top-level under <Skatteverket>
+ *   - FranvaroChoice contains FranvaroTyp (TILLFALLIG_FORALDRAPENNING for VAB,
+ *     FORALDRAPENNING for parental leave) — the borttag flow is not used.
+ *   - Hours emitted via FranvaroTimmarTFP (FK825) for VAB or FranvaroTimmarFP
+ *     (FK827) for parental. The procent variants (824/826) are not used —
+ *     gnubok tracks hours, not percent.
+ *   - FranvaroSpecifikationsnummer is assigned 1-based per (employee, period),
+ *     ordered by date. Skatteverket replaces a Frånvarouppgift on match of
+ *     (BetalningsmottagarId, FranvaroDatum, FranvaroSpecifikationsnummer,
+ *     RedovisningsPeriod, AgRegistreradId) — for stable replacement across
+ *     re-generations the numbering must persist; if dates are added/removed
+ *     mid-period the indices shift. First-submit is fine; correction
+ *     stability is a follow-up TODO (persist event → number mapping).
+ *   - Periods before 202501 emit no Frånvarouppgift (Skatteverket rejects).
+ *
+ * Per-employee sick days are NOT reported via AGI under any version — they
+ * go to Försäkringskassan separately. The company-level FK499
+ * TotalSjuklonekostnad in HU is correctly emitted from sick_day2_14 line
+ * items × dailyRate × 0.80 (see agi/xml/route.ts).
  */
 
 const INSTANS_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1'
 const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/komponent/schema/1.1'
+
+/**
+ * One absence event for AGI Frånvarouppgift emission. Loaded from
+ * salary_absence_days (per-day records). Sick days are NOT included — they
+ * go to Försäkringskassan, not Skatteverket.
+ */
+export interface AGIAbsenceEvent {
+  /** YYYY-MM-DD — emitted as FK821 FranvaroDatum. */
+  date: string
+  /** Mapped to FranvaroTyp:
+   *    'vab'      → TILLFALLIG_FORALDRAPENNING (FK825 hours field)
+   *    'parental' → FORALDRAPENNING            (FK827 hours field) */
+  type: 'vab' | 'parental'
+  /** Hours absent on this date, 0.01–24.00. Defaults to 8 in salary_absence_days. */
+  hours: number
+}
 
 export interface AGIEmployeeData {
   personnummer: string       // Encrypted — decrypted for XML
@@ -47,10 +79,15 @@ export interface AGIEmployeeData {
   benefitMeals?: number
   /** @deprecated Per-employee sick days are not reported via AGI (goes to Försäkringskassan separately). Kept for snapshot compatibility. */
   sickDays?: number
-  /** @deprecated VAB is reported via top-level <Franvarouppgift> as per-event records, not as an IU day count. Kept for snapshot compatibility. */
+  /** @deprecated VAB is reported via top-level <Franvarouppgift> as per-event records (see absenceEvents), not as an IU day count. Kept for snapshot compatibility. */
   vabDays?: number
-  /** @deprecated Parental leave is reported via top-level <Franvarouppgift> as per-event records, not as an IU day count. Kept for snapshot compatibility. */
+  /** @deprecated Parental leave is reported via top-level <Franvarouppgift> as per-event records (see absenceEvents), not as an IU day count. Kept for snapshot compatibility. */
   parentalDays?: number
+  /**
+   * Per-event absence records for the period. Drives <gem:Franvarouppgift>
+   * emission. VAB and parental only — sick days excluded by spec (FK).
+   */
+  absenceEvents?: AGIAbsenceEvent[]
 }
 
 export interface AGICompanyData {
@@ -334,6 +371,56 @@ export function generateAGIXml(
     lines.push('  </gem:Blankett>')
   }
 
+  // ── Frånvarouppgift (per-event VAB/parental records, FK820-827) ───────
+  // Skatteverket only accepts Frånvarouppgift from period 202501 onward.
+  const periodAsNumber = company.periodYear * 100 + company.periodMonth
+  if (periodAsNumber >= 202501) {
+    for (const emp of employees) {
+      if (!emp.absenceEvents || emp.absenceEvents.length === 0) continue
+
+      let pnr: string
+      try {
+        pnr = decryptPersonnummer(emp.personnummer)
+      } catch {
+        // Already surfaced as a hard error in the IU loop above; skip silently here.
+        continue
+      }
+
+      // Stable specifikationsnummer per (employee, period): sort by date,
+      // then 1-based index. Two events on the same date get sequential
+      // numbers. The unique key in the Skatteverket spec is
+      // (BetalningsmottagarId, FranvaroDatum, FranvaroSpecifikationsnummer,
+      // RedovisningsPeriod, AgRegistreradId), so within one employee+date
+      // duplicates of the same number replace.
+      const sorted = [...emp.absenceEvents].sort((a, b) => {
+        if (a.date < b.date) return -1
+        if (a.date > b.date) return 1
+        return 0
+      })
+
+      sorted.forEach((event, idx) => {
+        const specNumber = idx + 1
+        const isVab = event.type === 'vab'
+        const franvaroTyp = isVab ? 'TILLFALLIG_FORALDRAPENNING' : 'FORALDRAPENNING'
+        const hoursElement = isVab ? 'FranvaroTimmarTFP' : 'FranvaroTimmarFP'
+        const hoursFaltkod = isVab ? '825' : '827'
+
+        lines.push('  <gem:Franvarouppgift>')
+        // Element order follows the spec example file (SKV 4785 doc, section 4).
+        lines.push(`    <gem:AgRegistreradId faltkod="201">${orgIdentitet}</gem:AgRegistreradId>`)
+        lines.push(`    <gem:RedovisningsPeriod faltkod="006">${period}</gem:RedovisningsPeriod>`)
+        lines.push(`    <gem:FranvaroDatum faltkod="821">${event.date}</gem:FranvaroDatum>`)
+        lines.push(`    <gem:BetalningsmottagarId faltkod="215">${pnr}</gem:BetalningsmottagarId>`)
+        lines.push(`    <gem:FranvaroSpecifikationsnummer faltkod="822">${specNumber}</gem:FranvaroSpecifikationsnummer>`)
+        lines.push('    <gem:FranvaroChoice>')
+        lines.push(`      <gem:FranvaroTyp faltkod="823">${franvaroTyp}</gem:FranvaroTyp>`)
+        lines.push('    </gem:FranvaroChoice>')
+        lines.push(`    <gem:${hoursElement} faltkod="${hoursFaltkod}">${formatHours(event.hours)}</gem:${hoursElement}>`)
+        lines.push('  </gem:Franvarouppgift>')
+      })
+    }
+  }
+
   lines.push('</Skatteverket>')
 
   return lines.join('\n')
@@ -382,4 +469,16 @@ function escapeXml(str: string): string {
 
 function formatAmount(amount: number): string {
   return Math.round(amount).toString()
+}
+
+/**
+ * Format hours for FranvaroTimmarTFP/FP (FK825/827).
+ * Spec range: 0.01 – 24.00, up to two decimals. Whole-hour values emit
+ * without trailing zeros (e.g. 8 → "8") to match Skatteverket's example
+ * file ("4" not "4.00"); fractional values keep their decimals.
+ */
+function formatHours(hours: number): string {
+  const clamped = Math.max(0.01, Math.min(24, hours))
+  const rounded = Math.round(clamped * 100) / 100
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
 }

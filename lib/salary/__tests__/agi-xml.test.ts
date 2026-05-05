@@ -300,3 +300,165 @@ describe('buildIndividuppgifterSnapshot', () => {
     expect(snapshot[0]).toHaveProperty('ruta020', 40000)
   })
 })
+
+// ─── Frånvarouppgift (FK820-827) ────────────────────────────────────
+
+describe('generateAGIXml — Frånvarouppgift', () => {
+  const employeesWithAbsence: AGIEmployeeData[] = [
+    {
+      personnummer: 'emp1_encrypted',
+      specificationNumber: 1,
+      grossSalary: 40000,
+      taxWithheld: 12000,
+      avgifterBasis: 40000,
+      absenceEvents: [
+        { date: '2026-04-15', type: 'vab', hours: 8 },
+        { date: '2026-04-16', type: 'vab', hours: 4 },
+      ],
+    },
+    {
+      personnummer: 'emp2_encrypted',
+      specificationNumber: 2,
+      grossSalary: 35000,
+      taxWithheld: 10500,
+      avgifterBasis: 35000,
+      absenceEvents: [
+        { date: '2026-04-20', type: 'parental', hours: 8 },
+      ],
+    },
+  ]
+
+  it('emits a <gem:Franvarouppgift> per absence event', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    const matches = xml.match(/<gem:Franvarouppgift>/g) ?? []
+    expect(matches).toHaveLength(3)
+  })
+
+  it('emits TILLFALLIG_FORALDRAPENNING with FranvaroTimmarTFP for VAB', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    expect(xml).toContain('<gem:FranvaroTyp faltkod="823">TILLFALLIG_FORALDRAPENNING</gem:FranvaroTyp>')
+    expect(xml).toContain('<gem:FranvaroTimmarTFP faltkod="825">8</gem:FranvaroTimmarTFP>')
+    expect(xml).toContain('<gem:FranvaroTimmarTFP faltkod="825">4</gem:FranvaroTimmarTFP>')
+  })
+
+  it('emits FORALDRAPENNING with FranvaroTimmarFP for parental leave', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    expect(xml).toContain('<gem:FranvaroTyp faltkod="823">FORALDRAPENNING</gem:FranvaroTyp>')
+    expect(xml).toContain('<gem:FranvaroTimmarFP faltkod="827">8</gem:FranvaroTimmarFP>')
+  })
+
+  it('does NOT emit TFP hour-fields for parental events', () => {
+    const xml = generateAGIXml(
+      company,
+      [{
+        ...employeesWithAbsence[1],
+        absenceEvents: [{ date: '2026-04-20', type: 'parental', hours: 8 }],
+      }],
+      totals,
+    )
+    expect(xml).not.toMatch(/FranvaroTimmarTFP|FranvaroProcentTFP/)
+  })
+
+  it('uses 1-based stable specifikationsnummer per employee, ordered by date', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    // emp1 has two events on 2026-04-15 and 2026-04-16
+    expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">1</gem:FranvaroSpecifikationsnummer>')
+    expect(xml).toContain('<gem:FranvaroSpecifikationsnummer faltkod="822">2</gem:FranvaroSpecifikationsnummer>')
+  })
+
+  it('formats fractional hours with up to 2 decimals', () => {
+    const xml = generateAGIXml(
+      company,
+      [{
+        ...employeesWithAbsence[0],
+        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 4.5 }],
+      }],
+      totals,
+    )
+    expect(xml).toContain('<gem:FranvaroTimmarTFP faltkod="825">4.5</gem:FranvaroTimmarTFP>')
+  })
+
+  it('clamps hours into the spec range (0.01–24.00)', () => {
+    const xml = generateAGIXml(
+      company,
+      [{
+        ...employeesWithAbsence[0],
+        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 50 }],
+      }],
+      totals,
+    )
+    expect(xml).toContain('<gem:FranvaroTimmarTFP faltkod="825">24</gem:FranvaroTimmarTFP>')
+  })
+
+  it('skips Frånvarouppgift entirely for periods before 202501', () => {
+    const xml = generateAGIXml(
+      { ...company, periodYear: 2024, periodMonth: 12 },
+      employeesWithAbsence,
+      totals,
+    )
+    expect(xml).not.toContain('Franvarouppgift')
+  })
+
+  it('emits Frånvarouppgift for the boundary period 202501', () => {
+    const xml = generateAGIXml(
+      { ...company, periodYear: 2025, periodMonth: 1 },
+      [{
+        ...employeesWithAbsence[0],
+        absenceEvents: [{ date: '2025-01-15', type: 'vab', hours: 8 }],
+      }],
+      totals,
+    )
+    expect(xml).toContain('<gem:Franvarouppgift>')
+    expect(xml).toContain('<gem:FranvaroDatum faltkod="821">2025-01-15</gem:FranvaroDatum>')
+  })
+
+  it('places Frånvarouppgift after IU Blanketts and before </Skatteverket>', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    const lastBlankettClose = xml.lastIndexOf('</gem:Blankett>')
+    const firstFranvaro = xml.indexOf('<gem:Franvarouppgift>')
+    const closeRoot = xml.indexOf('</Skatteverket>')
+    expect(firstFranvaro).toBeGreaterThan(lastBlankettClose)
+    expect(closeRoot).toBeGreaterThan(firstFranvaro)
+  })
+
+  it('emits FK820/824/826 absence-removal and percent fields not at all (gnubok always sends timmar)', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    expect(xml).not.toContain('faltkod="820"')
+    expect(xml).not.toContain('faltkod="824"')
+    expect(xml).not.toContain('faltkod="826"')
+  })
+
+  it('preserves date order across employees with mixed types', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    const idx15 = xml.indexOf('2026-04-15')
+    const idx16 = xml.indexOf('2026-04-16')
+    const idx20 = xml.indexOf('2026-04-20')
+    expect(idx15).toBeLessThan(idx16)
+    expect(idx16).toBeLessThan(idx20)
+  })
+
+  it('emits required fields per Frånvarouppgift (AgRegistreradId, RedovisningsPeriod, FranvaroDatum, BetalningsmottagarId, Specifikationsnummer, FranvaroChoice)', () => {
+    const xml = generateAGIXml(
+      company,
+      [{
+        ...employeesWithAbsence[0],
+        absenceEvents: [{ date: '2026-04-15', type: 'vab', hours: 8 }],
+      }],
+      totals,
+    )
+    // Single Frånvarouppgift block
+    const block = xml.slice(xml.indexOf('<gem:Franvarouppgift>'), xml.indexOf('</gem:Franvarouppgift>'))
+    expect(block).toContain('faltkod="201"') // AgRegistreradId
+    expect(block).toContain('faltkod="006"') // RedovisningsPeriod
+    expect(block).toContain('faltkod="821"') // FranvaroDatum
+    expect(block).toContain('faltkod="215"') // BetalningsmottagarId
+    expect(block).toContain('faltkod="822"') // FranvaroSpecifikationsnummer
+    expect(block).toContain('<gem:FranvaroChoice>')
+    expect(block).toContain('faltkod="823"') // FranvaroTyp inside choice
+  })
+
+  it('omits the section entirely when no employee has absenceEvents', () => {
+    const xml = generateAGIXml(company, employees, totals)
+    expect(xml).not.toContain('Franvarouppgift')
+  })
+})

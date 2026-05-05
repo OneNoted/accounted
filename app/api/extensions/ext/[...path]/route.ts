@@ -12,6 +12,27 @@ ensureInitialized()
 export const maxDuration = 300
 
 /**
+ * Per-extension runtime feature flags. Lets ops toggle an integration off
+ * without redeploying or removing it from extensions.config.json — useful
+ * for phased rollouts (dev tenants → design partners → general).
+ *
+ * The flag is checked on every request. If the env var is not exactly the
+ * string "true", the dispatcher returns 503 with `code: 'EXTENSION_DISABLED'`.
+ *
+ * Server-side env vars only — no NEXT_PUBLIC_ prefix. Next.js inlines
+ * NEXT_PUBLIC_* into the client bundle at build time, so a flip on Vercel
+ * without a redeploy would create split-brain (server returns 503,
+ * client still renders the enabled flow). UI panels detect the 503 by
+ * response code, not by reading the flag directly.
+ */
+const EXTENSION_FEATURE_FLAGS: Record<string, { envVar: string; disabledMessage: string }> = {
+  skatteverket: {
+    envVar: 'SKATTEVERKET_ENABLED',
+    disabledMessage: 'Skatteverket-integrationen är inte aktiverad i denna miljö.',
+  },
+}
+
+/**
  * Match a request path against a route pattern.
  * Supports :param wildcards (e.g., /:id/confirm).
  * Returns extracted params on match, null on mismatch.
@@ -68,6 +89,18 @@ async function handleRequest(
   const extension = extensionRegistry.get(extensionId)
   if (!extension || !extension.apiRoutes || extension.apiRoutes.length === 0) {
     return NextResponse.json({ error: 'Extension not found' }, { status: 404 })
+  }
+
+  // Per-extension feature flags. Lets us toggle a single integration off
+  // mid-rollout without redeploying or removing it from extensions.config.json.
+  // The frontend (SkatteverketPanel, AGIPanel) inspects the 503 + code to
+  // render an "extension disabled" empty state.
+  const flag = EXTENSION_FEATURE_FLAGS[extensionId]
+  if (flag && process.env[flag.envVar] !== 'true') {
+    return NextResponse.json(
+      { error: flag.disabledMessage, code: 'EXTENSION_DISABLED' },
+      { status: 503 },
+    )
   }
 
   // Match route BEFORE auth so we can check skipAuth (e.g. OAuth callbacks)

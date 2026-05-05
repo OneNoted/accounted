@@ -21,6 +21,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
   const hasCompany = !!company
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMcpExtension = ENABLED_EXTENSION_IDS.has('mcp-server')
+  const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
   const items: NavItem[] = [
     { href: '/settings/company', label: 'Företag', show: hasCompany },
@@ -29,6 +30,7 @@ export function SettingsNav({ isSandbox }: { isSandbox?: boolean }) {
     { href: '/settings/tax', label: 'Skatt', show: hasCompany },
     { href: '/settings/team', label: 'Lag', show: false },
     { href: '/settings/banking', label: 'Bank (PSD2)', show: hasCompany && !isSandbox && hasBankingExtension },
+    { href: '/settings/skatteverket', label: 'Skatteverket', show: hasCompany && !isSandbox && hasSkatteverketExtension },
     { href: '/settings/salary', label: 'Löner', show: hasCompany && company?.entity_type === 'aktiebolag' },
     { href: '/settings/templates', label: 'Mallar', show: hasCompany },
     { href: '/settings/backup', label: 'Säkerhetsbackup', show: hasCompany },
