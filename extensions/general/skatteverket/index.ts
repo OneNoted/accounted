@@ -808,12 +808,19 @@ export const skatteverketExtension: Extension = {
             // and re-submitted. The same agi_declarations row is reused
             // (xml-route updates xml_content in place), so this update
             // promotes the recovered submission back to pending_signature.
+            //
+            // 'exported' is NOT in the allowed-from list. The status value
+            // is preserved in the schema for the legacy manual-download
+            // path (see migration), but no code currently writes it; an
+            // 'exported' row encountered here would represent a parallel
+            // filing attempt that should land in its own row, not reuse
+            // this one (preserves chain of custody per BFL 5 kap 6§).
             await ctx.supabase
               .from('agi_declarations')
               .update({ status: 'pending_signature' })
               .eq('salary_run_id', runId)
               .eq('company_id', ctx.companyId)
-              .in('status', ['generated', 'exported', 'rejected'])
+              .in('status', ['generated', 'rejected'])
           }
 
           return NextResponse.json({ data: result.data })
