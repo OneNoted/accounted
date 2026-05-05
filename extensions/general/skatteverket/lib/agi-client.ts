@@ -140,9 +140,16 @@ export async function agiGetKontrollresultat(
 /**
  * POST /underlag/{inlamningId}/spara — commit the underlag to Eget utrymme.
  *
- * Allowed even when kontrollresultat reports DONE_REJECTED; the user fixes
- * the errors in Mina Sidor before signing. Returns 400 felkod 20 if the
- * underlag was already saved or had no errors to fix.
+ * Allowed even when kontrollresultat reports DONE_REJECTED — SKV will keep
+ * the rejected underlag in Eget utrymme as a record. Mina Sidor does NOT
+ * expose in-place editing of saved underlag; correcting a rejected AGI
+ * means generating new XML (with the same FK570 specifikationsnummer per
+ * employee) and resubmitting it as a rättelse via the same /underlag flow.
+ * The current AGIPanel doesn't auto-spara on rejection; it surfaces the
+ * findings and leaves recovery (re-generate + re-submit) to the user.
+ *
+ * Returns 400 felkod 20 if the underlag was already saved or had no
+ * errors to fix.
  */
 export async function agiSparaUnderlag(
   supabase: SupabaseClient,

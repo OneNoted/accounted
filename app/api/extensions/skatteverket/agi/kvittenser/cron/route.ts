@@ -137,26 +137,28 @@ export async function GET(request: Request) {
         continue
       }
 
-      // Audit-trail honesty: the column records when the AGI was *filed*,
-      // not when we noticed. If SKV omits signeradTid we leave it NULL
-      // rather than substituting wall-clock now() — falsifying the filing
-      // moment would conflict with BFNAR 2013:2 kap 8 (behandlingshistorik
-      // must faithfully record events) and BFL 5 kap 6§. The status flip
-      // to 'submitted' is still correct on its own.
-      const submittedAt = kvittens.signeradTid ?? null
-      if (!submittedAt) {
-        console.warn('[agi-kvittenser-cron] kvittens missing signeradTid', {
+      // The presence of uuidKvittens confirms SKV signed and accepted
+      // the AGI. signeradTid is the precise signing moment; if SKV omits
+      // it we fall back to reconciliation time + warn so the discrepancy
+      // is investigable. Leaving NULL would hide that the filing occurred
+      // at all, which itself misstates behandlingshistorik (BFNAR 2013:2
+      // kap 8 / BFL 5 kap 6§). The fallback only applies on this code
+      // path because we're inside the kvittens-found branch above.
+      const submittedAt = kvittens.signeradTid || new Date().toISOString()
+      if (!kvittens.signeradTid) {
+        console.warn('[agi-kvittenser-cron] kvittens missing signeradTid; using reconciliation time', {
           declarationId, companyId, period, uuidKvittens: kvittens.uuidKvittens,
         })
       }
 
-      // Stamp submitted_by with the token-owning auth user. That row was
-      // created when the operator authenticated with BankID, and SKV's
-      // own kvittens.signeradAv is the same person's personnummer. Not
-      // writing the column at all would leave a NULL signer on rows
-      // reconciled by this cron, which conflicts with BFL 5 kap 6§
-      // (verifikationer must be traceable to an actor) and BFNAR 2013:2
-      // kap 8 (behandlingshistorik must record who triggered changes).
+      // submitted_by is the token-owning auth.users row — the human who
+      // connected via BankID. The legally load-bearing signer identity
+      // is kvittens.signeradAv (a personnummer), which the token user_id
+      // does NOT necessarily match (e.g. if the connected user is a
+      // bookkeeper but the deklarationsombud signed). We preserve the
+      // full kvittens in response_data so the audit trail (BFL 5 kap 6§,
+      // BFNAR 2013:2 kap 8) records the actual BankID signer regardless
+      // of who triggered the reconciliation.
       await supabase
         .from('agi_declarations')
         .update({
@@ -164,10 +166,19 @@ export async function GET(request: Request) {
           kvittensnummer: kvittens.uuidKvittens,
           submitted_at: submittedAt,
           submitted_by: token.user_id,
+          response_data: {
+            signeradAv: kvittens.signeradAv ?? null,
+            signeradTid: kvittens.signeradTid ?? null,
+            uuidKvittens: kvittens.uuidKvittens,
+            arbetsgivare: kvittens.arbetsgivare ?? null,
+            period: kvittens.period ?? null,
+            underlag: kvittens.underlag ?? null,
+            reconciledBy: 'cron',
+          },
         })
         .eq('id', declarationId)
 
-      if (decl.salary_run_id && submittedAt) {
+      if (decl.salary_run_id) {
         await supabase
           .from('salary_runs')
           .update({ agi_submitted_at: submittedAt })

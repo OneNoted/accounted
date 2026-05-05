@@ -797,18 +797,23 @@ export const skatteverketExtension: Extension = {
             }
           }
           if (runId) {
-            // Monotonicity guard: only flip from a pre-spara state. If the
+            // Monotonicity guard: only flip from a pre-filing state. If the
             // kvittens cron or the interactive /agi/kvittenser handler has
-            // already promoted this row to 'submitted'/'accepted'/'rejected'
-            // (e.g. user signed quickly while a delayed /agi/spara retry was
-            // in flight), don't regress it. behandlingshistorik must move
-            // forward only — BFNAR 2013:2 kap 8.
+            // already promoted this row to 'submitted'/'accepted', don't
+            // regress it — behandlingshistorik must move forward through
+            // the filing milestones (BFNAR 2013:2 kap 8).
+            //
+            // 'rejected' IS allowed as an originating state: a previous
+            // submission failed kontrollresultat, the user fixed the XML
+            // and re-submitted. The same agi_declarations row is reused
+            // (xml-route updates xml_content in place), so this update
+            // promotes the recovered submission back to pending_signature.
             await ctx.supabase
               .from('agi_declarations')
               .update({ status: 'pending_signature' })
               .eq('salary_run_id', runId)
               .eq('company_id', ctx.companyId)
-              .in('status', ['generated', 'exported'])
+              .in('status', ['generated', 'exported', 'rejected'])
           }
 
           return NextResponse.json({ data: result.data })
@@ -1044,13 +1049,17 @@ export const skatteverketExtension: Extension = {
             // know the AGI was actually filed (the orchestrator deliberately
             // doesn't stamp on underlag-ingest, see route.ts comment).
             //
-            // If SKV omits signeradTid we leave the column NULL rather than
-            // substituting wall-clock now(). Behandlingshistorik must record
-            // the *filing* moment, not our reconciliation moment (BFNAR
-            // 2013:2 kap 8 / BFL 5 kap 6§).
-            const submittedAt = kvittens.signeradTid ?? null
-            if (!submittedAt) {
-              console.warn('[skatteverket] kvittens missing signeradTid', {
+            // The presence of `uuidKvittens` confirms SKV signed and accepted
+            // the AGI. signeradTid is the precise signing moment; if SKV
+            // omits it we fall back to reconciliation time + warn so the
+            // discrepancy is investigable. Leaving NULL would hide that the
+            // filing occurred at all, which itself misstates the behandlings-
+            // historik (BFNAR 2013:2 kap 8 / BFL 5 kap 6§). The fallback
+            // applies only on this code path because we're inside the
+            // `if (kvittens?.uuidKvittens)` branch — if no kvittens, no stamp.
+            const submittedAt = kvittens.signeradTid || new Date().toISOString()
+            if (!kvittens.signeradTid) {
+              console.warn('[skatteverket] kvittens missing signeradTid; using reconciliation time', {
                 companyId: ctx.companyId, period, uuidKvittens: kvittens.uuidKvittens,
               })
             }
@@ -1064,6 +1073,12 @@ export const skatteverketExtension: Extension = {
               .limit(1)
               .maybeSingle()
             if (latest?.id) {
+              // submitted_by is the auth.users UUID we have on hand (the
+              // operator who polled the kvittens endpoint). The actual
+              // BankID signer is identified by kvittens.signeradAv (a
+              // personnummer string), which we preserve in response_data
+              // alongside the rest of the receipt — that's the legally
+              // load-bearing audit record per BFL 5 kap 6§.
               await ctx.supabase
                 .from('agi_declarations')
                 .update({
@@ -1071,10 +1086,18 @@ export const skatteverketExtension: Extension = {
                   kvittensnummer: kvittens.uuidKvittens,
                   submitted_at: submittedAt,
                   submitted_by: ctx.userId,
+                  response_data: {
+                    signeradAv: kvittens.signeradAv ?? null,
+                    signeradTid: kvittens.signeradTid ?? null,
+                    uuidKvittens: kvittens.uuidKvittens,
+                    arbetsgivare: kvittens.arbetsgivare ?? null,
+                    period: kvittens.period ?? null,
+                    underlag: kvittens.underlag ?? null,
+                  },
                 })
                 .eq('id', latest.id)
 
-              if (latest.salary_run_id && submittedAt) {
+              if (latest.salary_run_id) {
                 await ctx.supabase
                   .from('salary_runs')
                   .update({ agi_submitted_at: submittedAt })
