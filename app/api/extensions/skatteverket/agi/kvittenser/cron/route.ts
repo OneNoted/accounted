@@ -137,7 +137,18 @@ export async function GET(request: Request) {
         continue
       }
 
-      const submittedAt = kvittens.signeradTid || new Date().toISOString()
+      // Audit-trail honesty: the column records when the AGI was *filed*,
+      // not when we noticed. If SKV omits signeradTid we leave it NULL
+      // rather than substituting wall-clock now() — falsifying the filing
+      // moment would conflict with BFNAR 2013:2 kap 8 (behandlingshistorik
+      // must faithfully record events) and BFL 5 kap 6§. The status flip
+      // to 'submitted' is still correct on its own.
+      const submittedAt = kvittens.signeradTid ?? null
+      if (!submittedAt) {
+        console.warn('[agi-kvittenser-cron] kvittens missing signeradTid', {
+          declarationId, companyId, period, uuidKvittens: kvittens.uuidKvittens,
+        })
+      }
 
       // Stamp submitted_by with the token-owning auth user. That row was
       // created when the operator authenticated with BankID, and SKV's
@@ -156,7 +167,7 @@ export async function GET(request: Request) {
         })
         .eq('id', declarationId)
 
-      if (decl.salary_run_id) {
+      if (decl.salary_run_id && submittedAt) {
         await supabase
           .from('salary_runs')
           .update({ agi_submitted_at: submittedAt })

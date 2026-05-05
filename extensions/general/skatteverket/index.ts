@@ -957,13 +957,22 @@ export const skatteverketExtension: Extension = {
           }
 
           // Persist the link so the user can return to it after a refresh.
-          // INCORRECT_DATA (status 409) also returns a link to the felrapport;
-          // surface it as `signing_failed_link` so the UI can route there.
-          const isError = result.status === 409 || result.data.tillstand === 'INCORRECT_DATA'
+          // SKV's tillstand enum (per skapagranskningsunderlagsvar.json):
+          //   LOCKED_FOR_SIGNING / UNLOCKED → granskning ready, user can sign
+          //   INCORRECT_DATA               → felrapport link, can't sign yet
+          //   RECEIVING / CALCULATING      → server still processing
+          //   SIGNING                      → another signing flow already running
+          // We key on tillstand alone — keying on HTTP status (e.g. 409) and
+          // the body string would miss future SKV additions like RECEIVING
+          // returned with HTTP 200, leaving us in an awaiting_signing state
+          // when the underlag isn't actually ready.
+          const canSign =
+            result.data.tillstand === 'LOCKED_FOR_SIGNING' ||
+            result.data.tillstand === 'UNLOCKED'
           await ctx.settings.set(
             `agi_submission_${period}`,
             JSON.stringify({
-              status: isError ? 'underlag_rejected' : 'awaiting_signing',
+              status: canSign ? 'awaiting_signing' : 'underlag_rejected',
               arbetsgivare,
               period,
               signeringslank: result.data.link,
@@ -1034,7 +1043,17 @@ export const skatteverketExtension: Extension = {
             // here, mirroring SKV's signeradTid — this is the only place we
             // know the AGI was actually filed (the orchestrator deliberately
             // doesn't stamp on underlag-ingest, see route.ts comment).
-            const submittedAt = kvittens.signeradTid || new Date().toISOString()
+            //
+            // If SKV omits signeradTid we leave the column NULL rather than
+            // substituting wall-clock now(). Behandlingshistorik must record
+            // the *filing* moment, not our reconciliation moment (BFNAR
+            // 2013:2 kap 8 / BFL 5 kap 6§).
+            const submittedAt = kvittens.signeradTid ?? null
+            if (!submittedAt) {
+              console.warn('[skatteverket] kvittens missing signeradTid', {
+                companyId: ctx.companyId, period, uuidKvittens: kvittens.uuidKvittens,
+              })
+            }
             const { data: latest } = await ctx.supabase
               .from('agi_declarations')
               .select('id, salary_run_id')
@@ -1055,7 +1074,7 @@ export const skatteverketExtension: Extension = {
                 })
                 .eq('id', latest.id)
 
-              if (latest.salary_run_id) {
+              if (latest.salary_run_id && submittedAt) {
                 await ctx.supabase
                   .from('salary_runs')
                   .update({ agi_submitted_at: submittedAt })

@@ -490,6 +490,12 @@ export function AGIPanel(props: AGIPanelProps) {
   const underlagSubmitted = subState === 'underlag_submitted'
   const underlagRejected = subState === 'underlag_rejected'
   const isSigned = subState === 'signed' || !!agiSubmittedAt
+  // Tokens issued before the agd scope was added to DEFAULT_SCOPES will
+  // 403 with invalid_scope at submission time — surface that proactively
+  // so the user reconnects before hitting the deadline rather than at it.
+  const missingAgdScope =
+    typeof status?.scope === 'string' &&
+    !status.scope.split(/\s+/).filter(Boolean).includes('agd')
 
   return (
     <Card>
@@ -503,6 +509,29 @@ export function AGIPanel(props: AGIPanelProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Missing-scope banner — proactive nudge before the user hits a
+            403 invalid_scope at submission time. The agd scope was added
+            after some users had already connected, so their stored token
+            grants moms/skattekonto but not AGI. */}
+        {missingAgdScope && !readOnly && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+            <p className="text-sm font-medium">
+              Anslutningen mot Skatteverket saknar behörighet för Arbetsgivardeklaration
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Din anslutning utfärdades innan AGI-stödet aktiverades. Koppla
+              bort och anslut igen via Inställningar → Skatteverket för att
+              kunna skicka AGI direkt.
+            </p>
+            <a
+              href="/settings/skatteverket"
+              className="mt-2 inline-flex items-center gap-1 text-sm font-medium hover:underline"
+            >
+              Öppna inställningar <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        )}
+
         {/* Status summary */}
         <div className="space-y-1.5 text-sm">
           <StatusRow
