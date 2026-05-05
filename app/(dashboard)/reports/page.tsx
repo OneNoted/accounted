@@ -2420,7 +2420,7 @@ function ARLedgerView({ periodId }: { periodId: string }) {
                 <span className="font-mono">{formatAmount(reconciliation.ar_ledger_total)} kr</span>
               </div>
               <div className="flex justify-between">
-                <span><AccountNumber number="1510" /> saldo (huvudbok)</span>
+                <span>Kundfordringar (<AccountNumber number="1510" /> + <AccountNumber number="1513" />) saldo</span>
                 <span className="font-mono">{formatAmount(reconciliation.account_1510_balance)} kr</span>
               </div>
               <div className="flex justify-between pt-2 border-t font-semibold">

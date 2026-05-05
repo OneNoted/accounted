@@ -199,6 +199,36 @@ describe('generateARReconciliation', () => {
     // EUR row excluded → ledger total is just the SEK 500
     expect(result.ar_ledger_total).toBe(500)
     expect(result.account_1510_balance).toBe(500)
+    // Numbers match, but the calculation is incomplete (a row was excluded);
+    // BFL 5 kap requires the period not be stamped Avstämd until the missing
+    // exchange rate is filled in.
+    expect(result.is_reconciled).toBe(false)
+  })
+
+  it('sums 1510 + 1513 in the GL balance for ROT/RUT fakturamodellen', async () => {
+    // Forward-looking: today no postings hit 1513, but if a fakturamodellen
+    // invoice ever splits the AR receivable across 1510 (customer portion)
+    // and 1513 (Skatteverket claim), both must be included to reconcile.
+    results = [
+      // 0: invoices — single 1 500 SEK invoice
+      {
+        data: [{ total: 1500, paid_amount: 0, currency: 'SEK', exchange_rate: null }],
+        error: null,
+      },
+      // 1: GL — 1 200 on 1510, 300 on 1513 → combined 1 500
+      {
+        data: [
+          { debit_amount: 1200, credit_amount: 0, journal_entry_id: 'e1' },
+          { debit_amount: 300, credit_amount: 0, journal_entry_id: 'e2' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(1500)
+    expect(result.account_1510_balance).toBe(1500)
     expect(result.is_reconciled).toBe(true)
   })
 

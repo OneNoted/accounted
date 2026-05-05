@@ -202,7 +202,10 @@ describe('generateReconciliation', () => {
     // EUR row excluded → ledger total is just the SEK 1 000
     expect(result.supplier_ledger_total).toBe(1000)
     expect(result.account_2440_balance).toBe(1000)
-    expect(result.is_reconciled).toBe(true)
+    // Numbers match, but the calculation is incomplete (a row was excluded);
+    // BFL 5 kap requires the period not be stamped Avstämd until the missing
+    // exchange rate is filled in.
+    expect(result.is_reconciled).toBe(false)
   })
 
   it('uses Math.round for monetary precision', async () => {

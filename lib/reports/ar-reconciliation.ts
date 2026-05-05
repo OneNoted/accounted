@@ -3,6 +3,12 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
+  /**
+   * Sum of posted balances on accounts 1510 (Kundfordringar) and 1513
+   * (Kundfordringar – delad faktura). 1513 covers the Skatteverket portion
+   * of ROT/RUT fakturamodellen invoices and is zero today (no fakturamodellen
+   * postings yet) — included for forward compatibility.
+   */
   account_1510_balance: number
   difference: number
   is_reconciled: boolean
@@ -56,7 +62,12 @@ export async function generateARReconciliation(
       return Math.round((sum + sek) * 100) / 100
     }, 0)
 
-  // Get account 1510 balance from posted journal entry lines in this period
+  // Get AR receivable balance from posted journal entry lines in this period.
+  // We sum 1510 (Kundfordringar) AND 1513 (Kundfordringar – delad faktura) so
+  // the comparison stays correct under ROT/RUT fakturamodellen, where the
+  // customer portion sits on 1510 and the Skatteverket claim on 1513 — both
+  // are open AR receivable from the company's perspective. 1513 is zero today
+  // (no fakturamodellen postings yet) so this is a forward-looking defense.
   const { data: journalLines } = await supabase
     .from('journal_entry_lines')
     .select(`
@@ -68,13 +79,12 @@ export async function generateARReconciliation(
         fiscal_period_id
       )
     `)
-    .eq('account_number', '1510')
+    .in('account_number', ['1510', '1513'])
     .eq('journal_entries.company_id', companyId)
     .eq('journal_entries.fiscal_period_id', periodId)
     .eq('journal_entries.status', 'posted')
 
-  // Account 1510 is an asset: debit normal balance
-  // Balance = debits - credits
+  // Both 1510 and 1513 are debit-normal assets: balance = debits - credits
   let account1510Balance = 0
   if (journalLines) {
     for (const line of journalLines) {
@@ -88,7 +98,11 @@ export async function generateARReconciliation(
     ar_ledger_total: Math.round(arLedgerTotal * 100) / 100,
     account_1510_balance: Math.round(account1510Balance * 100) / 100,
     difference,
-    is_reconciled: Math.abs(difference) < 0.01,
+    // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
+    // any row was excluded for a missing exchange rate, the calculation is
+    // incomplete by construction and we cannot honestly stamp the period
+    // Avstämd — the user must fix the underlying data first.
+    is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
     unconverted_fx_count: unconvertedFxCount,
   }
 }

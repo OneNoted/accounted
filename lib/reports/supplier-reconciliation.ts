@@ -91,7 +91,11 @@ export async function generateReconciliation(
     supplier_ledger_total: Math.round(supplierLedgerTotal * 100) / 100,
     account_2440_balance: Math.round(account2440Balance * 100) / 100,
     difference,
-    is_reconciled: Math.abs(difference) < 0.01,
+    // BFL 5 kap requires the reconciliation to cover all affärshändelser. If
+    // any row was excluded for a missing exchange rate, the calculation is
+    // incomplete by construction and we cannot honestly stamp the period
+    // Avstämd — the user must fix the underlying data first.
+    is_reconciled: Math.abs(difference) < 0.01 && unconvertedFxCount === 0,
     unconverted_fx_count: unconvertedFxCount,
   }
 }
