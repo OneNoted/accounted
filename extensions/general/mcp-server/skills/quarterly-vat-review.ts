@@ -61,6 +61,7 @@ File via Skatteverket e-tjänst (or skatteverket extension if enabled). After fi
 | 30 | Utgående moms reverse charge 25 % | 2614 |
 | 31 | Utgående moms reverse charge 12 % | 2624 |
 | 32 | Utgående moms reverse charge 6 % | 2634 |
+| 35 | EU-varuförsäljning, momsfri (intra-community goods supply) | 3108 |
 | 39 | EU-tjänsteförsäljning (services to EU B2B) | 3308 |
 | 40 | Export (outside EU) | 3305 |
 | 48 | Ingående moms (all input VAT) | 2641 + 2645 + 2647 |

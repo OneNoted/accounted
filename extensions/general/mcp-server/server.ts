@@ -584,6 +584,7 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
         ruta30: { type: 'number', description: 'Reverse-charge output VAT 25 % (account 2614)' },
         ruta31: { type: 'number', description: 'Reverse-charge output VAT 12 % (account 2624)' },
         ruta32: { type: 'number', description: 'Reverse-charge output VAT 6 % (account 2634)' },
+        ruta35: { type: 'number', description: 'EU intra-community goods supplies, momsfri (account 3108)' },
         ruta39: { type: 'number', description: 'EU services sold (account 3308)' },
         ruta40: { type: 'number', description: 'Export outside EU (account 3305)' },
         ruta48: { type: 'number', description: 'Total input VAT (2641 + 2645 + 2647)' },
@@ -592,7 +593,7 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
           description: 'VAT to pay (positive) or refund (negative) = (10+11+12+30+31+32) − 48',
         },
       },
-      required: ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta39', 'ruta40', 'ruta48', 'ruta49'],
+      required: ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta35', 'ruta39', 'ruta40', 'ruta48', 'ruta49'],
     },
     summary: { type: 'string', description: 'One-line Swedish summary string (att betala / att få tillbaka / noll)' },
     warnings: {
@@ -623,16 +624,30 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
 //   2641/2645/2647 → ruta48  (all input VAT)
 //
 // Posted+reversed status filter: a "reversed" original entry is still part of
-// its period's books (Skatteverket files VAT period-by-period). The matching
-// storno entry has status 'posted' on its own date; if cross-period, the
-// adjustment correctly lands in the later period. Across a year the two cancel.
+// its period's books — Skatteverket files VAT period-by-period under
+// faktureringsmetoden (sale's VAT in invoice-date period; kreditfaktura's
+// reduction in storno-date period). The original entry stays in its period;
+// the storno (status 'posted', dated when the credit was issued) lands in
+// its own period. The two periods file independently; across a year they
+// arithmetically cancel. *Excluding* 'reversed' would under-report Period N
+// (the original sale's VAT silently disappears) and over-credit Period N+M
+// (a reversal with no original) — incorrect per ML 2023:200.
 
-/** Common BAS taxable-revenue accounts that contribute to ruta 05. Conservative
- *  expansion beyond 3001/3002/3003 — companies using non-standard accounts must
- *  either book to one of these or extend the list. */
+/** Common BAS taxable-revenue accounts that contribute to ruta 05.
+ *
+ *  Conservative expansion beyond 3001/3002/3003. Excludes 3004 (momsfri,
+ *  exempt) and 3108/3305/3308 (handled by ruta35/40/39). 3106 covers the
+ *  rare case of taxable EU goods (momspliktig EU-leverans, e.g. when the
+ *  buyer's VAT number is invalid).
+ *
+ *  Companies using non-standard charts must either book to one of these
+ *  or extend the list — gnubok's BAS chart only ships 3001/3002/3003/3004
+ *  by default, but 30xx alternates are common in custom charts. */
 const RUTA_05_ACCOUNTS = [
-  // Domestic sales by VAT rate
-  '3001', '3002', '3003', '3004', '3005', '3006', '3007', '3008',
+  // Domestic sales by VAT rate (canonical BAS)
+  '3001', '3002', '3003', '3005', '3006', '3007', '3008',
+  // Taxable EU goods (momspliktig — buyer's VAT number invalid or buyer is private)
+  '3106',
   // Domestic services (alternative numbering some companies use)
   '3041', '3042', '3043', '3044', '3045', '3046', '3047', '3048',
   // Domestic goods (alternative numbering)
@@ -647,7 +662,7 @@ export interface VatReportResult {
   rutor: {
     ruta05: number; ruta10: number; ruta11: number; ruta12: number
     ruta30: number; ruta31: number; ruta32: number
-    ruta39: number; ruta40: number
+    ruta35: number; ruta39: number; ruta40: number
     ruta48: number; ruta49: number
   }
   summary: string
@@ -724,6 +739,7 @@ export async function computeVatReport(
   const ruta30 = creditBalance('2614')
   const ruta31 = creditBalance('2624')
   const ruta32 = creditBalance('2634')
+  const ruta35 = creditBalance('3108')   // EU intra-community goods supplies (momsfri leverans till EU)
   const ruta39 = creditBalance('3308')
   const ruta40 = creditBalance('3305')
   const calculatedInput2645 = debitBalance('2645')
@@ -769,6 +785,7 @@ export async function computeVatReport(
       ruta30: Math.abs(ruta30),
       ruta31: Math.abs(ruta31),
       ruta32: Math.abs(ruta32),
+      ruta35: Math.abs(ruta35),
       ruta39: Math.abs(ruta39),
       ruta40: Math.abs(ruta40),
       ruta48: Math.abs(ruta48),

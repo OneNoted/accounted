@@ -304,6 +304,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
 
     html += '<tr class="section"><td colspan="3">Försäljning</td></tr>'
     html += row('05', 'Momspliktig försäljning', 'all momspliktig försäljning oavsett skattesats', r.ruta05)
+    html += row('35', 'EU-varuförsäljning (momsfri)', '3108', r.ruta35)
     html += row('39', 'Försäljning av tjänster (EU)', '3308', r.ruta39)
     html += row('40', 'Export', '3305', r.ruta40)
 
@@ -345,6 +346,7 @@ export const VAT_REVIEW_HTML = `<!DOCTYPE html>
         'Ruta 30: ' + fmt(r.ruta30),
         'Ruta 31: ' + fmt(r.ruta31),
         'Ruta 32: ' + fmt(r.ruta32),
+        'Ruta 35: ' + fmt(r.ruta35),
         'Ruta 39: ' + fmt(r.ruta39),
         'Ruta 40: ' + fmt(r.ruta40),
         'Ruta 48: ' + fmt(r.ruta48),

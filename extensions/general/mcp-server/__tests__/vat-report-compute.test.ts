@@ -131,12 +131,13 @@ describe('computeVatReport', () => {
     expect(result.warnings).toEqual([])
   })
 
-  it('expanded ruta05 includes alternative BAS revenue accounts (3041/3051/3071)', async () => {
+  it('expanded ruta05 includes alternative BAS revenue accounts (3041/3051/3071) AND taxable EU goods (3106)', async () => {
     const lines: MockLine[] = [
       { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
       { account_number: '3041', debit_amount: 0, credit_amount: 500 },  // service 25%
       { account_number: '3051', debit_amount: 0, credit_amount: 300 },  // goods 25%
       { account_number: '3071', debit_amount: 0, credit_amount: 200 },  // other domestic
+      { account_number: '3106', debit_amount: 0, credit_amount: 100 },  // momspliktig EU goods
     ]
 
     const result = await computeVatReport(
@@ -145,7 +146,42 @@ describe('computeVatReport', () => {
       mockSupabaseWithLines(lines)
     )
 
-    expect(result.rutor.ruta05).toBe(2000)
+    expect(result.rutor.ruta05).toBe(2100)
+  })
+
+  it('excludes 3004 (momsfri) from ruta05 — exempt sales must NOT be in the taxable base', async () => {
+    const lines: MockLine[] = [
+      { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3004', debit_amount: 0, credit_amount: 500 }, // exempt — must be excluded
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'yearly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta05).toBe(1000)
+  })
+
+  it('aggregates 3108 → ruta35 (EU intra-community goods, momsfri leverans till EU)', async () => {
+    const lines: MockLine[] = [
+      // Domestic taxable sale
+      { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+      // EU goods supply, momsfri (zero-rated to EU customer with valid VAT number)
+      { account_number: '3108', debit_amount: 0, credit_amount: 5000 },
+    ]
+
+    const result = await computeVatReport(
+      { period_type: 'quarterly', year: 2026, period: 1 },
+      'company-1',
+      mockSupabaseWithLines(lines)
+    )
+
+    expect(result.rutor.ruta05).toBe(1000)        // 3108 NOT in ruta05 (it's reported separately)
+    expect(result.rutor.ruta35).toBe(5000)        // The new ruta we just added
+    expect(result.rutor.ruta39).toBe(0)
+    expect(result.rutor.ruta40).toBe(0)
   })
 
   it('refund summary string when ruta49 is negative', async () => {
@@ -179,7 +215,7 @@ describe('computeVatReport', () => {
       expect(props).toHaveProperty('warnings')
       // rutor must declare each ruta the runtime returns.
       const rutorProps = (props.rutor as { properties: Record<string, unknown> }).properties
-      for (const r of ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta39', 'ruta40', 'ruta48', 'ruta49']) {
+      for (const r of ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta35', 'ruta39', 'ruta40', 'ruta48', 'ruta49']) {
         expect(rutorProps, `tool ${name} rutor.${r}`).toHaveProperty(r)
       }
     }

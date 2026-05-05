@@ -92,6 +92,8 @@ When money arrives in 1930:
 
 If the invoice was wrong: \`gnubok_credit_invoice({ invoice_id, reason })\` creates a \`KR-\` mirror invoice with negated amounts and reverses the original JE. Original status → \`credited\`. **Never edit a sent invoice** — kreditfaktura is the only legal path.
 
+The kreditfaktura **itself** consumes a sequential number from the same (or a dedicated KR-) fakturaserie per BFL 5 kap. 6–7 § / ML 17 kap. 22–23 §. The \`KR-\` prefix is a display convention; the underlying löpnummer must be unbroken just like the regular invoice series. \`gnubok_credit_invoice\` allocates this atomically at approval — agents shouldn't try to set or skip the number manually.
+
 ## ROT/RUT (consumer services)
 
 For consumer-targeted services (RUT: städning, RUT) or construction (ROT):
