@@ -254,12 +254,6 @@ export interface CompanySettings {
   // Sandbox
   is_sandbox: boolean
 
-  // Agent auto-commit. When enabled, low-risk pending_operations staged by
-  // trusted agents (api_key, mcp_oauth) skip human review. High-risk ops
-  // (period close, year-end, send_invoice, etc.) always require approval.
-  agent_auto_commit_enabled: boolean
-  agent_auto_commit_max_amount: number | null
-
   // Timestamps
   created_at: string
   updated_at: string
@@ -1349,9 +1343,6 @@ export interface PendingOperation {
   actor_id: string | null
   actor_label: string | null
   risk_level: PendingOperationRiskLevel
-  // Stream 2 Phase 2: auto-commit tracking
-  auto_commit_eligible: boolean
-  auto_committed_at: string | null
   created_at: string
   resolved_at: string | null
   updated_at: string
@@ -1363,6 +1354,8 @@ export interface OnboardingProgress {
   hasInvoices: boolean
   hasBankConnected: boolean
   hasSIEImport: boolean
+  /** True when the active user has a stored Skatteverket OAuth token. */
+  hasSkatteverketConnected: boolean
 }
 
 // Onboarding step data
@@ -2470,7 +2463,13 @@ export type SalaryType = 'monthly' | 'hourly'
 export type FSkattStatus = 'a_skatt' | 'f_skatt' | 'fa_skatt' | 'not_verified'
 export type VacationRule = 'procentregeln' | 'sammaloneregeln'
 export type SalaryRunStatus = 'draft' | 'review' | 'approved' | 'paid' | 'booked' | 'corrected'
-export type AGIStatus = 'generated' | 'exported' | 'submitted' | 'accepted' | 'rejected'
+export type AGIStatus =
+  | 'generated'         // XML built from a salary run; nothing sent to SKV yet
+  | 'pending_signature' // underlag accepted into Eget utrymme; awaiting BankID
+  | 'exported'          // legacy: manual XML download path
+  | 'submitted'         // kvittens received; AGI is filed
+  | 'accepted'          // reserved (SKV does not currently expose this)
+  | 'rejected'          // reserved (kontrollresultat DONE_REJECTED could land here)
 
 export type SalaryLineItemType =
   | 'monthly_salary' | 'hourly_salary' | 'overtime' | 'bonus' | 'commission'
