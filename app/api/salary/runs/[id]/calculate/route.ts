@@ -153,7 +153,7 @@ export const POST = withRouteContext(
     // in-memory lineItems array passed to calculateSalary.
     const absenceResult = await loadAndDeriveAbsence({
       supabase,
-      companyId,
+      companyId: companyId!,
       employeeId: emp.id,
       monthlySalary: emp.monthly_salary || 0,
       payrollConfig: config,
