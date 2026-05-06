@@ -493,17 +493,6 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Issue a credit note instead of deleting a posted invoice.',
     },
   },
-  INVOICE_DELETE_NUMBERED: {
-    httpStatus: 400,
-    message_sv:
-      'Det här utkastet har redan tilldelats ett löpnummer och kan inte tas bort. Försök skicka det igen — om sändningen lyckas behövs inget annat steg.',
-    message_en:
-      'Draft already has an invoice number assigned; refusing to delete to preserve the number sequence. Retry the send — assignment is idempotent.',
-    remediation: {
-      description:
-        'Retry sending the invoice; ensureInvoiceNumber is idempotent so no new number will be consumed. If sending is no longer desired, contact support to clean up the orphan number.',
-    },
-  },
   INVOICE_CANCEL_RACE: {
     httpStatus: 409,
     message_sv: 'Fakturan ändrades samtidigt och kunde inte makuleras. Ladda om och försök igen.',

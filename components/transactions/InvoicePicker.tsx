@@ -29,11 +29,16 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
     let cancelled = false
     async function load() {
       setIsLoading(true)
+      // Filter out fully-settled invoices defensively — match-invoice should
+      // flip status to 'paid' on full settlement, but a stale 'sent'/'overdue'
+      // row with remaining_amount=0 would otherwise be selectable here and
+      // could be matched a second time, double-booking the income.
       const { data } = await supabase
         .from('invoices')
         .select('*, customer:customers(*)')
         .eq('company_id', company!.id)
         .in('status', ['sent', 'overdue', 'partially_paid'])
+        .gt('remaining_amount', 0)
         .order('invoice_date', { ascending: false })
         .limit(200)
       if (cancelled) return
