@@ -292,6 +292,11 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan är inte i ett obetalt läge och kan inte matchas.',
     message_en: 'Invoice is not in an unpaid state.',
   },
+  MATCH_INVOICE_NOT_INVOICE_TYPE: {
+    httpStatus: 400,
+    message_sv: 'Endast fakturor kan matchas mot en transaktion. Proforma och följesedel saknar momsskyldighet.',
+    message_en: 'Only invoices may be matched to a transaction; proforma and delivery notes have no VAT obligation.',
+  },
   MATCH_INVOICE_ALREADY_PAID: {
     httpStatus: 409,
     message_sv: 'Fakturan har redan slutbetalats av en annan förfrågan.',
