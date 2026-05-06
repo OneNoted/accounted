@@ -953,24 +953,30 @@ export async function computeVatCloseCheck(
       hint: 'BFL 5 kap 6§: varje affärshändelse måste ha verifikat. Använd gnubok_list_unmatched_documents för att para ihop.',
     })
   }
-  // Reverse-charge sanity: EU acquisitions (ruta 31/32) are buyer-side and
-  // require BOTH calculated utgående moms (2615/2625/2635 → ruta 30) AND
-  // matching ingående moms (2645 → ruta 48). If we have EU-acquisition
-  // beskattningsunderlag in 31/32 with no ruta 48, the input side was
-  // forgotten — ML 2023:200 / SKV 4700.
-  // We deliberately exclude ruta 30 from this check: ruta 30 is the seller-
-  // side reporting field for domestic omvänd skattskyldighet (e.g. bygg-
-  // tjänster), where the seller books no VAT at all (the buyer reports
-  // both sides on rutor 24/48). Including ruta 30 produced false positives
-  // for any seller of byggtjänster with no buyer-side EU purchases.
-  const euAcquisitionBase = vatReport.rutor.ruta31 + vatReport.rutor.ruta32
-  if (euAcquisitionBase > 0 && vatReport.rutor.ruta48 === 0) {
+  // Reverse-charge / import sanity: rutor 30/31/32 are the buyer's calculated
+  // utgående moms on reverse-charge purchases (domestic byggtjänster &
+  // electronics → 2614 → ruta 30; EU acquisitions of goods → 2624 → ruta 31;
+  // EU services → 2634 → ruta 32). Rutor 60/61/62 are the importer's
+  // calculated utgående moms on non-EU imports declared via momsdeklaration
+  // (since 2015 — 2615/2625/2635). All five carry a corresponding ingående
+  // moms entry that lands in ruta 48 (2645 utlandet RC, 2647 domestic RC).
+  // If any of these output rutor are > 0 but ruta 48 is 0, the buyer/importer
+  // booked the output side but forgot the deductible input — ML 2023:200.
+  const acquisitionAndImportBase =
+    vatReport.rutor.ruta30 +
+    vatReport.rutor.ruta31 +
+    vatReport.rutor.ruta32 +
+    vatReport.rutor.ruta60 +
+    vatReport.rutor.ruta61 +
+    vatReport.rutor.ruta62
+  if (acquisitionAndImportBase > 0 && vatReport.rutor.ruta48 === 0) {
     blockers.push({
       kind: 'reverse_charge_input_missing',
       severity: 'high',
       count: 1,
-      message: 'EU-förvärv (ruta 31/32) bokförda men ingen ingående moms (ruta 48)',
-      hint: 'ML 2023:200: vid EU-förvärv ska både beräknad utgående moms och avdragsgill ingående moms bokföras (2645).',
+      message:
+        'Omvänd skattskyldighet eller import: utgående moms bokförd (ruta 30/31/32 eller 60/61/62) men ingen ingående moms (ruta 48)',
+      hint: 'ML 2023:200: både beräknad utgående moms och avdragsgill ingående moms ska bokföras (2645 utlandet, 2647 inhemskt).',
     })
   }
 
