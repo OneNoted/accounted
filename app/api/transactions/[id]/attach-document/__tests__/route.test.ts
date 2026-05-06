@@ -103,11 +103,38 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     expect(body).toEqual({ error: 'Unauthorized' })
   })
 
-  it('clears document_id', async () => {
+  it('returns 404 when transaction not in company', async () => {
+    enqueue({ data: null, error: null }) // tx fetch
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse(res)
+    expect(status).toBe(404)
+    expect(body).toEqual({ error: 'Transaction not found' })
+  })
+
+  it('returns 409 when document is already on a journal entry', async () => {
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: 'je-1' }, error: null }) // doc fetch
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(409)
+    expect(body.error).toContain('verifikation')
+  })
+
+  it('clears document_id when no journal entry link', async () => {
+    enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: null, error: null }) // update
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse<{ data: { document_id: string | null } }>(res)
     expect(status).toBe(200)
     expect(body.data.document_id).toBeNull()
+  })
+
+  it('clears document_id when no doc was attached', async () => {
+    enqueue({ data: { id: 'tx-1', document_id: null }, error: null }) // tx fetch
+    enqueue({ data: null, error: null }) // update
+    const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
   })
 })

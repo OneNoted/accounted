@@ -385,13 +385,17 @@ export async function POST(
   } else if (journalEntryId && transaction.document_id) {
     // Document was pinned to the transaction (via /attach-document or MCP) before
     // categorization. Propagate the link to the journal entry so receipt-on-verifikation
-    // requirements are satisfied.
+    // (BFL 5 kap 6 §) is satisfied. Supabase JS returns { error } rather than throwing
+    // — destructure and log it, never swallow silently.
     try {
-      await supabase
+      const { error: linkErr } = await supabase
         .from('document_attachments')
         .update({ journal_entry_id: journalEntryId })
         .eq('id', transaction.document_id)
         .eq('company_id', companyId)
+      if (linkErr) {
+        console.error('[categorize] Failed to link transaction document:', linkErr)
+      }
     } catch (docErr) {
       console.error('[categorize] Failed to link transaction document:', docErr)
     }

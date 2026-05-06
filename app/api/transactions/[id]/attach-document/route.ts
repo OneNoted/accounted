@@ -76,9 +76,11 @@ export async function POST(
 /**
  * DELETE /api/transactions/[id]/attach-document
  *
- * Detach a document from a transaction. Does not touch any downstream
- * journal_entry_id link on document_attachments — reversing the journal entry
- * is a separate, explicit action.
+ * Detach a document from a transaction.
+ *
+ * Blocked once the document has propagated into a journal entry (BFL 5 kap 6 §
+ * räkenskapsinformation immutability) — at that point the doc is the
+ * verifikation's underlag and can only be undone by reversing the entry.
  */
 export async function DELETE(
   _request: Request,
@@ -94,6 +96,35 @@ export async function DELETE(
   if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  const { data: tx, error: fetchError } = await supabase
+    .from('transactions')
+    .select('id, document_id')
+    .eq('id', transactionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (fetchError || !tx) {
+    return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
+  }
+
+  if (tx.document_id) {
+    const { data: doc } = await supabase
+      .from('document_attachments')
+      .select('journal_entry_id')
+      .eq('id', tx.document_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (doc?.journal_entry_id) {
+      return NextResponse.json(
+        {
+          error:
+            'Bilagan är kopplad till en bokförd verifikation och kan inte tas bort. Storno verifikationen först.',
+        },
+        { status: 409 },
+      )
+    }
+  }
 
   const { error: updateError } = await supabase
     .from('transactions')

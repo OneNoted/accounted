@@ -16,14 +16,15 @@ async function insertDocument(params: {
   companyId: string
 }): Promise<string> {
   const id = randomUUID()
+  const storagePath = `documents/${params.companyId}/test.pdf`
+  const sha256 = randomUUID().replace(/-/g, '').padEnd(64, '0')
   await getPool().query(
     `INSERT INTO public.document_attachments
        (id, user_id, company_id, file_name, mime_type, file_size_bytes,
         storage_path, sha256_hash, upload_source)
      VALUES ($1, $2, $3, 'test.pdf', 'application/pdf', 1024,
-             'documents/' || $2 || '/test.pdf',
-             $4, 'file_upload')`,
-    [id, params.userId, params.companyId, randomUUID().replace(/-/g, '').padEnd(64, '0')],
+             $4, $5, 'file_upload')`,
+    [id, params.userId, params.companyId, storagePath, sha256],
   )
   return id
 }

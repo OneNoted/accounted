@@ -2688,7 +2688,7 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         limit: { type: 'number', description: 'Max results (default 20, max 50)' },
-        cursor: { type: 'string', description: 'created_at ISO timestamp from previous page (exclusive)' },
+        cursor: { type: 'string', description: 'Composite "<created_at>__<inbox_item_id>" from previous page (exclusive). Pass next_cursor verbatim.' },
       },
     },
     outputSchema: {
@@ -2696,7 +2696,7 @@ export const tools: McpTool[] = [
       properties: {
         items: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
-        next_cursor: { type: 'string', description: 'Pass as cursor on next call to continue' },
+        next_cursor: { type: 'string', description: 'Pass as cursor on next call. Absent = no more pages.' },
       },
       required: ['items', 'count'],
     },
@@ -2710,9 +2710,24 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
       const cursor = typeof args.cursor === 'string' ? args.cursor : null
 
+      // Composite cursor: "<created_at>__<id>". Falls back to plain timestamp
+      // for backward compat with older callers.
+      let cursorTs: string | null = null
+      let cursorId: string | null = null
+      if (cursor) {
+        const sep = cursor.indexOf('__')
+        if (sep === -1) {
+          cursorTs = cursor
+        } else {
+          cursorTs = cursor.slice(0, sep)
+          cursorId = cursor.slice(sep + 2)
+        }
+      }
+
       // Pull recent inbox items with a document, no supplier invoice yet, then
       // filter out those whose document is already pinned to a transaction.
       // Two-step query because PostgREST doesn't expose anti-joins.
+      const fetchSize = limit * 2
       let inboxQuery = supabase
         .from('invoice_inbox_items')
         .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at')
@@ -2720,9 +2735,17 @@ export const tools: McpTool[] = [
         .not('document_id', 'is', null)
         .is('created_supplier_invoice_id', null)
         .order('created_at', { ascending: false })
-        .limit(limit * 2)
+        .order('id', { ascending: false })
+        .limit(fetchSize)
 
-      if (cursor) inboxQuery = inboxQuery.lt('created_at', cursor)
+      if (cursorTs && cursorId) {
+        // (created_at, id) < (cursorTs, cursorId) — keyset pagination
+        inboxQuery = inboxQuery.or(
+          `created_at.lt.${cursorTs},and(created_at.eq.${cursorTs},id.lt.${cursorId})`
+        )
+      } else if (cursorTs) {
+        inboxQuery = inboxQuery.lt('created_at', cursorTs)
+      }
 
       const { data: inboxRows, error: inboxError } = await inboxQuery
       if (inboxError) throw new Error(`Database error: ${inboxError.message}`)
@@ -2778,9 +2801,21 @@ export const tools: McpTool[] = [
           }
         })
 
-      const nextCursor = unmatched.length === limit
-        ? unmatched[unmatched.length - 1].created_at
-        : null
+      // Pagination contract: emit next_cursor whenever the caller might be
+      // missing rows. Two cases:
+      //   (a) slice was full → cursor on last returned item (next page picks up
+      //       any leftover unmatched rows we filtered past);
+      //   (b) slice was short but inbox query returned a full batch → cursor on
+      //       last inspected row (more unmatched may exist deeper in the inbox).
+      // Only suppress the cursor when we exhausted the inbox stream entirely.
+      let nextCursor: string | null = null
+      if (unmatched.length === limit) {
+        const last = unmatched[unmatched.length - 1]
+        nextCursor = `${last.created_at}__${last.inbox_item_id}`
+      } else if (inboxRows.length === fetchSize) {
+        const last = inboxRows[inboxRows.length - 1]
+        nextCursor = `${last.created_at}__${last.id}`
+      }
 
       return {
         items: unmatched,
