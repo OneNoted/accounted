@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 
 ensureInitialized()
 
@@ -39,7 +40,7 @@ export async function POST(
 
   const { data: transaction, error: txError } = await supabase
     .from('transactions')
-    .select('id')
+    .select('id, document_id')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -47,6 +48,8 @@ export async function POST(
   if (txError || !transaction) {
     return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
   }
+
+  const previousDocumentId = (transaction.document_id as string | null) ?? null
 
   const { data: document, error: docError } = await supabase
     .from('document_attachments')
@@ -66,11 +69,47 @@ export async function POST(
     .eq('company_id', companyId)
 
   if (updateError) {
+    const errMsg = (updateError as { message?: string }).message ?? ''
+    if (errMsg.includes('BFL_DOCUMENT_IMMUTABILITY')) {
+      return NextResponse.json(
+        {
+          error:
+            'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
+        },
+        { status: 409 },
+      )
+    }
     console.error('[attach-document] Failed to attach:', updateError)
     return NextResponse.json({ error: 'Failed to attach document' }, { status: 500 })
   }
 
-  return NextResponse.json({ data: { transaction_id: transactionId, document_id } })
+  // Rättelse audit trail (BFL 5 kap 5 §): record swaps where a non-null doc
+  // was replaced. Best-effort — a logging failure must not roll back the
+  // (compliant) attach.
+  if (previousDocumentId && previousDocumentId !== document_id) {
+    try {
+      await appendProcessingHistory({
+        companyId,
+        correlationId: transactionId,
+        aggregateType: 'BankTransaction',
+        aggregateId: transactionId,
+        eventType: 'TransactionDocumentReplaced',
+        payload: {
+          transaction_id: transactionId,
+          previous_document_id: previousDocumentId,
+          new_document_id: document_id,
+        },
+        actor: { type: 'user', id: user.id },
+        occurredAt: new Date(),
+      })
+    } catch (logErr) {
+      console.error('[attach-document] Failed to append rättelse event:', logErr)
+    }
+  }
+
+  return NextResponse.json({
+    data: { transaction_id: transactionId, document_id, previous_document_id: previousDocumentId },
+  })
 }
 
 /**

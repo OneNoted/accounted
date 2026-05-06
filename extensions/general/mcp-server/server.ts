@@ -2941,6 +2941,24 @@ export const tools: McpTool[] = [
 
       if (docError || !doc) throw new Error('Document not found')
 
+      // If the tx already has a different doc pinned, fetch its identity so the
+      // human approver sees "replaces X.pdf with Y.pdf" rather than just a flag.
+      // Required by BFL 5 kap 5 § rättelse (the approver must know what's being
+      // displaced before authorising the change).
+      type ExistingDoc = { id: string; file_name: string; journal_entry_id: string | null }
+      let existingDoc: ExistingDoc | null = null
+      if (tx.document_id && tx.document_id !== documentId) {
+        const { data: prev } = await supabase
+          .from('document_attachments')
+          .select('id, file_name, journal_entry_id')
+          .eq('id', tx.document_id)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (prev) {
+          existingDoc = prev as unknown as ExistingDoc
+        }
+      }
+
       return stagePendingOperation(
         supabase, companyId, userId, 'attach_document_to_transaction',
         `Koppla bilaga: ${doc.file_name} → ${tx.merchant_name || tx.description || transactionId}`,
@@ -2952,7 +2970,10 @@ export const tools: McpTool[] = [
           transaction_date: tx.date,
           document_file_name: doc.file_name,
           document_mime_type: doc.mime_type,
-          will_overwrite_existing: tx.document_id != null && tx.document_id !== documentId,
+          will_overwrite_existing: existingDoc != null,
+          existing_document_id: existingDoc?.id ?? null,
+          existing_document_file_name: existingDoc?.file_name ?? null,
+          existing_document_is_rakenskapsinformation: existingDoc?.journal_entry_id != null,
         },
         actor,
         undefined,

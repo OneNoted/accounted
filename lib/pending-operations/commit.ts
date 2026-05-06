@@ -876,6 +876,8 @@ async function commitAttachDocumentToTransaction(
     .maybeSingle()
   if (txError || !tx) return { error: 'Transaction not found', status: 404 }
 
+  const previousDocumentId = (tx.document_id as string | null) ?? null
+
   // Pre-check: if the tx already has a doc and that doc is räkenskapsinformation,
   // mirror the DELETE-route 409 instead of letting the DB trigger raise a
   // raw check_violation. Same compliance message in both places.
@@ -958,10 +960,36 @@ async function commitAttachDocumentToTransaction(
     }
   }
 
+  // Rättelse audit trail (BFL 5 kap 5 §): if we replaced a non-null doc, log
+  // the swap to processing_history so the original is traceable. Best-effort —
+  // a logging failure must not roll back the (compliant) attach.
+  if (previousDocumentId && previousDocumentId !== documentId) {
+    try {
+      await appendProcessingHistory({
+        companyId,
+        correlationId: txId,
+        aggregateType: 'BankTransaction',
+        aggregateId: txId,
+        eventType: 'TransactionDocumentReplaced',
+        payload: {
+          transaction_id: txId,
+          previous_document_id: previousDocumentId,
+          new_document_id: documentId,
+          journal_entry_id: journalEntryId,
+        },
+        actor: { type: 'user', id: userId },
+        occurredAt: new Date(),
+      })
+    } catch (logErr) {
+      console.error('[commitAttach] Failed to append rättelse event:', logErr)
+    }
+  }
+
   return {
     data: {
       transaction_id: txId,
       document_id: documentId,
+      previous_document_id: previousDocumentId,
       journal_entry_id: journalEntryId,
     },
   }
