@@ -31,10 +31,16 @@ const log = createLogger('tic/bankid')
 
 /**
  * Request SPAR + CompanyRoles enrichment for a completed BankID session and
- * cache the result in `extension_data`. CompanyRoles powers the
- * /select-company picker; SPAR (folkbokföringsadress + protection flags) is
- * captured for future UX (EF onboarding pre-fill, profile display) but not
- * yet consumed by any UI.
+ * cache the CompanyRoles slice in `extension_data` for the
+ * /select-company picker.
+ *
+ * SPAR (personnummer, address, name, birth date) is requested so TIC will
+ * complete the enrichment, but is intentionally NOT persisted: personnummer
+ * is already hashed + encrypted in `bankid_identities`, names live there too,
+ * and no UI currently consumes the address. Storing the SPAR blob in
+ * `extension_data.value` (a plain JSON column) would expose national-ID-level
+ * PII to anyone with read access. If/when address pre-fill is built, encrypt
+ * the relevant fields the same way `encryptPersonalNumber` does for pnr.
  *
  * Non-blocking: any failure is logged and swallowed — BankID auth must still
  * succeed even if enrichment is down.
@@ -117,13 +123,20 @@ async function fetchAndStoreEnrichment(
       sparHasProtection: !!(spar?.Skydd_Sekretessmarkering || spar?.Skydd_SkyddadFolkbokforing),
     })
 
+    // Persist only what consumers actually read. See block comment on
+    // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded.
+    const persistedValue = {
+      companyRoles: enrichmentData.companyRoles ?? [],
+      enrichedAtUtc: enrichmentData.enrichedAtUtc,
+    }
+
     await supabase
       .from('extension_data')
       .upsert({
         user_id: userId,
         extension_id: 'tic',
         key: 'bankid_enrichment',
-        value: enrichmentData,
+        value: persistedValue,
       }, { onConflict: 'user_id,extension_id,key' })
   } catch (enrichError) {
     log.warn('enrichment failed (non-blocking)', enrichError)

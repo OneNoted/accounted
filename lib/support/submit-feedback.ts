@@ -5,7 +5,7 @@ export interface SubmitFeedbackInput {
 
 export interface SubmitFeedbackResult {
   ok: boolean
-  channel: 'recapt' | 'email' | null
+  channel: 'recapt' | 'email'
   error?: string
 }
 
