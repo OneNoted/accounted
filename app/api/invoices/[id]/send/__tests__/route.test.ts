@@ -303,6 +303,33 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
   })
 
+  it('does NOT consume an invoice number when PDF render fails (preflight)', async () => {
+    const draftWithoutNumber = makeInvoice({
+      id: 'inv-1',
+      status: 'draft',
+      invoice_number: null,
+      customer,
+      items: invoice.items,
+    })
+
+    enqueue({ data: draftWithoutNumber, error: null })
+    enqueue({ data: company, error: null })
+
+    // First render call (the preflight) throws.
+    mockRenderToBuffer.mockRejectedValueOnce(new Error('PDF render exploded'))
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(500)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_PDF_RENDER_FAILED')
+    // Critical: counter must not have advanced.
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+    // Email must not have been attempted.
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('returns 500 when email sending fails', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })

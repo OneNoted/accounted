@@ -63,15 +63,6 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
     }
 
-    // Eagerly assign the invoice number — drafts get one only at send time so
-    // discarded drafts never consume a number.
-    try {
-      await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
-    } catch (err) {
-      opLog.error('failed to assign invoice number on send', err as Error)
-      return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
-    }
-
     const items = (invoice.items as InvoiceItem[]).sort((a, b) => a.sort_order - b.sort_order)
 
     let originalInvoiceNumber: string | undefined
@@ -88,7 +79,37 @@ export const POST = withRouteContext(
       }
     }
 
-    // Generate PDF — non-fatal failures here become PARTIAL after send.
+    // Preflight render: validate the PDF pipeline BEFORE consuming an F-series
+    // number. If the row is already numbered (retry path), skip — we'd just
+    // render twice for no gain.
+    const isFreshAllocation = !invoice.invoice_number
+    if (isFreshAllocation) {
+      try {
+        await renderToBuffer(
+          InvoicePDF({
+            invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
+            customer,
+            items,
+            company: company as CompanySettings,
+            originalInvoiceNumber,
+          }),
+        )
+      } catch (err) {
+        opLog.error('preflight PDF render failed before invoice number assignment', err as Error)
+        return errorResponseFromCode('INVOICE_SEND_PDF_RENDER_FAILED', opLog, { requestId })
+      }
+    }
+
+    // Allocate the F-series number. Idempotent — retries reuse the same number.
+    try {
+      await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
+    } catch (err) {
+      opLog.error('failed to assign invoice number on send', err as Error)
+      return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
+    }
+
+    // Final render with the assigned number — this is the buffer attached to
+    // the email and later archived as underlag.
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: invoice as Invoice,

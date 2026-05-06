@@ -433,6 +433,12 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'E-postleverantören kunde inte skicka meddelandet.',
     message_en: 'The email provider could not deliver the message.',
   },
+  INVOICE_SEND_PDF_RENDER_FAILED: {
+    httpStatus: 500,
+    message_sv:
+      'Fakturans PDF kunde inte skapas. Kontrollera fakturarader och kunduppgifter och försök igen.',
+    message_en: 'Failed to render invoice PDF before send; no invoice number was consumed.',
+  },
   INVOICE_SEND_PARTIAL: {
     httpStatus: 200,
     message_sv:
