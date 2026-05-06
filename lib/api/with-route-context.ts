@@ -40,15 +40,16 @@ export interface RouteContext {
   /** Authenticated Supabase client (request-scoped, RLS active). */
   supabase: SupabaseClient
   /**
-   * Resolved active company id. May be null when `requireCompany: false` was
-   * passed; otherwise the wrapper short-circuits with COMPANY_CONTEXT_MISSING.
+   * Resolved active company id. The wrapper short-circuits with
+   * COMPANY_CONTEXT_MISSING before invoking the handler when no company is
+   * resolved, so handlers can treat this as guaranteed non-null. Routes that
+   * need to opt out of the guarantee (e.g. onboarding) shouldn't use
+   * withRouteContext.
    */
-  companyId: string | null
+  companyId: string
 }
 
 interface RouteContextOptions {
-  /** Defaults to true. When false, the route runs even without a resolved company id. */
-  requireCompany?: boolean
   /**
    * Defaults to false. When true, the wrapper rejects callers whose role in
    * the active company is `viewer` (or who have no membership). Mirrors the
@@ -81,7 +82,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
   handler: RouteHandler<P>,
   options: RouteContextOptions = {},
 ): (request: Request, params: P) => Promise<Response> {
-  const { requireCompany = true, requireWrite = false } = options
+  const { requireWrite = false } = options
 
   return async function wrapped(request: Request, params: P): Promise<Response> {
     const requestId = generateRequestId()
@@ -111,7 +112,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         userLog.error('failed to resolve active company', err as Error)
       }
 
-      if (requireCompany && !companyId) {
+      if (!companyId) {
         return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
       }
 
@@ -131,7 +132,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
 
       const ctx: RouteContext = {
         requestId,
-        log: companyId ? userLog.child({ companyId }) : userLog,
+        log: userLog.child({ companyId }),
         user,
         supabase,
         companyId,
