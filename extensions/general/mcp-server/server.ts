@@ -526,10 +526,13 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
         ruta48: { type: 'number', description: 'Total input VAT (2641 + 2645 + 2647)' },
         ruta49: {
           type: 'number',
-          description: 'VAT to pay (positive) or refund (negative) = (10+11+12+30+31+32) − 48',
+          description: 'VAT to pay (positive) or refund (negative) = (10+11+12+30+31+32+60+61+62) − 48',
         },
+        ruta60: { type: 'number', description: 'Import VAT 25 % (account 2615) — non-EU import declared via momsdeklaration' },
+        ruta61: { type: 'number', description: 'Import VAT 12 % (account 2625)' },
+        ruta62: { type: 'number', description: 'Import VAT 6 % (account 2635)' },
       },
-      required: ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta35', 'ruta39', 'ruta40', 'ruta48', 'ruta49'],
+      required: ['ruta05', 'ruta10', 'ruta11', 'ruta12', 'ruta30', 'ruta31', 'ruta32', 'ruta35', 'ruta39', 'ruta40', 'ruta48', 'ruta49', 'ruta60', 'ruta61', 'ruta62'],
     },
     summary: { type: 'string', description: 'One-line Swedish summary string (att betala / att få tillbaka / noll)' },
     warnings: {
@@ -600,6 +603,10 @@ export interface VatReportResult {
     ruta30: number; ruta31: number; ruta32: number
     ruta35: number; ruta39: number; ruta40: number
     ruta48: number; ruta49: number
+    // Import VAT (post-2015 momsdeklaration path, accounts 2615/2625/2635).
+    // Buyer/importer self-assesses output VAT here and deducts the matching
+    // input via ruta 48 — same mechanic as ruta 30/31/32.
+    ruta60: number; ruta61: number; ruta62: number
   }
   summary: string
   warnings: string[]
@@ -678,11 +685,17 @@ export async function computeVatReport(
   const ruta35 = creditBalance('3108')   // EU intra-community goods supplies (momsfri leverans till EU)
   const ruta39 = creditBalance('3308')
   const ruta40 = creditBalance('3305')
+  // Import VAT (since 2015 declared via momsdeklaration, not Tullverket): the
+  // importer books output VAT to 2615/2625/2635 (ruta 60/61/62) and the
+  // matching deductible input to 2645 (rolls into ruta 48 below).
+  const ruta60 = creditBalance('2615')
+  const ruta61 = creditBalance('2625')
+  const ruta62 = creditBalance('2635')
   const calculatedInput2645 = debitBalance('2645')
   const calculatedInput2647 = debitBalance('2647')
   const ruta48 = debitBalance('2641') + calculatedInput2645 + calculatedInput2647
   const ruta49 = Math.round(
-    (ruta10 + ruta11 + ruta12 + ruta30 + ruta31 + ruta32 - ruta48) * 100
+    (ruta10 + ruta11 + ruta12 + ruta30 + ruta31 + ruta32 + ruta60 + ruta61 + ruta62 - ruta48) * 100
   ) / 100
 
   const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
@@ -726,6 +739,9 @@ export async function computeVatReport(
       ruta40: Math.abs(ruta40),
       ruta48: Math.abs(ruta48),
       ruta49,
+      ruta60: Math.abs(ruta60),
+      ruta61: Math.abs(ruta61),
+      ruta62: Math.abs(ruta62),
     },
     summary: ruta49 > 0
       ? `Moms att betala: ${Math.abs(ruta49).toFixed(2)} kr`
