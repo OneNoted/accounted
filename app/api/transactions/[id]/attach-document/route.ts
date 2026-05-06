@@ -133,6 +133,20 @@ export async function DELETE(
     .eq('company_id', companyId)
 
   if (updateError) {
+    // The enforce_transactions_document_immutability trigger raises
+    // check_violation (SQLSTATE 23514) when the previously-attached doc has
+    // already become räkenskapsinformation. Translate to the same 409 +
+    // Swedish message the application-layer pre-check returns, so behaviour
+    // is identical whether or not the pre-check fires first.
+    if ((updateError as { code?: string }).code === '23514') {
+      return NextResponse.json(
+        {
+          error:
+            'Bilagan är kopplad till en bokförd verifikation och kan inte tas bort. Storno verifikationen först.',
+        },
+        { status: 409 },
+      )
+    }
     console.error('[attach-document] Failed to detach:', updateError)
     return NextResponse.json({ error: 'Failed to detach document' }, { status: 500 })
   }

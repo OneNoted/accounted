@@ -868,18 +868,32 @@ async function commitAttachDocumentToTransaction(
     return { error: 'transaction_id and document_id are required', status: 400 }
   }
 
-  // Fetch the transaction's current state. journal_entry_id may have flipped to
-  // non-null between staging and commit (user categorized manually). In that
-  // case we must propagate the doc to the journal entry in this same commit —
-  // categorize/route.ts only propagates when the doc is on the tx at the moment
-  // of categorization, and that window has closed.
   const { data: tx, error: txError } = await supabase
     .from('transactions')
-    .select('id, journal_entry_id')
+    .select('id, document_id, journal_entry_id')
     .eq('id', txId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (txError || !tx) return { error: 'Transaction not found', status: 404 }
+
+  // Pre-check: if the tx already has a doc and that doc is räkenskapsinformation,
+  // mirror the DELETE-route 409 instead of letting the DB trigger raise a
+  // raw check_violation. Same compliance message in both places.
+  if (tx.document_id && tx.document_id !== documentId) {
+    const { data: existing } = await supabase
+      .from('document_attachments')
+      .select('journal_entry_id')
+      .eq('id', tx.document_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (existing?.journal_entry_id) {
+      return {
+        error:
+          'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
+        status: 409,
+      }
+    }
+  }
 
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
@@ -889,22 +903,41 @@ async function commitAttachDocumentToTransaction(
     .maybeSingle()
   if (docError || !doc) return { error: 'Document not found', status: 404 }
 
-  const { error: updateError } = await supabase
+  // Race-free read of journal_entry_id: use UPDATE ... RETURNING so the value
+  // we propagate against reflects any concurrent categorize that committed
+  // before our UPDATE acquired the row lock. Reading the post-update state
+  // (rather than the pre-staging state) is what makes the
+  // attach-then-categorize and categorize-then-attach orderings produce the
+  // same final state — both end with document_attachments.journal_entry_id
+  // set to the tx's journal_entry_id. (BFL 5 kap 6 § verifikation underlag.)
+  const { data: postUpdate, error: updateError } = await supabase
     .from('transactions')
     .update({ document_id: documentId })
     .eq('id', txId)
     .eq('company_id', companyId)
+    .select('journal_entry_id')
+    .maybeSingle()
 
-  if (updateError) return { error: 'Failed to attach document', status: 500 }
+  if (updateError) {
+    // The DB-level immutability trigger raises check_violation if the previous
+    // doc was already räkenskapsinformation. Translate to 409 with the Swedish
+    // user message rather than surfacing as a 500.
+    if ((updateError as { code?: string }).code === '23514') {
+      return {
+        error:
+          'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
+        status: 409,
+      }
+    }
+    return { error: 'Failed to attach document', status: 500 }
+  }
+  if (!postUpdate) return { error: 'Transaction not found', status: 404 }
 
-  // If the tx is already booked, propagate the link to the journal entry now
-  // so verifikation underlag (BFL 5 kap 6 §) is satisfied. Without this, an
-  // attach staged before categorize-without-doc and committed after would
-  // leave the journal entry with no documentary basis.
-  if (tx.journal_entry_id) {
+  const journalEntryId = postUpdate.journal_entry_id as string | null
+  if (journalEntryId) {
     const { error: linkErr } = await supabase
       .from('document_attachments')
-      .update({ journal_entry_id: tx.journal_entry_id })
+      .update({ journal_entry_id: journalEntryId })
       .eq('id', documentId)
       .eq('company_id', companyId)
     if (linkErr) {
@@ -916,7 +949,7 @@ async function commitAttachDocumentToTransaction(
     data: {
       transaction_id: txId,
       document_id: documentId,
-      journal_entry_id: tx.journal_entry_id ?? null,
+      journal_entry_id: journalEntryId,
     },
   }
 }

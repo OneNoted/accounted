@@ -4,11 +4,15 @@ import { seedCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
- * Smoke for transactions.document_id added in 20260505140000.
+ * Smoke for transactions.document_id (added 20260505140000, hardened in
+ * 20260506090000 and 20260506100000).
+ *
  * Locks in:
- *   - The FK exists and points at document_attachments(id).
- *   - ON DELETE SET NULL: deleting the document nulls the link rather than
- *     blocking (RESTRICT) or cascading the transaction (CASCADE).
+ *   - FK exists and points at document_attachments(id).
+ *   - ON DELETE RESTRICT: deleting a doc that is pinned to any tx is blocked.
+ *   - enforce_transactions_document_immutability trigger blocks UPDATE on
+ *     transactions.document_id when the previously-pinned document has
+ *     propagated to a journal entry (BFL 5 kap 6 §).
  */
 
 async function insertDocument(params: {
@@ -73,21 +77,32 @@ describe('transactions.document_id.pg', () => {
     expect(res.rows[0]!.document_id).toBe(docId)
   })
 
-  it('ON DELETE SET NULL: deleting the document nulls transactions.document_id', async () => {
+  it('ON DELETE RESTRICT: blocks deletion of a doc still pinned to a tx', async () => {
+    const { userId, companyId } = await seedCompany()
+    const docId = await insertDocument({ userId, companyId })
+    await insertTransaction({ userId, companyId, documentId: docId })
+
+    await expect(
+      getPool().query(`DELETE FROM public.document_attachments WHERE id = $1`, [docId]),
+    ).rejects.toThrow(/violates foreign key constraint|still referenced/)
+  })
+
+  it('detaching first then deleting the doc succeeds', async () => {
     const { userId, companyId } = await seedCompany()
     const docId = await insertDocument({ userId, companyId })
     const txId = await insertTransaction({ userId, companyId, documentId: docId })
 
-    // block_document_deletion fires only on rows linked to journal entries —
-    // this document has no journal_entry_id so the trigger is a no-op.
-    await getPool().query(`DELETE FROM public.document_attachments WHERE id = $1`, [docId])
-
-    const res = await getPool().query<{ document_id: string | null }>(
-      `SELECT document_id FROM public.transactions WHERE id = $1`,
+    await getPool().query(
+      `UPDATE public.transactions SET document_id = NULL WHERE id = $1`,
       [txId],
     )
-    expect(res.rows).toHaveLength(1)
-    expect(res.rows[0]!.document_id).toBeNull()
+    await getPool().query(`DELETE FROM public.document_attachments WHERE id = $1`, [docId])
+
+    const res = await getPool().query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM public.document_attachments WHERE id = $1`,
+      [docId],
+    )
+    expect(res.rows[0]!.count).toBe('0')
   })
 
   it('blocks UPDATE that detaches a document already linked to a journal entry', async () => {
