@@ -2959,6 +2959,32 @@ export const tools: McpTool[] = [
         }
       }
 
+      // Pull the matching invoice_inbox_items extracted_data so the approver
+      // sees vendor/amount/currency/date — the same hints the agent had when
+      // choosing this attachment. Mirrors the BFL 5 kap 6 § informed-rättelse
+      // intent: the human authorising the link should see what's on the doc.
+      let docVendorName: string | null = null
+      let docAmount: number | null = null
+      let docCurrency: string | null = null
+      let docInvoiceDate: string | null = null
+      const { data: inbox } = await supabase
+        .from('invoice_inbox_items')
+        .select('extracted_data')
+        .eq('document_id', documentId)
+        .eq('company_id', companyId)
+        .limit(1)
+        .maybeSingle()
+      if (inbox?.extracted_data) {
+        const ext = inbox.extracted_data as Record<string, unknown>
+        const supplier = ext.supplier as Record<string, unknown> | undefined
+        const invoice = ext.invoice as Record<string, unknown> | undefined
+        const totals = ext.totals as Record<string, unknown> | undefined
+        docVendorName = (supplier?.name as string) || null
+        docAmount = (totals?.total as number) || null
+        docCurrency = (invoice?.currency as string) || null
+        docInvoiceDate = (invoice?.invoiceDate as string) || null
+      }
+
       return stagePendingOperation(
         supabase, companyId, userId, 'attach_document_to_transaction',
         `Koppla bilaga: ${doc.file_name} → ${tx.merchant_name || tx.description || transactionId}`,
@@ -2970,6 +2996,10 @@ export const tools: McpTool[] = [
           transaction_date: tx.date,
           document_file_name: doc.file_name,
           document_mime_type: doc.mime_type,
+          document_vendor_name: docVendorName,
+          document_amount: docAmount,
+          document_currency: docCurrency,
+          document_invoice_date: docInvoiceDate,
           will_overwrite_existing: existingDoc != null,
           existing_document_id: existingDoc?.id ?? null,
           existing_document_file_name: existingDoc?.file_name ?? null,
