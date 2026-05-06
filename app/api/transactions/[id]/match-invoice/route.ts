@@ -196,7 +196,12 @@ export const POST = withRouteContext(
           .limit(1)
           .maybeSingle()
         if (invoiceDoc) {
-          await supabase.from('document_attachments').insert({
+          // Destructure error: Supabase client returns { data, error } on
+          // postgres-level failures (unique constraint, RLS reject) instead
+          // of throwing, so the surrounding try/catch only covers thrown
+          // JS exceptions. Log via warn so attachment failures are visible
+          // in logs even though we don't abort the match.
+          const { error: attachErr } = await supabase.from('document_attachments').insert({
             user_id: user.id,
             company_id: companyId,
             uploaded_by: user.id,
@@ -208,6 +213,13 @@ export const POST = withRouteContext(
             sha256_hash: invoiceDoc.sha256_hash,
             journal_entry_id: journalEntryId,
           })
+          if (attachErr) {
+            txLog.warn('failed to attach invoice PDF to payment journal entry', {
+              attachError: attachErr.message,
+              paymentJournalEntryId: journalEntryId,
+              invoiceJournalEntryId: invoice.journal_entry_id,
+            })
+          }
         }
       } catch (err) {
         txLog.warn('failed to attach invoice PDF to payment journal entry', err as Error)
