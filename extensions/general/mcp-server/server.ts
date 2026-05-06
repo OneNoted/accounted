@@ -41,9 +41,12 @@ import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { closePeriod, lockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import { generateSIEExport } from '@/lib/reports/sie-export'
+import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { getSuggestedCategories } from '@/lib/transactions/category-suggestions'
 import { renderToBuffer } from '@react-pdf/renderer'
@@ -731,6 +734,333 @@ export async function computeVatReport(
         : 'Noll i moms',
     warnings,
   }
+}
+
+// ── VAT close check (composes VAT report + blocker scans + sanity ratios) ──
+//
+// Intent-shaped tool: answers "can I close VAT for this period?" in one call.
+// Replaces the 5–7 chained tool calls (vat_report + uncategorized + supplier
+// invoices + reconciliation + voucher gaps + prior-period compare) the agent
+// would otherwise need to assemble the same answer.
+
+interface VatCloseBlocker {
+  kind:
+    | 'uncategorized_transactions'
+    | 'unapproved_supplier_invoices'
+    | 'bank_unreconciled'
+    | 'missing_high_value_receipts'
+    | 'reverse_charge_input_missing'
+  severity: 'high' | 'medium' | 'low'
+  count: number
+  message: string
+  hint: string
+}
+
+interface VatCloseSanityAnomaly {
+  kind: 'output_vat_ratio_drift' | 'input_vat_ratio_drift' | 'revenue_drop' | 'revenue_spike'
+  rate?: '25' | '12' | '6'
+  current: number
+  previous: number
+  delta_pct: number
+  message: string
+}
+
+interface VatCloseCheckResult {
+  period: VatReportResult['period']
+  period_label: string
+  rutor: VatReportResult['rutor']
+  payment: {
+    net_due: number
+    direction: 'pay' | 'refund' | 'zero'
+    deadline: string | null
+    deadline_label: string | null
+    moms_period: 'monthly' | 'quarterly' | 'yearly' | null
+  }
+  blockers: VatCloseBlocker[]
+  sanity: {
+    anomalies: VatCloseSanityAnomaly[]
+    ratios: {
+      output_vat_ratio_25: number  // ruta10 / domestic 25% revenue
+      output_vat_ratio_12: number
+      output_vat_ratio_6: number
+      previous_period_compared: boolean
+    }
+  }
+  ready_to_close: boolean
+  summary: string
+}
+
+/** Compute the Skatteverket momsdeklaration deadline for a period.
+ *  - monthly: due on the 12th of (period-end-month + 1)
+ *  - quarterly: 26th of the month after quarter-end (Q4 → 26 Jan next year)
+ *  - yearly: 26 Feb of next year
+ */
+export function computeMomsDeadline(
+  periodType: 'monthly' | 'quarterly' | 'yearly',
+  year: number,
+  period: number
+): { date: string; label: string } | null {
+  if (periodType === 'monthly') {
+    // period 1-12; deadline = 12th of next month
+    const deadlineMonth = period === 12 ? 1 : period + 1
+    const deadlineYear = period === 12 ? year + 1 : year
+    return {
+      date: `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-12`,
+      label: `12 ${monthName(deadlineMonth)} ${deadlineYear}`,
+    }
+  }
+  if (periodType === 'quarterly') {
+    // Q1→26 apr, Q2→26 jul, Q3→26 okt, Q4→26 jan next year
+    const monthByQuarter: Record<number, { m: number; yOffset: number }> = {
+      1: { m: 4, yOffset: 0 },
+      2: { m: 7, yOffset: 0 },
+      3: { m: 10, yOffset: 0 },
+      4: { m: 1, yOffset: 1 },
+    }
+    const cfg = monthByQuarter[period]
+    if (!cfg) return null
+    return {
+      date: `${year + cfg.yOffset}-${String(cfg.m).padStart(2, '0')}-26`,
+      label: `26 ${monthName(cfg.m)} ${year + cfg.yOffset}`,
+    }
+  }
+  if (periodType === 'yearly') {
+    return {
+      date: `${year + 1}-02-26`,
+      label: `26 februari ${year + 1}`,
+    }
+  }
+  return null
+}
+
+function monthName(m: number): string {
+  return ['januari', 'februari', 'mars', 'april', 'maj', 'juni',
+    'juli', 'augusti', 'september', 'oktober', 'november', 'december'][m - 1] ?? ''
+}
+
+export async function computeVatCloseCheck(
+  args: Record<string, unknown>,
+  companyId: string,
+  supabase: SupabaseClient
+): Promise<VatCloseCheckResult> {
+  // 1) VAT report (validates inputs + gives us figures + period dates)
+  const vatReport = await computeVatReport(args, companyId, supabase)
+  const { start, end, type: periodType, year, period } = vatReport.period
+
+  // 2) Company settings — moms_period drives deadline labelling
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('moms_period')
+    .eq('company_id', companyId)
+    .single()
+  const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
+
+  // 3) Deadline — based on the *requested* period type, not company setting,
+  //    so the model gets the right deadline even when querying ad-hoc periods.
+  const deadline = computeMomsDeadline(
+    periodType as 'monthly' | 'quarterly' | 'yearly',
+    Number(year),
+    Number(period)
+  )
+
+  // 4) Blocker scans — run in parallel
+  const [uncategorizedRes, unapprovedRes, reconRes, missingReceiptsRes] = await Promise.all([
+    supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .gte('date', start).lte('date', end)
+      .is('journal_entry_id', null),
+    supabase
+      .from('supplier_invoices')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('status', 'registered')
+      .gte('invoice_date', start).lte('invoice_date', end),
+    getReconciliationStatus(supabase, companyId, start, end),
+    // Missing receipts: posted journal entries in period with absolute amount ≥ 4000
+    // SEK that have no document_attachments. Scoped to entries originating from
+    // bank transactions or supplier invoices (where a receipt is expected) —
+    // skips invoice-payment entries, year-end entries, etc.
+    (async () => {
+      const { data: candidates } = await supabase
+        .from('journal_entries')
+        .select('id, total_amount, source_type, document_attachments(id)')
+        .eq('company_id', companyId)
+        .in('source_type', ['bank_transaction', 'supplier_invoice', 'receipt'])
+        .in('status', ['posted'])
+        .gte('entry_date', start).lte('entry_date', end)
+      const missing = (candidates ?? []).filter(
+        (e) =>
+          Math.abs(Number(e.total_amount) || 0) >= 4000 &&
+          (!e.document_attachments || (e.document_attachments as unknown[]).length === 0)
+      )
+      return missing.length
+    })(),
+  ])
+
+  const blockers: VatCloseBlocker[] = []
+  const uncategorizedCount = uncategorizedRes.count ?? 0
+  if (uncategorizedCount > 0) {
+    blockers.push({
+      kind: 'uncategorized_transactions',
+      severity: 'high',
+      count: uncategorizedCount,
+      message: `${uncategorizedCount} okategoriserade banktransaktioner i perioden`,
+      hint: 'Kategorisera via gnubok_categorize_transaction eller kör gnubok_auto_match_period.',
+    })
+  }
+  const unapprovedCount = unapprovedRes.count ?? 0
+  if (unapprovedCount > 0) {
+    blockers.push({
+      kind: 'unapproved_supplier_invoices',
+      severity: 'high',
+      count: unapprovedCount,
+      message: `${unapprovedCount} oattesterade leverantörsfakturor i perioden`,
+      hint: 'Attestera via gnubok_approve_supplier_invoice — ingående moms (ruta 48) påverkas.',
+    })
+  }
+  if (!reconRes.is_reconciled) {
+    blockers.push({
+      kind: 'bank_unreconciled',
+      severity: Math.abs(reconRes.difference) > 100 ? 'high' : 'medium',
+      count: reconRes.unmatched_transaction_count + reconRes.unmatched_gl_line_count,
+      message: `Bankavstämning visar differens ${reconRes.difference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${reconRes.unmatched_gl_line_count} omatchade huvudbokslinjer på 1930)`,
+      hint: 'Granska via gnubok_get_reconciliation_status och matcha — moms beräknas från huvudboken så differenser döljer fel.',
+    })
+  }
+  const missingReceipts = missingReceiptsRes
+  if (missingReceipts > 0) {
+    blockers.push({
+      kind: 'missing_high_value_receipts',
+      severity: 'medium',
+      count: missingReceipts,
+      message: `${missingReceipts} bokföringsposter över 4 000 kr saknar bifogat verifikat`,
+      hint: 'BFL 5 kap 6§: varje affärshändelse måste ha verifikat. Använd gnubok_list_unmatched_documents för att para ihop.',
+    })
+  }
+  // Reverse-charge sanity: output present without matching input (mirrors warning in computeVatReport)
+  const totalRcOutput = vatReport.rutor.ruta30 + vatReport.rutor.ruta31 + vatReport.rutor.ruta32
+  if (totalRcOutput > 0 && vatReport.rutor.ruta48 === 0) {
+    blockers.push({
+      kind: 'reverse_charge_input_missing',
+      severity: 'high',
+      count: 1,
+      message: 'Omvänd skattskyldighet: utgående moms bokförd (ruta 30/31/32) men ingen ingående moms',
+      hint: 'ML 2023:200 kräver bokning av både utgående OCH ingående moms (2645 EU eller 2647 inhemsk).',
+    })
+  }
+
+  // 5) Sanity ratios — current period output VAT to revenue per rate, vs prior period
+  const ratios = {
+    output_vat_ratio_25: vatReport.rutor.ruta05 > 0
+      ? Math.round((vatReport.rutor.ruta10 / vatReport.rutor.ruta05) * 10000) / 100
+      : 0,
+    output_vat_ratio_12: 0,  // no per-rate revenue split available from VAT report
+    output_vat_ratio_6: 0,
+    previous_period_compared: false,
+  }
+  const anomalies: VatCloseSanityAnomaly[] = []
+
+  // Compare to previous same-length period
+  const prevArgs = previousPeriodArgs(periodType as 'monthly' | 'quarterly' | 'yearly', Number(year), Number(period))
+  if (prevArgs) {
+    try {
+      const prev = await computeVatReport(prevArgs, companyId, supabase)
+      ratios.previous_period_compared = true
+      // Output VAT ratio 25% drift
+      if (vatReport.rutor.ruta05 > 0 && prev.rutor.ruta05 > 0) {
+        const cur = vatReport.rutor.ruta10 / vatReport.rutor.ruta05
+        const prv = prev.rutor.ruta10 / prev.rutor.ruta05
+        if (prv > 0) {
+          const deltaPct = Math.round(((cur - prv) / prv) * 10000) / 100
+          if (Math.abs(deltaPct) > 20) {
+            anomalies.push({
+              kind: 'output_vat_ratio_drift',
+              rate: '25',
+              current: Math.round(cur * 10000) / 100,
+              previous: Math.round(prv * 10000) / 100,
+              delta_pct: deltaPct,
+              message: `Utgående moms 25% / försäljning ändrades ${deltaPct > 0 ? '+' : ''}${deltaPct}% jämfört med föregående period — kontrollera momssatser`,
+            })
+          }
+        }
+      }
+      // Revenue spike/drop
+      if (prev.rutor.ruta05 > 0) {
+        const revDelta = Math.round(((vatReport.rutor.ruta05 - prev.rutor.ruta05) / prev.rutor.ruta05) * 10000) / 100
+        if (revDelta < -50) {
+          anomalies.push({
+            kind: 'revenue_drop',
+            current: vatReport.rutor.ruta05,
+            previous: prev.rutor.ruta05,
+            delta_pct: revDelta,
+            message: `Försäljning föll ${revDelta}% — bekräfta att alla fakturor är bokförda`,
+          })
+        } else if (revDelta > 200) {
+          anomalies.push({
+            kind: 'revenue_spike',
+            current: vatReport.rutor.ruta05,
+            previous: prev.rutor.ruta05,
+            delta_pct: revDelta,
+            message: `Försäljning steg ${revDelta}% — kontrollera att inget bokats två gånger`,
+          })
+        }
+      }
+    } catch {
+      // Previous period unavailable — skip comparison silently
+    }
+  }
+
+  const highBlockers = blockers.filter((b) => b.severity === 'high').length
+  const readyToClose = highBlockers === 0
+  const netDue = vatReport.rutor.ruta49
+  const direction: 'pay' | 'refund' | 'zero' = netDue > 0 ? 'pay' : netDue < 0 ? 'refund' : 'zero'
+
+  let summary: string
+  if (readyToClose && anomalies.length === 0) {
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue.toFixed(2)} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue).toFixed(2)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}`
+  } else if (readyToClose) {
+    summary = `Klart för stängning men ${anomalies.length} avvikelse(r) att granska.`
+  } else {
+    summary = `Inte klart: ${highBlockers} kritiska blockerare.`
+  }
+
+  return {
+    period: vatReport.period,
+    period_label: vatReport.period_label,
+    rutor: vatReport.rutor,
+    payment: {
+      net_due: netDue,
+      direction,
+      deadline: deadline?.date ?? null,
+      deadline_label: deadline?.label ?? null,
+      moms_period: momsPeriod,
+    },
+    blockers,
+    sanity: { anomalies, ratios },
+    ready_to_close: readyToClose,
+    summary,
+  }
+}
+
+function previousPeriodArgs(
+  periodType: 'monthly' | 'quarterly' | 'yearly',
+  year: number,
+  period: number
+): { period_type: string; year: number; period: number } | null {
+  if (periodType === 'monthly') {
+    if (period === 1) return { period_type: 'monthly', year: year - 1, period: 12 }
+    return { period_type: 'monthly', year, period: period - 1 }
+  }
+  if (periodType === 'quarterly') {
+    if (period === 1) return { period_type: 'quarterly', year: year - 1, period: 4 }
+    return { period_type: 'quarterly', year, period: period - 1 }
+  }
+  if (periodType === 'yearly') {
+    return { period_type: 'yearly', year: year - 1, period: 1 }
+  }
+  return null
 }
 
 // ── Tools ────────────────────────────────────────────────────
@@ -1709,6 +2039,52 @@ export const tools: McpTool[] = [
     },
   },
 
+  {
+    name: 'gnubok_vat_close_check',
+    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor + blocker scan (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts ≥ 4000 kr, reverse-charge mirroring) + period sanity ratios + Skatteverket deadline + ready_to_close.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        period_type: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'Period type' },
+        year: { type: 'number', description: 'Year (e.g. 2026)' },
+        period: { type: 'number', description: '1–12 for monthly, 1–4 for quarterly, 1 for yearly' },
+      },
+      required: ['period_type', 'year', 'period'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        period: { type: 'object' },
+        period_label: { type: 'string' },
+        rutor: { type: 'object' },
+        payment: {
+          type: 'object',
+          properties: {
+            net_due: { type: 'number' },
+            direction: { type: 'string', enum: ['pay', 'refund', 'zero'] },
+            deadline: { type: ['string', 'null'] },
+            deadline_label: { type: ['string', 'null'] },
+            moms_period: { type: ['string', 'null'] },
+          },
+        },
+        blockers: { type: 'array', items: { type: 'object' } },
+        sanity: { type: 'object' },
+        ready_to_close: { type: 'boolean' },
+        summary: { type: 'string' },
+      },
+      required: ['period', 'rutor', 'payment', 'blockers', 'sanity', 'ready_to_close', 'summary'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      return computeVatCloseCheck(args, companyId, supabase)
+    },
+  },
+
   // ── KPI & Income Statement tools ─────────────────────────────
 
   {
@@ -2390,6 +2766,222 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_query_journal',
+    description: "Flexible journal-line query — replaces chained ledger calls for ad-hoc questions. Filters: accounts, date range, amount range, voucher series/number, source type, status, project, cost center, free-text. Returns lines with parent voucher metadata + totals.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account_from: { type: 'string', description: 'Lowest account number (inclusive). E.g. "4000" with account_to "4999" → all class-4 expenses.' },
+        account_to: { type: 'string', description: 'Highest account number (inclusive)' },
+        accounts: { type: 'array', items: { type: 'string' }, description: 'Specific account numbers (overrides account_from/account_to). Up to 50.' },
+        date_from: { type: 'string', description: 'Earliest entry date (YYYY-MM-DD, inclusive)' },
+        date_to: { type: 'string', description: 'Latest entry date (YYYY-MM-DD, inclusive)' },
+        amount_min: { type: 'number', description: 'Minimum line amount (absolute value of debit OR credit)' },
+        amount_max: { type: 'number', description: 'Maximum line amount (absolute value)' },
+        text: { type: 'string', description: 'Free-text search in entry description and line description' },
+        voucher_series: { type: 'string', description: 'Filter by voucher series (e.g. "A")' },
+        voucher_number_from: { type: 'number', description: 'Lowest voucher number (inclusive)' },
+        voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
+        source_type: { type: 'string', description: 'Filter by source: bank_transaction, invoice_created, supplier_invoice, currency_revaluation, year_end, opening_balance, etc.' },
+        status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
+        project: { type: 'string', description: 'Filter by project code' },
+        cost_center: { type: 'string', description: 'Filter by cost center' },
+        limit: { type: 'number', description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        lines: { type: 'array', items: { type: 'object' } },
+        truncated: { type: 'boolean', description: 'True if more lines matched than were returned' },
+        total_lines: { type: 'number' },
+        returned_lines: { type: 'number' },
+        totals: {
+          type: 'object',
+          properties: {
+            debit: { type: 'number' },
+            credit: { type: 'number' },
+            net: { type: 'number', description: 'debit minus credit (positive = net debit)' },
+          },
+        },
+        applied_filters: { type: 'object' },
+      },
+      required: ['lines', 'total_lines', 'returned_lines', 'totals'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
+      const status = (args.status as string) || 'posted'
+      const accounts = args.accounts as string[] | undefined
+      const accountFrom = args.account_from as string | undefined
+      const accountTo = args.account_to as string | undefined
+
+      if (accounts && accounts.length > 50) {
+        throw new Error('accounts list capped at 50 — use account_from/account_to for ranges')
+      }
+
+      // Build the line-level query with a forced inner join on journal_entries
+      // so we can filter by the parent's company_id, status, date range, etc.
+      let query = supabase
+        .from('journal_entry_lines')
+        .select(
+          'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
+          { count: 'exact' }
+        )
+        .eq('journal_entries.company_id', companyId)
+
+      if (status === 'all') {
+        query = query.in('journal_entries.status', ['posted', 'reversed'])
+      } else {
+        query = query.eq('journal_entries.status', status)
+      }
+
+      if (accounts && accounts.length > 0) {
+        query = query.in('account_number', accounts)
+      } else {
+        if (accountFrom) query = query.gte('account_number', accountFrom)
+        if (accountTo) query = query.lte('account_number', accountTo)
+      }
+
+      const dateFrom = args.date_from as string | undefined
+      const dateTo = args.date_to as string | undefined
+      if (dateFrom) query = query.gte('journal_entries.entry_date', dateFrom)
+      if (dateTo) query = query.lte('journal_entries.entry_date', dateTo)
+
+      const voucherSeries = args.voucher_series as string | undefined
+      if (voucherSeries) query = query.eq('journal_entries.voucher_series', voucherSeries)
+      const vnFrom = args.voucher_number_from as number | undefined
+      const vnTo = args.voucher_number_to as number | undefined
+      if (typeof vnFrom === 'number') query = query.gte('journal_entries.voucher_number', vnFrom)
+      if (typeof vnTo === 'number') query = query.lte('journal_entries.voucher_number', vnTo)
+
+      const sourceType = args.source_type as string | undefined
+      if (sourceType) query = query.eq('journal_entries.source_type', sourceType)
+
+      const project = args.project as string | undefined
+      if (project) query = query.eq('project', project)
+      const costCenter = args.cost_center as string | undefined
+      if (costCenter) query = query.eq('cost_center', costCenter)
+
+      // Free-text search across both line description and entry description.
+      // PostgREST `or` filter applies at the joined level when fully qualified.
+      const text = (args.text as string | undefined)?.trim()
+      if (text) {
+        const escaped = text.replace(/[%]/g, '\\%').replace(/,/g, ' ')
+        query = query.or(
+          `line_description.ilike.%${escaped}%,journal_entries.description.ilike.%${escaped}%`
+        )
+      }
+
+      // Order by date desc then voucher_number desc — most recent first
+      query = query
+        .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+        .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+        .order('sort_order', { ascending: true })
+        .limit(limit)
+
+      const { data, error, count } = await query
+      if (error) throw new Error(`Database error: ${error.message}`)
+
+      type LineRow = {
+        id: string
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        currency: string | null
+        line_description: string | null
+        project: string | null
+        cost_center: string | null
+        sort_order: number
+        journal_entries: {
+          id: string
+          voucher_number: number
+          voucher_series: string
+          entry_date: string
+          description: string
+          source_type: string
+          status: string
+        }
+      }
+
+      // Apply amount filter post-fetch — PostgREST can't OR an abs(debit) >= n
+      // with abs(credit) >= n cleanly. Lines are debit XOR credit, so checking
+      // max(debit, credit) works.
+      const amountMin = args.amount_min as number | undefined
+      const amountMax = args.amount_max as number | undefined
+      const filtered = (data ?? []).filter((row) => {
+        const r = row as unknown as LineRow
+        const lineAmount = Math.max(Number(r.debit_amount) || 0, Number(r.credit_amount) || 0)
+        if (typeof amountMin === 'number' && lineAmount < amountMin) return false
+        if (typeof amountMax === 'number' && lineAmount > amountMax) return false
+        return true
+      }) as unknown as LineRow[]
+
+      // Compute totals on the fetched-and-filtered set. Note: when truncated,
+      // these are totals of the returned slice, not the full match. The
+      // truncated flag tells the agent whether to issue a narrower query.
+      let totalDebit = 0
+      let totalCredit = 0
+      const lines = filtered.map((r) => {
+        totalDebit += Number(r.debit_amount) || 0
+        totalCredit += Number(r.credit_amount) || 0
+        return {
+          line_id: r.id,
+          journal_entry_id: r.journal_entries.id,
+          voucher_series: r.journal_entries.voucher_series,
+          voucher_number: r.journal_entries.voucher_number,
+          entry_date: r.journal_entries.entry_date,
+          entry_description: r.journal_entries.description,
+          source_type: r.journal_entries.source_type,
+          status: r.journal_entries.status,
+          account_number: r.account_number,
+          debit: Number(r.debit_amount) || 0,
+          credit: Number(r.credit_amount) || 0,
+          line_description: r.line_description,
+          project: r.project,
+          cost_center: r.cost_center,
+          currency: r.currency,
+        }
+      })
+
+      const totalMatched = count ?? lines.length
+      return {
+        lines,
+        truncated: totalMatched > lines.length,
+        total_lines: totalMatched,
+        returned_lines: lines.length,
+        totals: {
+          debit: Math.round(totalDebit * 100) / 100,
+          credit: Math.round(totalCredit * 100) / 100,
+          net: Math.round((totalDebit - totalCredit) * 100) / 100,
+        },
+        applied_filters: {
+          account_from: accountFrom ?? null,
+          account_to: accountTo ?? null,
+          accounts: accounts ?? null,
+          date_from: dateFrom ?? null,
+          date_to: dateTo ?? null,
+          amount_min: amountMin ?? null,
+          amount_max: amountMax ?? null,
+          text: text ?? null,
+          voucher_series: voucherSeries ?? null,
+          voucher_number_from: vnFrom ?? null,
+          voucher_number_to: vnTo ?? null,
+          source_type: sourceType ?? null,
+          status,
+          project: project ?? null,
+          cost_center: costCenter ?? null,
+        },
+      }
+    },
+  },
+
+  {
     name: 'gnubok_get_ar_ledger',
     description: 'Accounts receivable ledger (kundreskontra): outstanding customer invoices with aging.',
     inputSchema: {
@@ -2498,6 +3090,192 @@ export const tools: McpTool[] = [
         },
         actor
       )
+    },
+  },
+
+  {
+    name: 'gnubok_auto_match_period',
+    description: "Bulk reconciliation: scan unmatched income transactions in a date range and propose invoice matches with confidence + reasoning. dry_run=true (default) previews without staging; dry_run=false stages every match above confidence_threshold as a pending operation.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date_from: { type: 'string', description: 'Period start YYYY-MM-DD' },
+        date_to: { type: 'string', description: 'Period end YYYY-MM-DD' },
+        confidence_threshold: { type: 'number', description: 'Minimum confidence to propose (0..1, default 0.9). Lower for more matches; raise for safety.' },
+        dry_run: { type: 'boolean', description: 'If true (default), preview proposals without staging. If false, stage each above-threshold match as a pending operation.' },
+        max_transactions: { type: 'number', description: 'Cap on transactions to process this call (default 100, max 500). Use multiple calls or narrower date ranges for very large periods.' },
+      },
+      required: ['date_from', 'date_to'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        dry_run: { type: 'boolean' },
+        confidence_threshold: { type: 'number' },
+        scanned_transactions: { type: 'number' },
+        proposed_matches: { type: 'number' },
+        below_threshold: { type: 'number' },
+        no_match_found: { type: 'number' },
+        truncated: { type: 'boolean' },
+        proposals: { type: 'array', items: { type: 'object' } },
+        staged_count: { type: 'number' },
+        stage_failures: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['dry_run', 'scanned_transactions', 'proposed_matches', 'proposals'],
+    },
+    annotations: {
+      readOnlyHint: false,  // can stage when dry_run=false
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const dateFrom = args.date_from as string
+      const dateTo = args.date_to as string
+      if (!dateFrom || !dateTo) throw new Error('date_from and date_to are required')
+
+      const confidenceThreshold = typeof args.confidence_threshold === 'number'
+        ? Math.max(0, Math.min(1, args.confidence_threshold))
+        : 0.9
+      const dryRun = args.dry_run !== false
+      const maxTransactions = Math.min(Math.max(1, Number(args.max_transactions) || 100), 500)
+
+      // Fetch unmatched income transactions in window. We require positive
+      // amount because findMatchingInvoices only matches income; expenses are
+      // out of scope for this tool.
+      const { data: transactions, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, reference, journal_entry_id, invoice_id')
+        .eq('company_id', companyId)
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+        .gt('amount', 0)
+        .is('journal_entry_id', null)
+        .is('invoice_id', null)
+        .order('date', { ascending: true })
+        .limit(maxTransactions + 1)
+
+      if (txError) throw new Error(`Failed to fetch transactions: ${txError.message}`)
+
+      const txList = (transactions ?? []).slice(0, maxTransactions)
+      const truncated = (transactions ?? []).length > maxTransactions
+
+      type Proposal = {
+        transaction_id: string
+        transaction_date: string
+        transaction_amount: number
+        transaction_currency: string
+        transaction_description: string
+        invoice_id: string
+        invoice_number: string | null
+        invoice_total: number
+        customer_name: string | null
+        confidence: number
+        match_reason: string
+        decision: 'propose' | 'below_threshold' | 'no_match'
+      }
+
+      const proposals: Proposal[] = []
+      let belowThreshold = 0
+      let noMatchFound = 0
+
+      for (const tx of txList) {
+        const matches = await findMatchingInvoices(
+          supabase,
+          companyId,
+          tx as never,
+        )
+        if (matches.length === 0) {
+          noMatchFound++
+          continue
+        }
+        const best = matches[0]
+        const baseProposal: Omit<Proposal, 'decision'> = {
+          transaction_id: tx.id as string,
+          transaction_date: tx.date as string,
+          transaction_amount: Number(tx.amount) || 0,
+          transaction_currency: tx.currency as string,
+          transaction_description: (tx.merchant_name as string) || (tx.description as string) || '',
+          invoice_id: best.invoice.id,
+          invoice_number: best.invoice.invoice_number,
+          invoice_total: best.invoice.total,
+          customer_name: (best.invoice.customer as { name?: string } | undefined)?.name ?? null,
+          confidence: Math.round(best.confidence * 1000) / 1000,
+          match_reason: best.matchReason,
+        }
+        if (best.confidence < confidenceThreshold) {
+          proposals.push({ ...baseProposal, decision: 'below_threshold' as const })
+          belowThreshold++
+        } else {
+          proposals.push({ ...baseProposal, decision: 'propose' as const })
+        }
+      }
+
+      const proposed = proposals.filter((p) => p.decision === 'propose')
+
+      // Dry-run path: return proposals with reasoning, no side-effects
+      if (dryRun) {
+        return {
+          dry_run: true,
+          confidence_threshold: confidenceThreshold,
+          scanned_transactions: txList.length,
+          proposed_matches: proposed.length,
+          below_threshold: belowThreshold,
+          no_match_found: noMatchFound,
+          truncated,
+          proposals,
+          staged_count: 0,
+          stage_failures: [],
+        }
+      }
+
+      // Commit path: stage each above-threshold match through pending_operations.
+      // Per-item failure isolation — one bad match doesn't kill the rest.
+      const stageFailures: { transaction_id: string; invoice_id: string; error: string }[] = []
+      let stagedCount = 0
+      for (const p of proposed) {
+        try {
+          await stagePendingOperation(
+            supabase,
+            companyId,
+            userId,
+            'match_transaction_invoice',
+            `Matcha: ${p.transaction_description || p.transaction_id} → ${p.invoice_number}`,
+            { transaction_id: p.transaction_id, invoice_id: p.invoice_id },
+            {
+              transaction_description: p.transaction_description,
+              transaction_amount: p.transaction_amount,
+              transaction_currency: p.transaction_currency,
+              invoice_number: p.invoice_number,
+              invoice_total: p.invoice_total,
+              customer_name: p.customer_name,
+              auto_match_confidence: p.confidence,
+              auto_match_reason: p.match_reason,
+            },
+            actor,
+          )
+          stagedCount++
+        } catch (err) {
+          stageFailures.push({
+            transaction_id: p.transaction_id,
+            invoice_id: p.invoice_id,
+            error: err instanceof Error ? err.message : 'Unknown stage error',
+          })
+        }
+      }
+
+      return {
+        dry_run: false,
+        confidence_threshold: confidenceThreshold,
+        scanned_transactions: txList.length,
+        proposed_matches: proposed.length,
+        below_threshold: belowThreshold,
+        no_match_found: noMatchFound,
+        truncated,
+        proposals,
+        staged_count: stagedCount,
+        stage_failures: stageFailures,
+      }
     },
   },
 
@@ -2787,6 +3565,196 @@ export const tools: McpTool[] = [
       if (!data) throw new Error('Inbox item not found')
 
       return data
+    },
+  },
+
+  {
+    name: 'gnubok_create_supplier_invoice_from_inbox',
+    description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier (matched or via org_number/name), assembles line items from extracted_data, applies VAT + FX, attaches the source document. Stages for human review; honors dry_run.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        inbox_item_id: { type: 'string', description: 'UUID of the inbox item to convert' },
+        supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
+        vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Override extracted VAT treatment' },
+        due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
+        notes: { type: 'string', description: 'Optional notes appended to the supplier invoice' },
+        dry_run: { type: 'boolean', description: 'If true, return the assembled payload without staging (default false)' },
+        idempotency_key: { type: 'string', description: 'UUID. Repeat calls with same key + payload return cached response.' },
+      },
+      required: ['inbox_item_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const inboxItemId = args.inbox_item_id as string
+      if (!inboxItemId) throw new Error('inbox_item_id is required')
+      const dryRun = args.dry_run === true
+      const idempotencyKey = args.idempotency_key as string | undefined
+
+      // Fetch the inbox item with the attached source document
+      const { data: inbox, error: inboxErr } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, status, extracted_data, matched_supplier_id, created_supplier_invoice_id, document_id')
+        .eq('id', inboxItemId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (inboxErr || !inbox) throw new Error('Inbox item not found')
+      if (inbox.created_supplier_invoice_id) {
+        throw new Error(`Inbox item already converted to supplier invoice ${inbox.created_supplier_invoice_id}`)
+      }
+
+      const extracted = (inbox.extracted_data as Record<string, unknown> | null) ?? null
+      if (!extracted) throw new Error('Inbox item has no extracted_data — re-run extraction first')
+
+      const supplierExt = extracted.supplier as Record<string, unknown> | undefined
+      const invoiceExt = extracted.invoice as Record<string, unknown> | undefined
+      const totalsExt = extracted.totals as Record<string, unknown> | undefined
+      const lineItemsExt = (extracted.lineItems as Array<Record<string, unknown>> | undefined) ?? []
+
+      // Resolve supplier — explicit override > matched > org_number lookup > name lookup
+      const supplierIdOverride = args.supplier_id_override as string | undefined
+      let supplierId: string | null = supplierIdOverride ?? (inbox.matched_supplier_id as string | null) ?? null
+      let supplierResolution: 'override' | 'matched' | 'lookup_org_number' | 'lookup_name' | 'unresolved' =
+        supplierIdOverride ? 'override' : inbox.matched_supplier_id ? 'matched' : 'unresolved'
+
+      if (!supplierId) {
+        const orgNumber = supplierExt?.organizationNumber as string | undefined
+        const supplierName = supplierExt?.name as string | undefined
+        if (orgNumber) {
+          const { data } = await supabase
+            .from('suppliers')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('org_number', orgNumber)
+            .maybeSingle()
+          if (data) {
+            supplierId = data.id
+            supplierResolution = 'lookup_org_number'
+          }
+        }
+        if (!supplierId && supplierName) {
+          const { data } = await supabase
+            .from('suppliers')
+            .select('id')
+            .eq('company_id', companyId)
+            .ilike('name', supplierName)
+            .maybeSingle()
+          if (data) {
+            supplierId = data.id
+            supplierResolution = 'lookup_name'
+          }
+        }
+      }
+
+      if (!supplierId) {
+        throw new Error(
+          `Cannot resolve supplier from extracted data. Pass supplier_id_override, or create the supplier first (extracted name: ${supplierExt?.name ?? 'unknown'}, org: ${supplierExt?.organizationNumber ?? 'unknown'}).`
+        )
+      }
+
+      // Assemble core invoice fields
+      const currency = (invoiceExt?.currency as string) || 'SEK'
+      const invoiceDate = (invoiceExt?.invoiceDate as string) || null
+      const dueDate = (args.due_date_override as string | undefined) ?? (invoiceExt?.dueDate as string | undefined) ?? null
+      const supplierInvoiceNumber = (invoiceExt?.invoiceNumber as string) || ''
+      if (!invoiceDate) throw new Error('Extracted invoice has no invoice date')
+      if (!supplierInvoiceNumber) throw new Error('Extracted invoice has no invoice number')
+
+      const total = Number(totalsExt?.total) || 0
+      const subtotal = Number(totalsExt?.subtotal) || 0
+      const vatAmount = Number(totalsExt?.vat) || 0
+
+      // VAT treatment: explicit override wins, else heuristic from extracted data
+      const vatTreatment = (args.vat_treatment_override as string | undefined)
+        ?? (invoiceExt?.vatTreatment as string | undefined)
+        ?? 'standard_25'
+
+      // FX: if non-SEK, fetch rate at fakturadatum (best-effort; agent can re-stage on failure)
+      let exchangeRate: number | null = null
+      if (currency !== 'SEK' && invoiceDate) {
+        try {
+          const result = await fetchExchangeRate(currency as Currency, new Date(invoiceDate))
+          exchangeRate = result?.rate ?? null
+        } catch {
+          exchangeRate = null  // Agent will be informed via preview; can override later
+        }
+      }
+
+      // Translate extracted line items into the supplier_invoice_items shape.
+      // Default account 4000 (varuinköp/inköp) when extraction didn't pin one.
+      const lineItems = lineItemsExt.map((li, idx) => ({
+        line_number: idx + 1,
+        description: (li.description as string) ?? `Position ${idx + 1}`,
+        quantity: Number(li.quantity) || 1,
+        unit: (li.unit as string) ?? 'st',
+        unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
+        line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
+        account_number: (li.account_number as string | undefined) ?? '4000',
+        vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
+        vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
+      }))
+
+      const params = {
+        inbox_item_id: inboxItemId,
+        supplier_id: supplierId,
+        document_id: inbox.document_id,
+        supplier_invoice_number: supplierInvoiceNumber,
+        invoice_date: invoiceDate,
+        due_date: dueDate,
+        currency,
+        exchange_rate: exchangeRate,
+        vat_treatment: vatTreatment,
+        subtotal: Math.round(subtotal * 100) / 100,
+        vat_amount: Math.round(vatAmount * 100) / 100,
+        total: Math.round(total * 100) / 100,
+        notes: (args.notes as string | undefined) ?? null,
+        items: lineItems,
+      }
+
+      const previewData = {
+        inbox_item_id: inboxItemId,
+        supplier_id: supplierId,
+        supplier_resolution: supplierResolution,
+        extracted_supplier_name: supplierExt?.name ?? null,
+        extracted_org_number: supplierExt?.organizationNumber ?? null,
+        supplier_invoice_number: supplierInvoiceNumber,
+        invoice_date: invoiceDate,
+        due_date: dueDate,
+        currency,
+        exchange_rate: exchangeRate,
+        exchange_rate_source: exchangeRate !== null ? 'riksbanken' : currency === 'SEK' ? 'not_applicable' : 'lookup_failed',
+        vat_treatment: vatTreatment,
+        subtotal: params.subtotal,
+        vat_amount: params.vat_amount,
+        total: params.total,
+        line_count: lineItems.length,
+        items_preview: lineItems.slice(0, 5),
+        will: 'register supplier invoice (status=registered), attach the inbox document, post a registration journal entry on confirm — leverantörsskuld (2440) credited and the cost/VAT split debited per the per-line VAT rules',
+      }
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'create_supplier_invoice_from_inbox',
+        `Leverantörsfaktura: ${supplierInvoiceNumber} (${(supplierExt?.name as string) ?? 'okänd'})`,
+        params,
+        previewData,
+        actor,
+        {
+          description: 'After approval, attest via gnubok_approve_supplier_invoice and pay via the bank flow.',
+          tool: 'gnubok_get_inbox_item',
+          args: { inbox_item_id: inboxItemId },
+        },
+        { dryRun, idempotencyKey },
+      )
     },
   },
 
@@ -3547,8 +4515,251 @@ export const tools: McpTool[] = [
     },
   },
 
+  {
+    name: 'gnubok_audit_package',
+    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal register, VAT) + receipts + audit log + voucher gaps, zipped. Returns a 1-hour signed download URL. Long-running on large datasets.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to package' },
+        include_documents: { type: 'boolean', description: 'Include receipts/document binaries in the zip (default true)' },
+        estimate_only: { type: 'boolean', description: 'Return size estimate without generating (default false)' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        download_url: { type: ['string', 'null'], description: 'Signed Supabase Storage URL valid for 1 hour. Null when estimate_only=true.' },
+        storage_path: { type: ['string', 'null'] },
+        file_name: { type: 'string' },
+        size_bytes: { type: 'number' },
+        size_limit_bytes: { type: 'number' },
+        within_limit: { type: 'boolean' },
+        period: { type: 'object' },
+        generated_at: { type: 'string' },
+        expires_at: { type: ['string', 'null'] },
+        estimate_only: { type: 'boolean' },
+      },
+      required: ['file_name', 'size_bytes', 'period', 'generated_at', 'estimate_only'],
+    },
+    annotations: {
+      readOnlyHint: false,  // produces a Storage artifact
+      destructiveHint: false,
+      idempotentHint: true,  // repeat calls produce equivalent archives, fresh URL
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      const includeDocuments = args.include_documents !== false
+      const estimateOnly = args.estimate_only === true
+      const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
+
+      // Verify period belongs to the company
+      const { data: period, error: periodErr } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+      if (periodErr || !period) throw new Error('Fiscal period not found')
+
+      const generatedAt = new Date().toISOString()
+
+      // Pre-flight size estimate — also serves the estimate-only path
+      const estimate = await estimateArchiveSize(supabase, companyId, 'period', fiscalPeriodId)
+      const sizeBytes = estimate.total_bytes
+      const withinLimit = sizeBytes <= SIZE_LIMIT_BYTES
+
+      const fileName = `arkiv_${period.name.replace(/[^\w-]/g, '_')}_${fiscalPeriodId.slice(0, 8)}.zip`
+
+      if (estimateOnly) {
+        return {
+          download_url: null,
+          storage_path: null,
+          file_name: fileName,
+          size_bytes: sizeBytes,
+          size_limit_bytes: SIZE_LIMIT_BYTES,
+          within_limit: withinLimit,
+          period: {
+            id: period.id,
+            name: period.name,
+            period_start: period.period_start,
+            period_end: period.period_end,
+          },
+          generated_at: generatedAt,
+          expires_at: null,
+          estimate_only: true,
+        }
+      }
+
+      if (includeDocuments && !withinLimit) {
+        throw new Error(
+          `Archive would exceed ${Math.round(SIZE_LIMIT_BYTES / 1024 / 1024)} MB (estimate: ${Math.round(sizeBytes / 1024 / 1024)} MB). Retry with include_documents=false to omit receipt binaries.`
+        )
+      }
+
+      // Generate the archive (long-running)
+      const zipBuffer = await generateFullArchive(supabase, companyId, {
+        scope: 'period',
+        period_id: fiscalPeriodId,
+        include_documents: includeDocuments,
+      })
+
+      // Upload to Storage under a per-user audit-packages folder
+      const storagePath = `${userId}/audit-packages/${Date.now()}_${fileName}`
+      const { error: uploadErr } = await supabase.storage
+        .from('documents')
+        .upload(storagePath, new Uint8Array(zipBuffer), {
+          contentType: 'application/zip',
+          upsert: false,
+        })
+      if (uploadErr) throw new Error(`Failed to upload archive: ${uploadErr.message}`)
+
+      // Sign for 1 hour
+      const SIGNED_URL_TTL_SECONDS = 3600
+      const { data: signed, error: signErr } = await supabase.storage
+        .from('documents')
+        .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS)
+      if (signErr || !signed) {
+        // Best-effort cleanup of the uploaded blob if signing failed
+        await supabase.storage.from('documents').remove([storagePath])
+        throw new Error(`Failed to sign archive URL: ${signErr?.message ?? 'unknown error'}`)
+      }
+
+      const expiresAt = new Date(Date.now() + SIGNED_URL_TTL_SECONDS * 1000).toISOString()
+
+      return {
+        download_url: signed.signedUrl,
+        storage_path: storagePath,
+        file_name: fileName,
+        size_bytes: zipBuffer.byteLength,
+        size_limit_bytes: SIZE_LIMIT_BYTES,
+        within_limit: true,
+        period: {
+          id: period.id,
+          name: period.name,
+          period_start: period.period_start,
+          period_end: period.period_end,
+        },
+        generated_at: generatedAt,
+        expires_at: expiresAt,
+        estimate_only: false,
+      }
+    },
+  },
+
   // ── Stream 1 Phase 1 follow-up: year-end, opening balances, revaluation,
   //    voucher gaps, supplier-invoice lifecycle, proforma conversion ──
+
+  {
+    name: 'gnubok_year_end_readiness',
+    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced trial balance, FX revaluation needed) + warnings + optional preview of the closing entry. Use this before staging year-end.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to year-end' },
+        include_preview: { type: 'boolean', description: 'If true, also return the would-be closing journal entry preview (default false)' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        period: { type: 'object' },
+        ready: { type: 'boolean' },
+        blockers: { type: 'array', items: { type: 'object' } },
+        warnings: { type: 'array', items: { type: 'string' } },
+        draft_count: { type: 'number' },
+        unexplained_voucher_gap_count: { type: 'number' },
+        sequence_mismatch_count: { type: 'number' },
+        trial_balance_balanced: { type: 'boolean' },
+        preview: { type: ['object', 'null'] },
+        summary: { type: 'string' },
+      },
+      required: ['ready', 'blockers', 'warnings', 'summary'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      const includePreview = args.include_preview === true
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      // Fetch period for context (the validate function returns errors if not found,
+      // but agents benefit from period metadata in the response)
+      const { data: period } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end, is_closed, locked_at, closing_entry_id, continuity_verified')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (!period) throw new Error('Fiscal period not found')
+
+      const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
+
+      // Reshape error strings into structured blockers so the agent (and any
+      // dashboard) can render and act on each one independently. The lib
+      // returns flat strings; we tag each with a `kind` heuristic for routing.
+      const blockers = validation.errors.map((message) => {
+        let kind: string = 'other'
+        if (/draft journal entries/i.test(message)) kind = 'draft_entries'
+        else if (/voucher gap/i.test(message)) kind = 'unexplained_voucher_gap'
+        else if (/Sequence counter integrity/i.test(message)) kind = 'sequence_mismatch'
+        else if (/Trial balance is not balanced/i.test(message)) kind = 'trial_balance_unbalanced'
+        else if (/already closed/i.test(message)) kind = 'period_already_closed'
+        else if (/has not yet ended/i.test(message)) kind = 'period_not_ended'
+        else if (/closing entry already exists/i.test(message)) kind = 'closing_entry_exists'
+        else if (/continuity check failed/i.test(message)) kind = 'opening_balance_continuity'
+        else if (/Fiscal period not found/i.test(message)) kind = 'period_not_found'
+        return { kind, severity: 'high' as const, message }
+      })
+
+      let preview = null
+      if (includePreview && validation.ready) {
+        try {
+          preview = await previewYearEndClosing(supabase, companyId, userId, fiscalPeriodId)
+        } catch (err) {
+          // Preview is opportunistic — never fail the readiness check on it.
+          preview = { error: err instanceof Error ? err.message : 'Preview unavailable' }
+        }
+      }
+
+      const summary = validation.ready
+        ? validation.warnings.length > 0
+          ? `Klart för bokslut. ${validation.warnings.length} varning(ar) att granska.`
+          : 'Klart för bokslut.'
+        : `Inte klart: ${blockers.length} blockerare måste åtgärdas.`
+
+      return {
+        period: {
+          id: period.id,
+          name: period.name,
+          period_start: period.period_start,
+          period_end: period.period_end,
+          is_closed: period.is_closed,
+          locked_at: period.locked_at,
+          closing_entry_id: period.closing_entry_id,
+          continuity_verified: period.continuity_verified,
+        },
+        ready: validation.ready,
+        blockers,
+        warnings: validation.warnings,
+        draft_count: validation.draftCount,
+        unexplained_voucher_gap_count: validation.unexplainedGaps.length,
+        sequence_mismatch_count: validation.sequenceMismatches.length,
+        trial_balance_balanced: validation.trialBalanceBalanced,
+        preview,
+        summary,
+      }
+    },
+  },
 
   {
     name: 'gnubok_run_year_end',

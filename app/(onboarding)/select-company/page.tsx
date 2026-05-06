@@ -92,18 +92,18 @@ export default async function SelectCompanyPage() {
     .single()
   const firstName = profile?.full_name?.split(' ')[0] ?? null
 
-  // TIC enrichment (SPAR + CompanyRoles).
+  // BankID enrichment (CompanyRoles from Bolagsverket via TIC). Stored
+  // user-keyed in `bankid_enrichment` because it lands before company
+  // selection — see fetchAndStoreEnrichment in the tic extension.
   const { data: enrichmentRow } = await supabase
-    .from('extension_data')
-    .select('value, created_at, updated_at')
+    .from('bankid_enrichment')
+    .select('company_roles, created_at, updated_at')
     .eq('user_id', user.id)
-    .eq('extension_id', 'tic')
-    .eq('key', 'bankid_enrichment')
     .maybeSingle()
 
-  const enrichmentValue = enrichmentRow?.value as {
-    companyRoles?: EnrichmentCompanyRole[]
-  } | null
+  const enrichmentValue = enrichmentRow
+    ? { companyRoles: enrichmentRow.company_roles as EnrichmentCompanyRole[] }
+    : null
 
   // "Currently a director" = no position end date. We deliberately do NOT
   // also require companyStatus === 'Aktivt': real TIC payloads have been

@@ -31,16 +31,21 @@ const log = createLogger('tic/bankid')
 
 /**
  * Request SPAR + CompanyRoles enrichment for a completed BankID session and
- * cache the CompanyRoles slice in `extension_data` for the
+ * cache the CompanyRoles slice in `bankid_enrichment` for the
  * /select-company picker.
+ *
+ * Stored in `bankid_enrichment` (user-keyed) rather than `extension_data`
+ * because enrichment runs before the user has a company; `extension_data`
+ * has been company-scoped (NOT NULL company_id) since the multi-tenant
+ * refactor.
  *
  * SPAR (personnummer, address, name, birth date) is requested so TIC will
  * complete the enrichment, but is intentionally NOT persisted: personnummer
  * is already hashed + encrypted in `bankid_identities`, names live there too,
- * and no UI currently consumes the address. Storing the SPAR blob in
- * `extension_data.value` (a plain JSON column) would expose national-ID-level
- * PII to anyone with read access. If/when address pre-fill is built, encrypt
- * the relevant fields the same way `encryptPersonalNumber` does for pnr.
+ * and no UI currently consumes the address. Storing the SPAR blob alongside
+ * company roles would expose national-ID-level PII. If/when address pre-fill
+ * is built, encrypt the relevant fields the same way `encryptPersonalNumber`
+ * does for pnr.
  *
  * Non-blocking: any failure is logged and swallowed — BankID auth must still
  * succeed even if enrichment is down.
@@ -125,19 +130,26 @@ async function fetchAndStoreEnrichment(
 
     // Persist only what consumers actually read. See block comment on
     // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded.
-    const persistedValue = {
-      companyRoles: enrichmentData.companyRoles ?? [],
-      enrichedAtUtc: enrichmentData.enrichedAtUtc,
-    }
-
-    await supabase
-      .from('extension_data')
+    const { error: upsertError } = await supabase
+      .from('bankid_enrichment')
       .upsert({
         user_id: userId,
-        extension_id: 'tic',
-        key: 'bankid_enrichment',
-        value: persistedValue,
-      }, { onConflict: 'user_id,extension_id,key' })
+        company_roles: enrichmentData.companyRoles ?? [],
+        enriched_at_utc: enrichmentData.enrichedAtUtc ?? null,
+      }, { onConflict: 'user_id' })
+
+    if (upsertError) {
+      log.warn('enrichment upsert failed (non-blocking)', {
+        message: upsertError.message,
+        code: upsertError.code,
+        details: upsertError.details,
+        hint: upsertError.hint,
+      })
+    } else {
+      log.info('enrichment persisted to bankid_enrichment', {
+        roleCount: enrichmentData.companyRoles?.length ?? 0,
+      })
+    }
   } catch (enrichError) {
     log.warn('enrichment failed (non-blocking)', enrichError)
   }

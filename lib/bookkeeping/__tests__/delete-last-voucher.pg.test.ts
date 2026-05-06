@@ -41,6 +41,33 @@ async function insertPostedEntryWithLines(params: {
   return id
 }
 
+// Insert a document_attachment row already linked to a journal entry, so
+// tests can exercise the bidirectional immutability trigger on the
+// journal_entry_id column.
+async function insertDocumentLinkedToEntry(params: {
+  userId: string
+  companyId: string
+  journalEntryId: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.document_attachments
+       (id, user_id, company_id, storage_path, file_name, sha256_hash,
+        journal_entry_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      id,
+      params.userId,
+      params.companyId,
+      `test/${id}.pdf`,
+      'receipt.pdf',
+      'a'.repeat(64),
+      params.journalEntryId,
+    ],
+  )
+  return id
+}
+
 describe('delete_last_voucher.pg — RPC + immutability trigger interaction', () => {
   it('deletes the last posted voucher in a series', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
@@ -189,5 +216,90 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
         [entryId],
       ),
     ).rejects.toThrow(/Cannot modify a reversed journal entry/i)
+  })
+
+  // BFNAR 2013:2 last-voucher deletion must succeed even when a document is
+  // attached. The document survives (BFL 7 kap retention) — only the
+  // back-reference is cleared so the FK no longer blocks the entry DELETE.
+  it('clears document_attachments.journal_entry_id when deleting a voucher with an attached document', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertPostedEntryWithLines({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const documentId = await insertDocumentLinkedToEntry({
+      userId, companyId, journalEntryId: entryId,
+    })
+
+    await withUserContext(userId, async (client) => {
+      await client.query(
+        `SELECT public.delete_last_voucher($1::uuid, $2::uuid)`,
+        [companyId, entryId],
+      )
+
+      const entry = await client.query(
+        `SELECT 1 FROM public.journal_entries WHERE id = $1`,
+        [entryId],
+      )
+      expect(entry.rowCount).toBe(0)
+
+      const doc = await client.query<{ journal_entry_id: string | null }>(
+        `SELECT journal_entry_id FROM public.document_attachments WHERE id = $1`,
+        [documentId],
+      )
+      expect(doc.rowCount).toBe(1)
+      expect(doc.rows[0]!.journal_entry_id).toBeNull()
+    })
+  })
+
+  // The bypass must be narrow: an unauthorized direct UPDATE that clears
+  // journal_entry_id (without the gnubok.allow_delete flag) must still raise.
+  it('blocks direct UPDATE that nulls journal_entry_id without the bypass flag', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertPostedEntryWithLines({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const documentId = await insertDocumentLinkedToEntry({
+      userId, companyId, journalEntryId: entryId,
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
+        [documentId],
+      ),
+    ).rejects.toThrow(/BFL_DOCUMENT_IMMUTABILITY/)
+  })
+
+  // Swap to a different non-null journal_entry_id is never legitimate, so
+  // the bypass flag must NOT enable it. set_config(..., is_local=true) is
+  // transaction-scoped, so the flag and the UPDATE must run inside an
+  // explicit BEGIN/ROLLBACK — otherwise autocommit ends the implicit
+  // transaction after set_config and the UPDATE sees an empty flag.
+  it('blocks swap to a different journal_entry_id even with the bypass flag set', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryA = await insertPostedEntryWithLines({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const entryB = await insertPostedEntryWithLines({
+      userId, companyId, fiscalPeriodId, voucherNumber: 2,
+    })
+    const documentId = await insertDocumentLinkedToEntry({
+      userId, companyId, journalEntryId: entryA,
+    })
+
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('gnubok.allow_delete', 'true', true)`)
+      await expect(
+        client.query(
+          `UPDATE public.document_attachments SET journal_entry_id = $2 WHERE id = $1`,
+          [documentId, entryB],
+        ),
+      ).rejects.toThrow(/BFL_DOCUMENT_IMMUTABILITY/)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
   })
 })

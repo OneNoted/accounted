@@ -55,6 +55,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_counterparty_templates:      'transactions:read',
   gnubok_suggest_categories:              'transactions:read',
   gnubok_match_transaction_to_invoice:    'transactions:write',
+  gnubok_auto_match_period:               'transactions:write',
   // Customers
   gnubok_list_customers:                  'customers:read',
   gnubok_create_customer:                 'customers:write',
@@ -71,11 +72,13 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_trial_balance:               'reports:read',
   gnubok_get_vat_report:                  'reports:read',
   gnubok_vat_review_widget:               'reports:read',
+  gnubok_vat_close_check:                 'reports:read',
   gnubok_get_kpi_report:                  'reports:read',
   gnubok_get_income_statement:            'reports:read',
   gnubok_list_accounts:                   'reports:read',
   gnubok_get_balance_sheet:               'reports:read',
   gnubok_get_general_ledger:              'reports:read',
+  gnubok_query_journal:                   'reports:read',
   gnubok_get_ar_ledger:                   'reports:read',
   gnubok_get_supplier_ledger:             'reports:read',
   gnubok_list_fiscal_periods:             'reports:read',
@@ -99,6 +102,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_lock_period:                     'bookkeeping:write',
   gnubok_unlock_period:                   'bookkeeping:write',
   gnubok_run_year_end:                    'bookkeeping:write',
+  gnubok_year_end_readiness:              'reports:read',
   gnubok_set_opening_balances:            'bookkeeping:write',
   gnubok_run_currency_revaluation:        'bookkeeping:write',
   gnubok_explain_voucher_gap:             'bookkeeping:write',
@@ -107,10 +111,12 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_uncategorize_transaction:        'transactions:write',
   // SIE export (read-only) + import (write)
   gnubok_export_sie:                      'reports:read',
+  gnubok_audit_package:                   'reports:read',
   gnubok_import_sie:                      'bookkeeping:write',
   // Supplier invoice lifecycle
   gnubok_approve_supplier_invoice:        'suppliers:write',
   gnubok_credit_supplier_invoice:         'suppliers:write',
+  gnubok_create_supplier_invoice_from_inbox: 'suppliers:write',
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',
