@@ -878,23 +878,37 @@ export async function computeVatCloseCheck(
       .eq('status', 'registered')
       .gte('invoice_date', start).lte('invoice_date', end),
     getReconciliationStatus(supabase, companyId, start, end),
-    // Missing receipts: posted journal entries in period with absolute amount ≥ 4000
-    // SEK that have no document_attachments. Scoped to entries originating from
-    // bank transactions or supplier invoices (where a receipt is expected) —
-    // skips invoice-payment entries, year-end entries, etc.
+    // Missing receipts: posted journal entries in period whose gross amount
+    // (sum of debits, equal to sum of credits in a balanced entry) is ≥
+    // 4 000 SEK and that have no document_attachments. Scoped to entries
+    // originating from bank transactions / supplier invoices / receipts
+    // (where a receipt is legally expected) — skips invoice-payment
+    // entries, year-end entries, etc.
+    //
+    // The 4 000 SEK threshold from ML 17 kap 26–28 § (förenklad faktura) is
+    // expressed inclusive of moms, so we deliberately compare against the
+    // gross. Sum-of-debits equals the gross for ordinary purchase entries
+    // (expense + ingående moms + AP/bank). For EU acquisitions and domestic
+    // reverse-charge buyer entries the calculated VAT lines inflate the
+    // sum, which can pull a sub-threshold purchase above 4 000 — that's a
+    // false positive in favour of asking the user for the receipt, which
+    // is the safe direction.
     (async () => {
       const { data: candidates } = await supabase
         .from('journal_entries')
-        .select('id, total_amount, source_type, document_attachments(id)')
+        .select(
+          'id, source_type, document_attachments(id), journal_entry_lines(debit_amount)'
+        )
         .eq('company_id', companyId)
         .in('source_type', ['bank_transaction', 'supplier_invoice', 'receipt'])
         .in('status', ['posted'])
         .gte('entry_date', start).lte('entry_date', end)
-      const missing = (candidates ?? []).filter(
-        (e) =>
-          Math.abs(Number(e.total_amount) || 0) >= 4000 &&
-          (!e.document_attachments || (e.document_attachments as unknown[]).length === 0)
-      )
+      const missing = (candidates ?? []).filter((e) => {
+        const lines = (e.journal_entry_lines ?? []) as { debit_amount: number | string }[]
+        const gross = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+        const docs = e.document_attachments as unknown[] | null
+        return gross >= 4000 && (!docs || docs.length === 0)
+      })
       return missing.length
     })(),
   ])
@@ -939,15 +953,24 @@ export async function computeVatCloseCheck(
       hint: 'BFL 5 kap 6§: varje affärshändelse måste ha verifikat. Använd gnubok_list_unmatched_documents för att para ihop.',
     })
   }
-  // Reverse-charge sanity: output present without matching input (mirrors warning in computeVatReport)
-  const totalRcOutput = vatReport.rutor.ruta30 + vatReport.rutor.ruta31 + vatReport.rutor.ruta32
-  if (totalRcOutput > 0 && vatReport.rutor.ruta48 === 0) {
+  // Reverse-charge sanity: EU acquisitions (ruta 31/32) are buyer-side and
+  // require BOTH calculated utgående moms (2615/2625/2635 → ruta 30) AND
+  // matching ingående moms (2645 → ruta 48). If we have EU-acquisition
+  // beskattningsunderlag in 31/32 with no ruta 48, the input side was
+  // forgotten — ML 2023:200 / SKV 4700.
+  // We deliberately exclude ruta 30 from this check: ruta 30 is the seller-
+  // side reporting field for domestic omvänd skattskyldighet (e.g. bygg-
+  // tjänster), where the seller books no VAT at all (the buyer reports
+  // both sides on rutor 24/48). Including ruta 30 produced false positives
+  // for any seller of byggtjänster with no buyer-side EU purchases.
+  const euAcquisitionBase = vatReport.rutor.ruta31 + vatReport.rutor.ruta32
+  if (euAcquisitionBase > 0 && vatReport.rutor.ruta48 === 0) {
     blockers.push({
       kind: 'reverse_charge_input_missing',
       severity: 'high',
       count: 1,
-      message: 'Omvänd skattskyldighet: utgående moms bokförd (ruta 30/31/32) men ingen ingående moms',
-      hint: 'ML 2023:200 kräver bokning av både utgående OCH ingående moms (2645 EU eller 2647 inhemsk).',
+      message: 'EU-förvärv (ruta 31/32) bokförda men ingen ingående moms (ruta 48)',
+      hint: 'ML 2023:200: vid EU-förvärv ska både beräknad utgående moms och avdragsgill ingående moms bokföras (2645).',
     })
   }
 
@@ -2793,9 +2816,11 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         lines: { type: 'array', items: { type: 'object' } },
-        truncated: { type: 'boolean', description: 'True if more lines matched than were returned' },
-        total_lines: { type: 'number' },
+        truncated: { type: 'boolean', description: 'True if more matching lines exist than were returned' },
+        total_lines: { type: 'number', description: 'Total lines matching ALL filters (incl. amount). When amount_min/amount_max is set this reflects the filtered set, not the wider DB-side match.' },
         returned_lines: { type: 'number' },
+        amount_filter_applied_post_fetch: { type: 'boolean', description: 'True if amount_min/amount_max was applied client-side after the DB fetch.' },
+        db_matched_pre_amount_filter: { type: ['number', 'null'], description: 'Pre-amount-filter DB match count when amount_filter_applied_post_fetch is true; null otherwise.' },
         totals: {
           type: 'object',
           properties: {
@@ -2872,7 +2897,10 @@ export const tools: McpTool[] = [
       // PostgREST `or` filter applies at the joined level when fully qualified.
       const text = (args.text as string | undefined)?.trim()
       if (text) {
-        const escaped = text.replace(/[%]/g, '\\%').replace(/,/g, ' ')
+        // Escape both LIKE wildcards (`%` and `_`) so a search for "2_441"
+        // matches the literal string instead of "2X441". Replace `,` with a
+        // space because PostgREST treats it as the `or` separator.
+        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_').replace(/,/g, ' ')
         query = query.or(
           `line_description.ilike.%${escaped}%,journal_entries.description.ilike.%${escaped}%`
         )
@@ -2914,6 +2942,7 @@ export const tools: McpTool[] = [
       // max(debit, credit) works.
       const amountMin = args.amount_min as number | undefined
       const amountMax = args.amount_max as number | undefined
+      const amountFilterApplied = typeof amountMin === 'number' || typeof amountMax === 'number'
       const filtered = (data ?? []).filter((row) => {
         const r = row as unknown as LineRow
         const lineAmount = Math.max(Number(r.debit_amount) || 0, Number(r.credit_amount) || 0)
@@ -2949,12 +2978,27 @@ export const tools: McpTool[] = [
         }
       })
 
-      const totalMatched = count ?? lines.length
+      // PostgREST's `count` is computed before the post-fetch amount filter,
+      // so when amount_min/amount_max is set it reflects the wider DB-side
+      // match — not the lines actually returned. Reporting that as
+      // `total_lines` would mislead an agent into chasing a truncated tail
+      // that has already been filtered out client-side. When the amount
+      // filter ran, anchor `total_lines` and `truncated` to the filtered
+      // result, and surface the pre-filter count + a flag separately so an
+      // agent can still tell the DB matched more (it just didn't pass the
+      // amount predicate).
+      const dbMatched = count ?? (data ?? []).length
+      const total_lines = amountFilterApplied ? lines.length : dbMatched
+      const truncated = amountFilterApplied
+        ? (data ?? []).length >= limit && lines.length === limit
+        : dbMatched > lines.length
       return {
         lines,
-        truncated: totalMatched > lines.length,
-        total_lines: totalMatched,
+        truncated,
+        total_lines,
         returned_lines: lines.length,
+        amount_filter_applied_post_fetch: amountFilterApplied,
+        db_matched_pre_amount_filter: amountFilterApplied ? dbMatched : null,
         totals: {
           debit: Math.round(totalDebit * 100) / 100,
           credit: Math.round(totalCredit * 100) / 100,

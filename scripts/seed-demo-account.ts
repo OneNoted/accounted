@@ -38,7 +38,15 @@ const sb = createClient(SUPABASE_URL, SERVICE_KEY, {
 })
 
 const args = process.argv.slice(2)
-const email = args.find((a) => !a.startsWith('--')) ?? 'emilamnas@gmail.com'
+const emailArg = args.find((a) => !a.startsWith('--'))
+if (!emailArg) {
+  console.error('Usage: npx tsx scripts/seed-demo-account.ts <email> [--force]')
+  console.error('Refusing to run without an explicit target email — the script')
+  console.error('seeds demo data and `--force` wipes existing Konsult AB / Konsult')
+  console.error('Holding AB owned by the target user before re-seeding.')
+  process.exit(1)
+}
+const email: string = emailArg
 const force = args.includes('--force')
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -208,7 +216,7 @@ async function setupCompany(
   const fpY: Record<number, string> = {}
   let prev: string | null = null
   for (const y of fiscalYears) {
-    const { data: fp, error } = await sb
+    const { data: fp, error } = (await sb
       .from('fiscal_periods')
       .insert({
         user_id: userId,
@@ -221,8 +229,8 @@ async function setupCompany(
         previous_period_id: prev,
       })
       .select('id')
-      .single()
-    if (error) throw new Error(`fiscal_periods ${y}: ${error.message}`)
+      .single()) as { data: { id: string } | null; error: { message: string } | null }
+    if (error || !fp) throw new Error(`fiscal_periods ${y}: ${error?.message ?? 'no data'}`)
     fpY[y] = fp.id
     prev = fp.id
   }
