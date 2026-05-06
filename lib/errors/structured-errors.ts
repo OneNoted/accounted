@@ -469,6 +469,25 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte bokföra betalningen.',
     message_en: 'Failed to create payment journal entry.',
   },
+  INVOICE_DELETE_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Endast utkast kan tas bort. Bokförda fakturor måste krediteras istället.',
+    message_en: 'Only draft invoices can be deleted; non-drafts must be credited.',
+    remediation: {
+      description: 'Issue a credit note instead of deleting a posted invoice.',
+    },
+  },
+  INVOICE_DELETE_NUMBERED: {
+    httpStatus: 400,
+    message_sv:
+      'Det här utkastet har redan tilldelats ett löpnummer och kan inte tas bort. Försök skicka det igen — om sändningen lyckas behövs inget annat steg.',
+    message_en:
+      'Draft already has an invoice number assigned; refusing to delete to preserve the number sequence. Retry the send — assignment is idempotent.',
+    remediation: {
+      description:
+        'Retry sending the invoice; ensureInvoiceNumber is idempotent so no new number will be consumed. If sending is no longer desired, contact support to clean up the orphan number.',
+    },
+  },
 }
 
 const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {

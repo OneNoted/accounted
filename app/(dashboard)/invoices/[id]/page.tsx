@@ -904,15 +904,24 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         </p>
                       </>
                     )}
-                    <Button
-                      variant="outline"
-                      className="w-full text-destructive hover:text-destructive"
-                      onClick={() => setShowDeleteDialog(true)}
-                      disabled={isDeleting}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Ta bort utkast
-                    </Button>
+                    {invoice.invoice_number ? (
+                      <div className="flex items-start gap-2 p-3 bg-muted/50 border border-border rounded-lg mt-2">
+                        <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                        <p className="text-xs text-muted-foreground">
+                          Utkastet har redan tilldelats löpnummer {invoice.invoice_number} och kan inte tas bort. Försök skicka fakturan igen — om sändningen lyckas behövs inget annat steg.
+                        </p>
+                      </div>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setShowDeleteDialog(true)}
+                        disabled={isDeleting}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Ta bort utkast
+                      </Button>
+                    )}
                   </>
                 )}
                 {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && (
@@ -947,22 +956,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      {/* Delete confirmation dialog */}
+      {/* Delete confirmation dialog. Only reachable when invoice_number is null;
+          numbered drafts surface an inline retry-send notice instead. */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Ta bort fakturautkast</DialogTitle>
             <DialogDescription>
-              Är du säker på att du vill ta bort {invoice.invoice_number ? `utkast ${invoice.invoice_number}` : 'utkastet'}? Detta kan inte ångras.
-              {invoice.invoice_number ? (
-                <span className="mt-2 block text-destructive">
-                  Löpnummer {invoice.invoice_number} är redan reserverat och kommer att bli ett permanent hopp i fakturaserien.
-                </span>
-              ) : (
-                <span className="mt-2 block text-muted-foreground">
-                  Inget löpnummer har tilldelats — fakturaserien påverkas inte.
-                </span>
-              )}
+              Är du säker på att du vill ta bort utkastet? Detta kan inte ångras.
+              <span className="mt-2 block text-muted-foreground">
+                Inget löpnummer har tilldelats — fakturaserien påverkas inte.
+              </span>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

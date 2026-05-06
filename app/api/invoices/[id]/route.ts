@@ -2,13 +2,24 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api.invoices.delete')
 
 /**
  * DELETE /api/invoices/[id]
  *
  * Permanently deletes a draft invoice and its items.
- * Only invoices with status 'draft' can be deleted — committed invoices
- * are immutable per BFL and must be reversed via credit note instead.
+ *
+ * Two preconditions:
+ *   1. status === 'draft' — committed invoices are immutable per BFL and
+ *      must be reversed via credit note.
+ *   2. invoice_number IS NULL — a draft that already holds an F-series
+ *      number is a side effect of an interrupted send/convert/mark-sent.
+ *      Destroying it would orphan the number and create a permanent gap
+ *      in the verifications series. Refuse and let the user retry the
+ *      send instead (ensureInvoiceNumber is idempotent).
  */
 export async function DELETE(
   request: Request,
@@ -28,10 +39,9 @@ export async function DELETE(
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // Fetch invoice to verify ownership and status
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
-    .select('id, status, user_id')
+    .select('id, status, invoice_number, user_id')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
@@ -41,13 +51,15 @@ export async function DELETE(
   }
 
   if (invoice.status !== 'draft') {
-    return NextResponse.json(
-      { error: 'Endast utkast kan tas bort. Bokförda fakturor måste krediteras istället.' },
-      { status: 400 }
-    )
+    return errorResponseFromCode('INVOICE_DELETE_NOT_DRAFT', log)
   }
 
-  // Delete items first (FK constraint), then the invoice
+  if (invoice.invoice_number !== null) {
+    return errorResponseFromCode('INVOICE_DELETE_NUMBERED', log, {
+      details: { invoice_number: invoice.invoice_number },
+    })
+  }
+
   const { error: itemsError } = await supabase
     .from('invoice_items')
     .delete()
