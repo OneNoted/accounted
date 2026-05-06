@@ -209,7 +209,7 @@ describe('POST /bankid/complete', () => {
   })
 
   describe('enrichment — SPAR + CompanyRoles', () => {
-    it('requests both SPAR and CompanyRoles, fetches data, and persists only companyRoles (no PII) to extension_data', async () => {
+    it('requests both SPAR and CompanyRoles, fetches data, and persists only companyRoles (no PII) to bankid_enrichment', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       vi.mocked(requestEnrichment).mockResolvedValueOnce({
         enrichmentId: 'enr-1',
@@ -257,14 +257,14 @@ describe('POST /bankid/complete', () => {
         { error: null }, // bankid_identities insert OK
       ])
 
-      // Intercept the extension_data upsert so we can assert the persisted shape
+      // Intercept the bankid_enrichment upsert so we can assert the persisted shape
       // contains no SPAR / personnummer / name. Other tables fall through to the
       // queued chain.
       const upsertSpy = vi.fn().mockResolvedValue({ error: null })
       const origFrom = client.from as unknown as ReturnType<typeof vi.fn>
       const queuedFrom = origFrom.getMockImplementation() as (table: string) => unknown
       origFrom.mockImplementation((table: string) => {
-        if (table === 'extension_data') {
+        if (table === 'bankid_enrichment') {
           return { upsert: upsertSpy }
         }
         return queuedFrom(table)
@@ -286,21 +286,19 @@ describe('POST /bankid/complete', () => {
       )
       expect(vi.mocked(fetchEnrichmentData)).toHaveBeenCalledWith('/api/v1/enrichment/data/abc')
 
-      // Persisted blob must contain companyRoles + enrichedAtUtc only.
+      // Persisted row must contain company_roles + enriched_at_utc only.
       // SPAR (personnummer / name / address / birth date) must NOT be stored,
       // even when TIC returns it — those fields live in bankid_identities (encrypted).
       expect(upsertSpy).toHaveBeenCalledTimes(1)
-      const [persistedRow] = upsertSpy.mock.calls[0] as [
-        { key: string; value: Record<string, unknown> },
-      ]
-      expect(persistedRow.key).toBe('bankid_enrichment')
-      expect(persistedRow.value).toEqual({
-        companyRoles: expect.any(Array),
-        enrichedAtUtc: '2026-05-06T11:30:00Z',
+      const [persistedRow] = upsertSpy.mock.calls[0] as [Record<string, unknown>]
+      expect(persistedRow).toEqual({
+        user_id: expect.any(String),
+        company_roles: expect.any(Array),
+        enriched_at_utc: '2026-05-06T11:30:00Z',
       })
-      expect(persistedRow.value).not.toHaveProperty('spar')
-      expect(persistedRow.value).not.toHaveProperty('personalNumber')
-      expect(persistedRow.value).not.toHaveProperty('name')
+      expect(persistedRow).not.toHaveProperty('spar')
+      expect(persistedRow).not.toHaveProperty('personalNumber')
+      expect(persistedRow).not.toHaveProperty('name')
     })
   })
 

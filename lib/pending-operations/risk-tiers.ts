@@ -50,6 +50,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   uncategorize_transaction: 'medium',
   approve_supplier_invoice: 'high',
   credit_supplier_invoice: 'high',
+  // Create supplier invoice from inbox: stages a `registered` supplier invoice
+  // + its line items + document attachment. Reversible until approved (the
+  // approval is a separate high-risk op) but creates a leverantörsskuld row,
+  // so we route it through human review at medium tier.
+  create_supplier_invoice_from_inbox: 'medium',
   credit_invoice: 'high',
   convert_invoice: 'medium',
 }

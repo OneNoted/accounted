@@ -41,6 +41,33 @@ async function insertPostedEntryWithLines(params: {
   return id
 }
 
+// Insert a document_attachment row already linked to a journal entry, so
+// tests can exercise the bidirectional immutability trigger on the
+// journal_entry_id column.
+async function insertDocumentLinkedToEntry(params: {
+  userId: string
+  companyId: string
+  journalEntryId: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.document_attachments
+       (id, user_id, company_id, storage_path, file_name, sha256_hash,
+        journal_entry_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      id,
+      params.userId,
+      params.companyId,
+      `test/${id}.pdf`,
+      'receipt.pdf',
+      'a'.repeat(64),
+      params.journalEntryId,
+    ],
+  )
+  return id
+}
+
 describe('delete_last_voucher.pg — RPC + immutability trigger interaction', () => {
   it('deletes the last posted voucher in a series', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
@@ -189,5 +216,25 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
         [entryId],
       ),
     ).rejects.toThrow(/Cannot modify a reversed journal entry/i)
+  })
+
+  // The bypass must remain narrow: an unauthorized direct UPDATE that clears
+  // journal_entry_id outside delete_last_voucher (no gnubok.allow_delete
+  // transaction-local flag) must still raise BFL_DOCUMENT_IMMUTABILITY.
+  it('blocks direct UPDATE that nulls journal_entry_id without the bypass flag', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertPostedEntryWithLines({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const documentId = await insertDocumentLinkedToEntry({
+      userId, companyId, journalEntryId: entryId,
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
+        [documentId],
+      ),
+    ).rejects.toThrow(/BFL_DOCUMENT_IMMUTABILITY/)
   })
 })
