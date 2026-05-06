@@ -133,12 +133,13 @@ export async function DELETE(
     .eq('company_id', companyId)
 
   if (updateError) {
-    // The enforce_transactions_document_immutability trigger raises
-    // check_violation (SQLSTATE 23514) when the previously-attached doc has
-    // already become räkenskapsinformation. Translate to the same 409 +
-    // Swedish message the application-layer pre-check returns, so behaviour
-    // is identical whether or not the pre-check fires first.
-    if ((updateError as { code?: string }).code === '23514') {
+    // The enforce_transactions_document_immutability trigger raises a
+    // P0001 exception with a stable BFL_DOCUMENT_IMMUTABILITY: prefix when the
+    // previously-attached doc has already become räkenskapsinformation.
+    // Match on the prefix (not on the generic SQLSTATE) so unrelated future
+    // exceptions don't get translated into the Swedish underlag message.
+    const errMsg = (updateError as { message?: string }).message ?? ''
+    if (errMsg.includes('BFL_DOCUMENT_IMMUTABILITY')) {
       return NextResponse.json(
         {
           error:

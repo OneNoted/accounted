@@ -2683,7 +2683,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_unmatched_documents',
-    description: 'List documents from the inbox that are not yet attached to any bank transaction or supplier invoice. Returns extracted hints (vendor, amount, date) so the agent can match against transactions without reading the PDF.',
+    description: 'List inbox documents not yet attached to any bank transaction or supplier invoice. Returns vendor/amount/currency/date hints. The amount is in the invoice currency — FX-normalise before comparing to transactions.amount.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2771,6 +2771,7 @@ export const tools: McpTool[] = [
           let vendorName: string | null = null
           let orgNumber: string | null = null
           let amount: number | null = null
+          let currency: string | null = null
           let invoiceDate: string | null = null
           let paymentReference: string | null = null
 
@@ -2781,6 +2782,12 @@ export const tools: McpTool[] = [
             vendorName = (supplier?.name as string) || null
             orgNumber = (supplier?.orgNumber as string) || null
             amount = (totals?.total as number) || null
+            // Surface currency alongside amount so the agent doesn't compare a
+            // non-SEK invoice numerically to a SEK transaction. transactions.amount
+            // is in transactions.currency; if these don't match, the agent must
+            // FX-normalise before ranking matches. Defaulting to null when absent
+            // (rather than 'SEK') makes the missing-currency case explicit.
+            currency = (invoice?.currency as string) || null
             invoiceDate = (invoice?.invoiceDate as string) || null
             paymentReference = (invoice?.paymentReference as string) || null
           }
@@ -2796,6 +2803,7 @@ export const tools: McpTool[] = [
             vendor_name: vendorName,
             org_number: orgNumber,
             amount,
+            currency,
             invoice_date: invoiceDate,
             payment_reference: paymentReference,
           }

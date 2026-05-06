@@ -395,12 +395,18 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     expect(result.http_status).toBe(409)
   })
 
-  it('translates trigger check_violation (23514) into auto-reject 409', async () => {
+  it('translates BFL_DOCUMENT_IMMUTABILITY trigger error into auto-reject 409', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
-    enqueue({ data: null, error: { code: '23514', message: 'check_violation' } }) // UPDATE trigger fires
+    enqueue({
+      data: null,
+      error: {
+        code: 'P0001',
+        message: 'BFL_DOCUMENT_IMMUTABILITY: cannot detach or swap document …',
+      },
+    })
     enqueue({ data: null, error: null }) // dispatcher reject update
 
     const result = await commitPendingOperation(

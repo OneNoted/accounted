@@ -919,10 +919,12 @@ async function commitAttachDocumentToTransaction(
     .maybeSingle()
 
   if (updateError) {
-    // The DB-level immutability trigger raises check_violation if the previous
-    // doc was already räkenskapsinformation. Translate to 409 with the Swedish
-    // user message rather than surfacing as a 500.
-    if ((updateError as { code?: string }).code === '23514') {
+    // The DB-level immutability trigger raises P0001 with a stable
+    // BFL_DOCUMENT_IMMUTABILITY: prefix when the previous doc is already
+    // räkenskapsinformation. Match on the prefix (not the generic SQLSTATE)
+    // so unrelated future exceptions don't get translated.
+    const errMsg = (updateError as { message?: string }).message ?? ''
+    if (errMsg.includes('BFL_DOCUMENT_IMMUTABILITY')) {
       return {
         error:
           'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
@@ -941,7 +943,18 @@ async function commitAttachDocumentToTransaction(
       .eq('id', documentId)
       .eq('company_id', companyId)
     if (linkErr) {
+      // Surface the propagation failure rather than logging-and-continuing.
+      // BFL 5 kap 6 § requires the verifikation to reference its underlag, so
+      // a "succeeded" attach that left document_attachments.journal_entry_id
+      // null would be a silent compliance gap. Failing here marks the op
+      // failed; a retry is idempotent (same documentId on tx, same propagate
+      // target) and will replay the document_attachments UPDATE.
       console.error('[commitAttach] Failed to propagate to journal entry:', linkErr)
+      return {
+        error:
+          'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen — operationen är idempotent.',
+        status: 500,
+      }
     }
   }
 

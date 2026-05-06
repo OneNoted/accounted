@@ -473,6 +473,7 @@ function AttachToTransactionDialog({
   const [attachingId, setAttachingId] = useState<string | null>(null)
 
   const targetAmount = pickAmount(item)
+  const targetCurrency = pickCurrency(item)
 
   useEffect(() => {
     if (!open) return
@@ -491,7 +492,7 @@ function AttachToTransactionDialog({
             amount: t.amount,
             currency: t.currency || 'SEK',
           }))
-        setTransactions(rankByAmount(rows, targetAmount))
+        setTransactions(rankByAmount(rows, targetAmount, targetCurrency))
       } catch (err) {
         console.error('[invoice-inbox/attach] fetch failed:', err)
         toast({ title: 'Kunde inte ladda transaktioner', variant: 'destructive' })
@@ -500,7 +501,7 @@ function AttachToTransactionDialog({
       }
     })()
     return () => { cancelled = true }
-  }, [open, targetAmount, toast])
+  }, [open, targetAmount, targetCurrency, toast])
 
   const handleAttach = async (tx: PickerTransaction) => {
     if (!item.document_id) return
@@ -559,7 +560,9 @@ function AttachToTransactionDialog({
                     <span
                       className={cn(
                         'text-sm tabular-nums whitespace-nowrap',
-                        targetAmount != null && Math.abs(Math.abs(tx.amount) - Math.abs(targetAmount)) < 0.01
+                        targetAmount != null
+                          && tx.currency === targetCurrency
+                          && Math.abs(Math.abs(tx.amount) - Math.abs(targetAmount)) < 0.01
                           ? 'font-semibold'
                           : '',
                       )}
@@ -578,10 +581,23 @@ function AttachToTransactionDialog({
   )
 }
 
-function rankByAmount(rows: PickerTransaction[], target: number | null): PickerTransaction[] {
+function rankByAmount(
+  rows: PickerTransaction[],
+  target: number | null,
+  targetCurrency: string,
+): PickerTransaction[] {
   if (target == null) return rows
   const t = Math.abs(target)
+  // Same-currency rows rank by amount distance. Cross-currency rows go to
+  // the bottom — comparing a EUR invoice's amount to a SEK transaction's
+  // amount numerically would be misleading and could cause a wrong attachment
+  // (which then becomes verifikation underlag, BFL 5 kap 6 §). The user can
+  // still manually pick a cross-currency match by scrolling down.
   return [...rows].sort((a, b) => {
+    const aMatch = a.currency === targetCurrency
+    const bMatch = b.currency === targetCurrency
+    if (aMatch !== bMatch) return aMatch ? -1 : 1
+    if (!aMatch) return 0
     const da = Math.abs(Math.abs(a.amount) - t)
     const db = Math.abs(Math.abs(b.amount) - t)
     return da - db

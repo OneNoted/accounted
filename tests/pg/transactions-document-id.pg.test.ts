@@ -122,7 +122,7 @@ describe('transactions.document_id.pg', () => {
         `UPDATE public.transactions SET document_id = NULL WHERE id = $1`,
         [txId],
       ),
-    ).rejects.toThrow(/räkenskapsinformation/)
+    ).rejects.toThrow(/BFL_DOCUMENT_IMMUTABILITY/)
 
     // And blocks swapping to a different document.
     const otherDocId = await insertDocument({ userId, companyId })
@@ -131,7 +131,7 @@ describe('transactions.document_id.pg', () => {
         `UPDATE public.transactions SET document_id = $1 WHERE id = $2`,
         [otherDocId, txId],
       ),
-    ).rejects.toThrow(/räkenskapsinformation/)
+    ).rejects.toThrow(/BFL_DOCUMENT_IMMUTABILITY/)
   })
 
   it('allows detach when the document is not yet on a journal entry', async () => {
