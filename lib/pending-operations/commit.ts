@@ -868,9 +868,14 @@ async function commitAttachDocumentToTransaction(
     return { error: 'transaction_id and document_id are required', status: 400 }
   }
 
+  // Fetch the transaction's current state. journal_entry_id may have flipped to
+  // non-null between staging and commit (user categorized manually). In that
+  // case we must propagate the doc to the journal entry in this same commit —
+  // categorize/route.ts only propagates when the doc is on the tx at the moment
+  // of categorization, and that window has closed.
   const { data: tx, error: txError } = await supabase
     .from('transactions')
-    .select('id')
+    .select('id, journal_entry_id')
     .eq('id', txId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -892,7 +897,28 @@ async function commitAttachDocumentToTransaction(
 
   if (updateError) return { error: 'Failed to attach document', status: 500 }
 
-  return { data: { transaction_id: txId, document_id: documentId } }
+  // If the tx is already booked, propagate the link to the journal entry now
+  // so verifikation underlag (BFL 5 kap 6 §) is satisfied. Without this, an
+  // attach staged before categorize-without-doc and committed after would
+  // leave the journal entry with no documentary basis.
+  if (tx.journal_entry_id) {
+    const { error: linkErr } = await supabase
+      .from('document_attachments')
+      .update({ journal_entry_id: tx.journal_entry_id })
+      .eq('id', documentId)
+      .eq('company_id', companyId)
+    if (linkErr) {
+      console.error('[commitAttach] Failed to propagate to journal entry:', linkErr)
+    }
+  }
+
+  return {
+    data: {
+      transaction_id: txId,
+      document_id: documentId,
+      journal_entry_id: tx.journal_entry_id ?? null,
+    },
+  }
 }
 
 async function commitRunYearEnd(

@@ -44,6 +44,22 @@ async function insertTransaction(params: {
   return id
 }
 
+async function insertJournalEntry(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+}): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.journal_entries
+       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+        entry_date, description, source_type, status)
+     VALUES ($1, $2, $3, $4, 1, 'A', '2026-05-01', 'Test', 'manual', 'draft')`,
+    [id, params.userId, params.companyId, params.fiscalPeriodId],
+  )
+  return id
+}
+
 describe('transactions.document_id.pg', () => {
   it('attaches a document to a transaction and reads it back', async () => {
     const { userId, companyId } = await seedCompany()
@@ -62,9 +78,8 @@ describe('transactions.document_id.pg', () => {
     const docId = await insertDocument({ userId, companyId })
     const txId = await insertTransaction({ userId, companyId, documentId: docId })
 
-    // Bypass document immutability triggers by using superuser DELETE.
-    // (block_document_deletion fires only on rows linked to journal entries —
-    // this document has no journal_entry_id so the trigger is a no-op.)
+    // block_document_deletion fires only on rows linked to journal entries —
+    // this document has no journal_entry_id so the trigger is a no-op.
     await getPool().query(`DELETE FROM public.document_attachments WHERE id = $1`, [docId])
 
     const res = await getPool().query<{ document_id: string | null }>(
@@ -72,6 +87,52 @@ describe('transactions.document_id.pg', () => {
       [txId],
     )
     expect(res.rows).toHaveLength(1)
+    expect(res.rows[0]!.document_id).toBeNull()
+  })
+
+  it('blocks UPDATE that detaches a document already linked to a journal entry', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const docId = await insertDocument({ userId, companyId })
+    const txId = await insertTransaction({ userId, companyId, documentId: docId })
+    const jeId = await insertJournalEntry({ userId, companyId, fiscalPeriodId })
+
+    // Simulate the categorize propagation: doc is now räkenskapsinformation.
+    await getPool().query(
+      `UPDATE public.document_attachments SET journal_entry_id = $1 WHERE id = $2`,
+      [jeId, docId],
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.transactions SET document_id = NULL WHERE id = $1`,
+        [txId],
+      ),
+    ).rejects.toThrow(/räkenskapsinformation/)
+
+    // And blocks swapping to a different document.
+    const otherDocId = await insertDocument({ userId, companyId })
+    await expect(
+      getPool().query(
+        `UPDATE public.transactions SET document_id = $1 WHERE id = $2`,
+        [otherDocId, txId],
+      ),
+    ).rejects.toThrow(/räkenskapsinformation/)
+  })
+
+  it('allows detach when the document is not yet on a journal entry', async () => {
+    const { userId, companyId } = await seedCompany()
+    const docId = await insertDocument({ userId, companyId })
+    const txId = await insertTransaction({ userId, companyId, documentId: docId })
+
+    await getPool().query(
+      `UPDATE public.transactions SET document_id = NULL WHERE id = $1`,
+      [txId],
+    )
+
+    const res = await getPool().query<{ document_id: string | null }>(
+      `SELECT document_id FROM public.transactions WHERE id = $1`,
+      [txId],
+    )
     expect(res.rows[0]!.document_id).toBeNull()
   })
 })
