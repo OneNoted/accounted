@@ -169,3 +169,40 @@ function isNetworkError(err: Error): boolean {
   }
   return false
 }
+
+/**
+ * Classify an error from a provider client (Fortnox/Bokio/Visma/Briox/BL) into
+ * a structured error code. Reads `statusCode` (Fortnox client) or `status`
+ * (other clients) off the thrown error and maps:
+ *
+ *   401/403 → PROVIDER_AUTH_EXPIRED
+ *   429     → PROVIDER_RATE_LIMITED
+ *   5xx     → PROVIDER_UPSTREAM_ERROR
+ *   network → PROVIDER_UNREACHABLE
+ *   other   → null (caller falls back to its domain-specific code, e.g.
+ *             `PROVIDER_SIE_FETCH_FAILED`)
+ *
+ * Use at the boundary where a provider call's failure becomes a user-facing
+ * response. Lets the toast show a specific Swedish message ("Anslutningen har
+ * gått ut. Återanslut för att fortsätta." vs. "Försök igen om en stund.")
+ * instead of the same generic message for every cause.
+ */
+export function classifyProviderError(error: unknown): ProviderCallErrorCode | null {
+  if (error instanceof ProviderCallError) {
+    return error.code
+  }
+  if (!(error instanceof Error)) return null
+
+  const status =
+    (error as Error & { statusCode?: number; status?: number }).statusCode ??
+    (error as Error & { statusCode?: number; status?: number }).status
+
+  if (typeof status === 'number') {
+    if (status === 401 || status === 403) return 'PROVIDER_AUTH_EXPIRED'
+    if (status === 429) return 'PROVIDER_RATE_LIMITED'
+    if (status >= 500) return 'PROVIDER_UPSTREAM_ERROR'
+  }
+  if (isNetworkError(error)) return 'PROVIDER_UNREACHABLE'
+
+  return null
+}
