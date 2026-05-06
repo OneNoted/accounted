@@ -267,6 +267,7 @@ export const POST = withRouteContext(
     let journalEntryCreated = false
     let journalEntryId: string | null = null
     let journalEntryError: string | null = null
+    let documentLinkWarning: string | null = null
 
     try {
       const journalEntry = await createTransactionJournalEntry(
@@ -335,6 +336,34 @@ export const POST = withRouteContext(
         }
       } catch (linkErr) {
         txLog.warn('failed to link receipt document (non-critical)', linkErr as Error)
+      }
+    } else if (journalEntryId && transaction.document_id) {
+      // Document was pinned to the transaction (via /attach-document or MCP) before
+      // categorization. Propagate the link to the journal entry so
+      // receipt-on-verifikation (BFL 5 kap 6 §) is satisfied. The journal entry has
+      // already been committed at this point, so we can't roll it back; instead
+      // surface a warning in the response so the UI can prompt the user to retry
+      // the link. Supabase JS returns { error } rather than throwing — destructure
+      // and surface it, never swallow silently.
+      try {
+        const { error: linkErr } = await supabase
+          .from('document_attachments')
+          .update({ journal_entry_id: journalEntryId })
+          .eq('id', transaction.document_id)
+          .eq('company_id', companyId)
+        if (linkErr) {
+          txLog.error('failed to link transaction document', linkErr, {
+            documentId: transaction.document_id,
+          })
+          documentLinkWarning =
+            'Verifikationen skapades men bilagan kunde inte länkas till den. Försök länka om bilagan manuellt.'
+        }
+      } catch (docErr) {
+        txLog.error('failed to link transaction document', docErr as Error, {
+          documentId: transaction.document_id,
+        })
+        documentLinkWarning =
+          'Verifikationen skapades men bilagan kunde inte länkas till den. Försök länka om bilagan manuellt.'
       }
     }
 
@@ -429,6 +458,7 @@ export const POST = withRouteContext(
       journal_entry_created: journalEntryCreated,
       journal_entry_id: journalEntryId,
       journal_entry_error: journalEntryError,
+      document_link_warning: documentLinkWarning,
       category: finalCategory,
     })
   },
