@@ -15,7 +15,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
-import { collectBankIdResult } from '../lib/bankid-client'
+import { collectBankIdResult, requestEnrichment, fetchEnrichmentData } from '../lib/bankid-client'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ticExtension } from '../index'
 
@@ -205,6 +205,73 @@ describe('POST /bankid/complete', () => {
       expect(status).toBe(404)
       expect(body.error).toBe('no_account')
       expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('enrichment — SPAR + CompanyRoles', () => {
+    it('requests both SPAR and CompanyRoles and fetches data via secureUrl when both succeed', async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      vi.mocked(requestEnrichment).mockResolvedValueOnce({
+        enrichmentId: 'enr-1',
+        sessionId: 'test-session',
+        status: 'Completed',
+        requestedTypes: ['SPAR', 'CompanyRoles'],
+        completedTypes: ['SPAR', 'CompanyRoles'],
+        secureUrl: '/api/v1/enrichment/data/abc',
+        secureUrlExpiresAtUtc: '2026-05-06T12:00:00Z',
+      })
+      vi.mocked(fetchEnrichmentData).mockResolvedValueOnce({
+        personalNumber: '199001011234',
+        name: 'Anna Andersson',
+        enrichedAtUtc: '2026-05-06T11:30:00Z',
+        spar: {
+          Person_IdNummer: '199001011234',
+          Person_PersonIdTyp: 'PERSONNR',
+          Skydd_Sekretessmarkering: false,
+          Skydd_SkyddadFolkbokforing: false,
+          Namn_Fornamn: 'Anna',
+          Namn_Efternamn: 'Andersson',
+          PersonDetaljer_Kon: 'K',
+          PersonDetaljer_Fodelsedatum: '1990-01-01',
+          Folkbokforingsadress_SvenskAdress_Utdelningsadress1: 'Storgatan 1',
+          Folkbokforingsadress_SvenskAdress_PostNr: '11122',
+          Folkbokforingsadress_SvenskAdress_Postort: 'Stockholm',
+        },
+        companyRoles: [
+          {
+            companyId: 12345,
+            companyRegistrationNumber: '5566778899',
+            legalName: 'Exempel AB',
+            legalEntityType: 'AB',
+            positionTypes: ['LED'],
+            positionDescriptions: ['Styrelseledamot'],
+            positionStart: '2020-01-15',
+            positionEnd: null,
+            companyStatus: 'Aktivt',
+          },
+        ],
+      })
+      mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { data: null }, // email lookup → not taken
+        { error: null }, // bankid_identities insert OK
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        body: { sessionId: 'test-session', mode: 'signup', email: 'fresh@example.com' },
+      })
+      const { status, body } = await parseJsonResponse<{
+        data?: { tokenHash?: string; isNewUser?: boolean }
+      }>(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      expect(body.data?.isNewUser).toBe(true)
+      expect(vi.mocked(requestEnrichment)).toHaveBeenCalledWith(
+        'test-session',
+        ['SPAR', 'CompanyRoles']
+      )
+      expect(vi.mocked(fetchEnrichmentData)).toHaveBeenCalledWith('/api/v1/enrichment/data/abc')
     })
   })
 
