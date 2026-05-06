@@ -119,17 +119,31 @@ export async function POST(
     }
   }
 
-  await supabase
+  // Cancel the proforma. If this fails, the new (still unnumbered) invoice
+  // is an orphan — delete it so the user can retry without ending up with
+  // two active invoices for the same proforma. invoice_items cascade.
+  const previousProformaStatus = proforma.status
+  const { error: cancelError } = await supabase
     .from('invoices')
     .update({ status: 'cancelled' })
     .eq('id', id)
 
-  // Allocate the F-series number last. If allocation fails, the row stays
-  // unnumbered and can be retried or cleaned up — but the counter does not
-  // advance because the RPC only commits on success.
+  if (cancelError) {
+    await supabase.from('invoices').delete().eq('id', invoice.id)
+    return NextResponse.json({ error: cancelError.message }, { status: 500 })
+  }
+
+  // Allocate the F-series number last. If allocation fails, restore the
+  // proforma's previous status and delete the orphan invoice. The F-counter
+  // is unaffected because generate_invoice_number only commits on success.
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
+    await supabase
+      .from('invoices')
+      .update({ status: previousProformaStatus })
+      .eq('id', id)
+    await supabase.from('invoices').delete().eq('id', invoice.id)
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to assign invoice number' },
       { status: 500 }

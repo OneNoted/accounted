@@ -130,6 +130,62 @@ describe('POST /api/invoices/[id]/convert', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('rolls back the orphan invoice when proforma cancel fails', async () => {
+    // 1. fetch proforma
+    enqueue({ data: baseProforma, error: null })
+    // 2. insert real invoice
+    enqueue({
+      data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' },
+      error: null,
+    })
+    // 3. insert items
+    enqueue({ data: null, error: null })
+    // 4. cancel proforma — FAILS
+    enqueue({ data: null, error: { message: 'cancel failed' } })
+    // 5. rollback delete of orphan invoice
+    enqueue({ data: null, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/pf-1/convert', { method: 'POST' }),
+      createMockRouteParams({ id: 'pf-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error).toContain('cancel failed')
+    // Counter must not have been touched and orphan invoice must have been
+    // deleted (5 enqueued calls all consumed).
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('rolls back invoice + un-cancels proforma when number allocation fails', async () => {
+    // 1. fetch proforma
+    enqueue({ data: baseProforma, error: null })
+    // 2. insert real invoice
+    enqueue({
+      data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' },
+      error: null,
+    })
+    // 3. insert items
+    enqueue({ data: null, error: null })
+    // 4. cancel proforma — succeeds
+    enqueue({ data: null, error: null })
+    // 5. ensureInvoiceNumber → rpc THROWS
+    enqueue({ data: null, error: { message: 'number allocation failed' } })
+    // 6. un-cancel proforma (restore previous status)
+    enqueue({ data: null, error: null })
+    // 7. delete orphan invoice
+    enqueue({ data: null, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/pf-1/convert', { method: 'POST' }),
+      createMockRouteParams({ id: 'pf-1' })
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(500)
+  })
+
   it('allocates the F-number after items + proforma cancel succeed', async () => {
     // 1. fetch proforma
     enqueue({ data: baseProforma, error: null })
