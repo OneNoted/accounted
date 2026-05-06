@@ -76,7 +76,7 @@ describe('DELETE /api/invoices/[id]', () => {
       data: { id: 'inv-1', status: 'draft', invoice_number: 'F-2026001', user_id: 'user-1' },
       error: null,
     })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
 
     const response = await DELETE(
       createMockRequest('/api/invoices/inv-1', { method: 'DELETE' }),
@@ -96,7 +96,7 @@ describe('DELETE /api/invoices/[id]', () => {
       data: { id: 'inv-1', status: 'draft', invoice_number: null, user_id: 'user-1' },
       error: null,
     })
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
 
     const response = await DELETE(
       createMockRequest('/api/invoices/inv-1', { method: 'DELETE' }),
@@ -109,6 +109,25 @@ describe('DELETE /api/invoices/[id]', () => {
     expect(status).toBe(200)
     expect(body.data.cancelled).toBe(true)
     expect(body.data.invoice_number).toBeNull()
+  })
+
+  it('returns 409 INVOICE_CANCEL_RACE when status flipped between fetch and update', async () => {
+    enqueue({
+      data: { id: 'inv-1', status: 'draft', invoice_number: 'F-2026001', user_id: 'user-1' },
+      error: null,
+    })
+    // Update succeeds with no error but matches 0 rows because the .eq('status','draft')
+    // guard rejected the row (concurrent send/cancel flipped status in the meantime).
+    enqueue({ data: [], error: null })
+
+    const response = await DELETE(
+      createMockRequest('/api/invoices/inv-1', { method: 'DELETE' }),
+      createMockRouteParams({ id: 'inv-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_CANCEL_RACE')
   })
 
   it('returns 500 when the cancel update fails', async () => {

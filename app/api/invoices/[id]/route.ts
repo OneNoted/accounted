@@ -54,15 +54,24 @@ export async function DELETE(
     return errorResponseFromCode('INVOICE_DELETE_NOT_DRAFT', log)
   }
 
-  const { error: cancelError } = await supabase
+  // .select() returns the affected rows so we can detect a TOCTOU race where
+  // the status flipped between the fetch above and this update. With only the
+  // .eq('status','draft') guard, a 0-row update returns success and the user
+  // would see "Makulerad" while the invoice is still in its previous state.
+  const { data: updated, error: cancelError } = await supabase
     .from('invoices')
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
     .eq('id', id)
     .eq('company_id', companyId)
     .eq('status', 'draft')
+    .select('id')
 
   if (cancelError) {
     return NextResponse.json({ error: cancelError.message }, { status: 500 })
+  }
+
+  if (!updated || updated.length === 0) {
+    return errorResponseFromCode('INVOICE_CANCEL_RACE', log)
   }
 
   return NextResponse.json({ data: { cancelled: true, invoice_number: invoice.invoice_number } })

@@ -267,6 +267,7 @@ export const POST = withRouteContext(
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,
       journal_entry_error: journalEntryError,
+      category: 'income_services',
     })
   },
   { requireWrite: true },

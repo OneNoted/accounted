@@ -503,7 +503,7 @@ export default function TransactionsPage() {
                   potential_invoice_id: null,
                   potential_invoice: undefined,
                   is_business: true,
-                  category: 'income_services' as TransactionCategory,
+                  category: (result.category ?? 'income_services') as TransactionCategory,
                   journal_entry_id: result.journal_entry_id,
                 }
               : t

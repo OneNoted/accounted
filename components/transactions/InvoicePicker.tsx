@@ -19,7 +19,7 @@ interface InvoicePickerProps {
 
 export default function InvoicePicker({ transaction, onSelect, isProcessing }: InvoicePickerProps) {
   const { company } = useCompany()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
   const [invoices, setInvoices] = useState<OpenInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')

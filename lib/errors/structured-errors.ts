@@ -499,6 +499,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
         'Retry sending the invoice; ensureInvoiceNumber is idempotent so no new number will be consumed. If sending is no longer desired, contact support to clean up the orphan number.',
     },
   },
+  INVOICE_CANCEL_RACE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan ändrades samtidigt och kunde inte makuleras. Ladda om och försök igen.',
+    message_en: 'Invoice was modified concurrently and could not be cancelled. Reload and retry.',
+  },
 }
 
 const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {

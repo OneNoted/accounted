@@ -242,11 +242,35 @@ export const POST = withRouteContext(
       try {
         await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
       } catch (err) {
-        await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id)
-        await supabase.from('invoices').delete().eq('id', invoice.id)
-        log.error('invoice number allocation failed; rolled back invoice', err as Error, {
-          invoiceId: invoice.id,
-        })
+        // Soft-cancel rather than hard-delete: if generate_invoice_number bumped
+        // the sequence before failing to write the number back, hard-deleting
+        // would leave a permanent gap in the F-series in violation of ML 17 kap
+        // 24§. Re-fetch the row to pick up any partially-written number, then
+        // flip status='cancelled' so the row (and any allocated number) is
+        // retained for audit. Log loudly if the cancel itself fails so an
+        // operator can clean up.
+        const { data: latest } = await supabase
+          .from('invoices')
+          .select('invoice_number')
+          .eq('id', invoice.id)
+          .single()
+        const { error: cancelErr } = await supabase
+          .from('invoices')
+          .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+          .eq('id', invoice.id)
+          .eq('company_id', companyId!)
+        if (cancelErr) {
+          log.error('invoice number allocation failed AND rollback-cancel failed; row may be orphaned', cancelErr, {
+            invoiceId: invoice.id,
+            allocatedNumber: latest?.invoice_number ?? null,
+            originalError: (err as Error).message,
+          })
+        } else {
+          log.error('invoice number allocation failed; invoice soft-cancelled', err as Error, {
+            invoiceId: invoice.id,
+            allocatedNumber: latest?.invoice_number ?? null,
+          })
+        }
         return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, {
           requestId,
         })

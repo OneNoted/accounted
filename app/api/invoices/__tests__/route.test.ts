@@ -261,7 +261,7 @@ describe('POST /api/invoices (create invoice)', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREATE_ITEMS_FAILED')
   })
 
-  it('rolls back invoice + items when invoice-number allocation fails', async () => {
+  it('soft-cancels the invoice when invoice-number allocation fails', async () => {
     const customer = makeCustomer({ id: VALID_UUID })
     const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
 
@@ -285,8 +285,8 @@ describe('POST /api/invoices (create invoice)', () => {
     enqueue({ data: null, error: null })
     // generate_invoice_number RPC fails
     enqueue({ data: null, error: { message: 'sequence locked' } })
-    // Rollback: items delete + invoice delete
-    enqueue({ data: null, error: null })
+    // Rollback path: re-fetch invoice_number, then soft-cancel.
+    enqueue({ data: { invoice_number: null }, error: null })
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/invoices', {
