@@ -33,10 +33,14 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
       // flip status to 'paid' on full settlement, but a stale 'sent'/'overdue'
       // row with remaining_amount=0 would otherwise be selectable here and
       // could be matched a second time, double-booking the income.
+      // Also exclude proformas (PF- series) — proforma is not a faktura per
+      // ML 17 kap 24§, has no VAT obligation, and must never be matched
+      // against a bank receipt or trigger a verifikation.
       const { data } = await supabase
         .from('invoices')
         .select('*, customer:customers(*)')
         .eq('company_id', company!.id)
+        .eq('document_type', 'invoice')
         .in('status', ['sent', 'overdue', 'partially_paid'])
         .gt('remaining_amount', 0)
         .order('invoice_date', { ascending: false })
