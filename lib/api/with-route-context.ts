@@ -58,9 +58,14 @@ interface RouteContextOptions {
   requireWrite?: boolean
 }
 
-type DynamicParams = { params: Promise<Record<string, string | string[]>> } | undefined
+// Next.js 16 always passes a `{ params: Promise<...> }` second arg to route
+// handlers — including on non-dynamic routes, where it's `Promise<{}>`. The
+// generic defaults to that empty shape so static routes type-check without
+// having to declare any params at the call site.
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type DynamicParams = { params: Promise<Record<string, string | string[]>> } | { params: Promise<{}> }
 
-type RouteHandler<P extends DynamicParams = undefined> = (
+type RouteHandler<P extends DynamicParams = { params: Promise<Record<string, never>> }> = (
   request: Request,
   ctx: RouteContext,
   params: P,
@@ -71,7 +76,7 @@ function generateRequestId(): string {
   return `req_${crypto.randomUUID()}`
 }
 
-export function withRouteContext<P extends DynamicParams = undefined>(
+export function withRouteContext<P extends DynamicParams = { params: Promise<Record<string, never>> }>(
   operation: string,
   handler: RouteHandler<P>,
   options: RouteContextOptions = {},
