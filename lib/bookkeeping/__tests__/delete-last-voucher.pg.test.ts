@@ -129,6 +129,50 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
     }
   })
 
+  it('clears journal_entry_id on attached documents and deletes the voucher', async () => {
+    // Regression for the document-immutability triggers ignoring the
+    // gnubok.allow_delete bypass. delete_last_voucher unlinks documents
+    // (UPDATE document_attachments SET journal_entry_id = NULL) before
+    // deleting the entry; if the trigger refused the unlink the whole RPC
+    // would fail and the entry would remain.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertPostedEntryWithLines({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const docId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.document_attachments
+         (id, user_id, company_id, storage_path, file_name, file_size_bytes,
+          mime_type, sha256_hash, journal_entry_id)
+       VALUES ($1, $2, $3, $4, 'underlag.pdf', 1024, 'application/pdf', $5, $6)`,
+      [
+        docId,
+        userId,
+        companyId,
+        `documents/${userId}/${docId}.pdf`,
+        'a'.repeat(64),
+        entryId,
+      ],
+    )
+
+    await withUserContext(userId, async (client) => {
+      await client.query(
+        `SELECT public.delete_last_voucher($1::uuid, $2::uuid)`,
+        [companyId, entryId],
+      )
+      const entryAfter = await client.query(
+        `SELECT 1 FROM public.journal_entries WHERE id = $1`,
+        [entryId],
+      )
+      expect(entryAfter.rowCount).toBe(0)
+      const docAfter = await client.query<{ journal_entry_id: string | null }>(
+        `SELECT journal_entry_id FROM public.document_attachments WHERE id = $1`,
+        [docId],
+      )
+      expect(docAfter.rows[0]!.journal_entry_id).toBeNull()
+    })
+  })
+
   it('blocks reversed → posted UPDATE without the bypass flag', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertPostedEntryWithLines({

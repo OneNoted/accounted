@@ -7,8 +7,19 @@ import {
   seedCompany,
 } from '@/tests/pg/fixtures'
 
-// Inline because there is no shared documents fixture and pg-real tests are
-// intentionally minimal — only the columns the trigger needs.
+// BFL retention is enforced by two independent triggers on document_attachments:
+//   * enforce_document_journal_entry_immutability (20260506130000) — blocks
+//     any change to journal_entry_id once it has been set, regardless of the
+//     linked entry's status. Honors gnubok.allow_delete (20260506140000).
+//   * enforce_document_metadata_immutability (extended in 20260506120000) —
+//     blocks metadata changes and journal_entry_line_id changes when the
+//     linked entry is posted/reversed. Also honors gnubok.allow_delete.
+//
+// Both wordings — "BFL 5 kap" (entry trigger) and "BFL 7 kap" (metadata
+// trigger) — are accepted; which one fires first depends on what column the
+// UPDATE touches.
+const BFL_RETENTION_ERROR = /BFL [57] kap/i
+
 async function insertDocument(params: {
   userId: string
   companyId: string
@@ -37,7 +48,10 @@ async function insertDocument(params: {
   return id
 }
 
-async function insertPostedEntry(params: {
+// Insert a draft, balance it, and walk through the legal state-machine
+// transitions to land on the requested status. enforce_journal_entry_immutability
+// only allows draft→posted and posted→reversed, so the path matters.
+async function insertEntryAtStatus(params: {
   userId: string
   companyId: string
   fiscalPeriodId: string
@@ -52,16 +66,22 @@ async function insertPostedEntry(params: {
   })
   await insertBalancedLines(entryId)
   await getPool().query(
-    `UPDATE public.journal_entries SET status = $1 WHERE id = $2`,
-    [params.status ?? 'posted', entryId],
+    `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`,
+    [entryId],
   )
+  if (params.status === 'reversed') {
+    await getPool().query(
+      `UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`,
+      [entryId],
+    )
+  }
   return entryId
 }
 
-describe('document-immutability.pg — BFL 7 kap retention bypass guards', () => {
+describe('document-immutability.pg — BFL retention bypass guards', () => {
   it('rejects unlinking (journal_entry_id → NULL) on a doc linked to a posted entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryId = await insertPostedEntry({
+    const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
@@ -71,12 +91,12 @@ describe('document-immutability.pg — BFL 7 kap retention bypass guards', () =>
         `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
         [docId],
       ),
-    ).rejects.toThrow(/BFL 7 kap/i)
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
   it('rejects unlinking on a doc linked to a reversed entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryId = await insertPostedEntry({
+    const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1, status: 'reversed',
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
@@ -86,33 +106,34 @@ describe('document-immutability.pg — BFL 7 kap retention bypass guards', () =>
         `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
         [docId],
       ),
-    ).rejects.toThrow(/BFL 7 kap/i)
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
-  it('allows unlinking on a doc linked to a draft entry (drafts are mutable)', async () => {
+  it('rejects unlinking on a doc linked to a draft entry — link is durable from first set', async () => {
+    // The entry-level trigger does not consult journal_entries.status; once
+    // journal_entry_id is set on a document, it cannot be cleared. This is
+    // stricter than the original branch design and matches main's intent
+    // that the verifikation→underlag link be durable from first set.
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const draftId = await insertDraftJournalEntry({
       userId, companyId, fiscalPeriodId, voucherNumber: 0,
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: draftId })
 
-    await getPool().query(
-      `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
-      [docId],
-    )
-    const after = await getPool().query<{ journal_entry_id: string | null }>(
-      `SELECT journal_entry_id FROM public.document_attachments WHERE id = $1`,
-      [docId],
-    )
-    expect(after.rows[0]!.journal_entry_id).toBeNull()
+    await expect(
+      getPool().query(
+        `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
+        [docId],
+      ),
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
   it('rejects re-pointing journal_entry_id to a different posted entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryA = await insertPostedEntry({
+    const entryA = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
-    const entryB = await insertPostedEntry({
+    const entryB = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 2,
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: entryA })
@@ -122,12 +143,12 @@ describe('document-immutability.pg — BFL 7 kap retention bypass guards', () =>
         `UPDATE public.document_attachments SET journal_entry_id = $1 WHERE id = $2`,
         [entryB, docId],
       ),
-    ).rejects.toThrow(/BFL 7 kap/i)
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
   it('allows first-time linking (NULL → UUID) — legitimate linkToJournalEntry path', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryId = await insertPostedEntry({
+    const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: null })
@@ -145,7 +166,7 @@ describe('document-immutability.pg — BFL 7 kap retention bypass guards', () =>
 
   it('rejects unlinking journal_entry_line_id on a doc linked to a posted entry', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryId = await insertPostedEntry({
+    const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
     const lineRow = await getPool().query<{ id: string }>(
@@ -162,26 +183,23 @@ describe('document-immutability.pg — BFL 7 kap retention bypass guards', () =>
         `UPDATE public.document_attachments SET journal_entry_line_id = NULL WHERE id = $1`,
         [docId],
       ),
-    ).rejects.toThrow(/BFL 7 kap/i)
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
   })
 
   it('end-to-end: unlink-then-delete attack is blocked at the unlink step', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryId = await insertPostedEntry({
+    const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
 
-    // Step 1 of attack now blocked. block_document_deletion would also have
-    // caught a direct DELETE — this asserts the unlink hole is closed.
     await expect(
       getPool().query(
         `UPDATE public.document_attachments SET journal_entry_id = NULL WHERE id = $1`,
         [docId],
       ),
-    ).rejects.toThrow(/BFL 7 kap/i)
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
 
-    // Direct DELETE is also still blocked by the existing trigger.
     await expect(
       getPool().query(`DELETE FROM public.document_attachments WHERE id = $1`, [docId]),
     ).rejects.toThrow(/Bokföringslagen/i)
@@ -189,7 +207,7 @@ describe('document-immutability.pg — BFL 7 kap retention bypass guards', () =>
 
   it('respects gnubok.allow_delete bypass — delete_last_voucher RPC keeps working', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const entryId = await insertPostedEntry({
+    const entryId = await insertEntryAtStatus({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
     })
     const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
