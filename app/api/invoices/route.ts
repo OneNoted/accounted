@@ -7,6 +7,7 @@ import type { EntityType, AccountingMethod, Invoice, CreditNote, InvoiceDocument
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
@@ -230,6 +231,26 @@ export const POST = withRouteContext(
         requestId,
         details: { pgCode: itemsError.code, pgMessage: itemsError.message },
       })
+    }
+
+    // Allocate F-series number on save (Fortnox-style). The user gets a numbered
+    // draft they can download and send manually without first lying about
+    // having sent it. Discarded numbered drafts become 'cancelled' rather than
+    // deleted, so the F-series stays gap-free per ML 17 kap 24§.
+    // Delivery notes already have their number from the insert above.
+    if (documentType === 'invoice' || documentType === 'proforma') {
+      try {
+        await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
+      } catch (err) {
+        await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id)
+        await supabase.from('invoices').delete().eq('id', invoice.id)
+        log.error('invoice number allocation failed; rolled back invoice', err as Error, {
+          invoiceId: invoice.id,
+        })
+        return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, {
+          requestId,
+        })
+      }
     }
 
     const { data: completeInvoice } = await supabase

@@ -325,15 +325,18 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        {/* Draft banner — visible warning when this PDF is rendered for an
-            invoice that has not yet been assigned a löpnummer. ML 17 kap 24§
-            requires a unique invoice number; without one the document is not
-            valid as fakturaunderlag and must not be sent to a customer. */}
-        {!invoice.invoice_number && (
+        {/* Draft banner — visible while the invoice is still in draft status.
+            Numbered drafts (allocate-on-save) keep the banner so the customer
+            sees that this is not yet a sent faktura; the banner clears the
+            moment the user marks it sent. Old un-numbered drafts also keep
+            the banner. */}
+        {(invoice.status === 'draft' || !invoice.invoice_number) && (
           <View style={styles.draftBanner}>
             <Text style={styles.draftBannerTitle}>UTKAST – inte en giltig faktura</Text>
             <Text style={styles.draftBannerText}>
-              Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.
+              {invoice.invoice_number
+                ? 'Detta är ett utkast. Markera fakturan som skickad eller skicka via systemet för att göra den giltig som fakturaunderlag.'
+                : 'Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.'}
             </Text>
           </View>
         )}

@@ -383,6 +383,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturaraderna kunde inte sparas.',
     message_en: 'Invoice items insert failed.',
   },
+  INVOICE_CREATE_NUMBER_ASSIGN_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte tilldela fakturanummer vid skapande.',
+    message_en: 'Failed to assign invoice number on create.',
+  },
   INVOICE_CREDIT_ORIGINAL_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Ursprungsfakturan kunde inte hittas.',
