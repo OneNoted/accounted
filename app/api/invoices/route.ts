@@ -254,11 +254,17 @@ export const POST = withRouteContext(
           .select('invoice_number')
           .eq('id', invoice.id)
           .single()
+        // Guard on status='draft' for symmetry with the DELETE handler — only
+        // drafts may be cancelled. At this point in the create flow the row
+        // can't realistically be anything else, but the symmetry prevents a
+        // future caller adding a status flip between insert and number-
+        // allocation from accidentally cancelling a posted invoice.
         const { error: cancelErr } = await supabase
           .from('invoices')
           .update({ status: 'cancelled', updated_at: new Date().toISOString() })
           .eq('id', invoice.id)
           .eq('company_id', companyId!)
+          .eq('status', 'draft')
         if (cancelErr) {
           log.error('invoice number allocation failed AND rollback-cancel failed; row may be orphaned', cancelErr, {
             invoiceId: invoice.id,

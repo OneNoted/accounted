@@ -450,6 +450,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'Fakturan skickades men en efterföljande åtgärd misslyckades (verifikation eller PDF-bilaga).',
     message_en: 'Invoice was sent but a follow-up step (journal entry or PDF) failed.',
   },
+  INVOICE_SEND_CANCELLED: {
+    httpStatus: 400,
+    message_sv: 'Makulerade fakturor kan inte skickas. Skapa en ny faktura istället.',
+    message_en: 'Cancelled invoices cannot be sent; create a new invoice instead.',
+  },
   INVOICE_PAID_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturan kunde inte hittas.',
