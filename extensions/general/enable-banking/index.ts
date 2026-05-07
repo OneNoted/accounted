@@ -318,7 +318,7 @@ export const enableBankingExtension: Extension = {
           // Skip for viewers — reconciliation updates transactions which viewers cannot do.
           if (sieOverlap && totalImported > 0 && !isViewer) {
             try {
-              const reconResult = await runReconciliation(supabase, ctx?.companyId ?? user.id, {
+              const reconResult = await runReconciliation(supabase, ctx?.companyId ?? user.id, user.id, {
                 dateFrom: fromDate,
                 dateTo: toDate,
               })
