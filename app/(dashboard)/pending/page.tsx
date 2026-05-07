@@ -311,13 +311,14 @@ export default function PendingOperationsPage() {
       if (!res.ok) throw new Error(json.error || 'Misslyckades')
 
       const summary = json.data?.summary as
-        | { committed: number; failed: number; skipped: number }
+        | { committed: number; failed: number; skipped: number; rejected: number }
         | undefined
 
       if (summary) {
         const parts: string[] = []
         if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
         if (summary.failed > 0) parts.push(`${summary.failed} misslyckades`)
+        if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
         if (summary.skipped > 0) parts.push(`${summary.skipped} hoppades över`)
 
         toast({

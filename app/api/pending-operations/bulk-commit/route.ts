@@ -6,14 +6,13 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
-import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import type { PendingOperation } from '@/types'
 
 ensureInitialized()
 
 interface BulkCommitItemResult {
   id: string
-  status: 'committed' | 'failed' | 'skipped'
+  status: 'committed' | 'failed' | 'skipped' | 'rejected'
   error?: string
 }
 
@@ -66,33 +65,15 @@ export async function POST(request: Request) {
       continue
     }
 
-    try {
-      const result = await commitPendingOperation(supabase, user.id, companyId, op, {
-        userEmail: user.email,
-      })
-      if (result.status === 'committed') {
-        results.push({ id, status: 'committed' })
-      } else {
-        results.push({ id, status: 'failed', error: result.error ?? 'Misslyckades' })
-      }
-    } catch (err) {
-      const typed = bookkeepingErrorResponse(err)
-      if (typed) {
-        const body = (await typed.json().catch(() => null)) as
-          | { error?: { message?: string } | string }
-          | null
-        const message =
-          typeof body?.error === 'string'
-            ? body.error
-            : body?.error?.message ?? 'Bokföringsfel'
-        results.push({ id, status: 'failed', error: message })
-        continue
-      }
-      results.push({
-        id,
-        status: 'failed',
-        error: err instanceof Error ? err.message : 'Okänt fel',
-      })
+    const result = await commitPendingOperation(supabase, user.id, companyId, op, {
+      userEmail: user.email,
+    })
+    if (result.status === 'committed') {
+      results.push({ id, status: 'committed' })
+    } else if (result.status === 'rejected' && result.auto_rejected) {
+      results.push({ id, status: 'rejected', error: result.error ?? 'Avvisad' })
+    } else {
+      results.push({ id, status: 'failed', error: result.error ?? 'Misslyckades' })
     }
   }
 
@@ -101,6 +82,7 @@ export async function POST(request: Request) {
     committed: results.filter((r) => r.status === 'committed').length,
     failed: results.filter((r) => r.status === 'failed').length,
     skipped: results.filter((r) => r.status === 'skipped').length,
+    rejected: results.filter((r) => r.status === 'rejected').length,
   }
 
   return NextResponse.json({ data: { results, summary } })
