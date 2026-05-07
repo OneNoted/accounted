@@ -28,8 +28,10 @@ const nextConfig: NextConfig = {
   // Force the pdfjs worker file into the function bundle. Next.js's tracer
   // can't see it (loaded dynamically by name), so without this it's missing
   // in /var/task and getDocument() fails with "Setting up fake worker failed".
+  // Scoped to the invoice-inbox sub-path — other extensions don't use pdfjs
+  // and shouldn't pay the ~1 MB worker cost.
   outputFileTracingIncludes: {
-    '/api/extensions/ext/**': ['./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'],
+    '/api/extensions/ext/invoice-inbox/**': ['./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'],
   },
   async redirects() {
     return [
