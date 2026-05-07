@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+
+// `createClient()` returns a fresh object on every call, so we keep the
+// instance creation inside the effect — listing it as a dep would re-fire
+// the fetch on every render and create an infinite loop.
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -43,7 +47,6 @@ export default function BankTransactionPicker({
   onPick,
 }: BankTransactionPickerProps) {
   const { company } = useCompany()
-  const supabase = createClient()
   const [transactions, setTransactions] = useState<BankTransaction[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -51,6 +54,7 @@ export default function BankTransactionPicker({
   useEffect(() => {
     if (!open || !company) return
     let cancelled = false
+    const supabase = createClient()
 
     ;(async () => {
       setIsLoading(true)
@@ -78,7 +82,7 @@ export default function BankTransactionPicker({
     return () => {
       cancelled = true
     }
-  }, [open, company, targetCurrency, supabase])
+  }, [open, company, targetCurrency])
 
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()

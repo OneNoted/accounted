@@ -122,7 +122,12 @@ export default function NewSupplierInvoicePage() {
 
   // Match-on-create state
   const [showBankPicker, setShowBankPicker] = useState(false)
-  const [submitMode, setSubmitMode] = useState<'register' | 'register_and_match'>('register')
+  const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null)
+  // The button's onClick and the form's onSubmit run in the same React event
+  // batch, so a `useState`-backed submitMode would still hold the previous
+  // render's value when onSubmit reads it. A ref bridges the two synchronous
+  // handlers; the matching state mirror only drives the review-dialog UI.
+  const submitModeRef = useRef<'register' | 'register_and_match'>('register')
 
   // Conflict state for duplicate-supplier-invoice-number
   const [conflict, setConflict] = useState<{
@@ -502,8 +507,9 @@ export default function NewSupplierInvoicePage() {
       return
     }
 
-    if (submitMode === 'register_and_match') {
+    if (submitModeRef.current === 'register_and_match') {
       // Open the bank-transaction picker; actual create happens on pick.
+      // For AB the review dialog is shown after a transaction is picked.
       setPendingData(data)
       setShowBankPicker(true)
       return
@@ -550,7 +556,8 @@ export default function NewSupplierInvoicePage() {
     setIsSubmitting(false)
   }
 
-  // AB: create after review dialog
+  // AB: create after review dialog. If a bank transaction was picked first
+  // (register-and-match flow), also match the new invoice to it.
   async function handleConfirm() {
     if (!pendingData) return
     setIsSubmitting(true)
@@ -558,9 +565,37 @@ export default function NewSupplierInvoicePage() {
     const { ok, status, result } = await postCreate(pendingData)
 
     if (ok && result.data) {
-      toast({ title: 'Faktura registrerad', description: `Ankomstnummer: ${result.data.arrival_number}` })
+      const invoiceId = result.data.id
+      const arrivalNumber = result.data.arrival_number
       setShowReview(false)
-      router.push(`/supplier-invoices/${result.data.id}`)
+
+      if (pendingTransactionId) {
+        const matchRes = await fetch(`/api/transactions/${pendingTransactionId}/match-supplier-invoice`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ supplier_invoice_id: invoiceId }),
+        })
+        const matchResult = await matchRes.json()
+        setPendingTransactionId(null)
+        submitModeRef.current = 'register'
+
+        if (matchRes.ok) {
+          toast({
+            title: 'Faktura registrerad och matchad',
+            description: `Ankomstnummer: ${arrivalNumber}. Markerad som betald.`,
+          })
+        } else {
+          toast({
+            title: 'Faktura registrerad — kunde inte matcha',
+            description: getErrorMessage(matchResult, { context: 'supplier_invoice', statusCode: matchRes.status }),
+            variant: 'destructive',
+          })
+        }
+      } else {
+        toast({ title: 'Faktura registrerad', description: `Ankomstnummer: ${arrivalNumber}` })
+      }
+
+      router.push(`/supplier-invoices/${invoiceId}`)
     } else {
       // Treat duplicate-number as a recoverable conflict; everything else as a hard error.
       if (status === 409 && result.error === 'duplicate_supplier_invoice_number') {
@@ -641,9 +676,19 @@ export default function NewSupplierInvoicePage() {
   }
 
   // Match-on-create: register the invoice, then match the picked transaction.
+  // EF goes straight through (auto-approve included). AB stores the picked
+  // transaction and routes through the same review dialog as the plain
+  // register flow — handleConfirm picks up the match step on confirmation.
   async function handlePickTransaction(transactionId: string) {
     if (!pendingData) return
     setShowBankPicker(false)
+
+    if (!isEF) {
+      setPendingTransactionId(transactionId)
+      setShowReview(true)
+      return
+    }
+
     setIsSubmitting(true)
     await patchInboxFieldsIfChanged(pendingData)
     const { ok, status, result } = await postCreate(pendingData)
@@ -664,12 +709,10 @@ export default function NewSupplierInvoicePage() {
     const invoiceId = result.data.id
     const arrivalNumber = result.data.arrival_number
 
-    // Auto-approve for EF before matching, so the invoice is in 'approved'
-    // state that match-supplier-invoice expects (it accepts registered too,
-    // but EF's expectation is fully-booked).
-    if (isEF) {
-      await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
-    }
+    // Auto-approve before matching, so the invoice is in the 'approved' state
+    // that match-supplier-invoice expects (it accepts registered too, but
+    // EF's expectation is fully-booked).
+    await fetch(`/api/supplier-invoices/${invoiceId}/approve`, { method: 'POST' })
 
     const matchRes = await fetch(`/api/transactions/${transactionId}/match-supplier-invoice`, {
       method: 'POST',
@@ -678,6 +721,7 @@ export default function NewSupplierInvoicePage() {
     })
     const matchResult = await matchRes.json()
     setIsSubmitting(false)
+    submitModeRef.current = 'register'
 
     if (matchRes.ok) {
       toast({
@@ -1101,7 +1145,7 @@ export default function NewSupplierInvoicePage() {
             variant="outline"
             className="w-full sm:w-auto"
             disabled={isSubmitting || !canWrite}
-            onClick={() => setSubmitMode('register_and_match')}
+            onClick={() => { submitModeRef.current = 'register_and_match' }}
             title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
           >
             <Link2 className="mr-2 h-4 w-4" />
@@ -1111,7 +1155,7 @@ export default function NewSupplierInvoicePage() {
             type="submit"
             disabled={isSubmitting || !canWrite}
             className="w-full sm:w-auto"
-            onClick={() => setSubmitMode('register')}
+            onClick={() => { submitModeRef.current = 'register' }}
             title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
           >
             {isSubmitting ? (
@@ -1133,8 +1177,9 @@ export default function NewSupplierInvoicePage() {
         </div>
       </form>
 
-      {/* Review dialog (AB only) */}
-      {pendingData && !isEF && submitMode === 'register' && (() => {
+      {/* Review dialog (AB only — also shown after a bank transaction is picked
+          in the register-and-match flow). */}
+      {pendingData && !isEF && showReview && (() => {
         const selectedSupplier = suppliers.find((s) => s.id === pendingData.supplier_id)
         if (!selectedSupplier) return null
         return (
@@ -1171,7 +1216,10 @@ export default function NewSupplierInvoicePage() {
         open={showBankPicker}
         onOpenChange={(open) => {
           setShowBankPicker(open)
-          if (!open) setSubmitMode('register')
+          if (!open) {
+            submitModeRef.current = 'register'
+            setPendingTransactionId(null)
+          }
         }}
         targetAmount={total}
         targetCurrency={watchedCurrency}
