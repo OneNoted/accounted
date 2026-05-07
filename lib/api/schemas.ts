@@ -573,6 +573,10 @@ export const PendingOperationsQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().default(0),
 })
 
+export const PendingOperationsBulkSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+})
+
 // ============================================================
 // Voucher gap schemas
 // ============================================================
