@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
+import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import { RecaptIdentify } from '@/components/RecaptIdentify'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
@@ -222,16 +223,7 @@ export default async function DashboardLayout({
           extensionNavItems={getExtensionNavItems()}
         />
         <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-[232px]" role="main">
-          {pathname.startsWith('/e/') ? (
-            // Extension workspaces opt out of the centered max-w-5xl chrome
-            // because their content (file viewers, dashboards) wants the full
-            // viewport width.
-            <div key={companyId} className="h-full">{children}</div>
-          ) : (
-            <div key={companyId} className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
-              {children}
-            </div>
-          )}
+          <MainContainer companyId={companyId}>{children}</MainContainer>
         </main>
         {!isSandbox && (
           <RecaptIdentify
