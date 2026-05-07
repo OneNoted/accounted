@@ -96,6 +96,16 @@ async function tryExtractPdfText(input: ExtractionInput): Promise<string | null>
   if (input.mimeType !== 'application/pdf') return null
 
   try {
+    // pdfjs-dist references DOMMatrix/ImageData/Path2D at module load. On
+    // Vercel's Node runtime these globals don't exist; without stubs the
+    // import throws "DOMMatrix is not defined" before getDocument() runs.
+    // We only call getTextContent (no rendering), so empty-class stubs are
+    // enough — pdfjs never invokes any methods on them.
+    const g = globalThis as unknown as { DOMMatrix?: unknown; ImageData?: unknown; Path2D?: unknown }
+    if (typeof g.DOMMatrix === 'undefined') g.DOMMatrix = class {}
+    if (typeof g.ImageData === 'undefined') g.ImageData = class {}
+    if (typeof g.Path2D === 'undefined') g.Path2D = class {}
+
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
     const loadingTask = pdfjs.getDocument({
       data: new Uint8Array(input.buffer),
