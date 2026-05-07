@@ -14,7 +14,7 @@ const cspDirectives = [
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
-  `frame-src 'self'${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
+  `frame-src 'self' https://*.supabase.co${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
   "frame-ancestors 'none'",
 ].join("; ");
 
