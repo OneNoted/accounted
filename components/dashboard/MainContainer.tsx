@@ -22,7 +22,7 @@ export function MainContainer({
   children: ReactNode
 }) {
   const pathname = usePathname()
-  const isExtensionWorkspace = pathname?.startsWith('/e/') ?? false
+  const isExtensionWorkspace = pathname.startsWith('/e/')
 
   return isExtensionWorkspace ? (
     <div key={companyId ?? ''} className="h-full">{children}</div>
