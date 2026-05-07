@@ -1,0 +1,30 @@
+name: compliance — PR mode (advisory)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: compliance-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compliance:
+    name: PR static checks (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: erp-mafia/compliancemaxx@v1
+        with:
+          mode: pr
+          base: ${{ github.event.pull_request.base.sha }}
+          fail-on-findings: false           # advisory while bedding in; flip to true after triage
