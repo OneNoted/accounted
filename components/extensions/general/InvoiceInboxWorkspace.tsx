@@ -452,10 +452,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               onAttach={() => setAttachOpen(true)}
               isDeleting={isDeleting}
               onFieldsUpdated={(nextData) => {
-                setSelected((prev) => (prev ? { ...prev, extracted_data: nextData } : prev))
+                // Guard against stale closure: if the user navigated to a
+                // different item between sending the PATCH and the response
+                // arriving, the captured `selected` is no longer the
+                // currently-selected one. Without the id check we'd write
+                // item A's payload onto item B's row.
+                const targetId = selected.id
+                setSelected((prev) =>
+                  prev?.id === targetId ? { ...prev, extracted_data: nextData } : prev
+                )
                 setItems((prev) =>
                   prev.map((it) =>
-                    it.id === selected.id ? { ...it, extracted_data: nextData } : it
+                    it.id === targetId ? { ...it, extracted_data: nextData } : it
                   )
                 )
               }}

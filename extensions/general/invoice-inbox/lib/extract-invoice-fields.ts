@@ -22,7 +22,13 @@ const log = createLogger('invoice-inbox-extract')
 // production (eu.anthropic.claude-sonnet-4-6 in eu-north-1, 8192 tokens —
 // enough headroom for invoices with 20+ line items).
 const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
-const MAX_TOKENS = Number(process.env.BEDROCK_MAX_TOKENS) || 8192
+const MAX_TOKENS = (() => {
+  const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
+  // Use the env value only if it's a positive number — `||` would also
+  // fall back on a deliberate `0`, masking what is really an invalid
+  // configuration rather than the intent to disable.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8192
+})()
 
 // Bedrock supports these document/image media types directly. HEIC/HEIF
 // are not on the list, so we skip AI for those — the inbox row still

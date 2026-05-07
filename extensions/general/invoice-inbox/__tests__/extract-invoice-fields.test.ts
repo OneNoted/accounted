@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 
 // Mock the Bedrock SDK so tests drive the JSON parser without
@@ -190,6 +190,3 @@ describe('extractInvoiceFields', () => {
     else delete process.env.AWS_SECRET_ACCESS_KEY
   })
 })
-
-// vitest doesn't auto-import afterAll
-import { afterAll } from 'vitest'
