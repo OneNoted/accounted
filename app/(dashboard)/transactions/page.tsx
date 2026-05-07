@@ -369,26 +369,41 @@ export default function TransactionsPage() {
   }
 
   async function handleConfirmInvoiceMatch() {
-    if (!selectedTransaction?.potential_invoice) return
+    if (!selectedTransaction) return
+    const isSupplier = !!selectedTransaction.potential_supplier_invoice
+    const isCustomer = !!selectedTransaction.potential_invoice
+    if (!isSupplier && !isCustomer) return
+
     setIsConfirmingMatch(true)
 
     try {
-      const response = await fetch(`/api/transactions/${selectedTransaction.id}/match-invoice`, {
+      const url = isSupplier
+        ? `/api/transactions/${selectedTransaction.id}/match-supplier-invoice`
+        : `/api/transactions/${selectedTransaction.id}/match-invoice`
+      const body = isSupplier
+        ? { supplier_invoice_id: selectedTransaction.potential_supplier_invoice!.id }
+        : { invoice_id: selectedTransaction.potential_invoice!.id }
+
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_id: selectedTransaction.potential_invoice.id }),
+        body: JSON.stringify(body),
       })
       const result = await response.json()
       if (!response.ok) {
-        toast({ title: 'Fakturamatchning misslyckades', description: getErrorMessage(result, { context: 'transaction' }), variant: 'destructive' })
+        toast({
+          title: isSupplier ? 'Leverantörsfakturamatchning misslyckades' : 'Fakturamatchning misslyckades',
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
         setIsConfirmingMatch(false)
         return
       }
 
-      toast({
-        title: 'Faktura matchad',
-        description: `Faktura ${selectedTransaction.potential_invoice.invoice_number} markerad som betald`,
-      })
+      const label = isSupplier
+        ? `Leverantörsfaktura ${selectedTransaction.potential_supplier_invoice!.supplier_invoice_number} markerad som betald`
+        : `Faktura ${selectedTransaction.potential_invoice!.invoice_number} markerad som betald`
+      toast({ title: isSupplier ? 'Leverantörsfaktura matchad' : 'Faktura matchad', description: label })
       setMatchDialogOpen(false)
 
       // Mark as exiting for animation
@@ -397,15 +412,23 @@ export default function TransactionsPage() {
         setTransactions((prev) =>
           prev.map((t) =>
             t.id === selectedTransaction.id
-              ? {
-                  ...t,
-                  invoice_id: selectedTransaction.potential_invoice?.id || null,
-                  potential_invoice_id: null,
-                  potential_invoice: undefined,
-                  is_business: true,
-                  category: 'income_services' as TransactionCategory,
-                  journal_entry_id: result.journal_entry_id,
-                }
+              ? isSupplier
+                ? {
+                    ...t,
+                    supplier_invoice_id: selectedTransaction.potential_supplier_invoice?.id || null,
+                    potential_supplier_invoice: undefined,
+                    is_business: true,
+                    journal_entry_id: result.journal_entry_id,
+                  }
+                : {
+                    ...t,
+                    invoice_id: selectedTransaction.potential_invoice?.id || null,
+                    potential_invoice_id: null,
+                    potential_invoice: undefined,
+                    is_business: true,
+                    category: 'income_services' as TransactionCategory,
+                    journal_entry_id: result.journal_entry_id,
+                  }
               : t
           )
         )
@@ -418,7 +441,7 @@ export default function TransactionsPage() {
         setIsConfirmingMatch(false)
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Transaktionen kunde inte matchas med fakturan. Försök igen.', variant: 'destructive' })
+      toast({ title: 'Matchning misslyckades', description: 'Transaktionen kunde inte matchas. Försök igen.', variant: 'destructive' })
       setIsConfirmingMatch(false)
     }
   }
