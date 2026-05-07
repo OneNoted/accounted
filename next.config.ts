@@ -23,8 +23,14 @@ const nextConfig: NextConfig = {
   // Keep pdfjs-dist out of the bundle. The legacy build references
   // @napi-rs/canvas at module load and breaks Vercel's bundling step.
   // Text extraction works in pure Node once DOM globals are stubbed at
-  // the call site (see extensions/general/invoice-inbox/lib/extract-invoice-fields.ts).
+  // module load (see extensions/general/invoice-inbox/lib/extract-invoice-fields.ts).
   serverExternalPackages: ['pdfjs-dist'],
+  // Force the pdfjs worker file into the function bundle. Next.js's tracer
+  // can't see it (loaded dynamically by name), so without this it's missing
+  // in /var/task and getDocument() fails with "Setting up fake worker failed".
+  outputFileTracingIncludes: {
+    '/api/extensions/ext/**': ['./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs'],
+  },
   async redirects() {
     return [
       {
