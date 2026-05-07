@@ -3,6 +3,7 @@ import type { CustomerType } from '@/types'
 import { detectCustomerColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { classifyCustomer } from '../shared/classify'
+import { readWorkbookFromBuffer } from '../shared/workbook-reader'
 import type {
   DetectedCustomerColumns,
   ParsedCustomerRow,
@@ -17,8 +18,8 @@ const VALID_CUSTOMER_TYPES: CustomerType[] = [
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function readBestSheet(buffer: ArrayBuffer): { sheetName: string; rawData: string[][] } {
-  const workbook = XLSX.read(buffer, { type: 'array' })
+function readBestSheet(buffer: ArrayBuffer, filename: string): { sheetName: string; rawData: string[][] } {
+  const workbook = readWorkbookFromBuffer(buffer, filename)
 
   let bestSheet = workbook.SheetNames[0]
   let bestRowCount = 0
@@ -91,7 +92,7 @@ export function parseCustomersFile(
   rows: ParsedCustomerRow[]
   warnings: string[]
 } {
-  const { sheetName, rawData } = readBestSheet(buffer)
+  const { sheetName, rawData } = readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedCustomerColumns = columnOverrides ?? {

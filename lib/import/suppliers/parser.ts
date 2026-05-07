@@ -3,6 +3,7 @@ import type { SupplierType } from '@/types'
 import { detectSupplierColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { classifySupplier } from '../shared/classify'
+import { readWorkbookFromBuffer } from '../shared/workbook-reader'
 import type {
   DetectedSupplierColumns,
   ParsedSupplierRow,
@@ -18,8 +19,8 @@ const VALID_CURRENCIES = new Set(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-function readBestSheet(buffer: ArrayBuffer): { sheetName: string; rawData: string[][] } {
-  const workbook = XLSX.read(buffer, { type: 'array' })
+function readBestSheet(buffer: ArrayBuffer, filename: string): { sheetName: string; rawData: string[][] } {
+  const workbook = readWorkbookFromBuffer(buffer, filename)
 
   let bestSheet = workbook.SheetNames[0]
   let bestRowCount = 0
@@ -94,7 +95,7 @@ export function parseSuppliersFile(
   rows: ParsedSupplierRow[]
   warnings: string[]
 } {
-  const { sheetName, rawData } = readBestSheet(buffer)
+  const { sheetName, rawData } = readBestSheet(buffer, filename)
 
   if (rawData.length < 2) {
     const fallbackColumns: DetectedSupplierColumns = columnOverrides ?? {

@@ -77,4 +77,25 @@ describe('parseSuppliersFile', () => {
     const result = parseSuppliersFile(buffer, 'bg.xlsx')
     expect(result.rows[0].bankgiro).toBe('54029685')
   })
+
+  it('preserves Swedish characters when reading a UTF-8 CSV', () => {
+    const csv = new TextEncoder().encode(
+      'Namn,Ort\nDinel AB,GÖTEBORG\nHisings AB,HISINGS KÄRRA\n',
+    ).buffer
+    const result = parseSuppliersFile(csv, 'lev.csv')
+    expect(result.rows[0].city).toBe('GÖTEBORG')
+    expect(result.rows[1].city).toBe('HISINGS KÄRRA')
+  })
+
+  it('preserves Swedish characters when reading a Windows-1252 CSV', () => {
+    // Ö = 0xD6, Ä = 0xC4 in Windows-1252
+    const bytes = [
+      0x4e, 0x61, 0x6d, 0x6e, 0x2c, 0x4f, 0x72, 0x74, 0x0a, // "Namn,Ort\n"
+      0x41, 0x63, 0x6d, 0x65, 0x2c, 0x47, 0xd6, 0x54, 0x45, 0x42, 0x4f, 0x52, 0x47, 0x0a, // "Acme,GÖTEBORG\n"
+      0x42, 0x65, 0x74, 0x61, 0x2c, 0x4b, 0xc4, 0x52, 0x52, 0x41, 0x0a, // "Beta,KÄRRA\n"
+    ]
+    const result = parseSuppliersFile(new Uint8Array(bytes).buffer, 'lev.csv')
+    expect(result.rows[0].city).toBe('GÖTEBORG')
+    expect(result.rows[1].city).toBe('KÄRRA')
+  })
 })

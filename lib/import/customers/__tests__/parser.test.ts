@@ -122,4 +122,13 @@ describe('parseCustomersFile', () => {
     expect(result.rows[0].row_index).toBe(2) // header is row 1
     expect(result.rows[1].row_index).toBe(3)
   })
+
+  it('preserves Swedish characters when reading a UTF-8 CSV', () => {
+    const csv = new TextEncoder().encode(
+      'Namn,Ort\nAcme AB,GÖTEBORG\nBeta AB,HISINGS KÄRRA\n',
+    ).buffer
+    const result = parseCustomersFile(csv, 'kunder.csv')
+    expect(result.rows[0].city).toBe('GÖTEBORG')
+    expect(result.rows[1].city).toBe('HISINGS KÄRRA')
+  })
 })
