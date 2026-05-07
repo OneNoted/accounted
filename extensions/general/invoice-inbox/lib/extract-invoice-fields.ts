@@ -12,6 +12,7 @@
 import type { InvoiceExtractionResult } from '@/types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { validateOcrReference, validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { extractText } from 'unpdf'
 
 // Below this we treat the document as image-only / unreadable and skip
 // regex extraction. The PDF text extractor returns near-zero text for
@@ -97,7 +98,6 @@ async function tryExtractPdfText(input: ExtractionInput): Promise<string | null>
   if (input.mimeType !== 'application/pdf') return null
 
   try {
-    const { extractText } = await import('unpdf')
     const { text } = await extractText(new Uint8Array(input.buffer), { mergePages: true })
     return text.replace(/[ \t]+/g, ' ').trim()
   } catch (err) {

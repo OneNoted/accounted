@@ -29,7 +29,7 @@ describe('extractInvoiceFields', () => {
     expect(data.supplier.orgNumber).toBeNull()
   })
 
-  it('returns empty result when pdfjs extracts no text (image-only PDF)', async () => {
+  it('returns empty result when unpdf extracts no text (image-only PDF)', async () => {
     mockExtractText.mockReturnValueOnce(fakePdf(''))
     const { data, rawText } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
@@ -124,7 +124,7 @@ describe('extractInvoiceFields', () => {
     expect(data.invoice.currency).toBe('SEK')
   })
 
-  it('returns empty result when pdfjs throws', async () => {
+  it('returns empty result when unpdf throws', async () => {
     mockExtractText.mockImplementationOnce(() => {
       throw new Error('boom')
     })
