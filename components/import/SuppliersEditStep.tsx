@@ -28,7 +28,7 @@ interface SuppliersEditStepProps {
 }
 
 const TYPE_LABELS: Record<SupplierType, string> = {
-  swedish_business: 'Svenskt företag',
+  swedish_business: 'Svenskt företag eller organisation',
   eu_business: 'EU-företag',
   non_eu_business: 'Utomeuropeiskt företag',
 }
