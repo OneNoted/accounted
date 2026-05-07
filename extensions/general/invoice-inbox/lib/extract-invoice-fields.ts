@@ -17,12 +17,12 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoice-inbox-extract')
 
-const MODEL = 'eu.anthropic.claude-sonnet-4-6'
-// 4096 covers a 10-15 line invoice plus VAT breakdown comfortably. The JSON
-// skeleton alone is ~200 tokens; 1500 left only ~1300 for content and
-// silently truncated complex documents (response cut mid-JSON →
-// JSON.parse throws → row lands with all-null fields).
-const MAX_TOKENS = 4096
+// Both overridable via env vars so ops can swap models / raise token caps
+// without a code deploy. Defaults match what's expected to be set in
+// production (eu.anthropic.claude-sonnet-4-6 in eu-north-1, 8192 tokens —
+// enough headroom for invoices with 20+ line items).
+const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
+const MAX_TOKENS = Number(process.env.BEDROCK_MAX_TOKENS) || 8192
 
 // Bedrock supports these document/image media types directly. HEIC/HEIF
 // are not on the list, so we skip AI for those — the inbox row still
