@@ -1,10 +1,10 @@
 // Deterministic Swedish invoice field extraction.
 //
 // Replaces the deleted AI classifier. We pull text out of the PDF with
-// pdfjs-dist and run regex extractors against it. Each extractor is
-// independent — a missing field stays null rather than dragging down a
-// neighbour. Validators (Luhn for org-nr/OCR/bankgiro) keep false
-// positives near zero.
+// unpdf (a serverless-friendly pdfjs wrapper) and run regex extractors
+// against it. Each extractor is independent — a missing field stays null
+// rather than dragging down a neighbour. Validators (Luhn for
+// org-nr/OCR/bankgiro) keep false positives near zero.
 //
 // Image-only PDFs and non-PDF mime types come back with all fields null.
 // The inbox item is still created so the user can register manually.
@@ -12,9 +12,11 @@
 import type { InvoiceExtractionResult } from '@/types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { validateOcrReference, validateBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { extractText } from 'unpdf'
 
 // Below this we treat the document as image-only / unreadable and skip
-// regex extraction. pdfjs-dist returns near-zero text for scanned PDFs.
+// regex extraction. The PDF text extractor returns near-zero text for
+// scanned PDFs.
 const MIN_TEXT_CHARS_FOR_EXTRACTION = 10
 
 export interface ExtractionInput {
@@ -96,26 +98,10 @@ async function tryExtractPdfText(input: ExtractionInput): Promise<string | null>
   if (input.mimeType !== 'application/pdf') return null
 
   try {
-    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-    const loadingTask = pdfjs.getDocument({
-      data: new Uint8Array(input.buffer),
-      isEvalSupported: false,
-      disableFontFace: true,
-    })
-    const pdf = await loadingTask.promise
-
-    const pages: string[] = []
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i)
-      const content = await page.getTextContent()
-      const pageText = content.items
-        .map((item) => ('str' in item ? item.str : ''))
-        .join(' ')
-      pages.push(pageText)
-    }
-    return pages.join('\n').replace(/[ \t]+/g, ' ').trim()
+    const { text } = await extractText(new Uint8Array(input.buffer), { mergePages: true })
+    return text.replace(/[ \t]+/g, ' ').trim()
   } catch (err) {
-    console.warn('[invoice-inbox/extract] pdfjs failed:', err instanceof Error ? err.message : err)
+    console.warn('[invoice-inbox/extract] pdf text extraction failed:', err instanceof Error ? err.message : err)
     return null
   }
 }

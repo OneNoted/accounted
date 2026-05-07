@@ -1,27 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 
-// Mock pdfjs-dist so we can drive the regex extractors with canned text
+// Mock unpdf so we can drive the regex extractors with canned text
 // without building actual PDF binaries.
-const mockGetDocument = vi.fn()
+const mockExtractText = vi.fn()
 
-vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
-  getDocument: (...args: unknown[]) => mockGetDocument(...args),
+vi.mock('unpdf', () => ({
+  extractText: (...args: unknown[]) => mockExtractText(...args),
 }))
 
 function fakePdf(text: string) {
-  return {
-    promise: Promise.resolve({
-      numPages: 1,
-      getPage: () =>
-        Promise.resolve({
-          getTextContent: () =>
-            Promise.resolve({
-              items: text.split(/\s+/).map((str) => ({ str })),
-            }),
-        }),
-    }),
-  }
+  return Promise.resolve({ totalPages: 1, text })
 }
 
 describe('extractInvoiceFields', () => {
@@ -40,8 +29,8 @@ describe('extractInvoiceFields', () => {
     expect(data.supplier.orgNumber).toBeNull()
   })
 
-  it('returns empty result when pdfjs extracts no text (image-only PDF)', async () => {
-    mockGetDocument.mockReturnValueOnce(fakePdf(''))
+  it('returns empty result when unpdf extracts no text (image-only PDF)', async () => {
+    mockExtractText.mockReturnValueOnce(fakePdf(''))
     const { data, rawText } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -53,7 +42,7 @@ describe('extractInvoiceFields', () => {
 
   it('extracts a Luhn-valid org number', async () => {
     // 5560125790 is a valid Swedish AB org-nr (Luhn-checked)
-    mockGetDocument.mockReturnValueOnce(fakePdf('Lev: Acme AB Org.nr 556012-5790 Faktura'))
+    mockExtractText.mockReturnValueOnce(fakePdf('Lev: Acme AB Org.nr 556012-5790 Faktura'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -63,7 +52,7 @@ describe('extractInvoiceFields', () => {
   })
 
   it('rejects org-nrs with bad Luhn digit', async () => {
-    mockGetDocument.mockReturnValueOnce(fakePdf('Org.nr 556012-5791'))
+    mockExtractText.mockReturnValueOnce(fakePdf('Org.nr 556012-5791'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -73,7 +62,7 @@ describe('extractInvoiceFields', () => {
   })
 
   it('extracts a Luhn-valid OCR reference', async () => {
-    mockGetDocument.mockReturnValueOnce(fakePdf('OCR-nummer: 12345674'))
+    mockExtractText.mockReturnValueOnce(fakePdf('OCR-nummer: 12345674'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -84,7 +73,7 @@ describe('extractInvoiceFields', () => {
 
   it('extracts a Luhn-valid bankgiro', async () => {
     // 991-2346 is the canonical test bankgiro (Luhn-valid) used in lib/bankgiro/__tests__
-    mockGetDocument.mockReturnValueOnce(fakePdf('Bankgiro 991-2346 Plusgiro'))
+    mockExtractText.mockReturnValueOnce(fakePdf('Bankgiro 991-2346 Plusgiro'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -94,7 +83,7 @@ describe('extractInvoiceFields', () => {
   })
 
   it('parses Swedish-formatted totals', async () => {
-    mockGetDocument.mockReturnValueOnce(
+    mockExtractText.mockReturnValueOnce(
       fakePdf('Att betala 12 345,67 kr')
     )
     const { data } = await extractInvoiceFields({
@@ -106,7 +95,7 @@ describe('extractInvoiceFields', () => {
   })
 
   it('parses Förfallodatum and normalizes to ISO', async () => {
-    mockGetDocument.mockReturnValueOnce(fakePdf('Förfallodatum 2026-06-15'))
+    mockExtractText.mockReturnValueOnce(fakePdf('Förfallodatum 2026-06-15'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -116,7 +105,7 @@ describe('extractInvoiceFields', () => {
   })
 
   it('extracts an invoice number after Fakturanr', async () => {
-    mockGetDocument.mockReturnValueOnce(fakePdf('Fakturanr F-2024-001 Datum'))
+    mockExtractText.mockReturnValueOnce(fakePdf('Fakturanr F-2024-001 Datum'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -126,7 +115,7 @@ describe('extractInvoiceFields', () => {
   })
 
   it('keeps SEK as default currency when no foreign code is present', async () => {
-    mockGetDocument.mockReturnValueOnce(fakePdf('Total 100 kr'))
+    mockExtractText.mockReturnValueOnce(fakePdf('Total 100 kr'))
     const { data } = await extractInvoiceFields({
       buffer: Buffer.from('%PDF'),
       mimeType: 'application/pdf',
@@ -135,8 +124,8 @@ describe('extractInvoiceFields', () => {
     expect(data.invoice.currency).toBe('SEK')
   })
 
-  it('returns empty result when pdfjs throws', async () => {
-    mockGetDocument.mockImplementationOnce(() => {
+  it('returns empty result when unpdf throws', async () => {
+    mockExtractText.mockImplementationOnce(() => {
       throw new Error('boom')
     })
     const { data, rawText } = await extractInvoiceFields({
