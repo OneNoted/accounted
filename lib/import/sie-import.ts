@@ -236,11 +236,15 @@ export async function ensureFiscalPeriod(
     return containing.id
   }
 
-  // Check for any overlapping period (DB exclusion constraint would reject
-  // a new insert that overlaps). Use the overlapping period instead.
+  // If an existing period overlaps the requested range but does not fully
+  // contain it, we MUST refuse — silently reusing it would stamp every
+  // imported voucher with a fiscal_period_id whose date window doesn't match
+  // the voucher's own date. That breaks the SIE invariant that #VER dates fall
+  // inside #RAR, breaks BFL 5 kap. (verifikationsnummer per räkenskapsår),
+  // and produces wrong-shaped trial balances per period.
   const { data: overlapping } = await supabase
     .from('fiscal_periods')
-    .select('id')
+    .select('id, period_start, period_end, name')
     .eq('company_id', companyId)
     .lte('period_start', endDate)
     .gte('period_end', startDate)
@@ -248,7 +252,12 @@ export async function ensureFiscalPeriod(
     .limit(1)
 
   if (overlapping && overlapping.length > 0) {
-    return overlapping[0].id
+    const existing = overlapping[0]
+    throw new Error(
+      `SIE-filens räkenskapsår (${startDate} – ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i gnubok ` +
+        `(${existing.name}: ${existing.period_start} – ${existing.period_end}). ` +
+        `Justera räkenskapsåret i Inställningar → Räkenskap så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`
+    )
   }
 
   // Pre-validate against the DB-side enforce_period_start_day trigger so the
@@ -1730,6 +1739,35 @@ export async function executeSIEImport(
 
     // Import transactions (SIE4 only)
     if (options.importTransactions && parsed.vouchers.length > 0 && result.fiscalPeriodId) {
+      // Reject vouchers whose date falls outside the resolved fiscal period.
+      // Without this guard, a SIE file whose #VER dates extend beyond #RAR (or
+      // a fiscal period whose shape doesn't match the file's #RAR) would
+      // produce journal entries stamped to a period that doesn't cover their
+      // own entry_date — breaking the SIE invariant and BFL 5 kap.
+      const { data: resolvedPeriod } = await supabase
+        .from('fiscal_periods')
+        .select('period_start, period_end')
+        .eq('id', result.fiscalPeriodId)
+        .single()
+
+      if (resolvedPeriod) {
+        const periodStart = new Date(resolvedPeriod.period_start + 'T00:00:00')
+        const periodEnd = new Date(resolvedPeriod.period_end + 'T00:00:00')
+        const outOfRange = parsed.vouchers.filter(
+          (v) => v.date.getTime() < periodStart.getTime() || v.date.getTime() > periodEnd.getTime()
+        )
+
+        if (outOfRange.length > 0) {
+          const sample = outOfRange.slice(0, 3).map(v => `${v.series}${v.number} (${formatDate(v.date)})`).join(', ')
+          result.errors.push(
+            `${outOfRange.length} verifikation${outOfRange.length === 1 ? '' : 'er'} har datum utanför räkenskapsåret ` +
+              `${resolvedPeriod.period_start} – ${resolvedPeriod.period_end}. Exempel: ${sample}${outOfRange.length > 3 ? '…' : ''}. ` +
+              `Importera varje räkenskapsår som en egen SIE-fil — flera år i samma fil stöds inte.`
+          )
+          return result
+        }
+      }
+
       // Detect partial-year export: if voucher dates don't span the full fiscal year,
       // the migration adjustment will produce incorrect large deltas for the missing period.
       if (parsed.vouchers.length > 0 && fiscalYearStart && fiscalYearEnd) {
