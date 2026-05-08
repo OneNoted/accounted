@@ -67,6 +67,7 @@ const SUPPLIER_TEXT_FIELDS = [
 const CUSTOMER_TEXT_FIELDS = [
   'name',
   'address_line1',
+  'address_line2',
   'city',
   'country',
   'notes',

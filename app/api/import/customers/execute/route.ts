@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { CustomerImportExecuteSchema } from '@/lib/api/schemas'
+import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -10,16 +11,6 @@ import type { Customer } from '@/types'
 import type { CustomerImportExecuteResult } from '@/lib/import/customers/types'
 
 ensureInitialized()
-
-function normalizeOrgNumber(value: string | null): string | null {
-  if (!value) return null
-  return value.replace(/\D/g, '') || null
-}
-
-function normalizeEmail(value: string | null): string | null {
-  if (!value) return null
-  return value.trim().toLowerCase() || null
-}
 
 interface ExistingCustomer {
   id: string

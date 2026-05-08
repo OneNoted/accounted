@@ -1,51 +1,62 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponse } from '@/lib/errors/get-structured-error'
 
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+export const GET = withRouteContext(
+  'voucher_sequence.next',
+  async (_request, ctx) => {
+    const { supabase, companyId, log, requestId } = ctx
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const today = new Date().toISOString().split('T')[0]
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    const [{ data: period, error: periodError }, { data: settings, error: settingsError }] =
+      await Promise.all([
+        supabase
+          .from('fiscal_periods')
+          .select('id')
+          .eq('company_id', companyId)
+          .lte('period_start', today)
+          .gte('period_end', today)
+          .maybeSingle(),
+        supabase
+          .from('company_settings')
+          .select('default_voucher_series')
+          .eq('company_id', companyId)
+          .maybeSingle(),
+      ])
 
-  const today = new Date().toISOString().split('T')[0]
+    if (periodError) {
+      log.error('fiscal_periods lookup failed', periodError)
+      return errorResponse(periodError, log, { requestId })
+    }
+    if (settingsError) {
+      log.error('company_settings lookup failed', settingsError)
+      return errorResponse(settingsError, log, { requestId })
+    }
 
-  const [{ data: period }, { data: settings }] = await Promise.all([
-    supabase
-      .from('fiscal_periods')
-      .select('id')
+    const series = settings?.default_voucher_series || 'A'
+
+    if (!period) {
+      return NextResponse.json({ data: { next: null, series, fiscal_period_id: null } })
+    }
+
+    const { data: sequence, error: sequenceError } = await supabase
+      .from('voucher_sequences')
+      .select('last_number')
       .eq('company_id', companyId)
-      .lte('period_start', today)
-      .gte('period_end', today)
-      .maybeSingle(),
-    supabase
-      .from('company_settings')
-      .select('default_voucher_series')
-      .eq('company_id', companyId)
-      .maybeSingle(),
-  ])
+      .eq('fiscal_period_id', period.id)
+      .eq('voucher_series', series)
+      .maybeSingle()
 
-  const series = settings?.default_voucher_series || 'A'
+    if (sequenceError) {
+      log.error('voucher_sequences lookup failed', sequenceError)
+      return errorResponse(sequenceError, log, { requestId })
+    }
 
-  if (!period) {
-    return NextResponse.json({ data: { next: null, series, fiscal_period_id: null } })
-  }
+    const next = (sequence?.last_number ?? 0) + 1
 
-  const { data: sequence } = await supabase
-    .from('voucher_sequences')
-    .select('last_number')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', period.id)
-    .eq('voucher_series', series)
-    .maybeSingle()
-
-  const next = (sequence?.last_number ?? 0) + 1
-
-  return NextResponse.json({
-    data: { next, series, fiscal_period_id: period.id },
-  })
-}
+    return NextResponse.json({
+      data: { next, series, fiscal_period_id: period.id },
+    })
+  },
+)

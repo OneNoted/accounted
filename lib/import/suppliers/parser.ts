@@ -1,9 +1,8 @@
-import * as XLSX from 'xlsx'
 import type { SupplierType } from '@/types'
 import { detectSupplierColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { classifySupplier } from '../shared/classify'
-import { readWorkbookFromBuffer } from '../shared/workbook-reader'
+import { readBestSheet } from '../shared/workbook-reader'
 import type {
   DetectedSupplierColumns,
   ParsedSupplierRow,
@@ -18,31 +17,6 @@ const VALID_SUPPLIER_TYPES: SupplierType[] = [
 const VALID_CURRENCIES = new Set(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-
-function readBestSheet(buffer: ArrayBuffer, filename: string): { sheetName: string; rawData: string[][] } {
-  const workbook = readWorkbookFromBuffer(buffer, filename)
-
-  let bestSheet = workbook.SheetNames[0]
-  let bestRowCount = 0
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name]
-    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
-    const rowCount = range.e.r - range.s.r + 1
-    if (rowCount > bestRowCount) {
-      bestRowCount = rowCount
-      bestSheet = name
-    }
-  }
-
-  const sheet = workbook.Sheets[bestSheet]
-  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: '',
-    raw: false,
-  })
-
-  return { sheetName: bestSheet, rawData }
-}
 
 function normalizeSupplierType(value: string | null): SupplierType | null {
   if (!value) return null

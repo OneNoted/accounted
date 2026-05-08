@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { SupplierImportExecuteSchema } from '@/lib/api/schemas'
+import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -9,16 +11,6 @@ import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
 
 ensureInitialized()
-
-function normalizeOrgNumber(value: string | null): string | null {
-  if (!value) return null
-  return value.replace(/\D/g, '') || null
-}
-
-function normalizeEmail(value: string | null): string | null {
-  if (!value) return null
-  return value.trim().toLowerCase() || null
-}
 
 interface ExistingSupplier {
   id: string
@@ -168,6 +160,13 @@ export const POST = withRouteContext(
           const newEmail = normalizeEmail(data.email)
           if (newEmail) byEmail.set(newEmail, data as ExistingSupplier)
         }
+      }
+
+      for (const s of created) {
+        await eventBus.emit({
+          type: 'supplier.created',
+          payload: { supplier: s, companyId, userId: user.id },
+        })
       }
 
       const response: SupplierImportExecuteResult = {

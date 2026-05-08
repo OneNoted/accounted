@@ -21,3 +21,38 @@ export function readWorkbookFromBuffer(buffer: ArrayBuffer, filename: string): X
   }
   return XLSX.read(buffer, { type: 'array' })
 }
+
+/**
+ * Read the workbook from `buffer` and return raw rows from its largest sheet.
+ *
+ * Picks the sheet with the most rows (a heuristic that handles files where
+ * the header sheet isn't the first one). Returns rows as a 2D string array
+ * with the header row included; cells default to empty string.
+ */
+export function readBestSheet(
+  buffer: ArrayBuffer,
+  filename: string,
+): { sheetName: string; rawData: string[][] } {
+  const workbook = readWorkbookFromBuffer(buffer, filename)
+
+  let bestSheet = workbook.SheetNames[0]
+  let bestRowCount = 0
+  for (const name of workbook.SheetNames) {
+    const sheet = workbook.Sheets[name]
+    const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
+    const rowCount = range.e.r - range.s.r + 1
+    if (rowCount > bestRowCount) {
+      bestRowCount = rowCount
+      bestSheet = name
+    }
+  }
+
+  const sheet = workbook.Sheets[bestSheet]
+  const rawData: string[][] = XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: false,
+  })
+
+  return { sheetName: bestSheet, rawData }
+}

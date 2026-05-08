@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { parseCustomersFile } from '@/lib/import/customers/parser'
+import { normalizeOrgNumber, normalizeEmail } from '@/lib/import/shared/column-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -11,16 +12,6 @@ import type {
 
 const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-
-function normalizeOrgNumber(value: string | null): string | null {
-  if (!value) return null
-  return value.replace(/\D/g, '') || null
-}
-
-function normalizeEmail(value: string | null): string | null {
-  if (!value) return null
-  return value.trim().toLowerCase() || null
-}
 
 /**
  * POST /api/import/customers/parse

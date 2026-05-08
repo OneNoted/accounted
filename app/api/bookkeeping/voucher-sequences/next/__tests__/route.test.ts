@@ -11,6 +11,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
@@ -30,6 +31,14 @@ function mockChain(result: ChainResult) {
   return chain
 }
 
+function mkReq() {
+  return new Request('http://localhost/api/bookkeeping/voucher-sequences/next')
+}
+
+function mkParams() {
+  return { params: Promise.resolve({}) }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
 })
@@ -38,7 +47,7 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
   it('returns 401 when not authenticated', async () => {
     mockAuth.mockResolvedValue({ data: { user: null } })
 
-    const response = await GET()
+    const response = await GET(mkReq(), mkParams())
     const body = await response.json()
 
     expect(response.status).toBe(401)
@@ -48,9 +57,7 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
   it('returns last_number + 1 when sequence exists', async () => {
     mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
 
-    let callIndex = 0
     mockFrom.mockImplementation((table: string) => {
-      callIndex++
       if (table === 'fiscal_periods') {
         return mockChain({ data: { id: 'period-1' }, error: null })
       }
@@ -60,10 +67,10 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
       if (table === 'voucher_sequences') {
         return mockChain({ data: { last_number: 57 }, error: null })
       }
-      throw new Error(`Unexpected table: ${table} on call ${callIndex}`)
+      throw new Error(`Unexpected table: ${table}`)
     })
 
-    const response = await GET()
+    const response = await GET(mkReq(), mkParams())
     const body = await response.json()
 
     expect(response.status).toBe(200)
@@ -86,7 +93,7 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
       throw new Error(`Unexpected table: ${table}`)
     })
 
-    const response = await GET()
+    const response = await GET(mkReq(), mkParams())
     const body = await response.json()
 
     expect(response.status).toBe(200)
@@ -106,7 +113,7 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
       throw new Error(`Unexpected table: ${table}`)
     })
 
-    const response = await GET()
+    const response = await GET(mkReq(), mkParams())
     const body = await response.json()
 
     expect(response.status).toBe(200)
@@ -129,7 +136,7 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
       throw new Error(`Unexpected table: ${table}`)
     })
 
-    const response = await GET()
+    const response = await GET(mkReq(), mkParams())
     const body = await response.json()
 
     expect(response.status).toBe(200)
