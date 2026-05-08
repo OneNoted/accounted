@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -47,6 +48,10 @@ interface InboxItem {
   matched_supplier_id: string | null
   created_supplier_invoice_id: string | null
   error_message: string | null
+  // Set client-side only while a manual upload is in flight. Replaced by a
+  // real server-side row once the AI extraction completes.
+  isPlaceholder?: boolean
+  fileName?: string
 }
 
 interface InboxAddress {
@@ -185,6 +190,28 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // ── Upload ─────────────────────────────────────────────────
 
   const uploadFile = useCallback(async (file: File) => {
+    // Optimistic placeholder — gives the user an immediate visual response
+    // for the 3–8s while Bedrock extracts. Removed once the real row arrives.
+    const tempId = `temp-${crypto.randomUUID()}`
+    const placeholder: InboxItem = {
+      id: tempId,
+      status: 'received',
+      source: 'upload',
+      created_at: new Date().toISOString(),
+      email_from: null,
+      email_subject: null,
+      email_received_at: null,
+      document_id: null,
+      extracted_data: null,
+      matched_supplier_id: null,
+      created_supplier_invoice_id: null,
+      error_message: null,
+      isPlaceholder: true,
+      fileName: file.name,
+    }
+    setItems((prev) => [placeholder, ...prev])
+    setSelectedId(tempId)
+    setSelected(placeholder)
     setIsUploading(true)
     try {
       const fd = new FormData()
@@ -196,11 +223,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Uppladdning misslyckades')
       toast({ title: 'Dokument uppladdat', description: file.name })
+      setItems((prev) => prev.filter((it) => it.id !== tempId))
       await fetchItems()
       if (json.data?.inbox_item_id) {
         await handleSelect(json.data.inbox_item_id)
       }
     } catch (err) {
+      setItems((prev) => prev.filter((it) => it.id !== tempId))
+      setSelectedId((prev) => (prev === tempId ? null : prev))
+      setSelected((prev) => (prev?.id === tempId ? null : prev))
       toast({
         title: 'Uppladdning misslyckades',
         description: err instanceof Error ? err.message : 'Försök igen.',
@@ -397,7 +428,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         {/* Document preview (hero) */}
         <main className="overflow-hidden bg-muted/10 relative">
           {selected ? (
-            <DocumentPreview docUrl={docUrl} docMime={docMime} />
+            <DocumentPreview docUrl={docUrl} docMime={docMime} isProcessing={!!selected.isPlaceholder} />
           ) : (
             <EmptyPreview
               onUploadClick={() => fileInputRef.current?.click()}
@@ -420,6 +451,22 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               onDelete={() => handleDelete(selected.id)}
               onAttach={() => setAttachOpen(true)}
               isDeleting={isDeleting}
+              onFieldsUpdated={(nextData) => {
+                // Guard against stale closure: if the user navigated to a
+                // different item between sending the PATCH and the response
+                // arriving, the captured `selected` is no longer the
+                // currently-selected one. Without the id check we'd write
+                // item A's payload onto item B's row.
+                const targetId = selected.id
+                setSelected((prev) =>
+                  prev?.id === targetId ? { ...prev, extracted_data: nextData } : prev
+                )
+                setItems((prev) =>
+                  prev.map((it) =>
+                    it.id === targetId ? { ...it, extracted_data: nextData } : it
+                  )
+                )
+              }}
             />
           ) : (
             <div className="p-6 text-center text-sm text-muted-foreground">
@@ -619,26 +666,33 @@ function InboxRow({
   const supplierName = pickSupplierName(item)
   const isErrored = item.status === 'error'
   const isProcessed = !!item.created_supplier_invoice_id
+  const isPlaceholder = !!item.isPlaceholder
 
   return (
     <li>
       <button
         type="button"
         onClick={onClick}
+        disabled={isPlaceholder}
         className={cn(
           'w-full text-left px-3 py-2 border-b transition-colors flex flex-col gap-0.5',
           selected ? 'bg-background border-l-2 border-l-primary' : 'hover:bg-background',
-          isErrored && !selected && 'bg-destructive/[0.03]'
+          isErrored && !selected && 'bg-destructive/[0.03]',
+          isPlaceholder && 'cursor-default'
         )}
       >
         <div className="flex items-center gap-2 min-w-0">
-          {item.source === 'email' ? (
+          {isPlaceholder ? (
+            <Loader2 className="h-3 w-3 text-muted-foreground shrink-0 animate-spin" />
+          ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
           <span className="text-sm font-medium truncate flex-1 min-w-0">
-            {supplierName ?? item.email_subject ?? 'Okänt dokument'}
+            {isPlaceholder
+              ? (item.fileName ?? 'Nytt dokument')
+              : (supplierName ?? item.email_subject ?? 'Okänt dokument')}
           </span>
           {isErrored && (
             <AlertTriangle className="h-3 w-3 text-destructive shrink-0" />
@@ -648,8 +702,12 @@ function InboxRow({
           )}
         </div>
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
-          {amount != null && (
+          {isPlaceholder ? (
+            <span className="italic">Tolkar dokument med AI…</span>
+          ) : (
+            <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+          )}
+          {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
               {formatCurrency(amount, pickCurrency(item))}
             </span>
@@ -665,10 +723,20 @@ function InboxRow({
 function DocumentPreview({
   docUrl,
   docMime,
+  isProcessing = false,
 }: {
   docUrl: string | null
   docMime: string | null
+  isProcessing?: boolean
 }) {
+  if (isProcessing) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <span>Tolkar dokument med AI…</span>
+      </div>
+    )
+  }
   if (!docUrl) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
@@ -750,11 +818,13 @@ function FieldsRail({
   onDelete,
   onAttach,
   isDeleting,
+  onFieldsUpdated,
 }: {
   item: InboxItem
   onDelete: () => void
   onAttach: () => void
   isDeleting: boolean
+  onFieldsUpdated: (data: InvoiceExtractionResult) => void
 }) {
   const data = item.extracted_data
   const isProcessed = !!item.created_supplier_invoice_id
@@ -800,16 +870,28 @@ function FieldsRail({
         <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-3">
           Extraherade fält
         </h3>
-        {data ? (
-          <ExtractedFieldsList data={data} />
+        {item.isPlaceholder ? (
+          <div className="space-y-2">
+            <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Tolkar dokument med AI…
+            </div>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-8 w-full" />
+            ))}
+          </div>
         ) : (
-          <p className="text-xs text-muted-foreground italic">
-            Kunde inte läsa text — manuell registrering krävs.
-          </p>
+          <EditableFieldsList
+            itemId={item.id}
+            data={data ?? emptyExtraction()}
+            disabled={isProcessed}
+            onUpdated={onFieldsUpdated}
+          />
         )}
       </div>
 
-      {/* Actions */}
+      {/* Actions — hidden while AI extraction is in flight */}
+      {!item.isPlaceholder && (
       <div className="border-t px-4 py-3 space-y-2">
         {isProcessed && item.created_supplier_invoice_id ? (
           <Link href={`/supplier-invoices/${item.created_supplier_invoice_id}`} className="block">
@@ -860,66 +942,282 @@ function FieldsRail({
           </Badge>
         )}
       </div>
+      )}
     </div>
   )
 }
 
 // ── Extracted fields list ────────────────────────────────────
 
-function ExtractedFieldsList({ data }: { data: InvoiceExtractionResult }) {
-  const fields: Array<{ label: string; value: string | null }> = [
-    { label: 'Leverantör', value: data.supplier?.name ?? null },
-    { label: 'Org.nr', value: data.supplier?.orgNumber ?? null },
-    { label: 'VAT-nr', value: data.supplier?.vatNumber ?? null },
-    { label: 'Bankgiro', value: data.supplier?.bankgiro ?? null },
-    { label: 'Plusgiro', value: data.supplier?.plusgiro ?? null },
-    { label: 'Fakturanr', value: data.invoice?.invoiceNumber ?? null },
-    { label: 'OCR/Referens', value: data.invoice?.paymentReference ?? null },
-    { label: 'Fakturadatum', value: data.invoice?.invoiceDate ?? null },
-    { label: 'Förfallodatum', value: data.invoice?.dueDate ?? null },
-    {
-      label: 'Totalt',
-      value: data.totals?.total != null ? formatCurrency(data.totals.total, data.invoice?.currency ?? 'SEK') : null,
+function emptyExtraction(): InvoiceExtractionResult {
+  return {
+    supplier: { name: null, orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
+    invoice: { invoiceNumber: null, invoiceDate: null, dueDate: null, paymentReference: null, currency: 'SEK' },
+    lineItems: [],
+    totals: { subtotal: null, vatAmount: null, total: null },
+    vatBreakdown: [],
+    confidence: 0,
+  }
+}
+
+// Inline edit + debounced auto-save. The field set mirrors the
+// UpdateExtractedDataSchema in extensions/general/invoice-inbox/index.ts.
+type FieldKey =
+  | 'supplier.name'
+  | 'supplier.orgNumber'
+  | 'supplier.vatNumber'
+  | 'supplier.bankgiro'
+  | 'supplier.plusgiro'
+  | 'invoice.invoiceNumber'
+  | 'invoice.paymentReference'
+  | 'invoice.invoiceDate'
+  | 'invoice.dueDate'
+  | 'invoice.currency'
+  | 'totals.total'
+  | 'totals.vatAmount'
+
+interface FieldDef {
+  key: FieldKey
+  label: string
+  type: 'text' | 'date' | 'number'
+  inputMode?: 'numeric' | 'decimal'
+}
+
+const FIELD_DEFS: FieldDef[] = [
+  { key: 'supplier.name', label: 'Leverantör', type: 'text' },
+  { key: 'supplier.orgNumber', label: 'Org.nr', type: 'text' },
+  { key: 'supplier.vatNumber', label: 'VAT-nr', type: 'text' },
+  { key: 'supplier.bankgiro', label: 'Bankgiro', type: 'text' },
+  { key: 'supplier.plusgiro', label: 'Plusgiro', type: 'text' },
+  { key: 'invoice.invoiceNumber', label: 'Fakturanr', type: 'text' },
+  { key: 'invoice.paymentReference', label: 'OCR/Referens', type: 'text' },
+  { key: 'invoice.invoiceDate', label: 'Fakturadatum', type: 'date' },
+  { key: 'invoice.dueDate', label: 'Förfallodatum', type: 'date' },
+  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
+  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
+  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
+]
+
+function readField(data: InvoiceExtractionResult, key: FieldKey): string {
+  const [group, name] = key.split('.') as [keyof InvoiceExtractionResult, string]
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const value = (data[group] as any)?.[name]
+  if (value == null) return ''
+  return String(value)
+}
+
+function buildPatchBody(key: FieldKey, raw: string, currency: string) {
+  const [group, name] = key.split('.')
+  const trimmed = raw.trim()
+
+  if (group === 'totals') {
+    const num = trimmed === '' ? null : Number(trimmed.replace(',', '.'))
+    if (num != null && !Number.isFinite(num)) return null
+    return { totals: { [name]: num } }
+  }
+  if (group === 'invoice' && (name === 'invoiceDate' || name === 'dueDate')) {
+    const value = trimmed === '' ? null : trimmed
+    return { invoice: { [name]: value } }
+  }
+  if (group === 'invoice' && name === 'currency') {
+    return { invoice: { currency: trimmed === '' ? currency : trimmed.toUpperCase() } }
+  }
+  return { [group]: { [name]: trimmed === '' ? null : trimmed } }
+}
+
+function EditableFieldsList({
+  itemId,
+  data,
+  disabled,
+  onUpdated,
+}: {
+  itemId: string
+  data: InvoiceExtractionResult
+  disabled: boolean
+  onUpdated: (data: InvoiceExtractionResult) => void
+}) {
+  const { toast } = useToast()
+  const [drafts, setDrafts] = useState<Record<FieldKey, string>>(() =>
+    Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
+  )
+  const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
+  // Last-known server values per field. Used to detect when the server
+  // normalises a value (currency upper-cased, whitespace trimmed) so we can
+  // pick up the canonical value into the input without clobbering an
+  // in-progress edit.
+  const lastServerRef = useRef<Record<FieldKey, string>>(
+    Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
+  )
+
+  // Reset drafts when the user switches to a different inbox item.
+  useEffect(() => {
+    const seeded = Object.fromEntries(
+      FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])
+    ) as Record<FieldKey, string>
+    setDrafts(seeded)
+    lastServerRef.current = seeded
+    return () => {
+      for (const t of Object.values(timersRef.current)) {
+        if (t) clearTimeout(t)
+      }
+      timersRef.current = {}
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemId])
+
+  // Re-seed drafts when the server returns normalised values (e.g. uppercased
+  // currency, trimmed strings). Only update fields where the local draft
+  // matches the previous server value — i.e. the user hasn't typed anything
+  // newer that we'd otherwise clobber.
+  useEffect(() => {
+    let dirty = false
+    const next: Record<FieldKey, string> = { ...lastServerRef.current }
+    setDrafts((prev) => {
+      const updated = { ...prev }
+      for (const f of FIELD_DEFS) {
+        const newServer = readField(data, f.key)
+        const prevServer = lastServerRef.current[f.key]
+        if (newServer !== prevServer) {
+          next[f.key] = newServer
+          // Only sync into the input if the user hadn't started a new edit.
+          if (prev[f.key] === prevServer) {
+            updated[f.key] = newServer
+            dirty = true
+          }
+        }
+      }
+      return dirty ? updated : prev
+    })
+    lastServerRef.current = next
+  }, [data])
+
+  const currency = data.invoice?.currency ?? 'SEK'
+
+  const persist = useCallback(
+    async (key: FieldKey, raw: string) => {
+      const body = buildPatchBody(key, raw, currency)
+      if (!body) {
+        toast({ variant: 'destructive', title: 'Ogiltigt värde' })
+        setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
+        return
+      }
+      try {
+        const res = await fetch(
+          `/api/extensions/ext/invoice-inbox/items/${itemId}/fields`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          }
+        )
+        const json = await res.json()
+        if (!res.ok) {
+          // 409 means the item is already linked to a supplier invoice and
+          // the server has rejected the edit. Surface the specific Swedish
+          // message ("Posten är redan kopplad…") instead of the generic
+          // fallback so the user understands why the field locked.
+          const isConflict = res.status === 409
+          toast({
+            variant: 'destructive',
+            title: isConflict ? 'Posten är låst' : 'Kunde inte spara',
+            description: json.error ?? 'Försök igen',
+          })
+          setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
+          return
+        }
+        if (json.data?.extracted_data) {
+          onUpdated(json.data.extracted_data as InvoiceExtractionResult)
+        }
+      } catch (err) {
+        toast({
+          variant: 'destructive',
+          title: 'Nätverksfel',
+          description: err instanceof Error ? err.message : 'Kunde inte spara',
+        })
+        setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
+      }
     },
-    {
-      label: 'Moms',
-      value: data.totals?.vatAmount != null ? formatCurrency(data.totals.vatAmount, data.invoice?.currency ?? 'SEK') : null,
+    [itemId, currency, data, onUpdated, toast]
+  )
+
+  const onChange = useCallback(
+    (key: FieldKey, raw: string) => {
+      setDrafts((prev) => ({ ...prev, [key]: raw }))
+      const existing = timersRef.current[key]
+      if (existing) clearTimeout(existing)
+      timersRef.current[key] = setTimeout(() => {
+        timersRef.current[key] = undefined
+        if (raw === readField(data, key)) return
+        void persist(key, raw)
+      }, 800)
     },
-  ]
+    [data, persist]
+  )
+
+  const onBlur = useCallback(
+    (key: FieldKey) => {
+      const pending = timersRef.current[key]
+      if (pending) {
+        clearTimeout(pending)
+        timersRef.current[key] = undefined
+        const raw = drafts[key]
+        if (raw !== readField(data, key)) void persist(key, raw)
+      }
+    },
+    [data, drafts, persist]
+  )
+
+  const vatRows = useMemo(() => data.vatBreakdown ?? [], [data.vatBreakdown])
 
   return (
-    <dl className="space-y-2">
-      {fields.map((f) => (
-        <div key={f.label} className="flex flex-col gap-0.5">
-          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground/80">{f.label}</dt>
-          <dd
-            className={cn(
-              'text-sm break-all',
-              f.value == null && 'text-muted-foreground/50 italic'
-            )}
+    <div className="space-y-2">
+      {FIELD_DEFS.map((f) => (
+        <div key={f.key} className="flex flex-col gap-0.5">
+          <label
+            htmlFor={`field-${f.key}`}
+            className="text-[10px] uppercase tracking-wide text-muted-foreground/80"
           >
-            {f.value ?? '—'}
-          </dd>
+            {f.label}
+          </label>
+          <Input
+            id={`field-${f.key}`}
+            type={f.type}
+            inputMode={f.inputMode}
+            value={drafts[f.key]}
+            onChange={(e) => onChange(f.key, e.target.value)}
+            onBlur={() => onBlur(f.key)}
+            disabled={disabled}
+            placeholder="—"
+            className={cn(
+              'h-8 text-sm border-transparent bg-transparent px-2 -mx-2 hover:border-border focus-visible:border-ring',
+              drafts[f.key] === '' && 'text-muted-foreground/50 italic'
+            )}
+          />
         </div>
       ))}
-      {data.vatBreakdown && data.vatBreakdown.length > 0 && (
+      {vatRows.length > 0 && (
         <div className="pt-2 border-t mt-3">
-          <dt className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
             Momsfördelning
-          </dt>
-          <dd className="space-y-1">
-            {data.vatBreakdown.map((row, i) => (
+          </p>
+          <div className="space-y-1">
+            {vatRows.map((row, i) => (
               <div key={i} className="text-xs flex justify-between">
                 <span className="text-muted-foreground">{row.rate}%</span>
                 <span className="tabular-nums">
-                  {formatCurrency(row.base, data.invoice?.currency ?? 'SEK')} +{' '}
-                  {formatCurrency(row.amount, data.invoice?.currency ?? 'SEK')}
+                  {formatCurrency(row.base, currency)} +{' '}
+                  {formatCurrency(row.amount, currency)}
                 </span>
               </div>
             ))}
-          </dd>
+          </div>
         </div>
       )}
-    </dl>
+      {disabled && (
+        <p className="text-[10px] text-muted-foreground/70 pt-2">
+          Posten är kopplad till en leverantörsfaktura — fälten kan inte ändras.
+        </p>
+      )}
+    </div>
   )
 }
