@@ -1744,28 +1744,41 @@ export async function executeSIEImport(
       // a fiscal period whose shape doesn't match the file's #RAR) would
       // produce journal entries stamped to a period that doesn't cover their
       // own entry_date — breaking the SIE invariant and BFL 5 kap.
-      const { data: resolvedPeriod } = await supabase
+      //
+      // Fail closed if the period fetch errors: a silent skip would leave the
+      // exact data-corruption path this guard exists to close.
+      const { data: resolvedPeriod, error: resolvedPeriodError } = await supabase
         .from('fiscal_periods')
         .select('period_start, period_end')
         .eq('id', result.fiscalPeriodId)
         .single()
 
-      if (resolvedPeriod) {
-        const periodStart = new Date(resolvedPeriod.period_start + 'T00:00:00')
-        const periodEnd = new Date(resolvedPeriod.period_end + 'T00:00:00')
-        const outOfRange = parsed.vouchers.filter(
-          (v) => v.date.getTime() < periodStart.getTime() || v.date.getTime() > periodEnd.getTime()
+      if (resolvedPeriodError || !resolvedPeriod) {
+        result.errors.push(
+          `Kunde inte verifiera räkenskapsårets datumintervall innan import: ${resolvedPeriodError?.message ?? 'räkenskapsåret hittades inte'}. Försök igen.`
         )
+        return result
+      }
 
-        if (outOfRange.length > 0) {
-          const sample = outOfRange.slice(0, 3).map(v => `${v.series}${v.number} (${formatDate(v.date)})`).join(', ')
-          result.errors.push(
-            `${outOfRange.length} verifikation${outOfRange.length === 1 ? '' : 'er'} har datum utanför räkenskapsåret ` +
-              `${resolvedPeriod.period_start} – ${resolvedPeriod.period_end}. Exempel: ${sample}${outOfRange.length > 3 ? '…' : ''}. ` +
-              `Importera varje räkenskapsår som en egen SIE-fil — flera år i samma fil stöds inte.`
-          )
-          return result
-        }
+      // Date-only string comparison — sidesteps any latent off-by-one if the
+      // SIE parser ever attaches a time component to v.date. SIE per spec is
+      // YYYYMMDD and our parser normalizes to midnight, but a string compare
+      // matches the underlying DATE columns exactly and is cheap.
+      const periodStart = resolvedPeriod.period_start as string
+      const periodEnd = resolvedPeriod.period_end as string
+      const outOfRange = parsed.vouchers.filter((v) => {
+        const d = formatDate(v.date)
+        return d < periodStart || d > periodEnd
+      })
+
+      if (outOfRange.length > 0) {
+        const sample = outOfRange.slice(0, 3).map(v => `${v.series}${v.number} (${formatDate(v.date)})`).join(', ')
+        result.errors.push(
+          `${outOfRange.length} verifikation${outOfRange.length === 1 ? '' : 'er'} har datum utanför räkenskapsåret ` +
+            `${periodStart} – ${periodEnd}. Exempel: ${sample}${outOfRange.length > 3 ? '…' : ''}. ` +
+            `Importera varje räkenskapsår som en egen SIE-fil — flera år i samma fil stöds inte.`
+        )
+        return result
       }
 
       // Detect partial-year export: if voucher dates don't span the full fiscal year,
