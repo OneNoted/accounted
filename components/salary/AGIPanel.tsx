@@ -130,7 +130,22 @@ export function AGIPanel(props: AGIPanelProps) {
         }
       }
       if (res.ok) {
-        setStatus(await res.json())
+        const next = await res.json() as ConnectionStatus
+        setStatus(next)
+        // Clear stale session-expired error after a successful reconnect.
+        // The browser bfcache can restore React state from before the OAuth
+        // round-trip, leaving the old "Sessionen har gått ut" message in
+        // place even though the token is now fresh. This wipes the error
+        // only when (a) there's currently an error and (b) the new status
+        // says we're healthy — never silently swallowing unrelated errors.
+        const isHealthy = next.connected && !next.expired && next.canRefresh !== false
+        if (isHealthy) {
+          setError(prev =>
+            prev && /sessionen har gått ut|logga in med bankid igen/i.test(prev)
+              ? null
+              : prev,
+          )
+        }
       }
     } catch {
       // ignore — UI shows the not-connected state
@@ -157,6 +172,28 @@ export function AGIPanel(props: AGIPanelProps) {
     fetchStatus()
     fetchSubmission()
   }, [fetchStatus, fetchSubmission])
+
+  // Listen for OAuth completion from the BankID popup. When the popup posts
+  // back a success/error message we re-fetch status so the panel flips from
+  // "expired" / not-connected to "Ansluten" without a full page reload.
+  useEffect(() => {
+    function handleMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return
+      if (event.data?.type === 'skatteverket-oauth-success') {
+        setError(null)
+        setSuccess('Anslutningen mot Skatteverket lyckades.')
+        fetchStatus()
+      } else if (event.data?.type === 'skatteverket-oauth-error') {
+        const reason =
+          typeof event.data.reason === 'string' && event.data.reason
+            ? event.data.reason
+            : 'OAuth-anslutningen misslyckades. Försök igen.'
+        setError(reason)
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [fetchStatus])
 
   // Background kvittens-polling timers (see scheduleKvittensPolls below).
   // Held in a ref so the unmount-cleanup effect can cancel them if the
@@ -213,7 +250,31 @@ export function AGIPanel(props: AGIPanelProps) {
   }, [arbetsgivare, period, fetchSubmission, onChange])
 
   const handleConnect = () => {
-    window.location.href = '/api/extensions/ext/skatteverket/authorize'
+    // Open the BankID OAuth flow in a centered popup. The callback page
+    // detects `window.opener` and posts back a `skatteverket-oauth-success`
+    // (or `-error`) message, then closes itself — see the postMessage
+    // listener below. `return_to` is still passed so the popup-less fallback
+    // path (e.g. popup blockers) lands on the salary run page rather than
+    // the default /reports tab.
+    const returnTo = typeof window !== 'undefined'
+      ? window.location.pathname + window.location.search
+      : ''
+    const url = `/api/extensions/ext/skatteverket/authorize${
+      returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ''
+    }`
+    const w = 600
+    const h = 750
+    const left = window.screenX + (window.outerWidth - w) / 2
+    const top = window.screenY + (window.outerHeight - h) / 2
+    const popup = window.open(
+      url,
+      'skatteverket-oauth',
+      `width=${w},height=${h},left=${left},top=${top}`,
+    )
+    if (!popup) {
+      // Popup blocked — fall back to a full-page navigation.
+      window.location.href = url
+    }
   }
 
   /**
@@ -509,6 +570,23 @@ export function AGIPanel(props: AGIPanelProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Expired-session banner — the token row exists (so status.connected
+            is true) but the access token is past expiry and either has no
+            refresh token or has burned through its 10-refresh budget. The
+            only fix is a fresh BankID round-trip. */}
+        {(status?.expired === true || status?.canRefresh === false) && !readOnly && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+            <p className="text-sm font-medium">Anslutningen mot Skatteverket har gått ut</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Logga in med BankID igen för att kunna skicka AGI.
+            </p>
+            <Button size="sm" variant="outline" className="mt-2" onClick={handleConnect}>
+              <Link2 className="mr-1.5 h-3.5 w-3.5" />
+              Återanslut med BankID
+            </Button>
+          </div>
+        )}
+
         {/* Missing-scope banner — proactive nudge before the user hits a
             403 invalid_scope at submission time. The agd scope was added
             after some users had already connected, so their stored token
@@ -624,12 +702,30 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
-        {error && (
-          <div className="rounded-md bg-destructive/10 p-2.5 text-sm text-destructive">
-            <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
-            {error}
-          </div>
-        )}
+        {error && (() => {
+          // When the underlying token is expired or its refresh budget is
+          // exhausted, the only fix is for the user to re-do the BankID OAuth
+          // flow. Surface a reconnect button right next to the error so they
+          // don't have to hunt for it in settings.
+          const sessionExpired =
+            /sessionen har gått ut|logga in med bankid igen/i.test(error) ||
+            status?.expired === true ||
+            status?.canRefresh === false
+          return (
+            <div className="rounded-md bg-destructive/10 p-2.5 text-sm text-destructive">
+              <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
+              {error}
+              {sessionExpired && !readOnly && (
+                <div className="mt-2">
+                  <Button size="sm" variant="outline" onClick={handleConnect}>
+                    <Link2 className="mr-1.5 h-3.5 w-3.5" />
+                    Återanslut med BankID
+                  </Button>
+                </div>
+              )}
+            </div>
+          )
+        })()}
         {success && !error && (
           <div className="rounded-md bg-emerald-50 p-2.5 text-sm text-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300">
             <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />

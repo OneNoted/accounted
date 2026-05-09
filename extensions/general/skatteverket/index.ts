@@ -137,16 +137,61 @@ export const skatteverketExtension: Extension = {
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
 
+        // JSON-encode for safe embedding inside <script>. Escapes quotes and `</`
+        // so the value can't break out of the script tag.
+        const jsLiteral = (value: unknown) =>
+          JSON.stringify(value ?? '').replace(/</g, '\\u003c')
+
+        // Build an HTML response that detects whether we're running inside an
+        // OAuth popup. If `window.opener` exists, post a message back to the
+        // parent and close the popup. Otherwise fall back to a plain redirect
+        // (preserves the legacy non-popup connect flow).
+        const respondWithSuccess = (fallbackPath: string) => {
+          const html = `<!DOCTYPE html><html><body><script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(appUrl)});
+              window.close();
+            } else {
+              window.location.href = ${jsLiteral(`${appUrl}${fallbackPath}`)};
+            }
+          </script><p>Anslutningen lyckades. Du kan stänga denna flik.</p></body></html>`
+          return new Response(html, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          })
+        }
+
+        const respondWithError = (reason: string, fallbackPath: string) => {
+          const escapedReason = reason
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+          const html = `<!DOCTYPE html><html><body><script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'skatteverket-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
+              window.close();
+            } else {
+              window.location.href = ${jsLiteral(`${appUrl}${fallbackPath}`)};
+            }
+          </script><p>Anslutningen misslyckades: ${escapedReason}</p></body></html>`
+          return new Response(html, {
+            status: 200,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          })
+        }
+
         if (error) {
           const desc = url.searchParams.get('error_description') || 'Okänt fel'
-          return NextResponse.redirect(
-            `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent(desc)}`
+          return respondWithError(
+            desc,
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(desc)}`,
           )
         }
 
         if (!code || !state) {
-          return NextResponse.redirect(
-            `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Saknar auktoriseringskod')}`
+          return respondWithError(
+            'Saknar auktoriseringskod',
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Saknar auktoriseringskod')}`,
           )
         }
 
@@ -158,6 +203,9 @@ export const skatteverketExtension: Extension = {
         // Verify user session (browser should still have cookies)
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) {
+          // Login redirects always go to a full page — popups can't render the
+          // login form usefully, so this is the one path that keeps a hard
+          // redirect even from inside the popup.
           return NextResponse.redirect(
             `${appUrl}/login?redirect=${encodeURIComponent('/reports?tab=vat-declaration')}`
           )
@@ -169,8 +217,9 @@ export const skatteverketExtension: Extension = {
         try {
           companyId = await requireCompanyId(supabase, user.id)
         } catch {
-          return NextResponse.redirect(
-            `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Inget företag valt')}`
+          return respondWithError(
+            'Inget företag valt',
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Inget företag valt')}`,
           )
         }
 
@@ -184,8 +233,9 @@ export const skatteverketExtension: Extension = {
           .single()
 
         if (!settingsData || settingsData.value !== state) {
-          return NextResponse.redirect(
-            `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Ogiltig state-parameter (CSRF)')}`
+          return respondWithError(
+            'Ogiltig state-parameter (CSRF)',
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Ogiltig state-parameter (CSRF)')}`,
           )
         }
 
@@ -213,11 +263,11 @@ export const skatteverketExtension: Extension = {
         const returnTo = (returnToData?.value as string | null) || null
         const successPath = returnTo
           ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_connected=true`
-          : `${appUrl}/reports?tab=vat-declaration&skv_connected=true`
+          : `/reports?tab=vat-declaration&skv_connected=true`
         const errorPath = (msg: string) =>
           returnTo
             ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_error=${encodeURIComponent(msg)}`
-            : `${appUrl}/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
+            : `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
 
         try {
           const tokens = await exchangeCodeForTokens(code, redirectUri)
@@ -231,10 +281,7 @@ export const skatteverketExtension: Extension = {
             .eq('extension_id', 'skatteverket')
             .in('key', ['oauth_state', 'oauth_return_to'])
 
-          const success = returnTo
-            ? `${appUrl}${successPath}`
-            : successPath
-          return NextResponse.redirect(success)
+          return respondWithSuccess(successPath)
         } catch (err) {
           console.error('[skatteverket] Token exchange failed:', err)
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
@@ -244,8 +291,7 @@ export const skatteverketExtension: Extension = {
             : err instanceof Error
               ? err.message
               : 'Token exchange misslyckades'
-          const target = returnTo ? `${appUrl}${errorPath(message)}` : errorPath(message)
-          return NextResponse.redirect(target)
+          return respondWithError(message, errorPath(message))
         }
       },
     },
