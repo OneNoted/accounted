@@ -98,14 +98,6 @@ interface Kontrollresultat {
 
 const ENABLED_KEY = 'EXTENSION_DISABLED'
 
-// Feature flag: gate the actual transmission to Skatteverket while we validate
-// the end-to-end flow with internal users. When off, the salary flow is fully
-// usable (calculation, payslips, payment files, AGI XML preview), but the
-// connect-to-SKV and submit/sign/kvittens buttons are disabled with a hint.
-// Set NEXT_PUBLIC_SKATTEVERKET_AGI_ENABLED=true on environments cleared to file.
-const AGI_TRANSMIT_ENABLED = process.env.NEXT_PUBLIC_SKATTEVERKET_AGI_ENABLED === 'true'
-const AGI_TRANSMIT_DISABLED_HINT = 'Inlämning till Skatteverket är inte aktiverad ännu. Funktionen är i beta.'
-
 export function AGIPanel(props: AGIPanelProps) {
   const {
     salaryRunId,
@@ -483,17 +475,10 @@ export function AGIPanel(props: AGIPanelProps) {
             Anslut till Skatteverket med BankID för att skicka AGI direkt från {`gnubok`}.
           </p>
           {!readOnly && (
-            <Button
-              onClick={handleConnect}
-              disabled={!AGI_TRANSMIT_ENABLED}
-              title={!AGI_TRANSMIT_ENABLED ? AGI_TRANSMIT_DISABLED_HINT : ''}
-            >
+            <Button onClick={handleConnect}>
               <Link2 className="mr-2 h-4 w-4" />
               Anslut med BankID
             </Button>
-          )}
-          {!AGI_TRANSMIT_ENABLED && (
-            <p className="text-xs text-muted-foreground">{AGI_TRANSMIT_DISABLED_HINT}</p>
           )}
         </CardContent>
       </Card>
@@ -658,8 +643,7 @@ export function AGIPanel(props: AGIPanelProps) {
               size="sm"
               variant="outline"
               onClick={handleSubmit}
-              disabled={!AGI_TRANSMIT_ENABLED || !!actionLoading || awaitingSigning}
-              title={!AGI_TRANSMIT_ENABLED ? AGI_TRANSMIT_DISABLED_HINT : ''}
+              disabled={!!actionLoading || awaitingSigning}
             >
               {actionLoading === 'submit' ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -671,12 +655,8 @@ export function AGIPanel(props: AGIPanelProps) {
             <Button
               size="sm"
               onClick={handleCreateSigningLink}
-              disabled={!AGI_TRANSMIT_ENABLED || !!actionLoading || (!underlagSubmitted && !awaitingSigning)}
-              title={
-                !AGI_TRANSMIT_ENABLED
-                  ? AGI_TRANSMIT_DISABLED_HINT
-                  : !underlagSubmitted && !awaitingSigning ? 'Skicka in underlag först' : ''
-              }
+              disabled={!!actionLoading || (!underlagSubmitted && !awaitingSigning)}
+              title={!underlagSubmitted && !awaitingSigning ? 'Skicka in underlag först' : ''}
             >
               {actionLoading === 'granskning' ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -704,8 +684,7 @@ export function AGIPanel(props: AGIPanelProps) {
               size="sm"
               variant="ghost"
               onClick={handleCheckSubmitted}
-              disabled={!AGI_TRANSMIT_ENABLED || !!actionLoading}
-              title={!AGI_TRANSMIT_ENABLED ? AGI_TRANSMIT_DISABLED_HINT : ''}
+              disabled={!!actionLoading}
             >
               {actionLoading === 'check' ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
