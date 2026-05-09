@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { generateBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import type { BgLbCompanyData, BgLbEmployee } from '@/lib/salary/payment/bg-lb-generator'
@@ -26,6 +27,9 @@ export async function GET(
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const writeCheck = await requireWritePermission(supabase, user.id)
+  if (!writeCheck.ok) return writeCheck.response
 
   const companyId = await requireCompanyId(supabase, user.id)
 
@@ -137,6 +141,7 @@ export async function GET(
       payment_file_generated_at: new Date().toISOString(),
     })
     .eq('id', id)
+    .eq('company_id', companyId)
 
   // ISO 8859-1 encoding — re-encode the JS string to Latin-1 bytes.
   const buffer = Buffer.from(result.content, 'latin1')

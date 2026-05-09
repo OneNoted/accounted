@@ -121,6 +121,7 @@ export async function GET(
       payment_file_generated_at: new Date().toISOString(),
     })
     .eq('id', id)
+    .eq('company_id', companyId)
 
   return new Response(xml, {
     headers: {
