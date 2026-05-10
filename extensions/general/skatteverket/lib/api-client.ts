@@ -365,7 +365,7 @@ export async function skvRequest(
   }
 
   if (response.status === 403) {
-    const text = await response.text()
+    const text = await response.text().catch(() => '')
     // Same diagnostic-vs-user-message split as the 401 path: log the body
     // server-side, surface only the actionable Swedish guidance.
     log.error('403 from Skatteverket API', {
