@@ -346,11 +346,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        {/* Status banner — cancelled takes precedence over draft so a cancelled
-            row that lacks a number (legacy un-numbered draft that was later
-            cancelled) still surfaces as MAKULERAD rather than UTKAST. The draft
-            banner only shows for genuine drafts and for the corrupt-state case
-            of a non-cancelled invoice that somehow lacks a number. */}
+        {/* Status banner — cancelled takes precedence. UTKAST only appears for
+            invoices without a löpnummer; once a number is assigned the document
+            is a valid fakturaunderlag per ML 17 kap 24§ regardless of whether
+            it has been marked sent. */}
         {invoice.status === 'cancelled' ? (
           <View style={styles.cancelledBanner}>
             <Text style={styles.cancelledBannerTitle}>MAKULERAD – inte en giltig faktura</Text>
@@ -360,13 +359,11 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 : 'Detta utkast har makulerats och är inte ett giltigt fakturaunderlag.'}
             </Text>
           </View>
-        ) : (invoice.status === 'draft' || !invoice.invoice_number) && (
+        ) : !invoice.invoice_number && (
           <View style={styles.draftBanner}>
             <Text style={styles.draftBannerTitle}>UTKAST – inte en giltig faktura</Text>
             <Text style={styles.draftBannerText}>
-              {invoice.invoice_number
-                ? 'Detta är ett utkast. Markera fakturan som skickad eller skicka via systemet för att göra den giltig som fakturaunderlag.'
-                : 'Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.'}
+              Denna faktura saknar löpnummer och kan inte användas som fakturaunderlag enligt ML 17 kap 24§. Skicka fakturan via systemet för att tilldela ett nummer.
             </Text>
           </View>
         )}
@@ -375,7 +372,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         <View style={styles.header}>
           <View style={styles.companyInfo}>
             {company.logo_url && (
-              <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start' }} />
+              <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start', objectFit: 'contain' }} />
             )}
             <Text style={styles.companyName}>{company.trade_name || company.company_name}</Text>
             {company.trade_name && company.company_name && (
