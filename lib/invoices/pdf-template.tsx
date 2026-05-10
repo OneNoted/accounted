@@ -375,7 +375,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         <View style={styles.header}>
           <View style={styles.companyInfo}>
             {company.logo_url && (
-              <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start', objectFit: 'contain' }} />
+              <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start' }} />
             )}
             <Text style={styles.companyName}>{company.trade_name || company.company_name}</Text>
             {company.trade_name && company.company_name && (
