@@ -24,8 +24,6 @@ type Status =
 const SCOPE_LABELS: Record<string, string> = {
   momsdeklaration: 'Momsdeklaration',
   inkforetag: 'Företagsinformation',
-  ska: 'Skatteinformation',
-  skahmst: 'Hemortskommun',
   skattekonto: 'Skattekonto',
   agd: 'Arbetsgivardeklaration',
 }
