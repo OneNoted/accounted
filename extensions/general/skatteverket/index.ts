@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
-import { buildAuthorizeUrl, exchangeCodeForTokens } from './lib/oauth'
+import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { storeTokens, getTokens, deleteTokens } from './lib/token-store'
 import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
 import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './lib/mappers'
@@ -109,13 +109,21 @@ export const skatteverketExtension: Extension = {
             ? requestedReturn
             : null
 
+        // Generate PKCE pair — verifier persisted server-side, challenge sent
+        // to SKV. Some SKV per-flow client configurations issue revoked-on-use
+        // tokens unless PKCE is present, so we always send it.
+        const pkce = generatePkcePair()
+
         // Store state for CSRF validation in callback
         await ctx.settings.set('oauth_state', state)
         await ctx.settings.set('oauth_redirect_uri', redirectUri)
+        await ctx.settings.set('oauth_code_verifier', pkce.verifier)
         if (returnTo) await ctx.settings.set('oauth_return_to', returnTo)
         else await ctx.settings.set('oauth_return_to', null)
 
-        const authorizeUrl = buildAuthorizeUrl(redirectUri, state)
+        const authorizeUrl = buildAuthorizeUrl(redirectUri, state, {
+          codeChallenge: pkce.challenge,
+        })
 
         return NextResponse.redirect(authorizeUrl)
       },
@@ -251,6 +259,19 @@ export const skatteverketExtension: Extension = {
         const redirectUri = redirectData?.value ||
           `${appUrl}/api/extensions/ext/skatteverket/callback`
 
+        // Retrieve the PKCE verifier stored in /authorize. Optional only for
+        // backward compatibility with in-flight flows that started before the
+        // PKCE rollout — once those drain, this can be made required.
+        const { data: verifierData } = await supabase
+          .from('extension_data')
+          .select('value')
+          .eq('company_id', companyId)
+          .eq('extension_id', 'skatteverket')
+          .eq('key', 'oauth_code_verifier')
+          .maybeSingle()
+
+        const codeVerifier = (verifierData?.value as string | null) || undefined
+
         // Optional in-app destination set by /authorize?return_to=...
         const { data: returnToData } = await supabase
           .from('extension_data')
@@ -270,16 +291,16 @@ export const skatteverketExtension: Extension = {
             : `/reports?tab=vat-declaration&skv_error=${encodeURIComponent(msg)}`
 
         try {
-          const tokens = await exchangeCodeForTokens(code, redirectUri)
+          const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier)
           await storeTokens(supabase, user.id, tokens, companyId)
 
-          // Clean up CSRF state + the one-shot return_to.
+          // Clean up CSRF state + the one-shot return_to + PKCE verifier.
           await supabase
             .from('extension_data')
             .delete()
             .eq('company_id', companyId)
             .eq('extension_id', 'skatteverket')
-            .in('key', ['oauth_state', 'oauth_return_to'])
+            .in('key', ['oauth_state', 'oauth_return_to', 'oauth_code_verifier'])
 
           return respondWithSuccess(successPath)
         } catch (err) {

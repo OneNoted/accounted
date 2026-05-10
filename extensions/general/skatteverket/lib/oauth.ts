@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import type { SkatteverketTokens } from '../types'
 import {
   fetchWithTimeout,
@@ -41,13 +42,31 @@ function getClientSecret(): string {
 }
 
 /**
+ * Generate a PKCE verifier/challenge pair (RFC 7636, S256 method).
+ *
+ * SKV's per flow accepts (and on some test client configurations *requires*)
+ * PKCE. Without a code_challenge SKV may issue tokens that downstream APIs
+ * (notably the AGI APIGW) reject as revoked when called — even though the
+ * initial token exchange succeeds. Always sending PKCE is safe regardless
+ * of whether SKV strictly requires it.
+ *
+ * Verifier: 64 random bytes → base64url → 86 chars (within RFC 7636's
+ * 43–128 range). Challenge: SHA-256 of the verifier, base64url-encoded.
+ */
+export function generatePkcePair(): { verifier: string; challenge: string } {
+  const verifier = crypto.randomBytes(64).toString('base64url')
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
+  return { verifier, challenge }
+}
+
+/**
  * Build the Skatteverket OAuth2 authorization URL.
  * User is redirected here to authenticate with BankID.
  */
 export function buildAuthorizeUrl(
   redirectUri: string,
   state: string,
-  scope?: string
+  options?: { scope?: string; codeChallenge?: string }
 ): string {
   const base = getOAuthBaseUrl()
   const params = new URLSearchParams({
@@ -55,8 +74,12 @@ export function buildAuthorizeUrl(
     response_type: 'code',
     state,
     redirect_uri: redirectUri,
-    scope: scope || DEFAULT_SCOPES,
+    scope: options?.scope || DEFAULT_SCOPES,
   })
+  if (options?.codeChallenge) {
+    params.set('code_challenge', options.codeChallenge)
+    params.set('code_challenge_method', 'S256')
+  }
   return `${base}/authorize?${params.toString()}`
 }
 
@@ -66,7 +89,8 @@ export function buildAuthorizeUrl(
  */
 export async function exchangeCodeForTokens(
   code: string,
-  redirectUri: string
+  redirectUri: string,
+  codeVerifier?: string,
 ): Promise<SkatteverketTokens> {
   const base = getOAuthBaseUrl()
 
@@ -77,6 +101,7 @@ export async function exchangeCodeForTokens(
     redirect_uri: redirectUri,
     code,
   })
+  if (codeVerifier) body.set('code_verifier', codeVerifier)
 
   const response = await fetchWithTimeout(
     `${base}/token`,
