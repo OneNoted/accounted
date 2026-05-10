@@ -25,6 +25,9 @@ interface InvoiceReviewContentProps {
   yourReference?: string
   ourReference?: string
   notes?: string
+  /** The invoice number that will be assigned on confirm. Null when unknown
+   *  (e.g. delivery notes use a different sequence) or unfetched. */
+  numberPreview?: string | null
 }
 
 export function InvoiceReviewContent({
@@ -39,6 +42,7 @@ export function InvoiceReviewContent({
   yourReference,
   ourReference,
   notes,
+  numberPreview,
 }: InvoiceReviewContentProps) {
   const customerTypeLabel: Record<string, string> = {
     individual: 'Privatperson',
@@ -60,6 +64,12 @@ export function InvoiceReviewContent({
 
   return (
     <div className="space-y-4">
+      {numberPreview && (
+        <div className="text-sm text-muted-foreground">
+          Tilldelas fakturanummer{' '}
+          <span className="font-medium tabular-nums text-foreground">{numberPreview}</span>
+        </div>
+      )}
       {/* Customer info */}
       <div className="bg-muted rounded-lg p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
         <div className="min-w-0">

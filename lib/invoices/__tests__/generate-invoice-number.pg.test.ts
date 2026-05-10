@@ -67,7 +67,7 @@ describe('generate_invoice_number RPC', () => {
     )
 
     const assigned = rows[0]!.generate_invoice_number
-    expect(assigned).toMatch(/^F\d{4}\d{3}$/)
+    expect(assigned).toBe('F001')
 
     const persisted = await getPool().query<{ invoice_number: string }>(
       'SELECT invoice_number FROM public.invoices WHERE id = $1',
@@ -86,7 +86,7 @@ describe('generate_invoice_number RPC', () => {
       [companyId, invoiceId, 'proforma'],
     )
 
-    expect(rows[0]!.generate_invoice_number).toMatch(/^PF-\d{4}042$/)
+    expect(rows[0]!.generate_invoice_number).toBe('PF-042')
   })
 
   it('is idempotent: a second call on the same invoice returns the same number without bumping the counter', async () => {
@@ -167,8 +167,39 @@ describe('generate_invoice_number RPC', () => {
       [companyId, invoiceB, 'invoice'],
     )
 
-    expect(a.rows[0]!.generate_invoice_number).toMatch(/200$/)
-    expect(b.rows[0]!.generate_invoice_number).toMatch(/201$/)
+    expect(a.rows[0]!.generate_invoice_number).toBe('F200')
+    expect(b.rows[0]!.generate_invoice_number).toBe('F201')
+  })
+
+  it('uses bare number when invoice_prefix is null (no implicit year prefix)', async () => {
+    const { userId, companyId } = await seedCompany()
+    // Mirror the C by Sea bug report: user set next_invoice_number=10159 with
+    // no prefix, expected '10159', got '2026101' under the old year-prefix
+    // bug. After the fix the bare number is what they get.
+    await ensureCompanySettings({ userId, companyId, invoicePrefix: undefined, nextInvoiceNumber: 10159 })
+    await getPool().query(
+      'UPDATE public.company_settings SET invoice_prefix = NULL WHERE company_id = $1',
+      [companyId],
+    )
+    const invoiceId = await insertDraftInvoice({ userId, companyId })
+
+    const { rows } = await getPool().query<{ generate_invoice_number: string }>(
+      'SELECT public.generate_invoice_number($1, $2, $3)',
+      [companyId, invoiceId, 'invoice'],
+    )
+    expect(rows[0]!.generate_invoice_number).toBe('10159')
+  })
+
+  it('does not zero-pad numbers that exceed three digits', async () => {
+    const { userId, companyId } = await seedCompany()
+    await ensureCompanySettings({ userId, companyId, invoicePrefix: 'F-', nextInvoiceNumber: 10159 })
+    const invoiceId = await insertDraftInvoice({ userId, companyId })
+
+    const { rows } = await getPool().query<{ generate_invoice_number: string }>(
+      'SELECT public.generate_invoice_number($1, $2, $3)',
+      [companyId, invoiceId, 'invoice'],
+    )
+    expect(rows[0]!.generate_invoice_number).toBe('F-10159')
   })
 
   it('raises when the invoice id does not belong to the company', async () => {

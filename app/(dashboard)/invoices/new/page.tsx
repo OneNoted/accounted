@@ -79,6 +79,7 @@ export default function NewInvoicePage() {
   const [hasBankDetails, setHasBankDetails] = useState<boolean | null>(null)
   const [showBankSetup, setShowBankSetup] = useState(false)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
+  const [numberPreview, setNumberPreview] = useState<string | null>(null)
   const pendingCustomerRef = useRef<Customer | null>(null)
 
   const {
@@ -152,6 +153,29 @@ export default function NewInvoicePage() {
       setAccountingMethod(data.accounting_method)
     }
   }
+
+  // Preview the next invoice number so the user can catch a mis-set
+  // sequence/prefix before committing. The actual allocator still runs
+  // atomically at create time; this is read-only.
+  useEffect(() => {
+    if (!company?.id) return
+    if (watchDocumentType === 'delivery_note') {
+      setNumberPreview(null)
+      return
+    }
+    let cancelled = false
+    fetch(`/api/invoices/next-number?document_type=${encodeURIComponent(watchDocumentType)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        if (!cancelled) setNumberPreview(res?.data?.preview ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setNumberPreview(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id, watchDocumentType])
 
   useEffect(() => {
     if (watchCustomerId) {
@@ -257,8 +281,21 @@ export default function NewInvoicePage() {
   }
   const total = subtotal + vatAmount
 
-  function onSubmit(data: FormData) {
+  async function onSubmit(data: FormData) {
     setPendingData(data)
+    // Re-fetch the preview right before review so the displayed number
+    // reflects any concurrent invoice creations.
+    if (data.document_type !== 'delivery_note') {
+      try {
+        const r = await fetch(`/api/invoices/next-number?document_type=${encodeURIComponent(data.document_type)}`)
+        if (r.ok) {
+          const json = await r.json()
+          setNumberPreview(json?.data?.preview ?? null)
+        }
+      } catch {
+        // Preview is best-effort; the allocator at create time is the source of truth.
+      }
+    }
     if (hasBankDetails === false && watchDocumentType === 'invoice') {
       setShowBankSetup(true)
       return
@@ -405,6 +442,11 @@ export default function NewInvoicePage() {
         <div>
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
             {watchDocumentType === 'proforma' ? 'Ny proformafaktura' : watchDocumentType === 'delivery_note' ? 'Ny följesedel' : 'Ny faktura'}
+            {numberPreview && (
+              <span className="ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl">
+                ({numberPreview})
+              </span>
+            )}
           </h1>
           <p className="text-muted-foreground">
             {watchDocumentType === 'proforma' ? 'Skapa en proformafaktura (ingen bokföring)' : watchDocumentType === 'delivery_note' ? 'Skapa en följesedel (utan priser)' : 'Skapa en ny faktura'}
@@ -853,6 +895,7 @@ export default function NewInvoicePage() {
             yourReference={pendingData?.your_reference}
             ourReference={pendingData?.our_reference}
             notes={pendingData?.notes}
+            numberPreview={numberPreview}
           />
         </ConfirmationDialog>
       )}

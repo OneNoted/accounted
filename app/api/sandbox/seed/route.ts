@@ -1,6 +1,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId } from '@/lib/company/context'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('sandbox:seed')
 
 /**
  * POST /api/sandbox/seed
@@ -19,7 +22,30 @@ export async function POST() {
     return NextResponse.json({ error: 'Sandbox is only available for anonymous users' }, { status: 403 })
   }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+  // Anonymous users start with no company. Create one before seeding.
+  // If a previous seed attempt already created a company for this user, reuse it
+  // (idempotency).
+  let companyId = await getActiveCompanyId(supabase, user.id)
+
+  if (!companyId) {
+    const { data: newCompanyId, error: companyError } = await supabase.rpc(
+      'create_company_with_owner',
+      {
+        p_name: 'Sandlådan Konsult',
+        p_entity_type: 'enskild_firma',
+      }
+    )
+
+    if (companyError || !newCompanyId) {
+      log.error('failed to create sandbox company', { error: companyError, userId: user.id })
+      return NextResponse.json(
+        { error: 'Failed to create sandbox company' },
+        { status: 500 }
+      )
+    }
+
+    companyId = newCompanyId as string
+  }
 
   // Idempotency: if already seeded, return early
   const { data: existing } = await supabase
@@ -523,7 +549,8 @@ export async function POST() {
     if (dlError) throw dlError
 
     return NextResponse.json({ seeded: true })
-  } catch {
+  } catch (err) {
+    log.error('failed to seed sandbox data', { error: err, userId: user.id, companyId })
     return NextResponse.json(
       { error: 'Failed to seed sandbox data' },
       { status: 500 }

@@ -35,21 +35,48 @@ beforeEach(() => {
   vi.restoreAllMocks()
 })
 
-function mockFetchStatus(status: number, body = '') {
+function mockFetchStatus(status: number, body = '', headers?: HeadersInit) {
   global.fetch = vi.fn(async () =>
-    new Response(body, { status, statusText: String(status) })
+    new Response(body, { status, statusText: String(status), headers })
   ) as unknown as typeof fetch
 }
 
 describe('skvRequest — error mapping', () => {
-  it('maps 401 → SESSION_EXPIRED', async () => {
+  it('maps empty 401 → ACCESS_DENIED (likely missing APIGW subscription)', async () => {
     mockFetchStatus(401)
-    await expect(
-      skvRequest(fakeSupabase, 'user-1', 'GET', '/x'),
-    ).rejects.toMatchObject({
-      name: 'SkatteverketAuthError',
-      code: 'SESSION_EXPIRED',
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
+      expect((e as SkatteverketAuthError).message).toMatch(/Utvecklarportalen|prenumeration/i)
+    }
+  })
+
+  it('maps 401 with body text → SESSION_EXPIRED and includes body', async () => {
+    mockFetchStatus(401, 'token expired')
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
+      expect((e as SkatteverketAuthError).message).toContain('token expired')
+    }
+  })
+
+  it('maps 401 with WWW-Authenticate insufficient_scope → MISSING_SCOPE', async () => {
+    mockFetchStatus(401, '', {
+      'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="agd"',
     })
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('MISSING_SCOPE')
+    }
   })
 
   it('maps 403 with Behörighet body → BEHORIGHET_SAKNAS', async () => {

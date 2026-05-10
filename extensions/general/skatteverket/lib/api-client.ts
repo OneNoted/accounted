@@ -213,9 +213,55 @@ export async function skvRequest(
     //   1. Genuine token expiry / invalid bearer (user must re-auth)
     //   2. APIGW client lacks subscription for this API (developer portal fix)
     //      — the bearer is valid but the gateway rejects the call.
-    // Read the body so we can distinguish and surface a useful message.
+    // Read the body and gateway-side headers so we can distinguish and
+    // surface a useful message.
     const text = await response.text().catch(() => '')
-    console.error('[skatteverket] 401 from API', { url, body: text })
+
+    // WWW-Authenticate carries OAuth's machine-readable failure reason
+    // (insufficient_scope / invalid_token). The x-skv-* / x-amzn-* / x-api-*
+    // families are gateway-side hints SKV's APIGW emits when it rejects the
+    // call before reaching the application — the body is often empty in
+    // that case so the headers are the only signal.
+    const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
+    const skvHeaders: Record<string, string> = {}
+    response.headers.forEach((v, k) => {
+      const lk = k.toLowerCase()
+      if (
+        lk === 'www-authenticate' ||
+        lk.startsWith('x-skv-') ||
+        lk.startsWith('x-amzn-') ||
+        lk.startsWith('x-api-')
+      ) {
+        skvHeaders[k] = v
+      }
+    })
+    console.error('[skatteverket] 401 from API', { url, body: text, headers: skvHeaders })
+
+    // (A) Surface SKV's WWW-Authenticate verbatim — when the body is empty
+    // this header is usually the only diagnostic SKV gives us. Carry both
+    // header and body into every thrown message below.
+    const headerSuffix = Object.keys(skvHeaders).length > 0
+      ? ` Headers: ${JSON.stringify(skvHeaders)}`
+      : ''
+    const bodySuffix = text ? ` Svar: ${text}` : ''
+
+    // OAuth's standard insufficient_scope marker. SKV sometimes emits this
+    // as 401 (rather than 403) when the AGI APIGW evaluates scope before
+    // the application sees the token. The remedy is the same as MISSING_SCOPE:
+    // disconnect + reconnect to mint a token covering the AGI scope.
+    const wwwLower = wwwAuth.toLowerCase()
+    if (
+      wwwLower.includes('insufficient_scope') ||
+      wwwLower.includes('invalid_scope')
+    ) {
+      throw new SkatteverketAuthError(
+        'Anslutningen mot Skatteverket saknar nödvändig behörighet för denna ' +
+        'tjänst. Koppla bort och anslut igen via Inställningar → Skatteverket ' +
+        'för att förnya tokenen med rätt scope.' +
+        headerSuffix + bodySuffix,
+        'MISSING_SCOPE'
+      )
+    }
 
     // APIGW subscription / client-credential problems: the gateway responds
     // before the bearer is ever evaluated. The user reconnecting won't help
@@ -233,15 +279,47 @@ export async function skvRequest(
       throw new SkatteverketAuthError(
         'Skatteverkets API-gateway nekade anropet. Kontrollera att din ' +
         'APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har prenumeration på ' +
-        `denna tjänst i Utvecklarportalen. Svar från Skatteverket: ${text || '(tomt svar)'}`,
+        'denna tjänst i Utvecklarportalen.' +
+        headerSuffix +
+        ` Svar från Skatteverket: ${text || '(tomt svar)'}`,
+        'ACCESS_DENIED'
+      )
+    }
+
+    // (B) Empty 401 with no diagnostic header → almost always a gateway/
+    // subscription issue rather than a real session expiry. We refreshed
+    // the local bearer immediately above, so an empty body with no
+    // WWW-Authenticate means SKV's APIGW rejected the call before it
+    // reached the application — typically because the APIGW client isn't
+    // subscribed to the API at the URL we just hit. Telling the user to
+    // "log in again" sends them down a dead end; be explicit about the
+    // likely fix instead.
+    if (!text) {
+      // Extract the API segment of the URL so the message tells the user
+      // exactly which subscription is missing. Falls back to the raw URL
+      // if parsing fails.
+      let apiHint = url
+      try {
+        const u = new URL(url)
+        const parts = u.pathname.split('/').filter(Boolean)
+        // Take the first 3 segments — e.g. arbetsgivardeklaration/inlamning/v1
+        if (parts.length >= 1) apiHint = parts.slice(0, 3).join('/')
+      } catch {
+        // keep raw url
+      }
+      throw new SkatteverketAuthError(
+        'Skatteverkets API-gateway nekade anropet utan motivering. ' +
+        'Trolig orsak: APIGW-klienten (SKATTEVERKET_APIGW_CLIENT_ID) har ' +
+        `inte prenumeration på tjänsten "${apiHint}" i Utvecklarportalen, ` +
+        'eller den lagrade tokenen saknar rätt scope. Kontrollera ' +
+        'prenumerationen, koppla annars bort och anslut igen via ' +
+        'Inställningar → Skatteverket.' + headerSuffix,
         'ACCESS_DENIED'
       )
     }
 
     throw new SkatteverketAuthError(
-      text
-        ? `Sessionen har gått ut. Logga in med BankID igen. (Skatteverket: ${text})`
-        : 'Sessionen har gått ut. Logga in med BankID igen.',
+      `Sessionen har gått ut. Logga in med BankID igen.${headerSuffix}${bodySuffix}`,
       'SESSION_EXPIRED'
     )
   }

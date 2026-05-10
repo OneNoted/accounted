@@ -14,6 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, Receipt, Lock } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -55,6 +56,7 @@ export default function InvoicesPage() {
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState('all')
@@ -64,21 +66,29 @@ export default function InvoicesPage() {
   async function fetchInvoices() {
     if (!company) return
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('*, customer:customers(name)')
-      .eq('company_id', company.id)
-      .order('invoice_date', { ascending: false })
+    const [invoicesResult, settingsResult] = await Promise.all([
+      supabase
+        .from('invoices')
+        .select('*, customer:customers(name)')
+        .eq('company_id', company.id)
+        .order('invoice_date', { ascending: false }),
+      supabase
+        .from('company_settings')
+        .select('ore_rounding')
+        .eq('company_id', company.id)
+        .maybeSingle(),
+    ])
 
-    if (error) {
+    if (invoicesResult.error) {
       toast({
         title: 'Kunde inte ladda fakturor',
         description: 'Kontrollera din anslutning och försök igen.',
         variant: 'destructive',
       })
     } else {
-      setInvoices(data || [])
+      setInvoices(invoicesResult.data || [])
     }
+    setOreRounding(settingsResult.data?.ore_rounding ?? true)
     setIsLoading(false)
   }
 
@@ -293,7 +303,10 @@ export default function InvoicesPage() {
                         <div className="flex items-start sm:items-center justify-between gap-2">
                           <p className={cn('font-medium truncate', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</p>
                           <p className={`font-medium tabular-nums shrink-0 ${isCreditNote ? 'text-destructive' : ''}`}>
-                            {formatCurrency(Number(invoice.total), invoice.currency)}
+                            {formatCurrency(
+                              getDisplayTotal({ total: Number(invoice.total), currency: invoice.currency }, { ore_rounding: oreRounding }).displayed,
+                              invoice.currency,
+                            )}
                           </p>
                         </div>
                         <p className="text-sm text-muted-foreground truncate">

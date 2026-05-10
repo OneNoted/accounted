@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
   Loader2,
   ArrowLeft,
@@ -85,6 +86,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isDownloading, setIsDownloading] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [oreRounding, setOreRounding] = useState<boolean>(true)
 
   useEffect(() => {
     fetchInvoice()
@@ -119,6 +121,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
 
     setInvoice(data as InvoiceWithRelations)
+
+    // Fetch the öresavrundning setting so the detail view matches the PDF.
+    if (data.company_id) {
+      const { data: settings } = await supabase
+        .from('company_settings')
+        .select('ore_rounding')
+        .eq('company_id', data.company_id)
+        .maybeSingle()
+      setOreRounding(settings?.ore_rounding ?? true)
+    }
 
     // Fetch reminders for this invoice
     const { data: reminderData } = await supabase
@@ -579,10 +591,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     ))
                   })()}
                   <Separator />
-                  <div className="flex justify-between font-bold text-lg">
-                    <span>Totalt</span>
-                    <span>{formatCurrency(invoice.total, invoice.currency)}</span>
-                  </div>
+                  {(() => {
+                    const rounding = getDisplayTotal(invoice, { ore_rounding: oreRounding })
+                    return (
+                      <>
+                        {rounding.applies && (
+                          <div className="flex justify-between text-sm text-muted-foreground">
+                            <span>Öresavrundning</span>
+                            <span>{formatCurrency(rounding.roundingDelta, 'SEK')}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between font-bold text-lg">
+                          <span>Totalt</span>
+                          <span>{formatCurrency(rounding.displayed, invoice.currency)}</span>
+                        </div>
+                      </>
+                    )
+                  })()}
                   {invoice.currency !== 'SEK' && invoice.total_sek && (
                     <div className="flex justify-between text-sm text-muted-foreground">
                       <span>I SEK (kurs {invoice.exchange_rate})</span>

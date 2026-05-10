@@ -8,6 +8,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 
 // Create styles
 const styles = StyleSheet.create({
@@ -542,21 +543,23 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <Text style={styles.totalValue}>{formatCurrency(invoice.vat_amount, invoice.currency)}</Text>
               </View>
             )}
-            <View style={styles.grandTotal}>
-              <Text style={styles.grandTotalLabel}>{isCreditNote ? 'Att kreditera:' : 'Att betala:'}</Text>
-              <Text style={styles.grandTotalValue}>{formatCurrency(
-                (company.ore_rounding ?? true) && invoice.currency === 'SEK'
-                  ? Math.round(invoice.total)
-                  : invoice.total,
-                invoice.currency
-              )}</Text>
-            </View>
-            {(company.ore_rounding ?? true) && invoice.currency === 'SEK' && Math.round(invoice.total) !== invoice.total && (
-              <View style={styles.totalRow}>
-                <Text style={[styles.totalLabel, { fontSize: 8 }]}>Öresavrundning:</Text>
-                <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatCurrency(Math.round(invoice.total) - invoice.total, 'SEK')}</Text>
-              </View>
-            )}
+            {(() => {
+              const rounding = getDisplayTotal(invoice, company)
+              return (
+                <>
+                  <View style={styles.grandTotal}>
+                    <Text style={styles.grandTotalLabel}>{isCreditNote ? 'Att kreditera:' : 'Att betala:'}</Text>
+                    <Text style={styles.grandTotalValue}>{formatCurrency(rounding.displayed, invoice.currency)}</Text>
+                  </View>
+                  {rounding.applies && (
+                    <View style={styles.totalRow}>
+                      <Text style={[styles.totalLabel, { fontSize: 8 }]}>Öresavrundning:</Text>
+                      <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatCurrency(rounding.roundingDelta, 'SEK')}</Text>
+                    </View>
+                  )}
+                </>
+              )
+            })()}
             {invoice.currency !== 'SEK' && invoice.total_sek && (
               <View style={{ marginTop: 8 }}>
                 {invoice.vat_amount_sek != null && invoice.vat_amount_sek !== 0 && (
