@@ -852,6 +852,37 @@ export const AbsenceRangeQuerySchema = z.object({
   path: ['from'],
 })
 
+// ── Worked-hours per-day records (hourly employees) ─────────────────
+//
+// Drives base salary calculation for hourly (timanställd) employees:
+// `baseSalary = hourly_rate × Σ hours`. Mirrors absence days deliberately —
+// same calendar UX, half-day mixing with absence enforced by the 24h cap
+// trigger. The calculator sums these per pay period at calculate time.
+
+export const UpsertWorkedDaySchema = z.object({
+  work_date: isoDate,
+  hours: z.number().positive().max(24).default(8),
+  notes: z.string().max(2000).optional(),
+  salary_run_employee_id: uuid.optional(),
+})
+
+export const WorkedHoursRangeQuerySchema = z.object({
+  from: isoDate,
+  to: isoDate,
+}).refine((data) => data.from <= data.to, {
+  message: '`from` måste vara före eller lika med `to`',
+  path: ['from'],
+})
+
+export const BatchUpsertWorkedDaysSchema = z.object({
+  // 100-row sanity cap: typical use is one pay period (~22 weekdays). A larger
+  // value usually indicates the caller is iterating wrong.
+  dates: z.array(isoDate).min(1).max(100),
+  hours: z.number().positive().max(24).default(8),
+  notes: z.string().max(2000).optional(),
+  salary_run_employee_id: uuid.optional(),
+})
+
 // ============================================================
 // AI agent flow schemas
 // ============================================================

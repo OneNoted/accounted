@@ -2,10 +2,10 @@
 
 import { use, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { ArrowLeft, Calculator, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { AbsenceCalendar } from '@/components/salary/AbsenceCalendar'
+import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { formatCurrency } from '@/lib/utils'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, Employee } from '@/types'
 
@@ -54,6 +54,10 @@ export default function SalaryRunEmployeeDetailPage({
   const [data, setData] = useState<DetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [calculating, setCalculating] = useState(false)
+  // Live counts pushed from the calendar — overrides the stale snapshot from
+  // the last calculation so badges update immediately on absence save.
+  const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -79,6 +83,23 @@ export default function SalaryRunEmployeeDetailPage({
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, employeeId])
+
+  const handleCalculate = async () => {
+    setCalculating(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/salary/runs/${runId}/calculate`, { method: 'POST' })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(json.error || 'Beräkning misslyckades')
+      }
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Okänt fel')
+    } finally {
+      setCalculating(false)
+    }
+  }
 
   const periodStart = useMemo(() => {
     if (!data) return ''
@@ -144,8 +165,18 @@ export default function SalaryRunEmployeeDetailPage({
               {employee.personnummer} · Lönespecifikation {periodLabel}
             </p>
           </div>
-          <Button variant="outline" size="sm" onClick={load}>
-            Uppdatera
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCalculate}
+            disabled={calculating || readOnly}
+          >
+            {calculating ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Calculator className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Beräkna
           </Button>
         </div>
       </div>
@@ -158,28 +189,31 @@ export default function SalaryRunEmployeeDetailPage({
         <SummaryCard label="Avgifter" value={runEmployee.avgifter_amount} />
       </div>
 
-      {/* Absence calendar */}
+      {/* Unified calendar — worked time (for hourly) + absence on the same grid */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Frånvaro</CardTitle>
+          <CardTitle className="text-base">Tid och frånvaro</CardTitle>
           <p className="text-xs text-muted-foreground">
-            Markera sjukdom, VAB, föräldraledighet och annan frånvaro per dag.
-            Karensavdrag, sjuklön och AGI-rapportering räknas ut automatiskt.
+            {employee.salary_type === 'hourly'
+              ? 'Markera dagar och ange arbetade timmar eller frånvaro. Grundlönen räknas som timlön × summa arbetade timmar. Karensavdrag, sjuklön och AGI-rapportering härleds automatiskt.'
+              : 'Markera sjukdom, VAB, föräldraledighet och annan frånvaro per dag. Karensavdrag, sjuklön och AGI-rapportering räknas ut automatiskt.'}
           </p>
         </CardHeader>
         <CardContent>
-          <AbsenceCalendar
+          <SalaryCalendar
             employeeId={employee.id}
+            salaryType={employee.salary_type}
             periodStart={periodStart}
             periodEnd={periodEnd}
             salaryRunEmployeeId={runEmployee.id}
             readOnly={readOnly}
             onChange={load}
+            onAbsenceCountsChange={setLiveCounts}
           />
           <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-            <AbsenceCount label="Sjukdagar" days={runEmployee.sick_days} />
-            <AbsenceCount label="VAB-dagar" days={runEmployee.vab_days} />
-            <AbsenceCount label="Föräldraledig" days={runEmployee.parental_days} />
+            <AbsenceCount label="Sjukdagar" days={liveCounts?.sick ?? runEmployee.sick_days} />
+            <AbsenceCount label="VAB-dagar" days={liveCounts?.vab ?? runEmployee.vab_days} />
+            <AbsenceCount label="Föräldraledig" days={liveCounts?.parental ?? runEmployee.parental_days} />
           </div>
         </CardContent>
       </Card>
