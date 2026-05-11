@@ -6,7 +6,7 @@ import { SupportLink } from '@/components/ui/support-link'
 
 export default function YearEndPage() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Årsbokslut</h1>
         <Button variant="outline" asChild>

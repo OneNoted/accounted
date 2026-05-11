@@ -156,6 +156,9 @@ export async function GET(request: Request) {
     // Stay in 'pending_selection' until the user confirms which accounts to sync.
     // The cron and manual sync routes both skip this status, so no transactions
     // can be pulled before the user has had a chance to deselect accounts.
+    // Do not set last_synced_at here either: no transactions have been fetched
+    // yet, and setting it would cause the cron's first-sync 90-day backfill
+    // path to be skipped. The first successful sync sets it.
     const { error: updateError } = await supabase
       .from('bank_connections')
       .update({

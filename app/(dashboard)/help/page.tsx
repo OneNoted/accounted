@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { HelpLink } from '@/components/ui/info-tooltip'
+import { PageHeader } from '@/components/ui/page-header'
 import {
   Search,
   BookOpen,
@@ -319,13 +320,10 @@ export default function HelpPage() {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <header>
-        <h1 className="font-display text-3xl font-medium tracking-tight mb-2">Hjälp & Ordlista</h1>
-        <p className="text-muted-foreground">
-          Förklaringar av skatte- och bokföringstermer på ren svenska.
-        </p>
-      </header>
+      <PageHeader
+        title="Hjälp & Ordlista"
+        description="Förklaringar av skatte- och bokföringstermer på ren svenska."
+      />
 
       {/* Search */}
       <div className="relative">
@@ -369,7 +367,7 @@ export default function HelpPage() {
       </div>
 
       {/* Terms list */}
-      <div className="space-y-3">
+      <div className="space-y-4">
         {filteredTerms.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center">
@@ -433,7 +431,6 @@ export default function HelpPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Externa resurser</CardTitle>
-          <CardDescription>Mer hjälp från officiella källor</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2">

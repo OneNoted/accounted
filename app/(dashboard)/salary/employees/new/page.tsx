@@ -68,7 +68,7 @@ export default function NewEmployeePage() {
     } else {
       const result = await res.json()
       toast({
-        title: 'Fel',
+        title: 'Kunde inte skapa anställd',
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
         variant: 'destructive',
       })
@@ -78,10 +78,10 @@ export default function NewEmployeePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" asChild className="h-8 w-8">
-          <Link href="/salary/employees"><ArrowLeft className="h-4 w-4" /></Link>
+        <Button variant="ghost" size="icon" asChild>
+          <Link href="/salary/employees" aria-label="Tillbaka till anställda"><ArrowLeft className="h-4 w-4" /></Link>
         </Button>
         <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Ny anställd</h1>
       </div>

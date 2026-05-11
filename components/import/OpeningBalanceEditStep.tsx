@@ -199,12 +199,12 @@ export default function OpeningBalanceEditStep({
         {/* Table */}
         <div className="overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-3 py-2 text-left font-medium w-28">Konto</th>
-                <th className="px-3 py-2 text-left font-medium">Kontonamn</th>
-                <th className="px-3 py-2 text-right font-medium w-32">Debet</th>
-                <th className="px-3 py-2 text-right font-medium w-32">Kredit</th>
+            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <tr className="border-b">
+                <th className="px-3 py-2 text-left w-28">Konto</th>
+                <th className="px-3 py-2 text-left">Kontonamn</th>
+                <th className="px-3 py-2 text-right w-32">Debet</th>
+                <th className="px-3 py-2 text-right w-32">Kredit</th>
                 <th className="px-3 py-2 w-10" />
               </tr>
             </thead>

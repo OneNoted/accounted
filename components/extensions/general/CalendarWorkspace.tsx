@@ -45,8 +45,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       setCustomers(customersData || [])
     } catch {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte hamta data',
+        title: 'Kunde inte hamta data',
         variant: 'destructive',
       })
     } finally {
@@ -74,8 +73,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       fetchData()
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte skapa deadline',
+        title: 'Kunde inte skapa deadline',
         variant: 'destructive',
       })
       throw error
@@ -101,8 +99,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       fetchData()
     } catch {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte uppdatera deadline',
+        title: 'Kunde inte uppdatera deadline',
         variant: 'destructive',
       })
     }

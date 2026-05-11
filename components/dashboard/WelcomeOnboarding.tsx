@@ -174,7 +174,7 @@ export default function WelcomeOnboarding({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logError('create company action threw', { error: message })
-      toast({ title: 'Fel', description: 'Ett oväntat fel uppstod. Försök igen.', variant: 'destructive' })
+      toast({ title: 'Ett oväntat fel uppstod. Försök igen.', variant: 'destructive' })
     } finally {
       setIsSaving(false)
     }

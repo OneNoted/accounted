@@ -204,8 +204,8 @@ export function SupplierInvoiceReviewContent({
       {/* Line items — table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-muted-foreground">
+          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+            <tr className="border-b text-left">
               <th className="py-2 w-20">Konto</th>
               <th className="py-2">Beskrivning</th>
               <th className="py-2 w-28 text-right">Belopp</th>
@@ -277,8 +277,8 @@ export function SupplierInvoiceReviewContent({
         <p className="text-sm font-semibold text-muted-foreground">Verifikation som bokförs</p>
         <div className="hidden sm:block">
           <table className="w-full text-sm font-mono">
-            <thead>
-              <tr className="text-left text-muted-foreground text-xs">
+            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <tr className="text-left">
                 <th className="pb-1 w-16">Konto</th>
                 <th className="pb-1">Beskrivning</th>
                 <th className="pb-1 w-24 text-right">Debet</th>

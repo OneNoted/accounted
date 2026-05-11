@@ -17,6 +17,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Plus, Trash2 } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
 import type { JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 interface CorrectionLine {
@@ -132,7 +133,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
     } catch (err) {
       const anyErr = err as { body?: unknown; status?: number }
       toast({
-        title: 'Fel',
+        title: 'Kunde inte spara ändringsverifikation',
         description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
         variant: 'destructive',
       })
@@ -165,15 +166,15 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <span className="font-mono">{entry.voucher_series}{entry.voucher_number}</span>
-            <span>{entry.entry_date}</span>
+            <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
             <Badge variant="outline" className="text-xs">Original</Badge>
           </div>
           <p className="text-sm">{entry.description}</p>
 
           <div className="hidden sm:block">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-1.5 w-48">Konto</th>
                   <th className="py-1.5">Beskrivning</th>
                   <th className="py-1.5 w-28 text-right">Debet</th>

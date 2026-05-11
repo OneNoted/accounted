@@ -55,6 +55,10 @@ interface NewSupplierForm {
   default_expense_account: string
 }
 
+function RequiredMark() {
+  return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
+}
+
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
@@ -741,7 +745,7 @@ export default function NewSupplierInvoicePage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => router.push('/supplier-invoices')}>
+        <Button variant="ghost" size="icon" onClick={() => router.push('/supplier-invoices')} aria-label="Tillbaka till leverantörsfakturor">
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
@@ -794,7 +798,7 @@ export default function NewSupplierInvoicePage() {
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Leverantör *</Label>
+                <Label>Leverantör<RequiredMark /></Label>
                 <Controller
                   name="supplier_id"
                   control={control}
@@ -825,7 +829,7 @@ export default function NewSupplierInvoicePage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Leverantörens fakturanummer *</Label>
+                <Label>Leverantörens fakturanummer<RequiredMark /></Label>
                 {(() => {
                   const { ref: rhfRef, ...rest } = register('supplier_invoice_number')
                   return (
@@ -843,11 +847,11 @@ export default function NewSupplierInvoicePage() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label>Fakturadatum *</Label>
+                <Label>Fakturadatum<RequiredMark /></Label>
                 <Input type="date" {...register('invoice_date')} />
               </div>
               <div className="space-y-2">
-                <Label>Förfallodatum *</Label>
+                <Label>Förfallodatum<RequiredMark /></Label>
                 <Input type="date" {...register('due_date')} />
               </div>
               <div className="space-y-2">
@@ -879,8 +883,8 @@ export default function NewSupplierInvoicePage() {
             {/* Desktop table */}
             <div className="hidden sm:block">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b text-left">
                     <th className="pb-2 w-28">Konto</th>
                     <th className="pb-2">Beskrivning</th>
                     <th className="pb-2 w-32">Belopp (exkl.)</th>
@@ -916,7 +920,9 @@ export default function NewSupplierInvoicePage() {
                             <Input
                               type="number"
                               step="0.01"
+                              inputMode="decimal"
                               placeholder="0,00"
+                              className="text-right tabular-nums"
                               value={field.value || ''}
                               onChange={(e) => field.onChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
                             />
@@ -965,7 +971,7 @@ export default function NewSupplierInvoicePage() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-muted-foreground">Rad {index + 1}</span>
                     {fields.length > 1 && (
-                      <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => remove(index)}>
+                      <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={`Ta bort rad ${index + 1}`}>
                         <Trash2 className="h-4 w-4 text-muted-foreground" />
                       </Button>
                     )}
@@ -994,7 +1000,9 @@ export default function NewSupplierInvoicePage() {
                           <Input
                             type="number"
                             step="0.01"
+                            inputMode="decimal"
                             placeholder="0,00"
+                            className="text-right tabular-nums"
                             value={field.value || ''}
                             onChange={(e) => field.onChange(e.target.value === '' ? 0 : parseFloat(e.target.value) || 0)}
                           />
@@ -1109,7 +1117,7 @@ export default function NewSupplierInvoicePage() {
                 {watchedCurrency !== 'SEK' && (
                   <div className="space-y-2">
                     <Label>Växelkurs</Label>
-                    <Input type="number" step="0.0001" placeholder="1.0000" {...register('exchange_rate')} />
+                    <Input type="number" step="0.0001" inputMode="decimal" placeholder="1,0000" className="text-right tabular-nums" {...register('exchange_rate')} />
                   </div>
                 )}
               </div>
@@ -1234,7 +1242,7 @@ export default function NewSupplierInvoicePage() {
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Namn *</Label>
+              <Label>Namn<RequiredMark /></Label>
               <Input
                 placeholder="Leverantörens namn"
                 value={newSupplier.name}

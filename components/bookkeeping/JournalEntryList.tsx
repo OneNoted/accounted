@@ -7,8 +7,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { ArrowDownNarrowWide, ArrowUpNarrowWide, ChevronDown, ChevronRight, Paperclip, AlertTriangle, Loader2, BookOpen, X, Copy } from 'lucide-react'
+import { ChevronDown, ChevronRight, Paperclip, AlertTriangle, Loader2, BookOpen, X, Copy } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
@@ -40,7 +42,7 @@ export default function JournalEntryList({ periodId }: Props) {
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
   const [showMissingOnly, setShowMissingOnly] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
-  const [dateSortDir, setDateSortDir] = useState<'desc' | 'asc'>('desc')
+  const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'voucher_asc' | 'voucher_desc'>('date_desc')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [dateFromInput, setDateFromInput] = useState('')
@@ -106,7 +108,7 @@ export default function JournalEntryList({ periodId }: Props) {
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
-      sort_date: dateSortDir,
+      sort_by: sortBy,
     })
     if (periodId) params.set('period_id', periodId)
     if (dateFrom) params.set('date_from', dateFrom)
@@ -130,7 +132,7 @@ export default function JournalEntryList({ periodId }: Props) {
 
   useEffect(() => {
     fetchEntries()
-  }, [periodId, page, dateSortDir, dateFrom, dateTo])
+  }, [periodId, page, sortBy, dateFrom, dateTo])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
@@ -196,32 +198,18 @@ export default function JournalEntryList({ periodId }: Props) {
               </Badge>
             )}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 sm:hidden"
-            onClick={() => { setDateSortDir(dateSortDir === 'desc' ? 'asc' : 'desc'); setPage(0) }}
-          >
-            {dateSortDir === 'desc' ? (
-              <ArrowDownNarrowWide className="h-4 w-4" />
-            ) : (
-              <ArrowUpNarrowWide className="h-4 w-4" />
-            )}
-          </Button>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 hidden sm:inline-flex"
-          onClick={() => { setDateSortDir(dateSortDir === 'desc' ? 'asc' : 'desc'); setPage(0) }}
-        >
-          {dateSortDir === 'desc' ? (
-            <ArrowDownNarrowWide className="h-4 w-4" />
-          ) : (
-            <ArrowUpNarrowWide className="h-4 w-4" />
-          )}
-          <span className="text-xs">Datum {dateSortDir === 'desc' ? 'nyast först' : 'äldst först'}</span>
-        </Button>
+        <Select value={sortBy} onValueChange={(v) => { setSortBy(v as typeof sortBy); setPage(0) }}>
+          <SelectTrigger className="h-8 w-auto gap-1.5 text-xs sm:w-[200px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="date_desc">Datum, nyast först</SelectItem>
+            <SelectItem value="date_asc">Datum, äldst först</SelectItem>
+            <SelectItem value="voucher_asc">Verifikat, A1 först</SelectItem>
+            <SelectItem value="voucher_desc">Verifikat, senaste först</SelectItem>
+          </SelectContent>
+        </Select>
         <div className="flex items-center gap-1.5">
           <Input
             type="text"
@@ -308,8 +296,8 @@ export default function JournalEntryList({ periodId }: Props) {
                   >
                     {entry.voucher_series}{entry.voucher_number}
                   </Link>
-                  <span className="text-sm text-muted-foreground w-24">
-                    {entry.entry_date}
+                  <span className="text-sm text-muted-foreground tabular-nums w-24">
+                    {formatDate(entry.entry_date)}
                   </span>
                   {entry.out_of_period && (
                     <Badge
@@ -320,8 +308,8 @@ export default function JournalEntryList({ periodId }: Props) {
                       Efterföljande
                     </Badge>
                   )}
-                  {(entry.status === 'reversed' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
-                    <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed'} />
+                  {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
+                    <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
                   )}
                   <span className="flex-1 truncate">{entry.description}</span>
                   {attachmentCounts[entry.id] ? (
@@ -352,8 +340,8 @@ export default function JournalEntryList({ periodId }: Props) {
                     >
                       {entry.voucher_series}{entry.voucher_number}
                     </Link>
-                    <span className="text-sm text-muted-foreground">
-                      {entry.entry_date}
+                    <span className="text-sm text-muted-foreground tabular-nums">
+                      {formatDate(entry.entry_date)}
                     </span>
                     {entry.out_of_period && (
                       <Badge
@@ -363,6 +351,9 @@ export default function JournalEntryList({ periodId }: Props) {
                       >
                         Efterföljande
                       </Badge>
+                    )}
+                    {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
+                      <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
                     )}
                     <span className="ml-auto flex items-center gap-1">
                       {attachmentCounts[entry.id] ? (

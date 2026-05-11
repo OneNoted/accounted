@@ -197,9 +197,9 @@ export default function DeadlinesPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-8">
         <PageHeader title="Deadlines" />
-        <div className="space-y-2">
+        <div className="space-y-3">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="rounded-lg border p-4 animate-pulse">
               <div className="flex items-center gap-4">

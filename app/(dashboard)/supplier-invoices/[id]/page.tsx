@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -12,6 +13,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { formatDate } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -21,15 +23,15 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-const statusColors: Record<string, string> = {
-  registered: 'bg-blue-100 text-blue-800',
-  approved: 'bg-yellow-100 text-yellow-800',
-  paid: 'bg-success/10 text-success',
-  partially_paid: 'bg-orange-100 text-orange-800',
-  overdue: 'bg-destructive/10 text-destructive',
-  disputed: 'bg-purple-100 text-purple-800',
-  credited: 'bg-gray-100 text-gray-800',
-  reversed: 'bg-gray-100 text-gray-500',
+const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
+  registered: 'secondary',
+  approved: 'default',
+  paid: 'success',
+  partially_paid: 'warning',
+  overdue: 'destructive',
+  disputed: 'destructive',
+  credited: 'secondary',
+  reversed: 'secondary',
 }
 
 const statusLabels: Record<string, string> = {
@@ -177,7 +179,7 @@ export default function SupplierInvoiceDetailPage() {
   if (isLoading) {
     return (
       <div className="space-y-6">
-        <div className="h-8 bg-muted rounded w-48 animate-pulse" />
+        <Skeleton className="h-8 w-48" />
         <Card className="animate-pulse"><CardContent className="h-48" /></Card>
       </div>
     )
@@ -202,7 +204,7 @@ export default function SupplierInvoiceDetailPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')}>
+          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label="Tillbaka till leverantörsfakturor">
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div className="min-w-0">
@@ -210,7 +212,7 @@ export default function SupplierInvoiceDetailPage() {
               <h1 className="font-display text-2xl sm:text-3xl font-medium tracking-tight">
                 Ankomst #{invoice.arrival_number}
               </h1>
-              <Badge className={statusColors[invoice.status] || ''}>
+              <Badge variant={statusVariants[invoice.status] || 'secondary'}>
                 {statusLabels[invoice.status] || invoice.status}
               </Badge>
             </div>
@@ -321,11 +323,11 @@ export default function SupplierInvoiceDetailPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Fakturadatum</span>
-              <span>{invoice.invoice_date}</span>
+              <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Förfallodatum</span>
-              <span>{invoice.due_date}</span>
+              <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
             </div>
             {invoice.delivery_date && (
               <div className="flex justify-between">
@@ -341,7 +343,7 @@ export default function SupplierInvoiceDetailPage() {
             )}
             {invoice.reverse_charge && (
               <div className="mt-2">
-                <Badge className="bg-purple-100 text-purple-800">Omvänd skattskyldighet</Badge>
+                <Badge variant="warning">Omvänd skattskyldighet</Badge>
               </div>
             )}
           </CardContent>
@@ -403,8 +405,8 @@ export default function SupplierInvoiceDetailPage() {
           {/* Desktop table */}
           <div className="hidden sm:block">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="pb-2">Beskrivning</th>
                   <th className="pb-2 w-16 text-right">Antal</th>
                   <th className="pb-2 w-16">Enhet</th>
@@ -460,8 +462,8 @@ export default function SupplierInvoiceDetailPage() {
             {/* Desktop table */}
             <div className="hidden sm:block">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b text-left">
                     <th className="pb-2">Datum</th>
                     <th className="pb-2 text-right">Belopp</th>
                     <th className="pb-2">Verifikation</th>
@@ -471,7 +473,7 @@ export default function SupplierInvoiceDetailPage() {
                 <tbody>
                   {payments.map((p) => (
                     <tr key={p.id} className="border-b last:border-0">
-                      <td className="py-2">{p.payment_date}</td>
+                      <td className="py-2 tabular-nums">{formatDate(p.payment_date)}</td>
                       <td className="py-2 text-right font-mono">{formatAmount(p.amount)} {p.currency}</td>
                       <td className="py-2">
                         {p.journal_entry_id ? (
@@ -491,7 +493,7 @@ export default function SupplierInvoiceDetailPage() {
               {payments.map((p) => (
                 <div key={p.id} className="border rounded-lg p-3 space-y-1">
                   <div className="flex items-center justify-between text-sm">
-                    <span>{p.payment_date}</span>
+                    <span className="tabular-nums">{formatDate(p.payment_date)}</span>
                     <span className="font-mono font-medium">{formatAmount(p.amount)} {p.currency}</span>
                   </div>
                   <div className="flex items-center justify-between text-xs text-muted-foreground">

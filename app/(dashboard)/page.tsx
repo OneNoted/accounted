@@ -55,7 +55,6 @@ export default async function DashboardPage() {
 
   // Fetch all data in parallel
   const [
-    { data: profile },
     { data: settings },
     { count: customerCount },
     { count: invoiceCount },
@@ -77,7 +76,6 @@ export default async function DashboardPage() {
     { count: uncategorizedCount },
     { count: skatteverketTokenCount },
   ] = await Promise.all([
-    supabase.from('profiles').select('full_name').eq('id', user.id).single(),
     supabase.from('company_settings').select('*').eq('company_id', companyId).single(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -107,8 +105,6 @@ export default async function DashboardPage() {
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
   ])
-
-  const firstName = profile?.full_name?.split(' ')[0] || null
 
   // If onboarding is not complete, redirect to onboarding
   if (!settings?.onboarding_complete) {
@@ -236,9 +232,7 @@ export default async function DashboardPage() {
 
   return (
     <DashboardContent
-      firstName={firstName}
       companyId={companyId}
-      settings={settings}
       summary={{
         ytd: ytdTotals,
         mtd: mtdTotals,

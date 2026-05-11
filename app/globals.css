@@ -2,6 +2,13 @@
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * Spacing scale — locked.
+ * Card padding: p-6. Section gap: space-y-8. Form/control gap: gap-4.
+ * Allowed Tailwind values: 1, 2, 3, 4, 6, 8, 10, 12. No 2.5 / 5.
+ * Sidebar width is md:w-64 (256px); main offset matches md:pl-64.
+ * ───────────────────────────────────────────────────────────────────────── */
+
 :root {
   color-scheme: light;
   /* Grayscale Chrome Palette */

@@ -97,7 +97,7 @@ export default async function DashboardLayout({
           />
           <main
             id="main-content"
-            className="safe-area-main-padding md:!pb-0 md:pl-[232px]"
+            className="safe-area-main-padding md:!pb-0 md:pl-64"
             role="main"
           >
             <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
@@ -147,7 +147,7 @@ export default async function DashboardLayout({
             isSandbox={false}
             extensionNavItems={getExtensionNavItems()}
           />
-          <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-[232px]" role="main">
+          <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
             <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
               {children}
             </div>
@@ -222,7 +222,7 @@ export default async function DashboardLayout({
           isSandbox={isSandbox}
           extensionNavItems={getExtensionNavItems()}
         />
-        <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-[232px]" role="main">
+        <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
           <MainContainer companyId={companyId}>{children}</MainContainer>
         </main>
         {!isSandbox && (

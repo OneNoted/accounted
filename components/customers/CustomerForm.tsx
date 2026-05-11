@@ -113,8 +113,7 @@ export default function CustomerForm({
       }
     } catch {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte verifiera VAT-nummer',
+        title: 'Kunde inte verifiera VAT-nummer',
         variant: 'destructive',
       })
     } finally {

@@ -134,8 +134,8 @@ export default function ChartOfAccounts() {
                 {isExpanded && (
                   <CardContent className="pt-0 pb-4">
                     <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b text-left text-muted-foreground">
+                      <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                        <tr className="border-b text-left">
                           <th className="py-2 w-24">Konto</th>
                           <th className="py-2">Namn</th>
                           <th className="py-2 w-20 text-center">SRU</th>

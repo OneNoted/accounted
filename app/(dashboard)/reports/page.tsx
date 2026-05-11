@@ -3,14 +3,16 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Download, AlertCircle, ChevronDown, ChevronRight, ArrowRight } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
 import { AccountNumber } from '@/components/ui/account-number'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { ReportsNav } from '@/components/reports/ReportsNav'
 import { NEDeclarationView } from '@/components/reports/NEDeclarationView'
 import { INK2DeclarationView } from '@/components/reports/INK2DeclarationView'
 import { BankReconciliationView } from '@/components/reports/BankReconciliationView'
@@ -89,14 +91,9 @@ export default function ReportsPage() {
   const isAktiebolag = company?.entity_type === 'aktiebolag'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Rapporter</h1>
-          <p className="text-muted-foreground">
-            Generera skattedeklarationer, resultaträkningar och exportera till Skatteverket
-          </p>
-        </div>
+        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Rapporter</h1>
       </div>
 
       <div className="flex flex-col sm:flex-row sm:items-end gap-4">
@@ -125,19 +122,19 @@ export default function ReportsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {[1, 2, 3, 4].map((i) => (
               <div key={i} className="space-y-2">
-                <div className="h-3 bg-muted rounded w-16 animate-pulse" />
+                <Skeleton className="h-3 w-16" />
                 <div className="rounded-lg border p-1 space-y-1">
-                  <div className="h-8 bg-muted rounded animate-pulse" />
-                  <div className="h-8 bg-muted rounded animate-pulse" />
-                  <div className="h-8 bg-muted rounded animate-pulse" />
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
+                  <Skeleton className="h-8" />
                 </div>
               </div>
             ))}
           </div>
           <Card>
             <CardContent className="p-6 space-y-4">
-              <div className="h-5 bg-muted rounded w-32 animate-pulse" />
-              <div className="h-64 bg-muted rounded animate-pulse" />
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-64" />
             </CardContent>
           </Card>
         </div>
@@ -166,173 +163,44 @@ export default function ReportsPage() {
           </nav>
         )}
 
-        <Tabs value={activeTab} onValueChange={handleTabChange}>
-          {/* Mobile: compact select dropdown */}
-          <div className="sm:hidden mb-2">
-            <select
-              value={activeTab}
-              onChange={(e) => handleTabChange(e.target.value)}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            >
-              <optgroup label="Löpande rapporter">
-                <option value="resultatrapport">Resultatrapport</option>
-                <option value="balansrapport">Balansrapport</option>
-                <option value="trial-balance">Saldobalans</option>
-              </optgroup>
-              <optgroup label="Bokslut">
-                <option value="income-statement">Resultaträkning</option>
-                <option value="balance-sheet">Balansräkning</option>
-              </optgroup>
-              <optgroup label="Skatt & moms">
-                <option value="vat-declaration">Momsdeklaration</option>
-                {isEnskildFirma && <option value="ne-declaration">NE-bilaga</option>}
-                {isAktiebolag && <option value="ink2-declaration">INK2</option>}
-              </optgroup>
-              <optgroup label="Huvudböcker">
-                <option value="huvudbok">Huvudbok</option>
-                <option value="grundbok">Grundbok</option>
-                <option value="kundreskontra">Kundreskontra</option>
-                <option value="supplier-ledger">Leverantörsreskontra</option>
-              </optgroup>
-              <optgroup label="Avstämning">
-                <option value="bank-reconciliation">Bankavstämning</option>
-              </optgroup>
-            </select>
-          </div>
-
-          {/* Desktop: inline grouped tab navigation */}
-          <div className="hidden sm:grid sm:grid-cols-[auto_1px_auto_1px_auto_1px_auto_1px_auto] items-stretch mb-5 rounded-xl border border-border bg-card shadow-sm">
-            {/* Löpande rapporter */}
-            <div className="flex flex-col gap-3 px-5 py-4">
-              <span className="text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-[0.1em]">Löpande rapporter</span>
-              <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1 items-start">
-                <TabsTrigger value="resultatrapport" className="w-full justify-start text-[13px]">
-                  Resultatrapport
-                </TabsTrigger>
-                <TabsTrigger value="balansrapport" className="w-full justify-start text-[13px]">
-                  Balansrapport
-                </TabsTrigger>
-                <TabsTrigger value="trial-balance" className="w-full justify-start text-[13px]">
-                  Saldobalans
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <div className="bg-border" />
-
-            {/* Bokslut */}
-            <div className="flex flex-col gap-3 px-5 py-4">
-              <span className="text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-[0.1em]">Bokslut</span>
-              <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1 items-start">
-                <TabsTrigger value="income-statement" className="w-full justify-start text-[13px]">
-                  Resultaträkning
-                </TabsTrigger>
-                <TabsTrigger value="balance-sheet" className="w-full justify-start text-[13px]">
-                  Balansräkning
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <div className="bg-border" />
-
-            {/* Skatt & moms */}
-            <div className="flex flex-col gap-3 px-5 py-4">
-              <span className="text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-[0.1em]">Skatt & moms</span>
-              <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1 items-start">
-                <TabsTrigger value="vat-declaration" className="w-full justify-start text-[13px]">
-                  Momsdeklaration
-                </TabsTrigger>
-                {isEnskildFirma && (
-                  <TabsTrigger value="ne-declaration" className="w-full justify-start text-[13px]">
-                    NE-bilaga
-                  </TabsTrigger>
-                )}
-                {isAktiebolag && (
-                  <TabsTrigger value="ink2-declaration" className="w-full justify-start text-[13px]">
-                    INK2
-                  </TabsTrigger>
-                )}
-              </TabsList>
-            </div>
-
-            <div className="bg-border" />
-
-            {/* Huvudböcker */}
-            <div className="flex flex-col gap-3 px-5 py-4">
-              <span className="text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-[0.1em]">Huvudböcker</span>
-              <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1 items-start">
-                <TabsTrigger value="huvudbok" className="w-full justify-start text-[13px]">
-                  Huvudbok
-                </TabsTrigger>
-                <TabsTrigger value="grundbok" className="w-full justify-start text-[13px]">
-                  Grundbok
-                </TabsTrigger>
-                <TabsTrigger value="kundreskontra" className="w-full justify-start text-[13px]">
-                  Kundreskontra
-                </TabsTrigger>
-                <TabsTrigger value="supplier-ledger" className="w-full justify-start text-[13px]">
-                  Leverantörsreskontra
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <div className="bg-border" />
-
-            {/* Avstämning */}
-            <div className="flex flex-col gap-3 px-5 py-4">
-              <span className="text-[11px] font-semibold text-muted-foreground/80 uppercase tracking-[0.1em]">Avstämning</span>
-              <TabsList className="flex flex-col h-auto bg-transparent p-0 gap-1 items-start">
-                <TabsTrigger value="bank-reconciliation" className="w-full justify-start text-[13px]">
-                  Bankavstämning
-                </TabsTrigger>
-              </TabsList>
-            </div>
-          </div>
-
-          <TabsContent value="resultatrapport">
-            <ResultatrapportView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
-          </TabsContent>
-          <TabsContent value="balansrapport">
-            <BalansrapportView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
-          </TabsContent>
-          <TabsContent value="trial-balance">
-            <TrialBalanceView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
-          </TabsContent>
-          <TabsContent value="income-statement">
-            <IncomeStatementView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
-          </TabsContent>
-          <TabsContent value="balance-sheet">
-            <BalanceSheetView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
-          </TabsContent>
-          <TabsContent value="vat-declaration">
-            <VatDeclarationView />
-          </TabsContent>
-          {isEnskildFirma && (
-            <TabsContent value="ne-declaration">
+        <div className="flex flex-col sm:flex-row gap-6 sm:gap-8">
+          <ReportsNav
+            active={activeTab}
+            onChange={handleTabChange}
+            entityType={company?.entity_type}
+          />
+          <div className="flex-1 min-w-0">
+            {activeTab === 'resultatrapport' && (
+              <ResultatrapportView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+            )}
+            {activeTab === 'balansrapport' && (
+              <BalansrapportView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+            )}
+            {activeTab === 'trial-balance' && (
+              <TrialBalanceView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+            )}
+            {activeTab === 'income-statement' && (
+              <IncomeStatementView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+            )}
+            {activeTab === 'balance-sheet' && (
+              <BalanceSheetView periodId={selectedPeriod} onNavigateToAccount={navigateToAccount} />
+            )}
+            {activeTab === 'vat-declaration' && <VatDeclarationView />}
+            {isEnskildFirma && activeTab === 'ne-declaration' && (
               <NEDeclarationView periodId={selectedPeriod} />
-            </TabsContent>
-          )}
-          {isAktiebolag && (
-            <TabsContent value="ink2-declaration">
+            )}
+            {isAktiebolag && activeTab === 'ink2-declaration' && (
               <INK2DeclarationView periodId={selectedPeriod} />
-            </TabsContent>
-          )}
-          <TabsContent value="huvudbok">
-            <GeneralLedgerView periodId={selectedPeriod} initialAccountFilter={glAccountFilter} />
-          </TabsContent>
-          <TabsContent value="grundbok">
-            <JournalRegisterView periodId={selectedPeriod} />
-          </TabsContent>
-          <TabsContent value="kundreskontra">
-            <ARLedgerView periodId={selectedPeriod} />
-          </TabsContent>
-          <TabsContent value="supplier-ledger">
-            <SupplierLedgerView periodId={selectedPeriod} />
-          </TabsContent>
-          <TabsContent value="bank-reconciliation">
-            <BankReconciliationView />
-          </TabsContent>
-        </Tabs>
+            )}
+            {activeTab === 'huvudbok' && (
+              <GeneralLedgerView periodId={selectedPeriod} initialAccountFilter={glAccountFilter} />
+            )}
+            {activeTab === 'grundbok' && <JournalRegisterView periodId={selectedPeriod} />}
+            {activeTab === 'kundreskontra' && <ARLedgerView periodId={selectedPeriod} />}
+            {activeTab === 'supplier-ledger' && <SupplierLedgerView periodId={selectedPeriod} />}
+            {activeTab === 'bank-reconciliation' && <BankReconciliationView />}
+          </div>
+        </div>
         </>
       ) : (
         <Card>
@@ -472,8 +340,8 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
           <div className="overflow-x-auto -mx-2 px-2">
             {viewMode === 'simplified' ? (
               <table className="w-full text-sm min-w-[500px]">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b text-left">
                     <th className="py-2 w-20">Konto</th>
                     <th className="py-2">Namn</th>
                     <th className="py-2 w-32 text-right">Ingående saldo</th>
@@ -512,8 +380,8 @@ function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: string;
               </table>
             ) : (
               <table className="w-full text-sm min-w-[600px]">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b text-left">
                     <th className="py-2 w-20">Konto</th>
                     <th className="py-2">Namn</th>
                     <th className="py-2 w-28 text-right">Period debet</th>
@@ -1350,12 +1218,12 @@ function VatDeclarationView() {
               <div className="flex items-center justify-between">
                 <CardTitle>Momsdeklaration - {data.period.start} till {data.period.end}</CardTitle>
                 <Badge
-                  className={
+                  variant={
                     data.rutor.ruta49 > 0
-                      ? 'bg-orange-100 text-orange-800'
+                      ? 'warning'
                       : data.rutor.ruta49 < 0
-                      ? 'bg-success/10 text-success'
-                      : 'bg-gray-100 text-gray-800'
+                      ? 'success'
+                      : 'secondary'
                   }
                 >
                   {data.rutor.ruta49 > 0
@@ -1704,8 +1572,8 @@ function SupplierLedgerView({ periodId }: { periodId: string }) {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2">Leverantör</th>
                   <th className="py-2 text-right">Ej förfallet</th>
                   <th className="py-2 text-right">1-30 dagar</th>
@@ -1936,8 +1804,8 @@ function GeneralLedgerView({ periodId, initialAccountFilter }: { periodId: strin
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2 w-16">Ver.nr</th>
                   <th className="py-2 w-24">Datum</th>
                   <th className="py-2">Beskrivning</th>
@@ -2096,8 +1964,8 @@ function JournalRegisterView({ periodId }: { periodId: string }) {
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
-            <thead>
-              <tr className="border-b text-left text-muted-foreground">
+            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <tr className="border-b text-left">
                 <th className="py-2 w-8"></th>
                 <th className="py-2 w-16">Ver.nr</th>
                 <th className="py-2 w-24">Datum</th>
@@ -2330,8 +2198,8 @@ function ARLedgerView({ periodId }: { periodId: string }) {
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[500px]">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2 w-8"></th>
                   <th className="py-2">Kund</th>
                   <th className="py-2 text-right">Ej förfallet</th>
@@ -2371,8 +2239,8 @@ function ARLedgerView({ periodId }: { periodId: string }) {
                           <td></td>
                           <td className="py-1 text-xs" colSpan={2}>
                             <span className="font-mono">{inv.invoice_number}</span>
-                            <span className="text-muted-foreground ml-2">{inv.invoice_date}</span>
-                            <span className="text-muted-foreground ml-2">förfaller {inv.due_date}</span>
+                            <span className="text-muted-foreground ml-2 tabular-nums">{formatDate(inv.invoice_date)}</span>
+                            <span className="text-muted-foreground ml-2 tabular-nums">förfaller {formatDate(inv.due_date)}</span>
                           </td>
                           <td className="py-1 text-right text-xs text-muted-foreground" colSpan={2}>
                             {inv.days_overdue > 0 ? `${inv.days_overdue} dagar förfallen` : 'Ej förfallen'}

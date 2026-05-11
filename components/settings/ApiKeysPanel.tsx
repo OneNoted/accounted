@@ -168,7 +168,7 @@ export function ApiKeysPanel() {
         setKeys(json.data.filter((k: ApiKey) => !k.revoked_at))
       }
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte hämta API-nycklar', variant: 'destructive' })
+      toast({ title: 'Kunde inte hämta API-nycklar', variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
@@ -189,7 +189,7 @@ export function ApiKeysPanel() {
       const json = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Fel', description: json.error, variant: 'destructive' })
+        toast({ title: json.error, variant: 'destructive' })
         return
       }
 
@@ -200,7 +200,7 @@ export function ApiKeysPanel() {
       setNewKeyScopes(new Set(ALL_SCOPES))
       fetchKeys()
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte skapa nyckel', variant: 'destructive' })
+      toast({ title: 'Kunde inte skapa nyckel', variant: 'destructive' })
     } finally {
       setIsCreating(false)
     }
@@ -219,7 +219,7 @@ export function ApiKeysPanel() {
       setKeys((prev) => prev.filter((k) => k.id !== id))
       toast({ title: 'Nyckel återkallad' })
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte återkalla nyckel', variant: 'destructive' })
+      toast({ title: 'Kunde inte återkalla nyckel', variant: 'destructive' })
     }
   }
 

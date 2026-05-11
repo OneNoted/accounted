@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Shield, ShieldCheck, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
+import { formatDateLong } from '@/lib/utils'
 
 interface BankIdIdentity {
   given_name: string | null
@@ -122,7 +123,7 @@ export function BankIdSettings() {
                 {identity.given_name} {identity.surname}
               </span>
               <span className="ml-2">
-                Kopplat {new Date(identity.linked_at).toLocaleDateString('sv-SE')}
+                Kopplat {formatDateLong(identity.linked_at)}
               </span>
             </div>
             <Button

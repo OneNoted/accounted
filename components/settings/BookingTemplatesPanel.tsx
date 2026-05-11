@@ -44,7 +44,7 @@ export function BookingTemplatesPanel() {
       const json = await res.json()
       if (json.data) setTemplates(json.data)
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte hämta mallar', variant: 'destructive' })
+      toast({ title: 'Kunde inte hämta mallar', variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
@@ -61,7 +61,7 @@ export function BookingTemplatesPanel() {
         body: JSON.stringify({ id }),
       })
       if (!res.ok) {
-        toast({ title: 'Fel', description: 'Kunde inte ta bort mall', variant: 'destructive' })
+        toast({ title: 'Kunde inte ta bort mall', variant: 'destructive' })
         return
       }
       setTemplates((prev) => prev.filter((t) => t.id !== id))
@@ -82,7 +82,7 @@ export function BookingTemplatesPanel() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte exportera mallar', variant: 'destructive' })
+      toast({ title: 'Kunde inte exportera mallar', variant: 'destructive' })
     }
   }
 
@@ -304,8 +304,8 @@ function TemplateSection({
                     <p className="text-xs text-muted-foreground mb-2">{t.description}</p>
                   )}
                   <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-muted-foreground border-b">
+                    <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                      <tr className="border-b">
                         <th className="text-left py-1 w-14">Konto</th>
                         <th className="text-left py-1">Beskrivning</th>
                         <th className="text-center py-1 w-16">Typ</th>
@@ -384,7 +384,7 @@ function CreateTemplateForm({ onCreated }: { onCreated: () => void }) {
       })
       if (!res.ok) {
         const json = await res.json()
-        toast({ title: 'Fel', description: json.error || 'Kunde inte skapa mall', variant: 'destructive' })
+        toast({ title: json.error || 'Kunde inte skapa mall', variant: 'destructive' })
         return
       }
       toast({ title: 'Mall skapad' })

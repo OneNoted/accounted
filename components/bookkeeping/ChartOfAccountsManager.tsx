@@ -145,7 +145,7 @@ export default function ChartOfAccountsManager() {
       if (!res.ok) throw new Error('Kunde inte uppdatera kontot')
       await refreshAll()
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte uppdatera kontot', variant: 'destructive' })
+      toast({ title: 'Kunde inte uppdatera kontot', variant: 'destructive' })
     } finally {
       setTogglingAccount(null)
     }
@@ -167,8 +167,7 @@ export default function ChartOfAccountsManager() {
       await refreshAll()
     } catch (err) {
       toast({
-        title: 'Fel',
-        description: err instanceof Error ? err.message : 'Kunde inte ta bort kontot',
+        title: err instanceof Error ? err.message : 'Kunde inte ta bort kontot',
         variant: 'destructive',
       })
     } finally {
@@ -191,7 +190,7 @@ export default function ChartOfAccountsManager() {
       }
       await refreshAll()
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte aktivera kontot', variant: 'destructive' })
+      toast({ title: 'Kunde inte aktivera kontot', variant: 'destructive' })
     } finally {
       setActivatingAccounts((prev) => {
         const next = new Set(prev)
@@ -367,8 +366,8 @@ export default function ChartOfAccountsManager() {
                   {isExpanded && (
                     <CardContent className="pt-0 pb-4">
                       <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b text-left text-muted-foreground">
+                        <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                          <tr className="border-b text-left">
                             <th className="py-2 w-24">Konto</th>
                             <th className="py-2">Namn</th>
                             <th className="py-2 w-20 text-center">SRU</th>
@@ -497,8 +496,8 @@ export default function ChartOfAccountsManager() {
                   {isExpanded && (
                     <CardContent className="pt-0 pb-4">
                       <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b text-left text-muted-foreground">
+                        <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                          <tr className="border-b text-left">
                             <th className="py-2 w-24">Konto</th>
                             <th className="py-2">Namn</th>
                             <th className="py-2 w-20 text-center">SRU</th>

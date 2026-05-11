@@ -4,6 +4,7 @@ import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -111,7 +112,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     } else {
       const result = await res.json()
       toast({
-        title: 'Fel',
+        title: 'Kunde inte uppdatera anställd',
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
         variant: 'destructive',
       })
@@ -133,8 +134,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-9 w-60 bg-muted rounded animate-pulse" />
-        <div className="h-64 bg-muted rounded-lg animate-pulse" />
+        <Skeleton className="h-9 w-60" />
+        <Skeleton className="rounded-lg h-64" />
       </div>
     )
   }
@@ -144,11 +145,11 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8">
-            <Link href="/salary/employees"><ArrowLeft className="h-4 w-4" /></Link>
+          <Button variant="ghost" size="icon" asChild>
+            <Link href="/salary/employees" aria-label="Tillbaka till anställda"><ArrowLeft className="h-4 w-4" /></Link>
           </Button>
           <div>
             <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">

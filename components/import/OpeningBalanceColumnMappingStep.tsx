@@ -197,10 +197,10 @@ export default function OpeningBalanceColumnMappingStep({
             <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
             <div className="overflow-x-auto rounded-md border">
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b">
                     {headers.map((h, i) => (
-                      <th key={i} className="px-3 py-2 text-left font-medium whitespace-nowrap">
+                      <th key={i} className="px-3 py-2 text-left whitespace-nowrap">
                         {h || `Kolumn ${i + 1}`}
                       </th>
                     ))}

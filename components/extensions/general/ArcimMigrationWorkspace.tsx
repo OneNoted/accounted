@@ -1652,7 +1652,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       toast({ title: 'Frånkopplad', description: 'Anslutningen har tagits bort.' })
       await fetchStatus()
     } catch (err) {
-      toast({ title: 'Fel', description: err instanceof Error ? err.message : 'Något gick fel', variant: 'destructive' })
+      toast({ title: err instanceof Error ? err.message : 'Något gick fel', variant: 'destructive' })
     }
   }, [toast, fetchStatus])
 

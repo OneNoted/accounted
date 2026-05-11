@@ -33,7 +33,7 @@ export default function SkatteverketSettingsPage() {
   }, [searchParams, router, toast])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <SkatteverketConnectPanel />
     </div>
   )

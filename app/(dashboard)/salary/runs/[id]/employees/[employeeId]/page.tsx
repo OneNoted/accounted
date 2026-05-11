@@ -7,7 +7,38 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AbsenceCalendar } from '@/components/salary/AbsenceCalendar'
 import { formatCurrency } from '@/lib/utils'
-import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, Employee } from '@/types'
+import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, Employee } from '@/types'
+
+const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
+  monthly_salary: 'Månadslön',
+  hourly_salary: 'Timlön',
+  overtime: 'Övertid',
+  bonus: 'Bonus',
+  commission: 'Provision',
+  gross_deduction_pension: 'Bruttoavdrag — pension',
+  gross_deduction_other: 'Bruttoavdrag — övrigt',
+  benefit_car: 'Bilförmån',
+  benefit_housing: 'Bostadsförmån',
+  benefit_meals: 'Kostförmån',
+  benefit_wellness: 'Friskvård',
+  benefit_other: 'Övrig förmån',
+  sick_karens: 'Karensavdrag',
+  sick_day2_14: 'Sjuklön (dag 2–14, 80 %)',
+  sick_day15_plus: 'Sjuklön (dag 15+, Försäkringskassan)',
+  vab: 'VAB (vård av sjukt barn)',
+  parental_leave: 'Föräldraledighet',
+  vacation: 'Semester',
+  traktamente_taxfree: 'Traktamente (skattefritt)',
+  traktamente_taxable: 'Traktamente (skattepliktigt)',
+  mileage_taxfree: 'Milersättning (skattefritt)',
+  mileage_taxable: 'Milersättning (skattepliktigt)',
+  net_deduction_advance: 'Nettoavdrag — förskott',
+  net_deduction_union: 'Nettoavdrag — fackavgift',
+  net_deduction_benefit_payment: 'Nettoavdrag — förmånsbetalning',
+  net_deduction_other: 'Nettoavdrag — övrigt',
+  correction: 'Korrigering',
+  other: 'Övrigt',
+}
 
 interface DetailResponse {
   run: SalaryRun
@@ -95,7 +126,7 @@ export default function SalaryRunEmployeeDetailPage({
   const readOnly = run.status !== 'draft' && run.status !== 'review'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div className="space-y-3">
         <Link
@@ -165,18 +196,18 @@ export default function SalaryRunEmployeeDetailPage({
             </p>
           ) : (
             <table className="w-full">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-2 font-medium">Typ</th>
-                  <th className="px-4 py-2 font-medium">Beskrivning</th>
-                  <th className="px-4 py-2 font-medium text-right">Antal</th>
-                  <th className="px-4 py-2 font-medium text-right">Belopp</th>
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
+                  <th className="px-4 py-2">Typ</th>
+                  <th className="px-4 py-2">Beskrivning</th>
+                  <th className="px-4 py-2 text-right">Antal</th>
+                  <th className="px-4 py-2 text-right">Belopp</th>
                 </tr>
               </thead>
               <tbody>
                 {lineItems.map(li => (
                   <tr key={li.id} className="border-b last:border-0">
-                    <td className="px-4 py-2 text-xs text-muted-foreground">{li.item_type}</td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground">{LINE_ITEM_TYPE_LABELS[li.item_type] ?? li.item_type}</td>
                     <td className="px-4 py-2 text-sm">{li.description}</td>
                     <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '—'}</td>
                     <td className="px-4 py-2 text-sm text-right tabular-nums">{formatCurrency(li.amount)}</td>

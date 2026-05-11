@@ -28,16 +28,30 @@ export async function GET(request: Request) {
   const dateFrom = searchParams.get('date_from')
   const dateTo = searchParams.get('date_to')
   const sortDate = searchParams.get('sort_date') // 'asc' | 'desc'
+  // 'date_desc' (default) | 'date_asc' | 'voucher_asc' | 'voucher_desc'
+  // sort_by overrides sort_date when present. sort_date is kept for backwards
+  // compatibility with older clients.
+  const sortBy = searchParams.get('sort_by')
+  const isVoucherSort = sortBy === 'voucher_asc' || sortBy === 'voucher_desc'
   // Default on: when a fiscal period is selected, include follow-up entries
   // booked in later periods whose source aggregate (invoice, supplier invoice)
   // is dated inside the selected period. Pass include_related=false to
   // restore strict fiscal_period_id filtering.
   const includeRelated = searchParams.get('include_related') !== 'false'
 
-  const dateAscending = sortDate === 'asc'
-  const sortDateParam = sortDate === 'asc' || sortDate === 'desc' ? sortDate : 'desc'
+  const dateAscending = sortDate === 'asc' || sortBy === 'date_asc'
+  const sortDateParam = sortBy === 'date_asc' || sortDate === 'asc' ? 'asc' : 'desc'
 
-  if (periodId && includeRelated) {
+  // Voucher-sort path: include_related RPC doesn't support voucher ordering,
+  // so fall through to the direct query below. This means voucher sort is
+  // *strict by fiscal_period_id* — cross-period follow-up entries that the
+  // RPC normally surfaces under date sort are excluded under voucher sort.
+  // That's intentional: voucher numbers are series-scoped within a fiscal
+  // year (BFL 5 kap 6–7 §§), so showing series A1, A2 … alongside entries
+  // belonging to a different year's series would be misleading. The trade-off
+  // is that the visible row count may differ between sort modes for the same
+  // period; the strict count is the BFL-compliant view of that year.
+  if (periodId && includeRelated && !isVoucherSort) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
       p_period_id: periodId,
@@ -66,7 +80,12 @@ export async function GET(request: Request) {
     .select('*, lines:journal_entry_lines(*)', { count: 'exact' })
     .eq('company_id', companyId)
 
-  if (sortDate === 'asc' || sortDate === 'desc') {
+  if (isVoucherSort) {
+    const voucherAscending = sortBy === 'voucher_asc'
+    query = query
+      .order('voucher_series', { ascending: voucherAscending })
+      .order('voucher_number', { ascending: voucherAscending })
+  } else if (sortDate === 'asc' || sortDate === 'desc' || sortBy === 'date_asc' || sortBy === 'date_desc') {
     query = query
       .order('entry_date', { ascending: dateAscending })
       .order('voucher_number', { ascending: dateAscending })
