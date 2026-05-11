@@ -17,14 +17,12 @@ import {
   FileWarning,
   Clock,
 } from 'lucide-react'
-import type { CompanySettings, Deadline, ReceiptQueueSummary, OnboardingProgress } from '@/types'
+import type { Deadline, ReceiptQueueSummary, OnboardingProgress } from '@/types'
 
 const setupFreshStartKey = (companyId: string) => `erp_setup_fresh_start:${companyId}`
 
 interface DashboardContentProps {
-  firstName?: string | null
   companyId: string
-  settings: CompanySettings | null
   summary: {
     ytd: { income: number; expenses: number; net: number }
     mtd: { income: number; expenses: number; net: number }

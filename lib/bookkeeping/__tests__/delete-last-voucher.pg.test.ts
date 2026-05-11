@@ -237,4 +237,57 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
       ),
     ).rejects.toThrow(/BFL_DOCUMENT_IMMUTABILITY/)
   })
+
+  // Drafts (voucher_number=0, never committed) can arise as orphans when a
+  // mark-paid or similar engine flow fails between draft creation and commit.
+  // They are not part of the verifikationsserie under BFL and must be
+  // deletable so users can clean up their books.
+  it('deletes a draft entry without touching the voucher series', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const draftId = await insertDraftJournalEntry({
+      userId, companyId, fiscalPeriodId,
+    })
+    await insertBalancedLines(draftId)
+
+    await withUserContext(userId, async (client) => {
+      const result = await client.query<{ delete_last_voucher: { deleted: boolean; was_draft: boolean } }>(
+        `SELECT public.delete_last_voucher($1::uuid, $2::uuid)`,
+        [companyId, draftId],
+      )
+      expect(result.rows[0]!.delete_last_voucher.deleted).toBe(true)
+      expect(result.rows[0]!.delete_last_voucher.was_draft).toBe(true)
+
+      const after = await client.query(
+        `SELECT 1 FROM public.journal_entries WHERE id = $1`,
+        [draftId],
+      )
+      expect(after.rowCount).toBe(0)
+    })
+  })
+
+  it('deletes a draft even when the fiscal period is locked', async () => {
+    // Drafts are not bokförda — period locks (which protect committed entries)
+    // do not need to block draft cleanup.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const draftId = await insertDraftJournalEntry({
+      userId, companyId, fiscalPeriodId,
+    })
+    await insertBalancedLines(draftId)
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`,
+      [fiscalPeriodId],
+    )
+
+    await withUserContext(userId, async (client) => {
+      await client.query(
+        `SELECT public.delete_last_voucher($1::uuid, $2::uuid)`,
+        [companyId, draftId],
+      )
+      const after = await client.query(
+        `SELECT 1 FROM public.journal_entries WHERE id = $1`,
+        [draftId],
+      )
+      expect(after.rowCount).toBe(0)
+    })
+  })
 })

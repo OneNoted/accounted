@@ -43,7 +43,14 @@ export async function GET(request: Request) {
   const sortDateParam = sortBy === 'date_asc' || sortDate === 'asc' ? 'asc' : 'desc'
 
   // Voucher-sort path: include_related RPC doesn't support voucher ordering,
-  // so fall through to the direct query below.
+  // so fall through to the direct query below. This means voucher sort is
+  // *strict by fiscal_period_id* — cross-period follow-up entries that the
+  // RPC normally surfaces under date sort are excluded under voucher sort.
+  // That's intentional: voucher numbers are series-scoped within a fiscal
+  // year (BFL 5 kap 6–7 §§), so showing series A1, A2 … alongside entries
+  // belonging to a different year's series would be misleading. The trade-off
+  // is that the visible row count may differ between sort modes for the same
+  // period; the strict count is the BFL-compliant view of that year.
   if (periodId && includeRelated && !isVoucherSort) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
