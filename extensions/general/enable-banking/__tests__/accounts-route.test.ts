@@ -232,4 +232,104 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(written.find(a => a.uid === 'acc-1')?.enabled).toBe(false)
     expect(written.find(a => a.uid === 'acc-2')?.enabled).toBe(true)
   })
+
+  it('omits status from update payload when connection is already active (state machine)', async () => {
+    const stub: SupabaseStub = {
+      authUser: { id: 'user-1' },
+      connectionRow: {
+        id: 'conn-1',
+        status: 'active',
+        accounts_data: [
+          { uid: 'acc-1', currency: 'SEK', enabled: true },
+          { uid: 'acc-2', currency: 'SEK', enabled: false },
+        ],
+      },
+    }
+    const supabase = buildSupabase(stub)
+    const ctx = makeContext(supabase)
+
+    const res = await accountsRoute.handler(
+      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-2'] }),
+      ctx
+    )
+
+    expect(res.status).toBe(200)
+    // Status field is NOT present in the update — already-active connections
+    // don't re-assert the transition, which keeps the state machine explicit.
+    expect(stub.capturedUpdate).toBeDefined()
+    expect('status' in (stub.capturedUpdate ?? {})).toBe(false)
+  })
+
+  it('returns 400 when ctx.companyId is absent (no user.id fallback)', async () => {
+    const supabase = buildSupabase({ authUser: { id: 'user-1' }, connectionRow: null })
+    const ctx = makeContext(supabase)
+    // Simulate a missing company context — should not fall back to user.id.
+    const ctxWithoutCompany = { ...ctx, companyId: undefined as unknown as string }
+
+    const res = await accountsRoute.handler(
+      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+      ctxWithoutCompany
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/Company context required/i)
+  })
+
+  it('returns 400 when enabled_uids exceeds the per-connection cap', async () => {
+    const supabase = buildSupabase({
+      authUser: { id: 'user-1' },
+      connectionRow: {
+        id: 'conn-1',
+        status: 'pending_selection',
+        accounts_data: [],
+      },
+    })
+    const ctx = makeContext(supabase)
+
+    const tooMany = Array.from({ length: 51 }, (_, i) => `acc-${i}`)
+    const res = await accountsRoute.handler(
+      makeRequest({ connection_id: 'conn-1', enabled_uids: tooMany }),
+      ctx
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/Max 50 konton/i)
+  })
+
+  it('emits bank_connection.account_selection_changed after a successful update', async () => {
+    const stub: SupabaseStub = {
+      authUser: { id: 'user-1' },
+      connectionRow: {
+        id: 'conn-1',
+        status: 'pending_selection',
+        accounts_data: [
+          { uid: 'acc-1', currency: 'SEK', enabled: true },
+          { uid: 'acc-2', currency: 'SEK', enabled: true },
+        ],
+      },
+    }
+    const supabase = buildSupabase(stub)
+    const ctx = makeContext(supabase)
+
+    const res = await accountsRoute.handler(
+      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+      ctx
+    )
+
+    expect(res.status).toBe(200)
+    expect(ctx.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'bank_connection.account_selection_changed',
+        payload: expect.objectContaining({
+          connectionId: 'conn-1',
+          previousStatus: 'pending_selection',
+          newStatus: 'active',
+          enabledCount: 1,
+          totalCount: 2,
+          userId: 'user-1',
+          companyId: 'company-1',
+        }),
+      })
+    )
+  })
 })

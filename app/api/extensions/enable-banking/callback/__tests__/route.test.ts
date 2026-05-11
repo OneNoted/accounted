@@ -70,13 +70,25 @@ describe('GET /api/extensions/enable-banking/callback', () => {
         // Find pending connection by oauth_state
         return mockChain({ data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1' }, error: null })
       }
-      // Update connection — capture the payload so we can assert on it
+      // Update connection — capture the payload, then chain returns the
+      // updated row via .select().single() for the audit event emission.
       const chain: Record<string, unknown> = {}
       chain.update = vi.fn((payload: Record<string, unknown>) => {
         capturedUpdates.push(payload)
         return chain
       })
       chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: {
+          id: 'conn-1',
+          bank_name: 'TestBank',
+          company_id: 'company-1',
+          user_id: 'user-1',
+        },
+        error: null,
+      })
+      // Back-compat fallthrough for chains that aren't terminated by .single()
       chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
       return chain
     })

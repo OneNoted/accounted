@@ -269,6 +269,7 @@ export async function ensureFiscalPeriod(
         .from('journal_entries')
         .select('id')
         .eq('fiscal_period_id', existing.id)
+        .eq('company_id', companyId)
         .limit(1)
       hasEntries = (existingEntries?.length ?? 0) > 0
     }

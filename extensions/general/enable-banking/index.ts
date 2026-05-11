@@ -9,8 +9,18 @@ import {
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
+import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
+
+// Per-user limits keep one tenant from spamming any single bank handler.
+// Sliding 60s windows — generous enough for legitimate retry, tight enough
+// to prevent UUID probing or status-machine abuse.
+const RATE_LIMIT_ACCOUNTS = { maxRequests: 20, windowMs: 60_000 }
+const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
+
+const MAX_ENABLED_UIDS = 50
 
 /**
  * Enable Banking (PSD2) extension
@@ -87,6 +97,11 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
         const { aspsp_name, aspsp_country, psu_type: explicitPsuType } = await request.json()
 
         if (!aspsp_name || !aspsp_country) {
@@ -102,7 +117,6 @@ export const enableBankingExtension: Extension = {
           if (explicitPsuType === 'personal' || explicitPsuType === 'business') {
             psuType = explicitPsuType
           } else {
-            const companyId = ctx?.companyId ?? user.id
             const { data: company } = await supabase
               .from('companies')
               .select('entity_type')
@@ -125,7 +139,7 @@ export const enableBankingExtension: Extension = {
           const { data: recentPending } = await supabase
             .from('bank_connections')
             .select('id, created_at')
-            .eq('company_id', ctx?.companyId ?? user.id)
+            .eq('company_id', companyId)
             .eq('bank_name', aspsp_name)
             .eq('status', 'pending')
             .order('created_at', { ascending: false })
@@ -155,7 +169,7 @@ export const enableBankingExtension: Extension = {
             await supabase
               .from('bank_connections')
               .update({ status: 'error', error_message: 'Superseded by new connection attempt', oauth_state: null })
-              .eq('company_id', ctx?.companyId ?? user.id)
+              .eq('company_id', companyId)
               .eq('bank_name', aspsp_name)
               .eq('status', 'pending')
           }
@@ -176,7 +190,7 @@ export const enableBankingExtension: Extension = {
           const { data: connection, error } = await supabase
             .from('bank_connections')
             .insert({
-              company_id: ctx?.companyId ?? user.id,
+              company_id: companyId,
               user_id: user.id,
               provider: `${aspsp_name.toLowerCase().replace(/\s+/g, '-')}-${aspsp_country.toLowerCase()}`,
               bank_name: aspsp_name,
@@ -230,6 +244,18 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
+        const rl = await checkRateLimit({
+          prefix: 'enable-banking:sync',
+          identifier: user.id,
+          ...RATE_LIMIT_SYNC,
+        })
+        if (!rl.ok) return rl.response!
+
         const { connection_id, days_back: rawDaysBack = 30 } = await request.json()
         const days_back = Math.min(Math.max(1, rawDaysBack), 365)
 
@@ -237,7 +263,7 @@ export const enableBankingExtension: Extension = {
           .from('bank_connections')
           .select('*')
           .eq('id', connection_id)
-          .eq('company_id', ctx?.companyId ?? user.id)
+          .eq('company_id', companyId)
           .single()
 
         if (connectionError || !connection) {
@@ -270,7 +296,6 @@ export const enableBankingExtension: Extension = {
 
           // Use ctx.services.ingestTransactions when available
           const ingestFn = ctx?.services.ingestTransactions
-          const companyId = ctx?.companyId ?? user.id
 
           // Detect SIE overlap — skip auto-categorization if the sync range
           // overlaps with a completed SIE import to prevent double-booking.
@@ -410,6 +435,21 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
+        // company_id must come from the verified extension context, never fall
+        // back to user.id (which is a different identifier dimension and would
+        // silently mis-scope queries in multi-tenant deployments).
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
+        const rl = await checkRateLimit({
+          prefix: 'enable-banking:accounts',
+          identifier: user.id,
+          ...RATE_LIMIT_ACCOUNTS,
+        })
+        if (!rl.ok) return rl.response!
+
         const body = await request.json().catch(() => null)
         const connection_id = body?.connection_id
         const enabled_uids = body?.enabled_uids
@@ -426,12 +466,18 @@ export const enableBankingExtension: Extension = {
             { status: 400 }
           )
         }
+        if (enabled_uids.length > MAX_ENABLED_UIDS) {
+          return NextResponse.json(
+            { error: `Max ${MAX_ENABLED_UIDS} konton per anslutning.` },
+            { status: 400 }
+          )
+        }
 
         const { data: connection, error: connectionError } = await supabase
           .from('bank_connections')
-          .select('id, status, accounts_data')
+          .select('id, status, accounts_data, bank_name')
           .eq('id', connection_id)
-          .eq('company_id', ctx?.companyId ?? user.id)
+          .eq('company_id', companyId)
           .single()
 
         if (connectionError || !connection) {
@@ -461,28 +507,66 @@ export const enableBankingExtension: Extension = {
           enabled: enabledSet.has(a.uid),
         }))
 
+        // State machine: only transition pending_selection → active. Once
+        // active, the status field is omitted from the update so the same
+        // endpoint can be reused to change account selection without
+        // re-asserting a transition that has already happened.
+        const updatePayload: { accounts_data: StoredAccount[]; status?: 'active' } = {
+          accounts_data: updatedAccounts,
+        }
+        if (connection.status === 'pending_selection') {
+          updatePayload.status = 'active'
+        }
+
         const { error: updateError } = await supabase
           .from('bank_connections')
-          .update({
-            accounts_data: updatedAccounts,
-            status: 'active',
-          })
+          .update(updatePayload)
           .eq('id', connection.id)
 
         if (updateError) {
           log.error('[enable-banking] Failed to update account selection', {
             errorMessage: updateError.message,
             connectionId: connection.id,
+            userId: user.id,
+            companyId,
           })
           return NextResponse.json({ error: 'Kunde inte spara kontoval' }, { status: 500 })
         }
 
+        const newStatus = updatePayload.status ?? connection.status
         log.info('[enable-banking] Account selection saved', {
           connectionId: connection.id,
           enabledCount: enabled_uids.length,
           totalCount: existing.length,
           previousStatus: connection.status,
+          newStatus,
+          userId: user.id,
+          companyId,
         })
+
+        try {
+          const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+          await emit({
+            type: 'bank_connection.account_selection_changed',
+            payload: {
+              connectionId: connection.id,
+              bankName: (connection as { bank_name?: string | null }).bank_name ?? null,
+              previousStatus: connection.status,
+              newStatus,
+              enabledCount: enabled_uids.length,
+              totalCount: existing.length,
+              userId: user.id,
+              companyId,
+            },
+          })
+        } catch (emitError) {
+          log.error('[enable-banking] Failed to emit account selection event', {
+            errorMessage: emitError instanceof Error ? emitError.message : String(emitError),
+            connectionId: connection.id,
+            userId: user.id,
+            companyId,
+          })
+        }
 
         return NextResponse.json({
           success: true,
@@ -503,6 +587,18 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
+        const rl = await checkRateLimit({
+          prefix: 'enable-banking:disconnect',
+          identifier: user.id,
+          ...RATE_LIMIT_DISCONNECT,
+        })
+        if (!rl.ok) return rl.response!
+
         const { connection_id } = await request.json()
 
         if (!connection_id) {
@@ -511,9 +607,9 @@ export const enableBankingExtension: Extension = {
 
         const { data: connection, error: findError } = await supabase
           .from('bank_connections')
-          .select('id, session_id, status')
+          .select('id, session_id, status, bank_name')
           .eq('id', connection_id)
-          .eq('company_id', ctx?.companyId ?? user.id)
+          .eq('company_id', companyId)
           .single()
 
         if (findError || !connection) {
@@ -530,6 +626,8 @@ export const enableBankingExtension: Extension = {
               sessionId: connection.session_id,
               connectionId: connection_id,
               connectionStatus: connection.status,
+              userId: user.id,
+              companyId,
             })
           }
         }
@@ -540,7 +638,33 @@ export const enableBankingExtension: Extension = {
           .eq('id', connection.id)
 
         if (updateError) {
+          log.error('[enable-banking] Failed to mark connection revoked', {
+            errorMessage: updateError.message,
+            connectionId: connection.id,
+            userId: user.id,
+            companyId,
+          })
           return NextResponse.json({ error: 'Failed to disconnect' }, { status: 500 })
+        }
+
+        try {
+          const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+          await emit({
+            type: 'bank_connection.revoked',
+            payload: {
+              connectionId: connection.id,
+              bankName: (connection as { bank_name?: string | null }).bank_name ?? null,
+              userId: user.id,
+              companyId,
+            },
+          })
+        } catch (emitError) {
+          log.error('[enable-banking] Failed to emit revoke event', {
+            errorMessage: emitError instanceof Error ? emitError.message : String(emitError),
+            connectionId: connection.id,
+            userId: user.id,
+            companyId,
+          })
         }
 
         return NextResponse.json({ success: true })
