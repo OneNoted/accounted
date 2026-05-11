@@ -22,7 +22,7 @@ const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
   benefit_meals: 'Kostförmån',
   benefit_wellness: 'Friskvård',
   benefit_other: 'Övrig förmån',
-  sick_karens: 'Karensavdrag (första sjukdagen)',
+  sick_karens: 'Karensavdrag',
   sick_day2_14: 'Sjuklön (dag 2–14, 80 %)',
   sick_day15_plus: 'Sjuklön (dag 15+, Försäkringskassan)',
   vab: 'VAB (vård av sjukt barn)',

@@ -343,7 +343,7 @@ export default function SupplierInvoiceDetailPage() {
             )}
             {invoice.reverse_charge && (
               <div className="mt-2">
-                <Badge variant="outline">Omvänd skattskyldighet</Badge>
+                <Badge variant="warning">Omvänd skattskyldighet</Badge>
               </div>
             )}
           </CardContent>
