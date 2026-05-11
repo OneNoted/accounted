@@ -249,7 +249,18 @@ export const enableBankingExtension: Extension = {
         }
 
         try {
-          const accounts = (connection.accounts_data as StoredAccount[] || []).map(a => ({ ...a }))
+          // Keep the full list for write-back; sync only the enabled subset.
+          // undefined enabled === true for back-compat with rows that predate
+          // the per-account toggle.
+          const allAccounts = (connection.accounts_data as StoredAccount[] || []).map(a => ({ ...a }))
+          const accounts = allAccounts.filter(a => a.enabled !== false)
+
+          if (accounts.length === 0) {
+            return NextResponse.json(
+              { error: 'Inga konton är valda för synkning. Öppna "Hantera konton" för att aktivera minst ett.' },
+              { status: 400 }
+            )
+          }
 
           const toDate = new Date().toISOString().split('T')[0]
           const fromDate = new Date(Date.now() - days_back * 24 * 60 * 60 * 1000)
@@ -337,7 +348,7 @@ export const enableBankingExtension: Extension = {
           await supabase
             .from('bank_connections')
             .update({
-              accounts_data: accounts,
+              accounts_data: allAccounts,
               last_synced_at: syncedAt,
             })
             .eq('id', connection.id)
@@ -381,6 +392,99 @@ export const enableBankingExtension: Extension = {
             { status: 500 }
           )
         }
+      },
+    },
+    {
+      method: 'PATCH',
+      path: '/accounts',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        const log = ctx?.log ?? console
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const body = await request.json().catch(() => null)
+        const connection_id = body?.connection_id
+        const enabled_uids = body?.enabled_uids
+
+        if (typeof connection_id !== 'string' || !connection_id) {
+          return NextResponse.json({ error: 'connection_id krävs' }, { status: 400 })
+        }
+        if (!Array.isArray(enabled_uids) || !enabled_uids.every(u => typeof u === 'string')) {
+          return NextResponse.json({ error: 'enabled_uids måste vara en lista av strängar' }, { status: 400 })
+        }
+        if (enabled_uids.length === 0) {
+          return NextResponse.json(
+            { error: 'Välj minst ett konto, eller koppla bort banken om inga konton ska synkas.' },
+            { status: 400 }
+          )
+        }
+
+        const { data: connection, error: connectionError } = await supabase
+          .from('bank_connections')
+          .select('id, status, accounts_data')
+          .eq('id', connection_id)
+          .eq('company_id', ctx?.companyId ?? user.id)
+          .single()
+
+        if (connectionError || !connection) {
+          return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
+        }
+
+        if (connection.status !== 'pending_selection' && connection.status !== 'active') {
+          return NextResponse.json(
+            { error: 'Anslutningen kan inte konfigureras i nuvarande status.' },
+            { status: 400 }
+          )
+        }
+
+        const existing = (connection.accounts_data as StoredAccount[] || []).map(a => ({ ...a }))
+        const knownUids = new Set(existing.map(a => a.uid))
+        const unknownUids = enabled_uids.filter(uid => !knownUids.has(uid))
+        if (unknownUids.length > 0) {
+          return NextResponse.json(
+            { error: 'Ett eller flera konton kunde inte hittas.', unknown_uids: unknownUids },
+            { status: 400 }
+          )
+        }
+
+        const enabledSet = new Set(enabled_uids)
+        const updatedAccounts: StoredAccount[] = existing.map(a => ({
+          ...a,
+          enabled: enabledSet.has(a.uid),
+        }))
+
+        const { error: updateError } = await supabase
+          .from('bank_connections')
+          .update({
+            accounts_data: updatedAccounts,
+            status: 'active',
+          })
+          .eq('id', connection.id)
+
+        if (updateError) {
+          log.error('[enable-banking] Failed to update account selection', {
+            errorMessage: updateError.message,
+            connectionId: connection.id,
+          })
+          return NextResponse.json({ error: 'Kunde inte spara kontoval' }, { status: 500 })
+        }
+
+        log.info('[enable-banking] Account selection saved', {
+          connectionId: connection.id,
+          enabledCount: enabled_uids.length,
+          totalCount: existing.length,
+          previousStatus: connection.status,
+        })
+
+        return NextResponse.json({
+          success: true,
+          enabled_count: enabled_uids.length,
+          total_count: existing.length,
+        })
       },
     },
     {

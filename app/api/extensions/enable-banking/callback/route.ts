@@ -106,7 +106,6 @@ export async function GET(request: Request) {
     }
 
     const userId = pendingConnection.user_id
-    const companyId = pendingConnection.company_id
 
     console.log('[enable-banking] Exchanging code for session', {
       connectionId: pendingConnection.id,
@@ -135,6 +134,10 @@ export async function GET(request: Request) {
             name: account.name || account.product,
             currency: account.currency,
             balance: balance.amount,
+            // Default to enabled. The user is presented with a picker
+            // immediately after this callback to uncheck unwanted accounts
+            // before any transactions are fetched.
+            enabled: true,
           }
         } catch (balanceError) {
           console.error(`Failed to get balance for account ${account.uid}:`, balanceError)
@@ -144,19 +147,22 @@ export async function GET(request: Request) {
             name: account.name || account.product,
             currency: account.currency,
             balance: undefined,
+            enabled: true,
           }
         }
       })
     )
 
+    // Stay in 'pending_selection' until the user confirms which accounts to sync.
+    // The cron and manual sync routes both skip this status, so no transactions
+    // can be pulled before the user has had a chance to deselect accounts.
     const { error: updateError } = await supabase
       .from('bank_connections')
       .update({
         session_id,
-        status: 'active',
+        status: 'pending_selection',
         accounts_data: accountsWithBalances,
         consent_expires: consentExpiresAt,
-        last_synced_at: new Date().toISOString(),
         oauth_state: null, // Clear to prevent replay
       })
       .eq('id', pendingConnection.id)
@@ -171,14 +177,7 @@ export async function GET(request: Request) {
     }
 
     const connectionId = pendingConnection.id
-
-    const { data: userSettings } = await supabase
-      .from('company_settings')
-      .select('onboarding_complete')
-      .eq('company_id', companyId)
-      .single()
-
-    const redirectTarget = `/settings/banking?bank_connected=true&connection_id=${connectionId}`
+    const redirectTarget = `/settings/banking?select_accounts=${connectionId}`
 
     return NextResponse.redirect(`${baseUrl}${redirectTarget}`)
   } catch (error) {
