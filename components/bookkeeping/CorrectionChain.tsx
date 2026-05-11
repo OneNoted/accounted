@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Info } from 'lucide-react'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
+import { formatDate } from '@/lib/utils'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface Props {
@@ -71,7 +72,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
                   <span className="font-mono text-sm">
                     {entry.voucher_series}{entry.voucher_number}
                   </span>
-                  <span className="text-sm text-muted-foreground">{entry.entry_date}</span>
+                  <span className="text-sm text-muted-foreground tabular-nums">{formatDate(entry.entry_date)}</span>
                   <JournalEntryStatusBadge entry={entry} showStatus={false} />
                   {isCurrent && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">

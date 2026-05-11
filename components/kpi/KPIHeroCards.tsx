@@ -1,8 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Info, X } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { formatCurrency } from '@/lib/utils'
 import { KPI_DEFINITIONS, getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
@@ -72,7 +71,6 @@ function getValueColor(
       ? 'text-[hsl(var(--chart-1))]'
       : 'text-[hsl(var(--chart-2))]'
   }
-  // negative-good (e.g. VAT: negative = refund = good, expense ratio: lower = better)
   if (colorLogic === 'negative-good') {
     return value <= 0
       ? 'text-[hsl(var(--chart-1))]'
@@ -83,9 +81,7 @@ function getValueColor(
 
 export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
   const prefs = preferences ?? getDefaultPreferences()
-  const [infoOpen, setInfoOpen] = useState<string | null>(null)
 
-  // Build ordered, visible list
   const visibleDefs = prefs.kpiOrder
     .map((id) => KPI_DEFINITIONS.find((d) => d.id === id))
     .filter((d) => d && prefs.visibleKpis.includes(d.id)) as typeof KPI_DEFINITIONS
@@ -100,7 +96,6 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
     )
   }
 
-  // Responsive grid: 2 cols on mobile, up to 4 on desktop
   const gridCols =
     visibleDefs.length <= 2
       ? 'grid-cols-2'
@@ -114,66 +109,51 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
         const { value, subtitle } = getKPIValue(report, def.id)
         const formatted = formatKPIValue(value, def.format, def.id)
         const color = getValueColor(value, def.colorLogic)
-        const showInfo = infoOpen === def.id
         const hasOverride =
           prefs.accountOverrides[def.id] &&
           prefs.accountOverrides[def.id].length > 0
 
-        return (
-          <Card key={def.id} className="relative">
-            <CardContent className="p-5">
-              <div className="flex items-start justify-between">
-                <p className="text-xs text-muted-foreground mb-1">
-                  {def.label}
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setInfoOpen(showInfo ? null : def.id)
-                  }
-                  className="text-muted-foreground/50 hover:text-muted-foreground transition-colors -mt-0.5 -mr-1 p-1"
-                  aria-label={`Visa formel för ${def.label}`}
-                >
-                  {showInfo ? (
-                    <X className="h-3 w-3" />
-                  ) : (
-                    <Info className="h-3 w-3" />
-                  )}
-                </button>
+        const tooltipContent = (
+          <div className="space-y-1.5 text-xs">
+            <p className="text-foreground/90">{def.description}</p>
+            <div>
+              <span className="font-medium">Formel: </span>
+              <span className="font-mono">{def.formula}</span>
+            </div>
+            <div>
+              <span className="font-medium">Konton: </span>
+              {def.accountDescription}
+            </div>
+            {hasOverride && (
+              <div className="text-primary">
+                <span className="font-medium">Anpassade: </span>
+                <span className="font-mono">
+                  {prefs.accountOverrides[def.id].join(', ')}
+                </span>
               </div>
+            )}
+          </div>
+        )
 
-              {showInfo ? (
-                <div className="space-y-1.5 text-[11px] text-muted-foreground mt-1">
-                  <p className="text-xs text-foreground/80">{def.description}</p>
-                  <div>
-                    <span className="font-medium">Formel: </span>
-                    <span className="font-mono">{def.formula}</span>
-                  </div>
-                  <div>
-                    <span className="font-medium">Konton: </span>
-                    {def.accountDescription}
-                  </div>
-                  {hasOverride && (
-                    <div className="text-primary">
-                      <span className="font-medium">Anpassade konton: </span>
-                      <span className="font-mono">
-                        {prefs.accountOverrides[def.id].join(', ')}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <p
-                    className={`font-display text-xl tabular-nums tracking-tight ${color}`}
-                  >
-                    {formatted}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {subtitle}
-                  </p>
-                </>
-              )}
+        return (
+          <Card key={def.id}>
+            <CardContent className="p-6">
+              <InfoTooltip
+                content={tooltipContent}
+                side="top"
+                maxWidth="320px"
+                iconClassName="h-3 w-3"
+              >
+                <p className="text-xs text-muted-foreground">{def.label}</p>
+              </InfoTooltip>
+              <p
+                className={`font-display text-2xl font-medium tabular-nums tracking-tight mt-2 ${color}`}
+              >
+                {formatted}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {subtitle}
+              </p>
             </CardContent>
           </Card>
         )

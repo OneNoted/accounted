@@ -46,7 +46,7 @@ export default function BookingTemplatePicker({ onApply, entityType }: Props) {
       setTemplates(data || [])
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return
-      toast({ title: 'Fel', description: 'Kunde inte hämta mallar', variant: 'destructive' })
+      toast({ title: 'Kunde inte hämta mallar', variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }

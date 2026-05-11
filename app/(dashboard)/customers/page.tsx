@@ -11,7 +11,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Plus, Search, Users, Lock } from 'lucide-react'
 import CustomerForm from '@/components/customers/CustomerForm'
-import { EmptyCustomers } from '@/components/ui/empty-state'
+import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -105,45 +106,42 @@ export default function CustomersPage() {
   )
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Kunder</h1>
-          <p className="text-muted-foreground">
-            Hantera dina kunder och deras faktureringsuppgifter
-          </p>
-        </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button
-              disabled={!canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
-            >
-              {canWrite ? (
-                <Plus className="mr-2 h-4 w-4" />
-              ) : (
-                <Lock className="mr-2 h-4 w-4" />
-              )}
-              Ny kund
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Lägg till kund</DialogTitle>
-            </DialogHeader>
-            <CustomerForm
-              onSubmit={handleCreateCustomer}
-              isLoading={isCreating}
-            />
-          </DialogContent>
-        </Dialog>
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title="Kunder"
+        action={
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                disabled={!canWrite}
+                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              >
+                {canWrite ? (
+                  <Plus className="mr-2 h-4 w-4" />
+                ) : (
+                  <Lock className="mr-2 h-4 w-4" />
+                )}
+                Ny kund
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Lägg till kund</DialogTitle>
+              </DialogHeader>
+              <CustomerForm
+                onSubmit={handleCreateCustomer}
+                isLoading={isCreating}
+              />
+            </DialogContent>
+          </Dialog>
+        }
+      />
 
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Sök på namn, e-post eller org.nr..."
+          placeholder="Sök kunder"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="pl-10"
@@ -167,15 +165,13 @@ export default function CustomersPage() {
         </div>
       ) : filteredCustomers.length === 0 ? (
         <Card>
-          <CardContent>
+          <CardContent className="p-0">
             {searchTerm ? (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Users className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium">Inga träffar</h3>
-                <p className="text-muted-foreground text-center mt-1">
-                  Inga kunder matchar &quot;{searchTerm}&quot;
-                </p>
-              </div>
+              <EmptyState
+                icon={Users}
+                title="Inga träffar"
+                description={`Inga kunder matchar "${searchTerm}".`}
+              />
             ) : (
               <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
             )}

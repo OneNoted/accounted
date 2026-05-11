@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Building2, Lock } from 'lucide-react'
 import SupplierForm from '@/components/suppliers/SupplierForm'
@@ -107,7 +108,7 @@ export default function SuppliersPage() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Leverantörer</h1>
@@ -157,7 +158,7 @@ export default function SuppliersPage() {
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((i) => (
             <Card key={i} className="animate-pulse">
-              <CardContent className="p-5 space-y-3">
+              <CardContent className="p-6 space-y-3">
                 <div className="h-5 bg-muted rounded w-1/2" />
                 <div className="h-3 bg-muted rounded w-2/3" />
                 <div className="h-px bg-muted" />
@@ -169,36 +170,21 @@ export default function SuppliersPage() {
         </div>
       ) : filteredSuppliers.length === 0 ? (
         <Card>
-          <CardContent>
+          <CardContent className="p-0">
             {searchTerm ? (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Building2 className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium">Inga träffar</h3>
-                <p className="text-muted-foreground text-center mt-1">
-                  Inga leverantörer matchar &quot;{searchTerm}&quot;
-                </p>
-              </div>
+              <EmptyState
+                icon={Building2}
+                title="Inga träffar"
+                description={`Inga leverantörer matchar "${searchTerm}".`}
+              />
             ) : (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Building2 className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium">Inga leverantörer</h3>
-                <p className="text-muted-foreground text-center mt-1">
-                  Lägg till din första leverantör för att börja registrera inköpsfakturor
-                </p>
-                <Button
-                  className="mt-4"
-                  onClick={() => setIsDialogOpen(true)}
-                  disabled={!canWrite}
-                  title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
-                >
-                  {canWrite ? (
-                    <Plus className="mr-2 h-4 w-4" />
-                  ) : (
-                    <Lock className="mr-2 h-4 w-4" />
-                  )}
-                  Ny leverantör
-                </Button>
-              </div>
+              <EmptyState
+                icon={Building2}
+                title="Inga leverantörer"
+                description="Lägg till din första leverantör för att börja registrera inköpsfakturor."
+                actionLabel={canWrite ? 'Ny leverantör' : undefined}
+                onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
+              />
             )}
           </CardContent>
         </Card>
@@ -210,7 +196,7 @@ export default function SuppliersPage() {
             return (
               <Link key={supplier.id} href={`/suppliers/${supplier.id}`} className="group">
                 <Card className="h-full cursor-pointer transition-all duration-150 hover:border-foreground/20 hover:shadow-sm motion-safe:active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                  <CardContent className="p-5 flex flex-col h-full">
+                  <CardContent className="p-6 flex flex-col h-full">
                     <div className="space-y-1 mb-4">
                       <h3 className="text-[15px] font-semibold tracking-tight leading-tight truncate group-hover:text-primary transition-colors">
                         {supplier.name}

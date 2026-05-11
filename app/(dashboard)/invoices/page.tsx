@@ -16,19 +16,19 @@ import { cn } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, Receipt, Lock } from 'lucide-react'
-import { EmptyInvoices } from '@/components/ui/empty-state'
+import { EmptyInvoices, EmptyState } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Invoice, InvoiceStatus } from '@/types'
 
-const statusConfig: Record<InvoiceStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive'; borderColor: string }> = {
-  draft: { label: 'Utkast', variant: 'secondary', borderColor: 'border-muted-foreground/30' },
-  sent: { label: 'Skickad', variant: 'default', borderColor: 'border-warning/50' },
-  paid: { label: 'Betald', variant: 'success', borderColor: 'border-success/50' },
-  partially_paid: { label: 'Delbetalad', variant: 'warning', borderColor: 'border-warning/50' },
-  overdue: { label: 'Förfallen', variant: 'destructive', borderColor: 'border-destructive/50' },
-  cancelled: { label: 'Makulerad', variant: 'secondary', borderColor: 'border-muted-foreground/30' },
-  credited: { label: 'Krediterad', variant: 'secondary', borderColor: 'border-muted-foreground/30' },
+const statusConfig: Record<InvoiceStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
+  draft: { label: 'Utkast', variant: 'secondary' },
+  sent: { label: 'Skickad', variant: 'default' },
+  paid: { label: 'Betald', variant: 'success' },
+  partially_paid: { label: 'Delbetalad', variant: 'warning' },
+  overdue: { label: 'Förfallen', variant: 'destructive' },
+  cancelled: { label: 'Makulerad', variant: 'secondary' },
+  credited: { label: 'Krediterad', variant: 'secondary' },
 }
 
 function getRelativeTimeLabel(dueDateStr: string, status: InvoiceStatus): { text: string; color: string } | null {
@@ -134,10 +134,9 @@ export default function InvoicesPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title="Fakturor"
-        description="Skicka fakturor, följ betalningar och skapa kreditnotor"
         action={
           canWrite ? (
             <Link href="/invoices/new">
@@ -158,58 +157,33 @@ export default function InvoicesPage() {
         }
       />
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
-        {isLoading ? (
-          <>
-            {[1, 2, 3].map((i) => (
-              <Card key={i}>
-                <CardContent className="pt-6">
-                  <div className="space-y-2">
-                    <div className="h-3.5 bg-muted rounded w-20 animate-pulse" />
-                    <div className="h-7 bg-muted rounded w-16 animate-pulse" />
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </>
-        ) : (
-          <>
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-sm text-muted-foreground">Totalt antal</p>
-                <p className="font-display text-2xl font-medium tabular-nums">{invoices.length}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-sm text-muted-foreground">Obetalda</p>
-                <div className="flex items-center gap-2">
-                  <p className="font-display text-2xl font-medium tabular-nums">{stats.unpaid}</p>
-                  {stats.overdue > 0 && (
-                    <Badge variant="destructive" className="text-xs">
-                      {stats.overdue} förfallna
-                    </Badge>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="pt-6">
-                <p className="text-sm text-muted-foreground">Att få in</p>
-                <p className="font-display text-2xl font-medium tabular-nums">{formatCurrency(stats.unpaidAmount)}</p>
-              </CardContent>
-            </Card>
-          </>
-        )}
-      </div>
+      {/* Inline summary */}
+      {!isLoading && invoices.length > 0 && (
+        <p className="text-sm text-muted-foreground tabular-nums">
+          {invoices.length} {invoices.length === 1 ? 'faktura' : 'fakturor'}
+          {stats.unpaid > 0 && (
+            <>
+              {' · '}
+              <span className="text-foreground">{stats.unpaid} obetalda</span>
+              {' · '}
+              {formatCurrency(stats.unpaidAmount)} att få in
+              {stats.overdue > 0 && (
+                <>
+                  {' · '}
+                  <span className="text-destructive">{stats.overdue} förfallna</span>
+                </>
+              )}
+            </>
+          )}
+        </p>
+      )}
 
       {/* Search and tabs */}
       <div className="flex flex-col sm:flex-row gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Sök på fakturanummer eller kund..."
+            placeholder="Sök fakturor"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-10"
@@ -265,30 +239,26 @@ export default function InvoicesPage() {
         </div>
       ) : filteredInvoices.length === 0 ? (
         <Card>
-          <CardContent>
+          <CardContent className="p-0">
             {searchTerm ? (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Receipt className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium">Inga träffar</h3>
-                <p className="text-muted-foreground text-center mt-1">
-                  Inga fakturor matchar &quot;{searchTerm}&quot;
-                </p>
-              </div>
+              <EmptyState
+                icon={Receipt}
+                title="Inga träffar"
+                description={`Inga fakturor matchar "${searchTerm}".`}
+              />
             ) : invoices.length === 0 ? (
               <EmptyInvoices />
             ) : (
-              <div className="flex flex-col items-center justify-center py-12">
-                <Receipt className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="text-lg font-medium">Inga fakturor i denna kategori</h3>
-                <p className="text-muted-foreground text-center mt-1">
-                  Prova att byta flik för att se fler fakturor
-                </p>
-              </div>
+              <EmptyState
+                icon={Receipt}
+                title="Inga fakturor i denna kategori"
+                description="Prova att byta flik för att se fler fakturor."
+              />
             )}
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {filteredInvoices.map((invoice) => {
             const status = statusConfig[invoice.status]
             const isCreditNote = !!invoice.credited_invoice_id
@@ -299,9 +269,7 @@ export default function InvoicesPage() {
             return (
               <Link key={invoice.id} href={`/invoices/${invoice.id}`}>
                 <Card className={cn(
-                  'cursor-pointer transition-all duration-150 hover:border-primary/50 hover:bg-accent/50 hover:shadow-sm active:scale-[0.99] active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                  isCreditNote ? 'border-destructive/30' : isProforma ? 'border-primary/30' : isDeliveryNote ? 'border-success/30' : status.borderColor,
-                  invoice.status === 'overdue' && 'ring-1 ring-destructive/20'
+                  'cursor-pointer transition-all duration-150 hover:border-primary/50 hover:bg-accent/50 hover:shadow-sm active:scale-[0.99] active:shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2'
                 )}>
                   <CardContent className="py-4">
                     <div className="min-w-0">

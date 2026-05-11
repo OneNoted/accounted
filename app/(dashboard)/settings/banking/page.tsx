@@ -112,7 +112,7 @@ export default function BankingSettingsPage() {
   }, [searchParams, router, toast])
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {bankConnectionError && (
         <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />

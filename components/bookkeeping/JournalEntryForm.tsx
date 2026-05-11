@@ -633,8 +633,8 @@ export default function JournalEntryForm({
       {/* Entry lines — desktop table */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b text-left text-muted-foreground">
+          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+            <tr className="border-b text-left">
               <th className="py-2 w-28">Konto</th>
               <th className="py-2 px-1">Beskrivning</th>
               <th className="py-2 w-32 px-1 text-right">Debet</th>

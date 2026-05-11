@@ -9,6 +9,7 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
 import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { formatDate } from '@/lib/utils'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { sourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
@@ -84,9 +85,12 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       const res = await fetch(`/api/bookkeeping/journal-entries/${id}`, { method: 'DELETE' })
       const result = await res.json()
       if (res.ok) {
+        const wasDraft = result.data?.was_draft === true
         toast({
-          title: 'Verifikat raderat',
-          description: `Verifikat ${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''} har raderats.`,
+          title: wasDraft ? 'Utkast raderat' : 'Verifikat raderat',
+          description: wasDraft
+            ? 'Utkastet har tagits bort.'
+            : `Verifikat ${result.data?.voucher_series ?? ''}${result.data?.voucher_number ?? ''} har raderats.`,
         })
         router.push('/bookkeeping')
       } else {
@@ -156,7 +160,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const fullChain = [entry, ...chain]
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Back link */}
       <Link
         href="/bookkeeping"
@@ -178,9 +182,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <p className="text-muted-foreground">{entry.description}</p>
         </div>
 
-        {entry.status === 'posted' && (
+        {(entry.status === 'posted' || entry.status === 'draft') && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {isLastInSeries && (
+            {(entry.status === 'draft' || isLastInSeries) && (
               <Button
                 variant="destructive"
                 size="sm"
@@ -190,7 +194,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-                Radera verifikat
+                {entry.status === 'draft' ? 'Radera utkast' : 'Radera verifikat'}
               </Button>
             )}
             {canCorrect && (
@@ -206,17 +210,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 Skapa ändringsverifikation
               </Button>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full sm:w-auto"
-              onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
-              disabled={!canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
-            >
-              {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-              Kopiera verifikat
-            </Button>
+            {entry.status === 'posted' && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full sm:w-auto"
+                onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
+                disabled={!canWrite}
+                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              >
+                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                Kopiera verifikat
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -230,7 +236,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Datum</span>
-              <span>{entry.entry_date}</span>
+              <span>{formatDate(entry.entry_date)}</span>
             </div>
             {entry.committed_at && (
               <div className="flex justify-between">
@@ -260,11 +266,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 {!editingNotes && canWrite && (
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-6 w-6 p-0"
+                    size="icon"
                     onClick={() => { setNotesValue(entry.notes || ''); setEditingNotes(true) }}
+                    aria-label="Redigera anteckning"
                   >
-                    <Pencil className="h-3 w-3" />
+                    <Pencil className="h-3.5 w-3.5" />
                   </Button>
                 )}
               </div>
@@ -381,8 +387,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           {/* Desktop table */}
           <div className="hidden sm:block">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2 w-48">Konto</th>
                   <th className="py-2">Beskrivning</th>
                   <th className="py-2 w-28 text-right">Debet</th>
@@ -530,8 +536,12 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         onOpenChange={setShowDeleteConfirm}
         onConfirm={handleDelete}
         isSubmitting={isDeleting}
-        title="Radera verifikat"
-        warningText={`Verifikat ${entry?.voucher_series ?? ''}${entry?.voucher_number ?? ''} raderas permanent. Eventuella kopplade underlag behålls men avlänkas. Denna åtgärd kan inte ångras.`}
+        title={entry?.status === 'draft' ? 'Radera utkast' : 'Radera verifikat'}
+        warningText={
+          entry?.status === 'draft'
+            ? 'Utkastet har aldrig bokförts och kan tas bort utan att påverka verifikationsserien. Eventuella kopplade underlag behålls men avlänkas. Denna åtgärd kan inte ångras.'
+            : `Verifikat ${entry?.voucher_series ?? ''}${entry?.voucher_number ?? ''} raderas permanent. Eventuella kopplade underlag behålls men avlänkas. Denna åtgärd kan inte ångras.`
+        }
         confirmLabel="Radera permanent"
       >
         <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4">
@@ -539,9 +549,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <div className="text-sm">
             <p className="font-medium mb-1">Permanent radering</p>
             <p className="text-muted-foreground">
-              Verifikatet och dess kontorader tas bort. Kopplade transaktioner och
-              fakturor behåller sina uppgifter men markeras som ej bokförda.
-              Underlag (kvitton, dokument) behålls men avlänkas.
+              {entry?.status === 'draft'
+                ? 'Utkastet och dess kontorader tas bort. Kopplade fakturor och transaktioner påverkas inte — de stannar kvar som obokförda. Underlag (kvitton, dokument) behålls men avlänkas.'
+                : 'Verifikatet och dess kontorader tas bort. Kopplade transaktioner och fakturor behåller sina uppgifter men markeras som ej bokförda. Underlag (kvitton, dokument) behålls men avlänkas.'}
             </p>
           </div>
         </div>

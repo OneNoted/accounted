@@ -57,7 +57,7 @@ export function CounterpartyTemplatesPanel() {
         setTemplates(json.data)
       }
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte hämta mallar', variant: 'destructive' })
+      toast({ title: 'Kunde inte hämta mallar', variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
@@ -76,14 +76,14 @@ export function CounterpartyTemplatesPanel() {
         body: JSON.stringify({ id }),
       })
       if (!res.ok) {
-        toast({ title: 'Fel', description: 'Kunde inte ta bort mall', variant: 'destructive' })
+        toast({ title: 'Kunde inte ta bort mall', variant: 'destructive' })
         return
       }
       setTemplates((prev) => prev.filter((t) => t.id !== id))
       if (expandedId === id) setExpandedId(null)
       toast({ title: 'Mall borttagen' })
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte ta bort mall', variant: 'destructive' })
+      toast({ title: 'Kunde inte ta bort mall', variant: 'destructive' })
     } finally {
       setDeletingId(null)
     }

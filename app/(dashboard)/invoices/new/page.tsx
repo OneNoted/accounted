@@ -56,6 +56,10 @@ type FormData = z.infer<typeof schema>
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
 
+function RequiredMark() {
+  return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
+}
+
 export default function NewInvoicePage() {
   const router = useRouter()
   const { toast } = useToast()
@@ -438,9 +442,9 @@ export default function NewInvoicePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => router.back()}>
+        <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label="Tillbaka">
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
@@ -475,7 +479,7 @@ export default function NewInvoicePage() {
             {/* Customer selection */}
             <Card>
               <CardHeader>
-                <CardTitle>Kund</CardTitle>
+                <CardTitle>Kund<RequiredMark /></CardTitle>
                 <CardDescription>Välj vilken kund fakturan ska skickas till</CardDescription>
               </CardHeader>
               <CardContent>
@@ -564,6 +568,7 @@ export default function NewInvoicePage() {
                               type="number"
                               step="0.01"
                               inputMode="decimal"
+                              className="text-right tabular-nums"
                               {...register(`items.${index}.quantity`, { valueAsNumber: true })}
                             />
                           </div>
@@ -594,6 +599,7 @@ export default function NewInvoicePage() {
                               type="number"
                               step="any"
                               inputMode="decimal"
+                              className="text-right tabular-nums"
                               {...register(`items.${index}.unit_price`, { valueAsNumber: true })}
                             />
                           </div>
@@ -729,13 +735,13 @@ export default function NewInvoicePage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Fakturadatum</Label>
-                  <Input type="date" {...register('invoice_date')} />
+                  <Label>Fakturadatum<RequiredMark /></Label>
+                  <Input type="date" {...register('invoice_date')} aria-required="true" />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Förfallodatum</Label>
-                  <Input type="date" {...register('due_date')} />
+                  <Label>Förfallodatum<RequiredMark /></Label>
+                  <Input type="date" {...register('due_date')} aria-required="true" />
                 </div>
 
                 {watchDocumentType === 'invoice' && (

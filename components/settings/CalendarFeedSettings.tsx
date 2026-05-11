@@ -62,8 +62,7 @@ export function CalendarFeedSettings() {
       })
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte skapa kalenderfeed.',
+        title: 'Kunde inte skapa kalenderfeed.',
         variant: 'destructive',
       })
     } finally {
@@ -91,8 +90,7 @@ export function CalendarFeedSettings() {
       setFeed(data)
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte uppdatera inställning.',
+        title: 'Kunde inte uppdatera inställning.',
         variant: 'destructive',
       })
     } finally {
@@ -129,8 +127,7 @@ export function CalendarFeedSettings() {
       })
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte skapa ny länk.',
+        title: 'Kunde inte skapa ny länk.',
         variant: 'destructive',
       })
     } finally {
@@ -149,8 +146,7 @@ export function CalendarFeedSettings() {
       })
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: 'Kunde inte kopiera länken.',
+        title: 'Kunde inte kopiera länken.',
         variant: 'destructive',
       })
     }

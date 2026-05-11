@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 
 interface VoucherSeries {
@@ -52,8 +53,8 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
 
       {isLoading ? (
         <div className="space-y-2">
-          <div className="h-4 bg-muted rounded w-32 animate-pulse" />
-          <div className="h-4 bg-muted rounded w-24 animate-pulse" />
+          <Skeleton className="h-4 w-32" />
+          <Skeleton className="h-4 w-24" />
         </div>
       ) : seriesEntries.length === 0 ? (
         <p className="text-sm text-muted-foreground">

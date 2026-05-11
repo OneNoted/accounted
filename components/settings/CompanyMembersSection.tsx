@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
+import { formatDateLong } from '@/lib/utils'
 import { Loader2, Plus, Trash2, Mail, Clock, Users } from 'lucide-react'
 
 interface CompanyMemberItem {
@@ -85,7 +86,7 @@ export function CompanyMembersSection() {
       const data = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Fel', description: data.error, variant: 'destructive' })
+        toast({ title: data.error, variant: 'destructive' })
         return
       }
 
@@ -102,7 +103,7 @@ export function CompanyMembersSection() {
       setInviteRole('viewer')
       fetchMembers()
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte skicka inbjudan.', variant: 'destructive' })
+      toast({ title: 'Kunde inte skicka inbjudan.', variant: 'destructive' })
     } finally {
       setIsSending(false)
     }
@@ -115,14 +116,14 @@ export function CompanyMembersSection() {
       const data = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Fel', description: data.error, variant: 'destructive' })
+        toast({ title: data.error, variant: 'destructive' })
         return
       }
 
       toast({ title: 'Medlem borttagen' })
       fetchMembers()
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte ta bort medlem.', variant: 'destructive' })
+      toast({ title: 'Kunde inte ta bort medlem.', variant: 'destructive' })
     } finally {
       setRemovingId(null)
     }
@@ -135,14 +136,14 @@ export function CompanyMembersSection() {
       const data = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Fel', description: data.error, variant: 'destructive' })
+        toast({ title: data.error, variant: 'destructive' })
         return
       }
 
       toast({ title: 'Inbjudan återkallad' })
       fetchMembers()
     } catch {
-      toast({ title: 'Fel', description: 'Kunde inte återkalla inbjudan.', variant: 'destructive' })
+      toast({ title: 'Kunde inte återkalla inbjudan.', variant: 'destructive' })
     } finally {
       setRevokingId(null)
     }
@@ -286,7 +287,7 @@ export function CompanyMembersSection() {
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Clock className="h-3 w-3" />
                         <span>
-                          Går ut {new Date(inv.expires_at).toLocaleDateString('sv-SE')}
+                          Går ut {formatDateLong(inv.expires_at)}
                         </span>
                       </div>
                     </div>

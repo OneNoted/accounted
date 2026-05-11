@@ -83,8 +83,7 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
       onStatusChange?.(deadlineId, newStatus)
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: error instanceof Error ? error.message : 'Kunde inte uppdatera status',
+        title: error instanceof Error ? error.message : 'Kunde inte uppdatera status',
         variant: 'destructive',
       })
     } finally {

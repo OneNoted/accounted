@@ -1,48 +1,35 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
+import { Skeleton } from "@/components/ui/skeleton"
+import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
 import { KPITrendChart } from '@/components/kpi/KPITrendChart'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
-import type { FiscalPeriod, KPIReport, KPIPreferences } from '@/types'
+import type { KPIReport, KPIPreferences } from '@/types'
 
 export default function KpiPage() {
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
-  const [selectedPeriod, setSelectedPeriod] = useState('')
+  const [selectedPeriod, setSelectedPeriod] = useState<string>('')
   const [report, setReport] = useState<KPIReport | null>(null)
   const [preferences, setPreferences] = useState<KPIPreferences>(getDefaultPreferences())
-  const [isLoadingInit, setIsLoadingInit] = useState(true)
   const [isLoadingReport, setIsLoadingReport] = useState(false)
   const [isSavingPrefs, setIsSavingPrefs] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    async function init() {
+    let cancelled = false
+    ;(async () => {
       try {
-        const [periodsRes, prefsRes] = await Promise.all([
-          fetch('/api/bookkeeping/fiscal-periods'),
-          fetch('/api/kpi/preferences'),
-        ])
-        const { data: periodsData } = await periodsRes.json()
-        const { data: prefsData } = await prefsRes.json()
-
-        const today = new Date().toISOString().split('T')[0]
-        const activePeriods = (periodsData || []).filter((p: FiscalPeriod) => p.period_start <= today)
-        setPeriods(activePeriods)
-        if (prefsData) setPreferences(prefsData)
-        if (activePeriods.length > 0) {
-          setSelectedPeriod(activePeriods[0].id)
-        }
+        const res = await fetch('/api/kpi/preferences')
+        const { data } = await res.json()
+        if (!cancelled && data) setPreferences(data)
       } catch {
-        setError('Kunde inte hämta data')
-      } finally {
-        setIsLoadingInit(false)
+        // Silently fall back to defaults
       }
-    }
-    init()
+    })()
+    return () => { cancelled = true }
   }, [])
 
   const fetchReport = useCallback(async (periodId: string) => {
@@ -63,7 +50,6 @@ export default function KpiPage() {
   useEffect(() => {
     if (!selectedPeriod) return
     let cancelled = false
-
     fetchReport(selectedPeriod).then(() => {
       if (cancelled) setReport(null)
     })
@@ -81,11 +67,7 @@ export default function KpiPage() {
       if (!res.ok) throw new Error()
       const { data } = await res.json()
       setPreferences(data)
-
-      // Re-fetch report if account overrides changed (calculations may differ)
-      if (selectedPeriod) {
-        await fetchReport(selectedPeriod)
-      }
+      if (selectedPeriod) await fetchReport(selectedPeriod)
     } catch {
       // Silently fail — user can retry
     } finally {
@@ -93,25 +75,10 @@ export default function KpiPage() {
     }
   }
 
-  if (isLoadingInit) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Nyckeltal</h1>
-          <p className="text-muted-foreground">Översikt av företagets ekonomiska hälsa</p>
-        </div>
-        <LoadingSkeleton />
-      </div>
-    )
-  }
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Nyckeltal</h1>
-          <p className="text-muted-foreground">Översikt av företagets ekonomiska hälsa</p>
-        </div>
+        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Nyckeltal</h1>
         <KPISettingsDialog
           preferences={preferences}
           onSave={handleSavePreferences}
@@ -119,23 +86,12 @@ export default function KpiPage() {
         />
       </div>
 
-      {/* Period selector */}
-      {periods.length > 0 && (
-        <div>
-          <Label>Räkenskapsår</Label>
-          <select
-            value={selectedPeriod}
-            onChange={(e) => setSelectedPeriod(e.target.value)}
-            className="w-full mt-1 max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            {periods.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.period_start} — {p.period_end})
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+      <FiscalYearSelector
+        value={selectedPeriod || null}
+        onChange={(id) => setSelectedPeriod(id || '')}
+        includeAllOption={false}
+        hideFuturePeriods
+      />
 
       {error && (
         <Card>
@@ -153,36 +109,28 @@ export default function KpiPage() {
           {report.months.length > 0 && <KPITrendChart months={report.months} />}
         </>
       )}
-
-      {!isLoadingReport && !error && !report && periods.length === 0 && (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            <p>Inget räkenskapsår hittades. Skapa ett räkenskapsår för att se nyckeltal.</p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   )
 }
 
 function LoadingSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[1, 2, 3, 4].map((i) => (
           <Card key={i}>
-            <CardContent className="p-5 space-y-2">
-              <div className="h-3 bg-muted rounded w-20 animate-pulse" />
-              <div className="h-7 bg-muted rounded w-28 animate-pulse" />
-              <div className="h-3 bg-muted rounded w-16 animate-pulse" />
+            <CardContent className="p-6 space-y-2">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-7 w-28" />
+              <Skeleton className="h-3 w-16" />
             </CardContent>
           </Card>
         ))}
       </div>
       <Card>
-        <CardContent className="p-5 space-y-3">
-          <div className="h-4 bg-muted rounded w-40 animate-pulse" />
-          <div className="h-56 bg-muted rounded animate-pulse" />
+        <CardContent className="p-6 space-y-3">
+          <Skeleton className="h-4 w-40" />
+          <Skeleton className="h-56" />
         </CardContent>
       </Card>
     </div>

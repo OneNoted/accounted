@@ -3,16 +3,19 @@
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { Badge } from '@/components/ui/badge'
+import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ArrowLeft, Calculator, Eye, Check, CreditCard, BookOpen,
   ArrowLeftCircle, Loader2, Download,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { SalaryRun, SalaryRunEmployee, Employee, CreateJournalEntryLineInput } from '@/types'
 import { AGIPanel } from '@/components/salary/AGIPanel'
@@ -30,13 +33,13 @@ const STATUS_LABELS: Record<string, string> = {
   corrected: 'Korrigerad',
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: 'bg-muted text-muted-foreground',
-  review: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
-  approved: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
-  paid: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400',
-  booked: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
-  corrected: 'bg-muted text-muted-foreground',
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
+  draft: 'secondary',
+  review: 'warning',
+  approved: 'default',
+  paid: 'success',
+  booked: 'success',
+  corrected: 'secondary',
 }
 
 interface EntryPreview {
@@ -113,7 +116,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     } else {
       const result = await res.json()
       toast({
-        title: 'Fel',
+        title: 'Kunde inte uppdatera status',
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
         variant: 'destructive',
       })
@@ -134,7 +137,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     } else {
       const result = await res.json()
       toast({
-        title: 'Fel',
+        title: 'Kunde inte lägga till anställd',
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
         variant: 'destructive',
       })
@@ -208,8 +211,8 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-9 w-60 bg-muted rounded animate-pulse" />
-        <div className="h-48 bg-muted rounded-lg animate-pulse" />
+        <Skeleton className="h-9 w-60" />
+        <Skeleton className="rounded-lg h-48" />
       </div>
     )
   }
@@ -224,40 +227,42 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   const notAdded = availableEmployees.filter(e => !addedEmployeeIds.has(e.id))
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8">
-            <Link href="/salary"><ArrowLeft className="h-4 w-4" /></Link>
+          <Button variant="ghost" size="icon" asChild>
+            <Link href="/salary" aria-label="Tillbaka till löner"><ArrowLeft className="h-4 w-4" /></Link>
           </Button>
           <div>
             <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
               Lönekörning {periodLabel}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Utbetalning: {run.payment_date}
+              Utbetalning: {formatDate(run.payment_date)}
             </p>
           </div>
         </div>
-        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${STATUS_COLORS[run.status]}`}>
+        <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>
           {STATUS_LABELS[run.status]}
-        </span>
+        </Badge>
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
           { label: 'Brutto', value: run.total_gross },
           { label: 'Skatt', value: run.total_tax },
-          { label: 'Netto', value: run.total_net },
+          { label: 'Netto', value: run.total_net, accent: true },
           { label: 'Avgifter', value: run.total_avgifter },
           { label: 'Total kostnad', value: run.total_employer_cost },
-        ].map(({ label, value }) => (
+        ].map(({ label, value, accent }) => (
           <Card key={label}>
-            <CardContent className="pt-4 pb-3">
-              <p className="text-xs text-muted-foreground">{label}</p>
-              <p className="text-lg font-semibold tabular-nums">{formatCurrency(value)}</p>
+            <CardContent className="p-4">
+              <p className="text-xs text-muted-foreground mb-2">{label}</p>
+              <p className={`font-display text-xl font-medium tabular-nums leading-tight ${accent ? 'text-success' : ''}`}>
+                {formatCurrency(value)}
+              </p>
             </CardContent>
           </Card>
         ))}
@@ -292,30 +297,30 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
               Inga anställda tillagda ännu
             </p>
           ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-2 font-medium">Anställd</th>
-                  <th className="px-4 py-2 font-medium text-right">Brutto</th>
-                  <th className="px-4 py-2 font-medium text-right">Skatt</th>
-                  <th className="px-4 py-2 font-medium text-right">Netto</th>
-                  <th className="px-4 py-2 font-medium text-right">Avgifter</th>
-                  <th className="px-4 py-2 font-medium text-right">Semester</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Anställd</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Brutto</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Skatt</TableHead>
+                  <TableHead className="text-right">Netto</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Avgifter</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Semester</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {employees.map(sre => {
                   const employee = (sre as SalaryRunEmployee & { employee?: { first_name: string; last_name: string; personnummer: string } }).employee
                   const name = employee
                     ? `${employee.first_name} ${employee.last_name}`
                     : `Anställd ${sre.employee_id.slice(0, 8)}...`
                   return (
-                    <tr
+                    <TableRow
                       key={sre.id}
-                      className="cursor-pointer border-b transition-colors last:border-0 hover:bg-accent/40"
+                      className="cursor-pointer"
                       onClick={() => router.push(`/salary/runs/${id}/employees/${sre.employee_id}`)}
                     >
-                      <td className="px-4 py-3 text-sm font-medium">
+                      <TableCell className="font-medium">
                         <Link
                           href={`/salary/runs/${id}/employees/${sre.employee_id}`}
                           className="hover:underline"
@@ -323,17 +328,20 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                         >
                           {name}
                         </Link>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.gross_salary)}</td>
-                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.tax_withheld)}</td>
-                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.net_salary)}</td>
-                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.avgifter_amount)}</td>
-                      <td className="px-4 py-3 text-sm text-right tabular-nums">{formatCurrency(sre.vacation_accrual)}</td>
-                    </tr>
+                        <span className="md:hidden block text-xs text-muted-foreground font-normal mt-0.5 tabular-nums">
+                          Brutto {formatCurrency(sre.gross_salary)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.gross_salary)}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(sre.tax_withheld)}</TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">{formatCurrency(sre.net_salary)}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(sre.avgifter_amount)}</TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.vacation_accrual)}</TableCell>
+                    </TableRow>
                   )
                 })}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
@@ -384,8 +392,8 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
               <div key={idx} className="space-y-2">
                 <h4 className="text-sm font-medium">{entry!.description}</h4>
                 <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-muted-foreground">
+                  <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                    <tr className="border-b">
                       <th className="text-left py-1">Konto</th>
                       <th className="text-left py-1">Beskrivning</th>
                       <th className="text-right py-1">Debet</th>

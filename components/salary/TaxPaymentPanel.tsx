@@ -88,7 +88,7 @@ export function TaxPaymentPanel({
       if (!res.ok) {
         const result = await res.json().catch(() => ({ error: 'Kunde inte markera som betald' }))
         toast({
-          title: 'Fel',
+          title: 'Kunde inte markera som betald',
           description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
           variant: 'destructive',
         })

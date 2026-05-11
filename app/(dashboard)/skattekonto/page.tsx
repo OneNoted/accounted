@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import {
@@ -365,69 +366,65 @@ function TransactionTable({
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
-            <th className="py-2 pr-3">Datum</th>
-            {showForfallodatum && <th className="py-2 pr-3">Förfallodatum</th>}
-            <th className="py-2 pr-3">Beskrivning</th>
-            <th className="py-2 pr-3 text-right">Belopp</th>
-            <th className="py-2 pr-3">Status</th>
-            <th className="py-2"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => {
-            const negative = Number(row.belopp_skatteverket) < 0
-            const isBooked = !!row.journal_entry_id
-            return (
-              <tr key={row.id} className="border-b last:border-0">
-                <td className="py-2 pr-3 tabular-nums">{row.transaktionsdatum}</td>
-                {showForfallodatum && (
-                  <td className="py-2 pr-3 tabular-nums">{row.forfallodatum ?? '–'}</td>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Datum</TableHead>
+          {showForfallodatum && <TableHead>Förfallodatum</TableHead>}
+          <TableHead>Beskrivning</TableHead>
+          <TableHead className="text-right">Belopp</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead></TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map(row => {
+          const negative = Number(row.belopp_skatteverket) < 0
+          const isBooked = !!row.journal_entry_id
+          return (
+            <TableRow key={row.id}>
+              <TableCell className="tabular-nums">{row.transaktionsdatum}</TableCell>
+              {showForfallodatum && (
+                <TableCell className="tabular-nums">{row.forfallodatum ?? '–'}</TableCell>
+              )}
+              <TableCell>{row.transaktionstext}</TableCell>
+              <TableCell
+                className={`text-right tabular-nums ${negative ? 'text-destructive' : ''}`}
+              >
+                {formatCurrency(Number(row.belopp_skatteverket))}
+              </TableCell>
+              <TableCell>
+                {isBooked ? (
+                  <Badge variant="secondary" className="gap-1">
+                    <FileCheck className="h-3 w-3" />
+                    Bokförd
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">Ej bokförd</Badge>
                 )}
-                <td className="py-2 pr-3">{row.transaktionstext}</td>
-                <td
-                  className={`py-2 pr-3 text-right tabular-nums ${
-                    negative ? 'text-destructive' : ''
-                  }`}
-                >
-                  {formatCurrency(Number(row.belopp_skatteverket))}
-                </td>
-                <td className="py-2 pr-3">
-                  {isBooked ? (
-                    <Badge variant="secondary" className="gap-1">
-                      <FileCheck className="h-3 w-3" />
-                      Bokförd
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline">Ej bokförd</Badge>
-                  )}
-                </td>
-                <td className="py-2 text-right">
-                  {isBooked ? (
-                    <Button asChild variant="ghost" size="sm">
-                      <Link href={`/bookkeeping/${row.journal_entry_id}`}>
-                        Visa verifikat
-                      </Link>
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onBokfor(row.id)}
-                      disabled={bookingId === row.id}
-                    >
-                      {bookingId === row.id ? 'Bokför…' : 'Bokför'}
-                    </Button>
-                  )}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
-    </div>
+              </TableCell>
+              <TableCell className="text-right">
+                {isBooked ? (
+                  <Button asChild variant="ghost" size="sm">
+                    <Link href={`/bookkeeping/${row.journal_entry_id}`}>
+                      Visa verifikat
+                    </Link>
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onBokfor(row.id)}
+                    disabled={bookingId === row.id}
+                  >
+                    {bookingId === row.id ? 'Bokför…' : 'Bokför'}
+                  </Button>
+                )}
+              </TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
   )
 }

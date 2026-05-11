@@ -339,7 +339,6 @@ export default function TransactionsPage() {
       if (result.journal_entry_created) {
         toast({
           title: 'Bokförd',
-          description: 'Transaktion bokförd och verifikation skapad',
           action: (
             <ToastAction altText="Ångra kategorisering" onClick={async () => {
               try {
@@ -674,7 +673,7 @@ export default function TransactionsPage() {
     }, 350)
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
-    toast({ title: 'Bokförd', description: 'Transaktion bokförd och verifikation skapad' })
+    toast({ title: 'Bokförd' })
   }
 
   // Batch mode handlers
@@ -889,7 +888,7 @@ export default function TransactionsPage() {
 
       {/* Content based on mode */}
       {isLoading ? (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {[1, 2, 3].map((i) => (
             <Card key={i} className="animate-pulse">
               <CardContent className="py-4">
@@ -911,7 +910,7 @@ export default function TransactionsPage() {
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-3">
             <AnimatePresence mode="popLayout">
               {uncategorizedTransactions.map((transaction) => (
                 <TransactionInboxCard
@@ -970,7 +969,7 @@ export default function TransactionsPage() {
                 Markera som privat
               </Button>
               <Button size="sm" onClick={() => setShowBatchSelector(true)}>
-                Bokför {selectedIds.size} st
+                Bokför
               </Button>
             </>
           )}

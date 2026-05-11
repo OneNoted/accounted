@@ -1,16 +1,12 @@
 'use client'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { PageHeader } from '@/components/ui/page-header'
 
 export default function SalarySettingsPage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="font-display text-xl font-medium tracking-tight">Löneinställningar</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Konfiguration för lönemodulen
-        </p>
-      </div>
+    <div className="space-y-8">
+      <PageHeader title="Löneinställningar" />
 
       <Card>
         <CardHeader>

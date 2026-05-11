@@ -121,13 +121,13 @@ export default function CustomersEditStep({
         {/* Table */}
         <div className="overflow-x-auto rounded-md border">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="px-3 py-2 text-left font-medium">Namn</th>
-                <th className="px-3 py-2 text-left font-medium w-44">Kundtyp</th>
-                <th className="px-3 py-2 text-left font-medium w-36">Orgnr</th>
-                <th className="px-3 py-2 text-left font-medium">E-post</th>
-                <th className="px-3 py-2 text-left font-medium w-32">Status</th>
+            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <tr className="border-b">
+                <th className="px-3 py-2 text-left">Namn</th>
+                <th className="px-3 py-2 text-left w-44">Kundtyp</th>
+                <th className="px-3 py-2 text-left w-36">Orgnr</th>
+                <th className="px-3 py-2 text-left">E-post</th>
+                <th className="px-3 py-2 text-left w-32">Status</th>
                 <th className="px-3 py-2 w-10" />
               </tr>
             </thead>

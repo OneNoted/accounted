@@ -454,7 +454,7 @@ export default function PendingOperationsPage() {
       </Tabs>
 
       {showBulkControls && bulkEligible.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-3">
           <div className="flex items-center gap-2">
             <Checkbox
               id="select-all"
@@ -583,13 +583,13 @@ export default function PendingOperationsPage() {
                           </Badge>
                         )}
                         {op.status === 'committed' && (
-                          <Badge variant="default" className="bg-emerald-500/10 text-emerald-600 border-emerald-200">
+                          <Badge variant="success">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
                             Godkänd
                           </Badge>
                         )}
                         {op.status === 'rejected' && (
-                          <Badge variant="destructive" className="bg-destructive/10">
+                          <Badge variant="destructive">
                             <XCircle className="h-3 w-3 mr-1" />
                             Avvisad
                           </Badge>

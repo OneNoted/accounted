@@ -93,8 +93,7 @@ export function TaxTodoWidget({ deadlines, onStatusChange }: TaxTodoWidgetProps)
       onStatusChange?.(deadlineId, newStatus)
     } catch (error) {
       toast({
-        title: 'Fel',
-        description: error instanceof Error ? error.message : 'Kunde inte uppdatera status',
+        title: error instanceof Error ? error.message : 'Kunde inte uppdatera status',
         variant: 'destructive',
       })
     } finally {

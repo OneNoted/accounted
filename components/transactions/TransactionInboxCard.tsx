@@ -244,9 +244,9 @@ export default function TransactionInboxCard({
               {/* Delete button — available for all unbooked transactions */}
               {isDeletable && onDelete && (
                 <Button
-                  size="sm"
                   variant="ghost"
-                  className="h-9 w-9 p-0 ml-auto text-muted-foreground hover:text-destructive"
+                  size="icon"
+                  className="ml-auto text-muted-foreground hover:text-destructive"
                   onClick={() => onDelete(transaction.id)}
                   disabled={isProcessing || isDisabled}
                   aria-label="Ta bort transaktion"

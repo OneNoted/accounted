@@ -526,3 +526,69 @@ Swedish sole traders (enskild firma) and small business owners (aktiebolag) who 
 - Keyboard-navigable with visible focus rings
 - Respect `prefers-reduced-motion`
 - Color never sole indicator of state — always pair with icons, text, or shape
+- Touch targets ≥ 40px (shadcn `Button size="icon"` default) — bump higher to 44px (WCAG AAA) for new mobile-critical surfaces
+- Icon-only buttons must have `aria-label`
+
+### Design System Tokens
+
+These conventions are locked. Don't reinvent them in new code; deviating from them on existing pages is a regression.
+
+**Spacing scale.** Only use Tailwind values `1, 2, 3, 4, 6, 8, 10, 12`. **Forbidden:** `2.5`, `5`, hardcoded pixels in page logic.
+
+| Token | Tailwind | Use for |
+|---|---|---|
+| 4 | `1` | icon padding |
+| 8 | `2` | tight inline gaps |
+| 12 | `3` | dense list rows, badge gaps |
+| 16 | `4` | default form / control / grid gap |
+| 24 | `6` | **card padding default** (`p-6`) |
+| 32 | `8` | **between page sections** (`space-y-8` on page root) |
+| 40 | `10` | hero spacing |
+| 48 | `12` | top of page after header |
+
+Compact metric cards (e.g. dashboard tiles, salary KPI row) use `p-4`. Detail cards use `p-6`. Never mix `p-5`.
+
+**Layout.**
+- Sidebar width: `md:w-64` (256px). Main content offset: `md:pl-64`.
+- Main container: `max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10` (via `components/dashboard/MainContainer.tsx`).
+- Page root: `<div className="space-y-8">`.
+
+**Primitives — always use these, don't hand-roll.**
+
+| Need | Component | Notes |
+|---|---|---|
+| Page title + action | `components/ui/page-header.tsx` `PageHeader` | Use this, not bespoke `<h1>` + `<p>` blocks. Drop the `description` prop when it just paraphrases the title. |
+| Data table | `components/ui/table.tsx` `Table / TableHeader / TableHead / TableRow / TableCell` | Header style is baked in: `text-[11px] font-medium uppercase tracking-wider text-muted-foreground`. Wrap in `<CardContent className="p-0">` when the table is a card's primary content. Add `tabular-nums` to numeric cells. |
+| Status indicator | `components/ui/badge.tsx` `<Badge variant>` | Variants: `default / secondary / success / warning / destructive / outline`. **Never** use raw Tailwind colors (`bg-blue-100`, `bg-emerald-500/10`, etc.) for status. Map status → variant via a small `Record` per feature. |
+| No-data state | `components/ui/empty-state.tsx` `EmptyState` | Don't hand-roll `<div className="flex flex-col items-center py-12">…</div>`. Preset variants exist (`EmptyInvoices`, `EmptyCustomers`, `EmptyTransactions`, etc.). |
+| Loading placeholder | `components/ui/skeleton.tsx` `<Skeleton>` | Don't hand-roll `bg-muted rounded animate-pulse` divs. |
+| Inline help / formulas | `components/ui/info-tooltip.tsx` `InfoTooltip` | Hover-revealed; don't use always-visible info buttons. |
+| Fiscal year picker | `components/common/FiscalYearSelector.tsx` | Don't use raw `<select>` for fiscal periods. |
+
+**Tabular display rules.**
+- All financial values get `tabular-nums`.
+- Dates in tables: `tabular-nums` for fixed width.
+- Right-align numeric columns (`text-right`).
+- For group bands inside tables (Resultatrapport-style): `<tr className="bg-muted/30"><td colSpan={n} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">{label}</td></tr>`.
+
+**Date formatting.** Two helpers in `lib/utils.ts`:
+- `formatDate(x)` → `2026-05-11` (ISO `yyyy-MM-dd`). Use for accounting data — transaction dates, invoice dates, payment dates, voucher dates. Aligns in tables, matches SIE/BFL convention.
+- `formatDateLong(x)` → `11 maj 2026` (Swedish long form). Use for metadata — when something was created, linked, verified, expires. Settings panels and audit displays.
+
+Never render raw `{x.invoice_date}` directly — always route through `formatDate()` for code consistency.
+
+**Currency.** `formatCurrency(n, currency?)` from `lib/utils.ts`. Default SEK.
+
+**Typography.**
+- Page title: `<h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">` (or use `PageHeader`).
+- Card title: `<CardTitle className="text-base">` for sections, default for primary cards.
+- Section divider header inside a page: `<h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">`.
+- Headline number: `font-display text-xl font-medium tabular-nums`.
+- Display font (`font-display`, Fraunces) reserved for h1/h2/h3 and primary financial numbers.
+
+**Forbidden / dead patterns.**
+- Page descriptions that paraphrase the page title (e.g. `<PageHeader title="Fakturor" description="Hantera dina fakturor">`) → drop the description.
+- Two different status indicators on the same element (e.g. colored card border *and* Badge for status) → pick one (prefer Badge).
+- Mobile-specific `<select>` duplicating desktop tabs in code — use a single Tabs primitive or a single grouped `Select`.
+- Hand-rolled icon buttons smaller than `h-10 w-10`. Use shadcn `Button size="icon"`.
+- Color-coded status using full-rainbow Tailwind palette (`bg-amber-100`, `bg-emerald-500/10`, etc.). Use Badge variants tied to the brand palette.

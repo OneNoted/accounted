@@ -187,7 +187,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-[232px] md:flex-col">
+      <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
         <div className="flex min-h-0 flex-1 flex-col border-r border-border/30 bg-card/90">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
             {/* Company switcher */}

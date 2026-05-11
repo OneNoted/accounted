@@ -3,13 +3,16 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, Edit, Trash2, FileText, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
 import Link from 'next/link'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -101,8 +104,8 @@ export default function SupplierDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <div className="h-8 bg-muted rounded w-48 animate-pulse" />
+      <div className="space-y-8">
+        <Skeleton className="h-8 w-48" />
         <Card className="animate-pulse">
           <CardContent className="h-48" />
         </Card>
@@ -121,13 +124,13 @@ export default function SupplierDetailPage() {
     )
   }
 
-  const statusColors: Record<string, string> = {
-    registered: 'bg-blue-100 text-blue-800',
-    approved: 'bg-yellow-100 text-yellow-800',
-    paid: 'bg-success/10 text-success',
-    partially_paid: 'bg-orange-100 text-orange-800',
-    overdue: 'bg-destructive/10 text-destructive',
-    credited: 'bg-gray-100 text-gray-800',
+  const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
+    registered: 'secondary',
+    approved: 'default',
+    paid: 'success',
+    partially_paid: 'warning',
+    overdue: 'destructive',
+    credited: 'secondary',
   }
 
   const statusLabels: Record<string, string> = {
@@ -140,10 +143,10 @@ export default function SupplierDetailPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/suppliers')}>
+          <Button variant="ghost" size="icon" onClick={() => router.push('/suppliers')} aria-label="Tillbaka till leverantörer">
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
@@ -254,40 +257,40 @@ export default function SupplierDetailPage() {
             <>
             {/* Desktop table */}
             <div className="hidden sm:block">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
-                    <th className="py-2">Ankomst</th>
-                    <th className="py-2">Fakturanr</th>
-                    <th className="py-2">Datum</th>
-                    <th className="py-2">Förfaller</th>
-                    <th className="py-2 text-right">Belopp</th>
-                    <th className="py-2 text-right">Kvar</th>
-                    <th className="py-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Ankomst</TableHead>
+                    <TableHead>Fakturanr</TableHead>
+                    <TableHead>Datum</TableHead>
+                    <TableHead>Förfaller</TableHead>
+                    <TableHead className="text-right">Belopp</TableHead>
+                    <TableHead className="text-right">Kvar</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
                   {invoices.map((inv) => (
-                    <tr key={inv.id} className="border-b last:border-0">
-                      <td className="py-2 font-mono">{inv.arrival_number}</td>
-                      <td className="py-2">
+                    <TableRow key={inv.id}>
+                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
+                      <TableCell>
                         <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline">
                           {inv.supplier_invoice_number}
                         </Link>
-                      </td>
-                      <td className="py-2">{inv.invoice_date}</td>
-                      <td className="py-2">{inv.due_date}</td>
-                      <td className="py-2 text-right">{formatAmount(inv.total)} kr</td>
-                      <td className="py-2 text-right">{formatAmount(inv.remaining_amount)} kr</td>
-                      <td className="py-2">
-                        <Badge className={statusColors[inv.status] || ''}>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
+                      <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(inv.total)} kr</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)} kr</TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariants[inv.status] || 'secondary'}>
                           {statusLabels[inv.status] || inv.status}
                         </Badge>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             {/* Mobile cards */}
             <div className="sm:hidden space-y-3">
@@ -297,12 +300,12 @@ export default function SupplierDetailPage() {
                     <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline font-medium text-sm">
                       {inv.supplier_invoice_number}
                     </Link>
-                    <Badge className={statusColors[inv.status] || ''}>
+                    <Badge variant={statusVariants[inv.status] || 'secondary'}>
                       {statusLabels[inv.status] || inv.status}
                     </Badge>
                   </div>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">{inv.invoice_date} → {inv.due_date}</span>
+                    <span className="text-muted-foreground tabular-nums">{formatDate(inv.invoice_date)} → {formatDate(inv.due_date)}</span>
                     <span className="font-mono">{formatAmount(inv.total)} kr</span>
                   </div>
                   {Number(inv.remaining_amount) > 0 && Number(inv.remaining_amount) !== Number(inv.total) && (

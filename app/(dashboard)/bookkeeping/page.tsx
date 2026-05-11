@@ -11,6 +11,7 @@ import ChartOfAccountsManager from '@/components/bookkeeping/ChartOfAccountsMana
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { useToast } from '@/components/ui/use-toast'
 import { Lock, Loader2, Copy } from 'lucide-react'
+import { PageHeader } from '@/components/ui/page-header'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface CopyPrefill {
@@ -129,25 +130,18 @@ export default function BookkeepingPage() {
   }, [refreshKey])
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Bokföring</h1>
-          <p className="text-muted-foreground">
-            Skapa verifikationer, hantera kontoplanen och bifoga underlag
-          </p>
-        </div>
-        <Button variant="outline" asChild className="w-full sm:w-auto">
-          <Link href="/bookkeeping/year-end">
-            <Lock className="mr-2 h-4 w-4" />
-            Årsbokslut
-          </Link>
-        </Button>
-      </div>
-
-      {activeTab === 'journal' && (
-        <FiscalYearSelector value={periodId} onChange={setPeriodId} />
-      )}
+    <div className="space-y-8">
+      <PageHeader
+        title="Bokföring"
+        action={
+          <Button variant="outline" asChild className="w-full sm:w-auto">
+            <Link href="/bookkeeping/year-end">
+              <Lock className="mr-2 h-4 w-4" />
+              Årsbokslut
+            </Link>
+          </Button>
+        }
+      />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabValue)}>
         <TabsList>
@@ -163,7 +157,8 @@ export default function BookkeepingPage() {
           <TabsTrigger value="accounts">Kontoplan</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="journal">
+        <TabsContent value="journal" className="space-y-4">
+          <FiscalYearSelector value={periodId} onChange={setPeriodId} />
           <JournalEntryList key={`${refreshKey}-${periodId ?? 'all'}`} periodId={periodId ?? undefined} />
         </TabsContent>
 

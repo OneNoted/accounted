@@ -26,7 +26,7 @@ import {
   Lock,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { cn } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 
@@ -185,7 +185,7 @@ export default function CustomerDetailPage({
   const Icon = customerTypeIcons[customer.customer_type]
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -352,7 +352,7 @@ export default function CustomerDetailPage({
                 >
                   <div>
                     <p className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</p>
-                    <p className="text-sm text-muted-foreground">{invoice.invoice_date}</p>
+                    <p className="text-sm text-muted-foreground tabular-nums">{formatDate(invoice.invoice_date)}</p>
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-sm tabular-nums">

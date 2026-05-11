@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
 import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye } from 'lucide-react'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -368,8 +368,8 @@ export function BankReconciliationView() {
           </CardHeader>
           <CardContent>
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2">Transaktion</th>
                   <th className="py-2 w-24">Datum</th>
                   <th className="py-2 w-28 text-right">Belopp</th>
@@ -383,14 +383,14 @@ export function BankReconciliationView() {
                 {dryRunResults.map((m) => (
                   <tr key={m.transaction_id} className="border-b last:border-0">
                     <td className="py-2 truncate max-w-[180px]">{m.transaction_description}</td>
-                    <td className="py-2">{m.transaction_date}</td>
+                    <td className="py-2 tabular-nums">{formatDate(m.transaction_date)}</td>
                     <td className="py-2 text-right font-mono">{formatAmount(m.transaction_amount)}</td>
                     <td className="py-2 text-center text-muted-foreground">&harr;</td>
                     <td className="py-2">
                       <span className="font-mono text-xs">{m.voucher_series}{m.voucher_number}</span>
                       <span className="ml-2 text-muted-foreground truncate">{m.entry_description}</span>
                     </td>
-                    <td className="py-2">{m.entry_date}</td>
+                    <td className="py-2 tabular-nums">{formatDate(m.entry_date)}</td>
                     <td className="py-2">
                       <Badge variant="outline" className="text-xs">
                         {METHOD_LABELS[m.method] || m.method}
@@ -422,8 +422,8 @@ export function BankReconciliationView() {
           </CardHeader>
           <CardContent>
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2 w-24">Datum</th>
                   <th className="py-2">Beskrivning</th>
                   <th className="py-2 w-28 text-right">Belopp</th>
@@ -454,7 +454,7 @@ export function BankReconciliationView() {
                           const lineAmount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
                           return (
                             <option key={line.line_id} value={line.journal_entry_id}>
-                              {line.voucher_series}{line.voucher_number} | {line.entry_date} | {formatCurrency(lineAmount)} | {line.entry_description}
+                              {line.voucher_series}{line.voucher_number} | {formatDate(line.entry_date)} | {formatCurrency(lineAmount)} | {line.entry_description}
                             </option>
                           )
                         })}
@@ -489,8 +489,8 @@ export function BankReconciliationView() {
           </CardHeader>
           <CardContent>
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-muted-foreground">
+              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                <tr className="border-b text-left">
                   <th className="py-2 w-16">Ver.nr</th>
                   <th className="py-2 w-24">Datum</th>
                   <th className="py-2">Beskrivning</th>
@@ -506,7 +506,7 @@ export function BankReconciliationView() {
                       <td className="py-2 font-mono text-xs">
                         {line.voucher_series}{line.voucher_number}
                       </td>
-                      <td className="py-2">{line.entry_date}</td>
+                      <td className="py-2 tabular-nums">{formatDate(line.entry_date)}</td>
                       <td className="py-2 truncate max-w-[300px]">
                         {line.line_description || line.entry_description}
                       </td>
@@ -544,8 +544,8 @@ export function BankReconciliationView() {
           {showMatched && (
             <CardContent>
               <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-muted-foreground">
+                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                  <tr className="border-b text-left">
                     <th className="py-2 w-24">Datum</th>
                     <th className="py-2">Beskrivning</th>
                     <th className="py-2 w-28 text-right">Belopp</th>

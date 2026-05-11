@@ -20,6 +20,19 @@ export function formatDate(date: Date | string): string {
   return formatDateFns(d, 'yyyy-MM-dd')
 }
 
+/**
+ * Long-form Swedish date for metadata/audit contexts (e.g. "9 maj 2026").
+ * Use formatDate for transaction/voucher/invoice dates that need to align in tables.
+ */
+export function formatDateLong(date: Date | string): string {
+  const d = typeof date === 'string' ? new Date(date) : date
+  return d.toLocaleDateString('sv-SE', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
 export function formatOrgNumber(orgNumber: string): string {
   // Format Swedish org number: XXXXXX-XXXX
   const cleaned = orgNumber.replace(/\D/g, '')
