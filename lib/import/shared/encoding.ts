@@ -116,26 +116,35 @@ const SWEDISH_STEMS = new Set<string>([
   'försäljnings', 'förskola', 'församling', 'förvaltning', 'förbund',
   'förlag', 'föräldra', 'försök', 'förbrukning', 'förbättring', 'förskott',
   'försening', 'förhandling', 'förbättrings',
-  // domain terms
+  // för-* derivatives that often appear in account names
+  'förmån', 'förmåner', 'förmedlad', 'förmedlade', 'förmedling', 'förmedlings',
+  'förvaltar', 'förmedla',
+  // -mark- / marknadsföring
+  'marknadsföring', 'marknadsförings', 'marknad',
+  // common Swedish words/prefixes
   'bostadsrätt', 'rätt', 'samfällighet', 'idrott', 'fastighet', 'utbildning',
   'näring', 'växel', 'värme', 'köp', 'köpa', 'inköp', 'sälja', 'säljs',
-  // accounting
+  'tjänst', 'tjänster',
+  // accounting terms
   'kostnad', 'kostnader', 'intäkt', 'intäkter', 'avskrivning', 'avsättning',
-  'lön', 'lönekostnad', 'pension', 'utgående', 'ingående', 'momspliktig',
-  'redovisning', 'företagskonto', 'bankkonto', 'överavskrivning',
-  'överskott', 'underskott', 'överföring', 'överlåtelse', 'återbetalning',
-  'utlägg', 'utgift',
-  // common short prepositions and adverbs
-  'från', 'för', 'över', 'är', 'när', 'där', 'även', 'någon', 'något',
-  'många', 'själv', 'små', 'väg', 'gång', 'tjänst', 'tjänster', 'räkning',
-  'räntor', 'år',
-  // common cities
+  'lön', 'löner', 'lönekostnad', 'pension', 'utgående', 'ingående',
+  'momspliktig', 'redovisning', 'företagskonto', 'bankkonto',
+  'överavskrivning', 'överskott', 'underskott', 'överföring', 'överlåtelse',
+  'återbetalning', 'utlägg', 'utgift', 'avdrag',
+  // omvänd moms etc.
+  'omvänd', 'omvänt', 'omvända',
+  // 3+ letter prepositions/adverbs (skip 2-letter ones — too ambiguous)
+  'från', 'över', 'när', 'där', 'även', 'någon', 'något', 'många',
+  'själv', 'små', 'väg', 'gång', 'räkning', 'räntor', 'är',
+  // 'på' — short but extremely common; include explicitly
+  'på',
+  // cities
   'göteborg', 'malmö', 'örebro', 'östersund', 'jönköping', 'linköping',
   'norrköping', 'lidköping', 'köping', 'helsingborg', 'umeå', 'skellefteå',
   'piteå', 'luleå', 'borås', 'växjö', 'östhammar', 'södertälje', 'västerås',
   'härnösand', 'värnamo', 'mölndal', 'mörrum', 'mönsterås', 'färjestaden',
   'eskilstuna',
-  // directions / common geo terms
+  // directions / geo
   'östra', 'västra', 'södra', 'norra', 'öster', 'väster', 'söder',
   // legal forms
   'aktiebolag', 'handelsbolag', 'ekonomisk', 'allmännyttig',
@@ -148,19 +157,21 @@ const SWEDISH_STEMS = new Set<string>([
 ])
 
 /**
- * Score a candidate word.
- *  - 1000 if the entire word matches a known stem (highest confidence).
- *  - Otherwise the count of distinct stems that appear as substrings.
- *    Counting (not boolean-returning) is required: when the same word has
- *    multiple U+FFFD positions, the correct combination must outscore wrong
- *    combinations that still happen to contain *one* stem each.
+ * Score a candidate word by *length-weighted* stem matching.
+ *
+ *  - Exact word match: 1_000_000 (still beats any substring sum).
+ *  - Otherwise: sum the lengths of every stem that is a substring of the
+ *    candidate. Length-weighting is the critical fix vs. simple counting:
+ *    "fårmedlad" hits "år" (2 chars), "förmedlad" hits "för" (3 chars).
+ *    Counting would tie them at 1; length-weighting gives 2 vs 3, so the
+ *    correct candidate wins.
  */
 function scoreCandidate(word: string): number {
   const lower = word.toLowerCase()
-  if (SWEDISH_STEMS.has(lower)) return 1000
+  if (SWEDISH_STEMS.has(lower)) return 1_000_000
   let score = 0
   for (const stem of SWEDISH_STEMS) {
-    if (lower.includes(stem)) score++
+    if (lower.includes(stem)) score += stem.length
   }
   return score
 }

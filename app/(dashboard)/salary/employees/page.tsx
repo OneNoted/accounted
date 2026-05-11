@@ -84,7 +84,7 @@ export default function EmployeesPage() {
                   <TableHead>Namn</TableHead>
                   <TableHead>Personnummer</TableHead>
                   <TableHead>Typ</TableHead>
-                  <TableHead className="text-right">Månadslön</TableHead>
+                  <TableHead className="text-right">Lön</TableHead>
                   <TableHead className="text-right">Sysselsättningsgrad</TableHead>
                   <TableHead>Skattetabell</TableHead>
                 </TableRow>
@@ -104,7 +104,9 @@ export default function EmployeesPage() {
                       {EMPLOYMENT_LABELS[emp.employment_type] || emp.employment_type}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '—'}
+                      {emp.salary_type === 'hourly'
+                        ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}/tim` : '—'
+                        : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '—'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {emp.employment_degree}%
