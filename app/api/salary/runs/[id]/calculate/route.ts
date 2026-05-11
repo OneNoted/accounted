@@ -187,6 +187,43 @@ export const POST = withRouteContext(
         (sum, d) => Math.round((sum + Number(d.hours)) * 100) / 100,
         0,
       )
+      opLog.info('Derived hours_worked from calendar', {
+        employeeId: emp.id,
+        periodStart,
+        periodEnd,
+        rowCount: workedDays?.length ?? 0,
+        derivedHoursWorked,
+      })
+
+      // Refresh the hourly_salary line item so the displayed Lönerader table
+      // matches what the engine actually calculated. Without this, the
+      // placeholder created at employee-add time keeps showing 0 kr even
+      // after the user fills the calendar.
+      if (derivedHoursWorked > 0 && (emp.hourly_rate || 0) > 0) {
+        const baseAmount = Math.round((emp.hourly_rate as number) * derivedHoursWorked * 100) / 100
+        // Delete any existing hourly_salary rows for this sre, then insert a
+        // single fresh one. Avoids the "did the row already exist?" branch.
+        await supabase
+          .from('salary_line_items')
+          .delete()
+          .eq('salary_run_employee_id', sre.id)
+          .eq('item_type', 'hourly_salary')
+        await supabase.from('salary_line_items').insert({
+          salary_run_employee_id: sre.id,
+          company_id: companyId,
+          item_type: 'hourly_salary',
+          description: 'Timlön',
+          quantity: derivedHoursWorked,
+          amount: baseAmount,
+          is_taxable: true,
+          is_avgift_basis: true,
+          is_vacation_basis: true,
+          is_gross_deduction: false,
+          is_net_deduction: false,
+          account_number: getLineItemAccount('hourly_salary'),
+          sort_order: 0,
+        })
+      }
     }
 
     const employeeName = `${emp.first_name} ${emp.last_name}`
