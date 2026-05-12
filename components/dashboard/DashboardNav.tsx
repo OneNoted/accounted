@@ -67,7 +67,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: '/', label: 'Översikt', icon: LayoutDashboard, group: 'main' },
   { href: '/kpi', label: 'Nyckeltal', icon: TrendingUp, group: 'main' },
-  { href: '/e/general/invoice-inbox', label: 'Dokumentinkorg', icon: Inbox, group: 'main' },
+  { href: '/e/general/invoice-inbox', label: 'Dokumentinkorg', icon: Inbox, group: 'main', betaBadge: true },
   // AR — Accounts Receivable
   { href: '/invoices', label: 'Fakturor', icon: Receipt, group: 'försäljning' },
   { href: '/customers', label: 'Kunder', icon: Users, group: 'försäljning' },
