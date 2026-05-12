@@ -1,0 +1,347 @@
+/**
+ * v1 REST API wrapper.
+ *
+ * Every route under `app/api/v1/` is wrapped with `withApiV1('operation.name', handler)`.
+ * The wrapper provides a single audit-friendly shape for the entire v1 surface:
+ *
+ *   1. Generates `requestId` (`req_<uuid>`) and a child logger bound to it.
+ *   2. Extracts and validates the `Authorization: Bearer gnubok_sk_...` header
+ *      via the existing `validateApiKey()` (atomic RPC, rate-limited).
+ *   3. Resolves the required scope for the route from the v1 endpoint catalogue
+ *      and returns INSUFFICIENT_SCOPE if the key lacks it. Public endpoints
+ *      (`/health`, `/openapi.json`) skip the scope check but still validate
+ *      the token when one is supplied.
+ *   4. When the URL contains `companyId`, verifies the API key's user has
+ *      access to that company via `company_members`. Multi-company keys are
+ *      supported transparently — the URL is the source of truth.
+ *   5. Resolves `Idempotency-Key` (header) and replays cached responses.
+ *   6. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
+ *   7. Invokes the handler with a typed RouteContext.
+ *   8. Stamps `X-Request-Id`, `Gnubok-Version`, `X-RateLimit-Limit` on the
+ *      response.
+ *   9. Catches any thrown value and converts it to the v1 error envelope via
+ *      `v1ErrorResponse`.
+ *
+ * Usage:
+ *
+ *   export const GET = withApiV1('companies.list', async (req, ctx) => {
+ *     // ctx.requestId, ctx.log, ctx.user, ctx.companyId (when in URL),
+ *     // ctx.supabase, ctx.scopes, ctx.mode, ctx.dryRun, ctx.idempotencyKey
+ *     return ok({ companies: [...] }, { requestId: ctx.requestId })
+ *   })
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { NextResponse } from 'next/server'
+import {
+  type ApiKeyMode,
+  type ApiKeyScope,
+  createServiceClientNoCookies,
+  extractBearerToken,
+  hasScope,
+  validateApiKey,
+} from '@/lib/auth/api-keys'
+import { resolveRequiredScope } from '@/lib/auth/scopes'
+import {
+  checkIdempotencyKey,
+  hashRequest,
+  IdempotencyKeyReuseError,
+  storeIdempotencyResponse,
+} from '@/lib/api/idempotency'
+import { createLogger, type Logger } from '@/lib/logger'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
+import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
+
+const IDEMPOTENCY_HEADER = 'Idempotency-Key'
+const DRY_RUN_HEADER = 'X-Dry-Run'
+const REQUIRES_IDEMPOTENCY = new Set(['POST', 'PATCH', 'DELETE'])
+
+export interface ApiV1Context {
+  /** Stable id for this HTTP request — appears in logs, error envelope, X-Request-Id. */
+  requestId: string
+  /** Logger pre-bound with { requestId, userId, companyId?, operation, apiKeyId? }. */
+  log: Logger
+  /** Authenticated user id. */
+  userId: string
+  /** API key id of the caller. Used for actor attribution on pending_operations / audit_log. */
+  apiKeyId: string | undefined
+  /** API key human name. */
+  apiKeyName: string | undefined
+  /** Scopes granted to the calling key. */
+  scopes: ApiKeyScope[]
+  /** test|live — handlers branch on this to short-circuit external providers in test mode. */
+  mode: ApiKeyMode
+  /** Service-role Supabase client (no cookies). All queries MUST filter by company_id. */
+  supabase: SupabaseClient
+  /**
+   * Resolved company id from the URL `:companyId` segment. Undefined for
+   * routes that don't include the segment (`/companies`, `/operations/:id`,
+   * `/health`).
+   */
+  companyId?: string
+  /** Resolved dry-run flag. Routes that mutate state must honor this. */
+  dryRun: boolean
+  /** Resolved idempotency key, if supplied. */
+  idempotencyKey: string | null
+}
+
+interface ApiV1Options {
+  /** Override the required scope (e.g. for ad-hoc endpoints not in the catalogue). */
+  requireScope?: ApiKeyScope
+  /**
+   * When true, idempotency is enforced — POST/PATCH/DELETE without an
+   * `Idempotency-Key` header return 400. Default false; can be flipped on
+   * per-route once the integrator audience is sophisticated enough.
+   */
+  requireIdempotencyKey?: boolean
+}
+
+// Next.js 16 always passes `{ params: Promise<...> }` as the second arg.
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+type DynamicParams = { params: Promise<Record<string, string | string[]>> } | { params: Promise<{}> }
+
+type V1Handler<P extends DynamicParams = { params: Promise<Record<string, never>> }> = (
+  request: Request,
+  ctx: ApiV1Context,
+  params: P,
+) => Promise<NextResponse | Response>
+
+function generateRequestId(): string {
+  return `req_${crypto.randomUUID()}`
+}
+
+function isDryRun(request: Request, url: URL): boolean {
+  if (url.searchParams.get('dry_run') === 'true') return true
+  const headerVal = request.headers.get(DRY_RUN_HEADER)
+  if (headerVal && headerVal.toLowerCase() === 'true') return true
+  return false
+}
+
+async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
+  // We need to consume the body to hash it, but the handler also needs it.
+  // Clone the request first so the handler can re-read.
+  const cloned = request.clone()
+  const text = await request.text()
+  if (!text) return { body: null, cloned }
+  try {
+    return { body: JSON.parse(text), cloned }
+  } catch {
+    return { body: text, cloned }
+  }
+}
+
+/**
+ * Wrap a v1 route handler with auth, scope, idempotency, dry-run, request-id,
+ * logging, and v1 error envelope handling.
+ *
+ * `operation` is a stable identifier for logs ('companies.list', 'invoices.create'...).
+ */
+export function withApiV1<P extends DynamicParams = { params: Promise<Record<string, never>> }>(
+  operation: string,
+  handler: V1Handler<P>,
+  options: ApiV1Options = {},
+): (request: Request, params: P) => Promise<Response> {
+  return async function wrapped(request: Request, params: P): Promise<Response> {
+    const requestId = generateRequestId()
+    const start = Date.now()
+    const log = createLogger(`api/v1/${operation}`, { requestId, operation })
+
+    const url = new URL(request.url)
+    const path = url.pathname
+
+    try {
+      // 1. Determine required scope before auth. Public endpoints can skip
+      //    authentication entirely.
+      const requiredScope = options.requireScope ?? resolveRequiredScope(request.method, path)
+
+      if (requiredScope === null) {
+        log.warn('endpoint not registered', { path, method: request.method })
+        return await v1ErrorResponseFromCode('NOT_FOUND', log, {
+          requestId,
+          details: { path, method: request.method },
+        })
+      }
+
+      // 2. Public endpoints: invoke handler directly with a minimal context.
+      if (requiredScope === 'public') {
+        const supabase = createServiceClientNoCookies()
+        const ctx: ApiV1Context = {
+          requestId,
+          log,
+          userId: 'anonymous',
+          apiKeyId: undefined,
+          apiKeyName: undefined,
+          scopes: [],
+          mode: 'live',
+          supabase,
+          dryRun: false,
+          idempotencyKey: null,
+        }
+        const response = await handler(request, ctx, params)
+        return stampHeaders(response, requestId)
+      }
+
+      // 3. Authenticate via Bearer token.
+      const token = extractBearerToken(request)
+      if (!token) {
+        log.warn('missing bearer token')
+        return await v1ErrorResponseFromCode('UNAUTHORIZED', log, { requestId })
+      }
+
+      const auth = await validateApiKey(token)
+      if ('error' in auth) {
+        log.warn('api key validation failed', { status: auth.status, reason: auth.error })
+        const code = auth.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'
+        return await v1ErrorResponseFromCode(code, log, { requestId, reason: auth.error })
+      }
+
+      const userLog = log.child({
+        userId: auth.userId,
+        apiKeyId: auth.apiKeyId,
+        mode: auth.mode,
+      })
+
+      // 4. Scope check.
+      if (!hasScope(auth.scopes, requiredScope)) {
+        userLog.warn('insufficient scope', { required: requiredScope, granted: auth.scopes })
+        return await v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', userLog, {
+          requestId,
+          details: { required_scope: requiredScope, granted_scopes: auth.scopes },
+        })
+      }
+
+      // 5. Resolve URL companyId and verify access.
+      const resolvedParams = (await params.params) as Record<string, string | string[] | undefined>
+      const rawCompanyId = resolvedParams.companyId
+      const companyId = typeof rawCompanyId === 'string' ? rawCompanyId : undefined
+
+      const supabase = createServiceClientNoCookies()
+
+      if (companyId !== undefined) {
+        const { data: membership, error: membershipErr } = await supabase
+          .from('company_members')
+          .select('company_id, role')
+          .eq('user_id', auth.userId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+
+        if (membershipErr) {
+          userLog.error('failed to resolve company membership', membershipErr as Error)
+          return await v1ErrorResponseFromCode('INTERNAL_ERROR', userLog, { requestId })
+        }
+
+        if (!membership) {
+          userLog.warn('user is not a member of company in URL', { companyId })
+          // 404 (not 403) so we don't leak company existence to unauthorized callers.
+          return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
+            requestId,
+            details: { companyId },
+          })
+        }
+      }
+
+      // 6. Idempotency. Mandatory for state-changing methods when the route
+      //    opts in (or when an Idempotency-Key header is supplied).
+      const idempotencyKey = request.headers.get(IDEMPOTENCY_HEADER)
+      const isMutation = REQUIRES_IDEMPOTENCY.has(request.method)
+
+      if (options.requireIdempotencyKey && isMutation && !idempotencyKey) {
+        userLog.warn('missing idempotency key on mutating request')
+        return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: {
+            issues: [{ field: IDEMPOTENCY_HEADER, message: 'Idempotency-Key header is required for write requests.' }],
+          },
+        })
+      }
+
+      // 7. If idempotency-key supplied, check for cached response.
+      let bodyForHash: unknown = null
+      let workingRequest = request
+      if (idempotencyKey && isMutation && companyId) {
+        const { body, cloned } = await readBodyForHash(request)
+        bodyForHash = body
+        workingRequest = cloned
+        const reqHash = hashRequest({ method: request.method, path, body })
+        try {
+          const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
+          if (hit) {
+            userLog.info('idempotent replay', { idempotencyKey })
+            const replay = NextResponse.json(hit.body, { status: hit.status === 'success' ? 200 : 400 })
+            replay.headers.set('Idempotent-Replayed', 'true')
+            return stampHeaders(replay, requestId)
+          }
+        } catch (err) {
+          if (err instanceof IdempotencyKeyReuseError) {
+            userLog.warn('idempotency key reused with different body')
+            return await v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', userLog, {
+              requestId,
+              details: { key: idempotencyKey },
+            })
+          }
+          throw err
+        }
+      }
+
+      // 8. Dry-run resolution.
+      const dryRun = isDryRun(workingRequest, url)
+
+      const ctx: ApiV1Context = {
+        requestId,
+        log: userLog.child({ companyId }),
+        userId: auth.userId,
+        apiKeyId: auth.apiKeyId,
+        apiKeyName: auth.apiKeyName,
+        scopes: auth.scopes,
+        mode: auth.mode,
+        supabase,
+        companyId,
+        dryRun,
+        idempotencyKey,
+      }
+
+      // 9. Invoke handler.
+      const response = await handler(workingRequest, ctx, params)
+
+      // 10. Persist idempotency cache (best-effort).
+      if (idempotencyKey && isMutation && companyId && response.status < 500) {
+        try {
+          const body = await response.clone().json().catch(() => ({}))
+          const reqHash = hashRequest({ method: request.method, path, body: bodyForHash })
+          const status: 'success' | 'error' = response.status >= 400 ? 'error' : 'success'
+          await storeIdempotencyResponse(
+            supabase,
+            auth.userId,
+            companyId,
+            idempotencyKey,
+            reqHash,
+            status,
+            body as Record<string, unknown>,
+            'api_route',
+          )
+        } catch (err) {
+          userLog.warn('failed to persist idempotency response', err as Error)
+        }
+      }
+
+      ctx.log.info('op completed', {
+        durationMs: Date.now() - start,
+        status: response.status,
+        dryRun,
+      })
+
+      return stampHeaders(response, requestId)
+    } catch (err) {
+      log.error('op failed', err as Error, { durationMs: Date.now() - start })
+      return await v1ErrorResponse(err, log, { requestId })
+    }
+  }
+}
+
+function stampHeaders(response: Response, requestId: string): Response {
+  if (!response.headers.get('X-Request-Id')) response.headers.set('X-Request-Id', requestId)
+  if (!response.headers.get(API_V1_VERSION_HEADER)) {
+    response.headers.set(API_V1_VERSION_HEADER, API_V1_VERSION)
+  }
+  return response
+}

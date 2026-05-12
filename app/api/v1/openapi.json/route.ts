@@ -1,0 +1,24 @@
+/**
+ * GET /api/v1/openapi.json — public OpenAPI 3.1 spec for the v1 surface.
+ *
+ * Generated from the Zod schema registry at request time. Cached for 5
+ * minutes in shared caches.
+ */
+
+import { NextResponse } from 'next/server'
+import { generateOpenApiSpec } from '@/lib/api/v1/registry'
+import '@/lib/api/v1/load-routes'
+
+export async function GET(request: Request) {
+  const url = new URL(request.url)
+  const serverUrl = `${url.protocol}//${url.host}`
+
+  const spec = generateOpenApiSpec(serverUrl)
+
+  return NextResponse.json(spec, {
+    status: 200,
+    headers: {
+      'Cache-Control': 'public, max-age=300, s-maxage=300',
+    },
+  })
+}
