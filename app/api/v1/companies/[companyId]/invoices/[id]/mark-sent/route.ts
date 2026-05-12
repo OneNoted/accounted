@@ -21,6 +21,16 @@
  * Idempotent (mandatory Idempotency-Key). Dry-run shows the would-be
  * post-send state without allocating a number, posting a journal entry,
  * or emitting events.
+ *
+ * Known residual race window: the F-series number is allocated via the
+ * generate_invoice_number RPC BEFORE the status-flip UPDATE. If a
+ * concurrent transition wins the race-guard check (status='draft' filter),
+ * the F-series number is consumed but no invoice carries it — a gap in
+ * the löpnummer series (ML 17 kap 24§ p.2). The internal /api/invoices
+ * mark-sent route has the same semantic. The architecturally correct
+ * fix is a Postgres RPC that allocates + flips status atomically;
+ * tracked as cross-surface compliance work. The race window is narrow
+ * (sub-millisecond between the two statements in normal load).
  */
 
 import { z } from 'zod'
@@ -44,6 +54,13 @@ const InvoiceMarkSentResponse = z.object({
   status: z.literal('sent'),
   total: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
+  // Present only when the status flip succeeded but a follow-up step
+  // (journal entry creation, event emission) failed and the response
+  // therefore reflects partial state. Agents that need transactional
+  // guarantees can detect this without parsing the body.
+  warnings: z
+    .array(z.object({ code: z.string(), message: z.string() }))
+    .optional(),
 })
 
 registerEndpoint({
@@ -128,6 +145,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const typed = invoice as unknown as Invoice & { customer?: { name?: string } }
 
+    // Type/document-shape guards run BEFORE the status check so the
+    // returned error matches the documented contract (400 VALIDATION_ERROR
+    // for delivery notes / credit notes regardless of their current
+    // status; 409 INVOICE_UPDATE_NOT_DRAFT only for genuine invoices).
+    if (typed.document_type === 'delivery_note') {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'document_type',
+          message: 'Delivery notes are not transitioned via mark-sent; they have no F-series lifecycle.',
+        },
+      })
+    }
+
+    // Credit notes (document_type='invoice' but credited_invoice_id set)
+    // need the credit-note journal entry generator (reverses sign of the
+    // original invoice). The PR-B-2b-4 :credit endpoint handles them.
+    // Reject here so we don't post the wrong-direction journal entry.
+    if (typed.credited_invoice_id) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'credited_invoice_id',
+          message: 'Credit notes are issued via POST /invoices/:id/credit (PR-B-2b-4); they cannot be mark-sent like regular invoices.',
+        },
+      })
+    }
+
     if (typed.status !== 'draft') {
       return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
@@ -135,12 +180,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    if (typed.document_type === 'delivery_note') {
+    // Defense in depth: moms_ruta drives which output-VAT account the
+    // journal-entry generator posts to (2611 / 2614 / etc.). A null value
+    // would silently default — wrong for reverse-charge / EU-service /
+    // zero-rated invoices. moms_ruta is populated by the POST handler
+    // from getVatRules(); a null here means the row was created via a
+    // path that bypassed v1 (legacy import, manual SQL).
+    if (!typed.moms_ruta) {
+      ctx.log.warn('invoices.mark-sent: missing moms_ruta', {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
-          field: 'document_type',
-          message: 'Delivery notes are not transitioned via mark-sent; they have no F-series lifecycle.',
+          field: 'moms_ruta',
+          message: 'Invoice has no moms_ruta set. The customer\'s VAT rule must be applied (re-create the draft via POST /invoices).',
         },
       })
     }
@@ -224,10 +279,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 3: journal entry for accrual + real invoices. Best-effort —
-    // failure to post the entry doesn't roll back the mark-sent (the
-    // dashboard's mark-sent has the same semantic). Surface in logs so an
-    // operator can reconcile.
+    // Collect partial-state signals to surface on the response. BFL 5 kap
+    // requires every affärshändelse to have a verifikation; if the
+    // journal-entry creation fails after the status flip, the response
+    // must surface this so the agent (or the dashboard, or a monitoring
+    // sink) can reconcile rather than silently treating the invoice as
+    // fully posted.
+    const warnings: { code: string; message: string }[] = []
+
+    // Step 3: journal entry for accrual + real invoices. Failure escalates
+    // to error-level log AND surfaces in the response as a warning.
     let journalEntryId: string | null = null
     if (wouldCreateJournalEntry) {
       try {
@@ -243,23 +304,51 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         )
         if (entry) {
           journalEntryId = entry.id
-          await ctx.supabase
+          // Supabase returns { data, error } — never rejects on DB error.
+          // A failed write-back leaves the invoice with a real journal
+          // entry in the ledger but no pointer on the row, which is
+          // unreconcilable without operator visibility.
+          const { error: writeBackErr } = await ctx.supabase
             .from('invoices')
             .update({ journal_entry_id: entry.id })
             .eq('id', invoiceId)
             .eq('company_id', ctx.companyId!)
+          if (writeBackErr) {
+            ctx.log.error('mark-sent: journal_entry_id write-back failed', writeBackErr as Error, {
+              invoiceId,
+              companyId: ctx.companyId,
+              journalEntryId: entry.id,
+            })
+            warnings.push({
+              code: 'JOURNAL_ENTRY_ID_WRITEBACK_FAILED',
+              message: 'Journal entry was posted but the invoice row could not be updated with its id. Re-fetch the invoice and reconcile manually.',
+            })
+          }
+        } else {
+          // null result = no fiscal period or other engine-side guard.
+          ctx.log.error('mark-sent: journal entry not created (engine returned null)', new Error('null entry'), {
+            invoiceId,
+            companyId: ctx.companyId,
+          })
+          warnings.push({
+            code: 'JOURNAL_ENTRY_NOT_POSTED',
+            message: 'Invoice was marked sent but no journal entry was posted. Check fiscal period, then issue a credit note and reissue if the missing verifikation is required (BFL 5 kap).',
+          })
         }
       } catch (err) {
         ctx.log.error('mark-sent: journal entry creation failed', err as Error, {
           invoiceId,
           companyId: ctx.companyId,
         })
-        // Continue — the invoice IS marked sent, the operator can reconcile
-        // the missing journal entry via the dashboard or a follow-up call.
+        warnings.push({
+          code: 'JOURNAL_ENTRY_NOT_POSTED',
+          message: 'Invoice was marked sent but the journal entry posting failed. Check fiscal period and engine logs; the verifikation must be created for BFL 5 kap compliance.',
+        })
       }
     }
 
-    // Step 4: emit invoice.sent. Best-effort.
+    // Step 4: emit invoice.sent. Best-effort; escalate to error if it
+    // fails (downstream webhook delivery and audit trails depend on this).
     try {
       await eventBus.emit({
         type: 'invoice.sent',
@@ -270,9 +359,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     } catch (err) {
-      ctx.log.warn('invoice.sent emit failed', err as Error, {
+      ctx.log.error('invoice.sent emit failed', err as Error, {
         invoiceId,
         companyId: ctx.companyId,
+      })
+      warnings.push({
+        code: 'EVENT_EMIT_FAILED',
+        message: 'invoice.sent event did not reach the bus; downstream subscribers (webhooks) may miss this transition.',
       })
     }
 
@@ -282,10 +375,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       userId: ctx.userId,
       invoiceNumber: (updated as { invoice_number?: string }).invoice_number,
       journalEntryId,
+      hadWarnings: warnings.length > 0,
     })
 
     return ok(
-      { ...(updated as object), journal_entry_id: journalEntryId },
+      {
+        ...(updated as object),
+        journal_entry_id: journalEntryId,
+        ...(warnings.length > 0 ? { warnings } : {}),
+      },
       { requestId: ctx.requestId },
     )
   },

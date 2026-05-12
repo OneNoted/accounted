@@ -109,6 +109,8 @@ const DRAFT_INVOICE = {
   vat_amount: 2500,
   total: 12500,
   vat_treatment: 'standard_25',
+  moms_ruta: '05',
+  credited_invoice_id: null,
   customer: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Acme AB', country: 'Sweden' },
   items: [{ id: 'iiiiiiii-iiii-4iii-8iii-iiiiiiiiiiii', sort_order: 0, description: 'x', quantity: 1, unit: 'st', unit_price: 10000, line_total: 10000, vat_rate: 25, vat_amount: 2500 }],
 }
@@ -177,11 +179,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.error.details.current_status).toBe('sent')
   })
 
-  it('rejects delivery notes with VALIDATION_ERROR', async () => {
+  it('rejects delivery notes with VALIDATION_ERROR (regardless of status)', async () => {
+    // Critical: the delivery-note guard must run BEFORE the status check
+    // so a sent delivery note still returns 400 (per the documented
+    // contract) rather than 409 INVOICE_UPDATE_NOT_DRAFT.
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        invoices: { data: { ...DRAFT_INVOICE, document_type: 'delivery_note' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, document_type: 'delivery_note', status: 'sent' }, error: null },
       }),
     )
 
@@ -196,6 +201,82 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.field).toBe('document_type')
+  })
+
+  it('rejects credit notes (credited_invoice_id set) with VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: { ...DRAFT_INVOICE, credited_invoice_id: 'oldoldol-dold-4old-8old-oldoldoldoldold'.slice(0, 36) },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('credited_invoice_id')
+  })
+
+  it('rejects invoices with missing moms_ruta', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, moms_ruta: null }, error: null },
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('moms_ruta')
+  })
+
+  it('surfaces a warning in the response when journal entry creation fails', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: SENT_INVOICE, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+    // Force the journal-entry generator to throw.
+    mockCreateJournalEntry.mockRejectedValueOnce(new Error('Period closed'))
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // Status STILL flips to sent.
+    expect(body.data.status).toBe('sent')
+    expect(body.data.journal_entry_id).toBeNull()
+    // But the caller is warned.
+    expect(body.data.warnings).toBeDefined()
+    expect(body.data.warnings[0].code).toBe('JOURNAL_ENTRY_NOT_POSTED')
   })
 
   it('returns 404 when the invoice does not belong to the company', async () => {
