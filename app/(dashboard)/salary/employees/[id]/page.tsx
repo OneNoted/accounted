@@ -37,7 +37,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const { id } = use(params)
   const router = useRouter()
   const { toast } = useToast()
-  const canWrite = useCanWrite()
+  const { canWrite } = useCanWrite()
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)

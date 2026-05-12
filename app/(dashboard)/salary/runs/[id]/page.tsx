@@ -58,7 +58,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   const { id } = use(params)
   const router = useRouter()
   const { toast } = useToast()
-  const canWrite = useCanWrite()
+  const { canWrite } = useCanWrite()
 
   const [run, setRun] = useState<SalaryRun | null>(null)
   const [availableEmployees, setAvailableEmployees] = useState<Employee[]>([])
