@@ -1,17 +1,16 @@
 /**
- * GET /api/v1/companies/{companyId}/customers — list customers.
+ * /api/v1/companies/{companyId}/customers — list + create customer endpoints.
  *
- * Cursor pagination on (created_at ASC, id ASC). Archived customers are
- * excluded by default; pass `?include_archived=true` to include them.
- *
- * Filters:
- *   - customer_type     CustomerType
- *   - search            substring match on name OR org_number prefix
- *   - include_archived  boolean (default false)
+ * GET   — list with filters (customer_type, search, include_archived).
+ *         Cursor pagination on (created_at ASC, id ASC).
+ * POST  — create. Idempotent (mandatory Idempotency-Key). Dry-runnable
+ *         (?dry_run=true returns validated would-be record without
+ *         committing). VIES validation runs only on commit.
  */
 
 import { z } from 'zod'
-import { paginated } from '@/lib/api/v1/response'
+import { created, paginated } from '@/lib/api/v1/response'
+import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import {
   decodeDefaultCursor,
   encodeDefaultCursor,
@@ -20,13 +19,19 @@ import {
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { CreateCustomerSchema } from '@/lib/api/schemas'
+import { validateVatNumber } from '@/lib/vat/vies-client'
+import { eventBus } from '@/lib/events'
+import type { Customer } from '@/types'
 
+// Mirror the canonical CustomerTypeSchema from lib/api/schemas.ts. Only
+// 'individual' refers to a natural person (Swedish sole trader / enskild
+// firma); the three *_business variants are legal entities.
 const CustomerType = z.enum([
   'individual',
-  'business',
+  'swedish_business',
   'eu_business',
-  'eu_individual',
-  'non_eu',
+  'non_eu_business',
 ])
 
 const CustomerSummary = z.object({
@@ -177,14 +182,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const trimmed = rows.slice(0, limit)
     const hasMore = rows.length > limit
 
-    // GDPR Art.5(1)(c) data minimisation: for sole traders (enskild firma)
-    // and EU-individual customers, org_number IS the personnummer — a
+    // GDPR Art.5(1)(c) data minimisation: for sole traders (enskild firma,
+    // customer_type='individual'), org_number IS the personnummer — a
     // directly identifying special-category identifier. Mask both
-    // org_number and vat_number in the LIST response for those types so
-    // bulk fetches don't expose personal IDs. The DETAIL endpoint (deliberate
-    // drill-in to one record) still returns them. Business customers'
-    // org_numbers are Bolagsverket public-record data and stay visible.
-    const INDIVIDUAL_TYPES = new Set(['individual', 'eu_individual'])
+    // org_number and vat_number in the LIST response so bulk fetches don't
+    // expose personal IDs. The DETAIL endpoint (deliberate drill-in to one
+    // record) still returns them. Business customers' org_numbers are
+    // Bolagsverket public-record data and stay visible.
+    const INDIVIDUAL_TYPES = new Set(['individual'])
 
     const customers = trimmed.map((r) => {
       const isIndividual = INDIVIDUAL_TYPES.has(r.customer_type)
@@ -211,4 +216,213 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       nextCursor: nextCursor ?? undefined,
     })
   },
+)
+
+// ──────────────────────────────────────────────────────────────────
+// POST — create customer
+// ──────────────────────────────────────────────────────────────────
+
+const CustomerCreated = z.object({
+  id: z.string().uuid().nullable(),
+  name: z.string(),
+  customer_type: CustomerType,
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  address_line1: z.string().nullable(),
+  address_line2: z.string().nullable(),
+  postal_code: z.string().nullable(),
+  city: z.string().nullable(),
+  country: z.string(),
+  org_number: z.string().nullable(),
+  vat_number: z.string().nullable(),
+  vat_number_validated: z.boolean(),
+  default_payment_terms: z.number(),
+  notes: z.string().nullable(),
+  archived_at: z.string().nullable(),
+  created_at: z.string().nullable(),
+  updated_at: z.string().nullable(),
+})
+
+const CUSTOMER_RESPONSE_COLUMNS =
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, vat_number_validated_at, default_payment_terms, notes, archived_at, created_at, updated_at'
+
+registerEndpoint({
+  operation: 'customers.create',
+  method: 'POST',
+  path: '/api/v1/companies/:companyId/customers',
+  summary: 'Create a customer.',
+  description:
+    'Creates a new customer for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing — the dry-run response shows the would-be record minus id and timestamps. EU-business customers with a VAT number are auto-validated against VIES on commit.',
+  useWhen:
+    'You need to register a new customer before invoicing them. Use dry-run first to catch validation errors before committing.',
+  doNotUseFor:
+    'Updating an existing customer (PATCH instead). Creating suppliers (different resource).',
+  pitfalls: [
+    'Idempotency-Key is mandatory — calls without it return 400 VALIDATION_ERROR.',
+    'org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
+    'For Swedish sole traders (customer_type=individual), org_number IS the personnummer. List responses mask it; the create endpoint accepts it as input.',
+    'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',
+  ],
+  example: {
+    request: {
+      name: 'Acme AB',
+      customer_type: 'business',
+      email: 'finance@acme.test',
+      org_number: '556677-8899',
+      default_payment_terms: 30,
+    },
+    response: {
+      data: {
+        id: '0e9c…',
+        name: 'Acme AB',
+        customer_type: 'business',
+        email: 'finance@acme.test',
+        org_number: '556677-8899',
+        vat_number_validated: false,
+        default_payment_terms: 30,
+        archived_at: null,
+        created_at: '2026-05-12T16:00:00Z',
+        updated_at: '2026-05-12T16:00:00Z',
+      },
+      meta: { request_id: 'req_…', api_version: '2026-05-12' },
+    },
+  },
+  scope: 'customers:write',
+  risk: 'low',
+  idempotent: true,
+  reversible: true,
+  dryRunSupported: true,
+  request: { body: CreateCustomerSchema },
+  response: { success: CustomerCreated },
+})
+
+export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
+  'customers.create',
+  async (request, ctx) => {
+    let rawBody: unknown
+    try {
+      rawBody = await request.json()
+    } catch {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Body is not valid JSON.' },
+      })
+    }
+
+    const parsed = CreateCustomerSchema.safeParse(rawBody)
+    if (!parsed.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: parsed.error.issues.map((i) => ({
+            field: i.path.join('.'),
+            message: i.message,
+          })),
+        },
+      })
+    }
+    const body = parsed.data
+
+    // Dry-run: validate input, return the would-be record. id, timestamps,
+    // and vat_number_validated all populate on commit, not here.
+    if (ctx.dryRun) {
+      return dryRunPreview(
+        {
+          id: null,
+          name: body.name,
+          customer_type: body.customer_type,
+          email: body.email ?? null,
+          phone: body.phone ?? null,
+          address_line1: body.address_line1 ?? null,
+          address_line2: body.address_line2 ?? null,
+          postal_code: body.postal_code ?? null,
+          city: body.city ?? null,
+          country: body.country ?? 'Sweden',
+          org_number: body.org_number ?? null,
+          vat_number: body.vat_number ?? null,
+          vat_number_validated: false,
+          default_payment_terms: body.default_payment_terms ?? 30,
+          notes: body.notes ?? null,
+          archived_at: null,
+          created_at: null,
+          updated_at: null,
+        },
+        { requestId: ctx.requestId, log: ctx.log },
+      )
+    }
+
+    const { data, error } = await ctx.supabase
+      .from('customers')
+      .insert({
+        user_id: ctx.userId,
+        company_id: ctx.companyId!,
+        name: body.name,
+        customer_type: body.customer_type,
+        email: body.email ?? null,
+        phone: body.phone ?? null,
+        address_line1: body.address_line1 ?? null,
+        address_line2: body.address_line2 ?? null,
+        postal_code: body.postal_code ?? null,
+        city: body.city ?? null,
+        country: body.country ?? 'Sweden',
+        org_number: body.org_number ?? null,
+        vat_number: body.vat_number ?? null,
+        default_payment_terms: body.default_payment_terms ?? 30,
+        notes: body.notes ?? null,
+      })
+      .select(CUSTOMER_RESPONSE_COLUMNS)
+      .single()
+
+    if (error) {
+      if (error.code === '23505') {
+        return v1ErrorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', ctx.log, {
+          requestId: ctx.requestId,
+          details: { org_number: body.org_number },
+        })
+      }
+      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+    }
+
+    // Best-effort VIES validation for EU business customers. Non-blocking —
+    // a VIES timeout or failure does not roll back the customer create.
+    if (body.customer_type === 'eu_business' && body.vat_number) {
+      try {
+        const vatResult = await validateVatNumber(body.vat_number)
+        if (vatResult.valid) {
+          await ctx.supabase
+            .from('customers')
+            .update({
+              vat_number_validated: true,
+              vat_number_validated_at: new Date().toISOString(),
+            })
+            .eq('id', (data as { id: string }).id)
+            .eq('company_id', ctx.companyId!)
+          ;(data as { vat_number_validated: boolean }).vat_number_validated = true
+        }
+      } catch (err) {
+        ctx.log.warn('auto-VIES validation failed on customer create', err as Error)
+      }
+    }
+
+    // Emit customer.created so webhooks (Phase 2 PR-C) and downstream
+    // handlers can react. Best-effort — emit failure does not roll back.
+    // Cast through `unknown` because the response projection deliberately
+    // omits internal scoping fields (user_id, company_id) the Customer type
+    // requires; we re-inject them on the payload from ctx.
+    try {
+      await eventBus.emit({
+        type: 'customer.created',
+        payload: {
+          customer: { ...(data as Record<string, unknown>), user_id: ctx.userId, company_id: ctx.companyId! } as unknown as Customer,
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+        },
+      })
+    } catch (err) {
+      ctx.log.warn('customer.created emit failed', err as Error)
+    }
+
+    return created(data, { requestId: ctx.requestId })
+  },
+  { requireIdempotencyKey: true },
 )

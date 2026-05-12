@@ -23,9 +23,19 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+// Mock VIES validation so customer-write tests never make a real network
+// call. Tests can override per-case via mockResolvedValueOnce.
+vi.mock('@/lib/vat/vies-client', () => ({
+  validateVatNumber: vi.fn().mockResolvedValue({ valid: false }),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { GET as listCustomers } from '../route'
-import { GET as getCustomer } from '../[id]/route'
+import { GET as listCustomers, POST as createCustomer } from '../route'
+import {
+  GET as getCustomer,
+  PATCH as updateCustomer,
+  DELETE as deleteCustomer,
+} from '../[id]/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -84,7 +94,7 @@ beforeEach(() => {
 const SAMPLE_CUSTOMER = {
   id: CUSTOMER_ID,
   name: 'Acme AB',
-  customer_type: 'business',
+  customer_type: 'swedish_business',
   email: 'a@acme.test',
   phone: null,
   address_line1: null,
@@ -134,7 +144,7 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     }
     const business = {
       ...SAMPLE_CUSTOMER,
-      customer_type: 'business',
+      customer_type: 'swedish_business',
     }
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -156,7 +166,7 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     expect(individualRow.org_number).toBeNull()
     expect(individualRow.vat_number).toBeNull()
     // Business: Bolagsverket-public org_number remains visible.
-    const businessRow = body.data.find((c: { customer_type: string }) => c.customer_type === 'business')
+    const businessRow = body.data.find((c: { customer_type: string }) => c.customer_type === 'swedish_business')
     expect(businessRow.org_number).toBe('TEST-0000-0001')
     expect(businessRow.vat_number).toBe('SETEST00000001')
   })
@@ -375,5 +385,387 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.error.code).toBe('NOT_FOUND')
     expect(body.error.details).toEqual({ resource: 'customer' })
     expect(body.error.details.id).toBeUndefined()
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// POST /api/v1/companies/:companyId/customers
+// ──────────────────────────────────────────────────────────────────
+
+function withWriteScope() {
+  mockValidate.mockResolvedValue({
+    userId: USER_ID,
+    companyId: COMPANY_ID,
+    apiKeyId: 'ak_1',
+    apiKeyName: 'CI key',
+    scopes: ['customers:write'],
+    mode: 'live',
+  })
+}
+
+function makePostRequest(url: string, body: unknown, extraHeaders: Record<string, string> = {}): Request {
+  return new Request(url, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer test-fixture-not-a-real-key',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'abcd1234-1111-4abc-8def-1234567890ab',
+      ...extraHeaders,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+function makePatchRequest(url: string, body: unknown, extraHeaders: Record<string, string> = {}): Request {
+  return new Request(url, {
+    method: 'PATCH',
+    headers: {
+      Authorization: 'Bearer test-fixture-not-a-real-key',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'abcd1234-2222-4abc-8def-1234567890ab',
+      ...extraHeaders,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+function makeDeleteRequest(url: string, extraHeaders: Record<string, string> = {}): Request {
+  return new Request(url, {
+    method: 'DELETE',
+    headers: {
+      Authorization: 'Bearer test-fixture-not-a-real-key',
+      'Idempotency-Key': 'abcd1234-3333-4abc-8def-1234567890ab',
+      ...extraHeaders,
+    },
+  })
+}
+
+describe('POST /api/v1/companies/:companyId/customers', () => {
+  it('creates a customer and returns 201 with the new record', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: { ...SAMPLE_CUSTOMER, name: 'New Co AB' }, error: null },
+      }),
+    )
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'New Co AB',
+        customer_type: 'swedish_business',
+        email: 'a@newco.test',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.name).toBe('New Co AB')
+  })
+
+  it('rejects requests without an Idempotency-Key header', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const req = new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer test-fixture-not-a-real-key',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name: 'X', customer_type: 'swedish_business' }),
+    })
+
+    const res = await createCustomer(req, companyParams(COMPANY_ID))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 400 when body is missing required fields', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        email: 'no@name.test',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 409 on duplicate org_number', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: null, error: { code: '23505', message: 'duplicate key' } },
+      }),
+    )
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'Dupe AB',
+        customer_type: 'swedish_business',
+        org_number: 'TEST-0000-0001',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_DUPLICATE_ORG_NUMBER')
+  })
+
+  it('dry-run returns 200 with X-Dry-Run header and preview shape; no insert', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers?dry_run=true`, {
+        name: 'Preview AB',
+        customer_type: 'swedish_business',
+        email: 'p@preview.test',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.name).toBe('Preview AB')
+    expect(body.data.preview.id).toBeNull()
+    expect(body.data.preview.created_at).toBeNull()
+    // The `customers` table was never queried for an insert/select.
+    const inserted = supabaseMock.from.mock.calls.some((c) => c[0] === 'customers')
+    expect(inserted).toBe(false)
+  })
+
+  it('rejects keys without customers:write scope', async () => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      scopes: ['customers:read'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+
+    const res = await createCustomer(
+      makePostRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`, {
+        name: 'X',
+        customer_type: 'swedish_business',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// PATCH /api/v1/companies/:companyId/customers/:id
+// ──────────────────────────────────────────────────────────────────
+
+describe('PATCH /api/v1/companies/:companyId/customers/:id', () => {
+  it('updates a customer and returns the new record', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: {
+          data: { ...SAMPLE_CUSTOMER, default_payment_terms: 14 },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        default_payment_terms: 14,
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.default_payment_terms).toBe(14)
+  })
+
+  it('rejects an empty body', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {}),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 400 VALIDATION_ERROR when :id is not a UUID', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/not-a-uuid`, {
+        name: 'X',
+      }),
+      detailParams(COMPANY_ID, 'not-a-uuid'),
+    )
+
+    expect(res.status).toBe(400)
+  })
+
+  it('dry-run merges the proposed changes with the current record', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SAMPLE_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?dry_run=true`,
+        { default_payment_terms: 7 },
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.default_payment_terms).toBe(7)
+    // Unchanged fields from the current record are preserved.
+    expect(body.data.preview.name).toBe(SAMPLE_CUSTOMER.name)
+  })
+
+  it('returns 404 when the customer does not exist', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        name: 'New name',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(404)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────
+// DELETE /api/v1/companies/:companyId/customers/:id
+// ──────────────────────────────────────────────────────────────────
+
+describe('DELETE /api/v1/companies/:companyId/customers/:id', () => {
+  it('soft-deletes the customer and returns 204', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: { id: CUSTOMER_ID }, error: null },
+      }),
+    )
+
+    const res = await deleteCustomer(
+      makeDeleteRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(204)
+  })
+
+  it('dry-run previews the archived state without modifying the customer', async () => {
+    withWriteScope()
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await deleteCustomer(
+      makeDeleteRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?dry_run=true`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.archived_at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('returns 404 when the customer does not exist', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: null, error: null },
+      }),
+    )
+
+    const res = await deleteCustomer(
+      makeDeleteRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 VALIDATION_ERROR when :id is not a UUID', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await deleteCustomer(
+      makeDeleteRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/not-a-uuid`),
+      detailParams(COMPANY_ID, 'not-a-uuid'),
+    )
+
+    expect(res.status).toBe(400)
   })
 })

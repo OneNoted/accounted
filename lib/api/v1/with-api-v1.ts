@@ -187,15 +187,17 @@ function isDryRun(request: Request, url: URL): boolean {
 }
 
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
-  // We need to consume the body to hash it, but the handler also needs it.
-  // Clone the request first so the handler can re-read.
-  const cloned = request.clone()
-  const text = await request.text()
-  if (!text) return { body: null, cloned }
+  // We need the body to hash it, but the handler also needs it. Read from a
+  // CLONE for the hash and pass the original through to the handler — that
+  // way the handler's `await request.json()` still works regardless of how
+  // the runtime implements stream teeing.
+  const reader = request.clone()
+  const text = await reader.text()
+  if (!text) return { body: null, cloned: request }
   try {
-    return { body: JSON.parse(text), cloned }
+    return { body: JSON.parse(text), cloned: request }
   } catch {
-    return { body: text, cloned }
+    return { body: text, cloned: request }
   }
 }
 

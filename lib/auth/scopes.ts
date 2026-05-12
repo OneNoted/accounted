@@ -46,9 +46,12 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Events (webhook fallback / event log polling)
   'GET /api/v1/companies/:companyId/events': 'events:read',
 
-  // Customers (Phase 2 PR-A)
+  // Customers (Phase 2 PR-A — reads; Phase 2 PR-B-1 — writes)
   'GET /api/v1/companies/:companyId/customers': 'customers:read',
   'GET /api/v1/companies/:companyId/customers/:id': 'customers:read',
+  'POST /api/v1/companies/:companyId/customers': 'customers:write',
+  'PATCH /api/v1/companies/:companyId/customers/:id': 'customers:write',
+  'DELETE /api/v1/companies/:companyId/customers/:id': 'customers:write',
 
   // Invoices (Phase 2 PR-A)
   'GET /api/v1/companies/:companyId/invoices': 'invoices:read',
