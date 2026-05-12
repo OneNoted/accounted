@@ -404,9 +404,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     if (error) {
       if (error.code === '23505') {
+        // GDPR Art.5(1)(c): do NOT echo body.org_number in the response —
+        // for customer_type='individual' it IS the personnummer.
+        // The error code alone tells the caller which field conflicted;
+        // they already know the value they submitted.
         return v1ErrorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', ctx.log, {
           requestId: ctx.requestId,
-          details: { org_number: body.org_number },
+          details: { field: 'org_number' },
         })
       }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
