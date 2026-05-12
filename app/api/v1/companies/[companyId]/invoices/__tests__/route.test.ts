@@ -173,6 +173,39 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     expect(body.error.details.invalidKeys).toEqual(['bogus'])
   })
 
+  it('rejects an invalid currency filter (not ISO-4217)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?currency=sek`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('accepts a valid ISO-4217 currency code', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: [SAMPLE_INVOICE], error: null },
+      }),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?currency=SEK`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
   it('rejects an invalid status filter', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

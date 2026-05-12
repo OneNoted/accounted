@@ -177,17 +177,29 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const trimmed = rows.slice(0, limit)
     const hasMore = rows.length > limit
 
-    const customers = trimmed.map((r) => ({
-      id: r.id,
-      name: r.name,
-      customer_type: r.customer_type,
-      email: r.email,
-      org_number: r.org_number,
-      vat_number: r.vat_number,
-      default_payment_terms: r.default_payment_terms,
-      archived_at: r.archived_at,
-      created_at: r.created_at,
-    }))
+    // GDPR Art.5(1)(c) data minimisation: for sole traders (enskild firma)
+    // and EU-individual customers, org_number IS the personnummer — a
+    // directly identifying special-category identifier. Mask both
+    // org_number and vat_number in the LIST response for those types so
+    // bulk fetches don't expose personal IDs. The DETAIL endpoint (deliberate
+    // drill-in to one record) still returns them. Business customers'
+    // org_numbers are Bolagsverket public-record data and stay visible.
+    const INDIVIDUAL_TYPES = new Set(['individual', 'eu_individual'])
+
+    const customers = trimmed.map((r) => {
+      const isIndividual = INDIVIDUAL_TYPES.has(r.customer_type)
+      return {
+        id: r.id,
+        name: r.name,
+        customer_type: r.customer_type,
+        email: r.email,
+        org_number: isIndividual ? null : r.org_number,
+        vat_number: isIndividual ? null : r.vat_number,
+        default_payment_terms: r.default_payment_terms,
+        archived_at: r.archived_at,
+        created_at: r.created_at,
+      }
+    })
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last

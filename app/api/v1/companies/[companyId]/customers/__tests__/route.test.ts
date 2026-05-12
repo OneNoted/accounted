@@ -124,6 +124,43 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     expect(body.data[0].org_number).toBe('TEST-0000-0001')
   })
 
+  it('masks org_number and vat_number in the list response for individual customer_types', async () => {
+    const individual = {
+      ...SAMPLE_CUSTOMER,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      customer_type: 'individual',
+      org_number: '195512319876', // would be a personnummer in real life
+      vat_number: null,
+    }
+    const business = {
+      ...SAMPLE_CUSTOMER,
+      customer_type: 'business',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: [individual, business], error: null },
+      }),
+    )
+
+    const res = await listCustomers(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toHaveLength(2)
+    // Individual: org_number & vat_number masked to null in the list.
+    const individualRow = body.data.find((c: { customer_type: string }) => c.customer_type === 'individual')
+    expect(individualRow.org_number).toBeNull()
+    expect(individualRow.vat_number).toBeNull()
+    // Business: Bolagsverket-public org_number remains visible.
+    const businessRow = body.data.find((c: { customer_type: string }) => c.customer_type === 'business')
+    expect(businessRow.org_number).toBe('TEST-0000-0001')
+    expect(businessRow.vat_number).toBe('SETEST00000001')
+  })
+
   it('accepts include_archived=true', async () => {
     const archived = { ...SAMPLE_CUSTOMER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(

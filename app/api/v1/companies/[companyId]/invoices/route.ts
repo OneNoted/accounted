@@ -67,12 +67,17 @@ const ALLOWED_EXPAND = ['customer', 'items'] as const
 const INVOICE_SUMMARY_COLUMNS =
   'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
 
-// Customer projections — name-only for default list, full record for
-// ?expand=customer. Both deliberately omit user_id, company_id, and
-// vat_number_validated_at (internal timestamp).
+// Customer projections — three tiers for different contexts:
+//   - NAME_ONLY: default for the invoice list (inline customer_name only)
+//   - LIST_CONTEXT: ?expand=customer in a LIST endpoint. Contact-summary
+//     subset only — full PII like address/phone/notes/vat_number lives on
+//     the dedicated customer detail endpoint. GDPR Art.5(1)(c)
+//     data-minimisation: bulk fetches should not transmit a full PII
+//     record per row.
+// All projections deliberately omit user_id, company_id, and
+// vat_number_validated_at (internal scoping / timestamp).
 const CUSTOMER_NAME_ONLY_COLUMNS = 'id, name'
-const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+const CUSTOMER_LIST_CONTEXT_COLUMNS = 'id, name, customer_type, email, country, archived_at'
 
 // Invoice items projection — excludes invoice_id (redundant) and internal
 // linkage fields not in the documented response shape.
@@ -148,12 +153,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const expand = expandResult.expand
 
-    // Validate query filters.
+    // Validate query filters. Currency is strict ISO-4217 (3 uppercase
+    // letters) — accepting arbitrary 3-8 char strings would pass through
+    // to the DB filter without serving any documented purpose.
     const FiltersSchema = z.object({
       status: InvoiceStatus.optional(),
       customer_id: z.string().uuid().optional(),
       document_type: InvoiceDocumentType.optional(),
-      currency: z.string().min(3).max(8).optional(),
+      currency: z.string().regex(/^[A-Z]{3}$/, 'currency must be a 3-letter ISO-4217 code').optional(),
     })
     const filtersResult = FiltersSchema.safeParse({
       status: url.searchParams.get('status') ?? undefined,
@@ -178,7 +185,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // customer_name; ?expand=customer upgrades it from a name-only shape to
     // the full record. ?expand=items pulls line items.
     const customerSelect = expand.has('customer')
-      ? `customer:customers(${CUSTOMER_DETAIL_COLUMNS})`
+      ? `customer:customers(${CUSTOMER_LIST_CONTEXT_COLUMNS})`
       : `customer:customers(${CUSTOMER_NAME_ONLY_COLUMNS})`
     const itemsSelect = expand.has('items') ? `, items:invoice_items(${INVOICE_ITEM_COLUMNS})` : ''
     const selectClause = `${INVOICE_SUMMARY_COLUMNS}, ${customerSelect}${itemsSelect}`

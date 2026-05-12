@@ -157,7 +157,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         // careful callers can retry or fall back without parsing the body.
         const errMsg = (invErr as { code?: string; message?: string }).message ?? 'unknown'
         const errCode = (invErr as { code?: string }).code ?? 'unknown'
-        ctx.log.warn('customers.get: open-invoices expansion failed', { errCode, errMsg })
+        // Postgres error class 42 = "Syntax Error or Access Rule Violation"
+        // (includes 42501 insufficient_privilege). These indicate a real
+        // misconfiguration — a revoked grant or an incorrect RLS policy —
+        // and should reach Sentry/error monitoring rather than blending
+        // into informational warn logs. Other classes are typically
+        // transient (network, timeout) and stay at warn.
+        const isPermissionError = typeof errCode === 'string' && errCode.startsWith('42')
+        if (isPermissionError) {
+          ctx.log.error('customers.get: open-invoices expansion permission denied', new Error(errMsg), {
+            errCode,
+            customerId,
+          })
+        } else {
+          ctx.log.warn('customers.get: open-invoices expansion failed', { errCode, errMsg })
+        }
         invoices = []
         partialExpansions.push('invoices')
       } else {
