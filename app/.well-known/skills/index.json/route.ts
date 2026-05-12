@@ -11,10 +11,10 @@ import { NextResponse } from 'next/server'
 import { skills } from '@/extensions/general/mcp-server/skills'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
+import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
 
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const base = `${url.protocol}//${url.host}`
+export async function GET(_request: Request) {
+  const base = getCanonicalBaseUrl()
 
   const catalogue = {
     schema_version: '1',

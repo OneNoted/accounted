@@ -10,10 +10,10 @@
 import { NextResponse } from 'next/server'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
+import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
 
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const base = `${url.protocol}//${url.host}`
+export async function GET(_request: Request) {
+  const base = getCanonicalBaseUrl()
 
   const body = `# gnubok API
 
@@ -50,6 +50,7 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
 - Health check: ${base}/api/v1/health
 - Docs (cookbook + reference): ${base}/docs/api
 - Error reference: ${base}/docs/api/errors
+- Security disclosure policy: ${base}/SECURITY.md (responsible disclosure to security@arcim.io)
 
 ## Schema discovery
 

@@ -8,13 +8,11 @@
 import { NextResponse } from 'next/server'
 import { generateOpenApiSpec } from '@/lib/api/v1/registry'
 import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
+import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
 import '@/lib/api/v1/load-routes'
 
-export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const serverUrl = `${url.protocol}//${url.host}`
-
-  const spec = generateOpenApiSpec(serverUrl)
+export async function GET(_request: Request) {
+  const spec = generateOpenApiSpec(getCanonicalBaseUrl())
 
   return NextResponse.json(spec, {
     status: 200,

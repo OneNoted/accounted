@@ -17,6 +17,17 @@ vi.mock('@/lib/auth/api-keys', async () => {
   }
 })
 
+// The wrapper's public-scope path calls @supabase/supabase-js#createClient
+// directly to obtain an anon-key client (no service-role privilege).
+// Stub it so tests don't need real SUPABASE env vars.
+vi.mock('@supabase/supabase-js', async () => {
+  const actual = await vi.importActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js')
+  return {
+    ...actual,
+    createClient: vi.fn().mockReturnValue({}),
+  }
+})
+
 vi.mock('@/lib/api/idempotency', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api/idempotency')>(
     '@/lib/api/idempotency',

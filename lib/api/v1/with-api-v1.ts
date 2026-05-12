@@ -31,7 +31,7 @@
  *   })
  */
 
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import {
   type ApiKeyMode,
@@ -111,6 +111,18 @@ function generateRequestId(): string {
 }
 
 /**
+ * Anon-key Supabase client for the wrapper's public-scope code path. RLS is
+ * enforced (no service-role privilege escalation) so even an accidental DB
+ * call from a public handler is constrained to anon-accessible rows.
+ */
+function createAnonClient(): SupabaseClient {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
+}
+
+/**
  * Forensic identifiers for security event logs (failed auth, scope deny,
  * company-membership deny). We log a *truncated* source IP (last octet
  * dropped for IPv4, last 80 bits zeroed for IPv6) and user-agent so audit
@@ -135,10 +147,17 @@ export function truncateIp(ip: string | undefined): string | undefined {
   return undefined
 }
 
-function extractForensicContext(request: Request): { ip: string | undefined; userAgent: string | undefined } {
+function extractForensicContext(request: Request, log: Logger): { ip: string | undefined; userAgent: string | undefined } {
   const fwd = request.headers.get('x-forwarded-for')
   const raw = fwd ? fwd.split(',')[0]?.trim() : request.headers.get('x-real-ip') ?? undefined
   const ip = truncateIp(raw || undefined)
+  if (raw && !ip) {
+    // x-forwarded-for / x-real-ip carried a non-empty payload we couldn't parse.
+    // Surface as a warn so spoofed / unexpected proxy values are visible in
+    // security monitoring instead of silently dropped. Never log the raw value
+    // — that would defeat the truncation step.
+    log.warn('unparseable forwarded-for header dropped', { headerLength: raw.length })
+  }
   const userAgent = request.headers.get('user-agent') ?? undefined
   return { ip, userAgent }
 }
@@ -181,7 +200,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
     const url = new URL(request.url)
     const path = url.pathname
-    const forensic = extractForensicContext(request)
+    const forensic = extractForensicContext(request, log)
 
     try {
       // 1. Determine required scope before auth. Public endpoints can skip
@@ -197,8 +216,12 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       }
 
       // 2. Public endpoints: invoke handler directly with a minimal context.
+      //    Use the anon-key Supabase client (RLS-respecting) rather than the
+      //    service-role client — public routes have no authenticated user,
+      //    so a future accidental DB call from this path must not be
+      //    privileged. Least-privilege at the infrastructure layer.
       if (requiredScope === 'public') {
-        const supabase = createServiceClientNoCookies()
+        const supabase = createAnonClient()
         const ctx: ApiV1Context = {
           requestId,
           log,
