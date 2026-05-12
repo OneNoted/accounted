@@ -76,7 +76,7 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
   return { from: vi.fn((table: string) => buildChain(table)) }
 }
 
-const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const CUSTOMER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const USER_ID = 'user-1'
@@ -677,7 +677,7 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(body.data.notes).toBe('Förlängd')
   })
 
-  it('returns 409 INVOICE_DELETE_NOT_DRAFT for non-draft invoices', async () => {
+  it('returns 409 INVOICE_UPDATE_NOT_DRAFT for non-draft invoices', async () => {
     withInvoiceWriteScope()
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -693,9 +693,9 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
       detailParams(COMPANY_ID, INVOICE_ID),
     )
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error.code).toBe('INVOICE_DELETE_NOT_DRAFT')
+    expect(body.error.code).toBe('INVOICE_UPDATE_NOT_DRAFT')
     expect(body.error.details.current_status).toBe('sent')
   })
 

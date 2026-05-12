@@ -6,10 +6,12 @@
  * POST — create draft invoice. Idempotent (mandatory Idempotency-Key).
  *        Dry-runnable (?dry_run=true returns the validated would-be
  *        invoice + items with computed VAT totals; no DB writes).
- *        Lifecycle: created drafts have no invoice_number until the next
- *        commit-side operation (or the :send action verb in PR-B-2b)
- *        triggers F-series allocation via ensureInvoiceNumber. Delivery
- *        notes get a number on create from a separate sequence.
+ *        Lifecycle: drafts have invoice_number=null until the :send action
+ *        verb (PR-B-2b) triggers F-series allocation atomically. Delivery
+ *        notes get a number on create from a separate D-series sequence.
+ *        Rationale (ML 17 kap 24§ p.2): the löpnummer series must be
+ *        unbroken AND cover only issued invoices — consuming numbers for
+ *        drafts that get abandoned creates legal gaps.
  */
 
 import { z } from 'zod'
@@ -27,7 +29,6 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { getAvailableVatRates, getVatRules } from '@/lib/invoices/vat-rules'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { eventBus } from '@/lib/events'
 import type { Invoice, InvoiceDocumentType } from '@/types'
 
@@ -379,6 +380,16 @@ registerEndpoint({
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'invoices.create',
   async (request, ctx) => {
+    // Defensive: companyId comes from the URL and was already validated for
+    // membership by the wrapper, but UUID-validate it before using as a DB
+    // predicate — mirrors the pattern in the detail-route :id check.
+    if (!z.string().uuid().safeParse(ctx.companyId).success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'companyId', message: 'companyId must be a UUID.' },
+      })
+    }
+
     let rawBody: unknown
     try {
       rawBody = await request.json()
@@ -580,57 +591,79 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .single()
 
     if (invoiceErr) {
+      // pg_message can interpolate field values from constraint detail —
+      // log internally, never echo to the client.
+      ctx.log.error('invoice insert failed', invoiceErr, {
+        invoiceId: undefined,
+        companyId: ctx.companyId,
+        pgCode: invoiceErr.code,
+      })
       return v1ErrorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { pg_code: invoiceErr.code, pg_message: invoiceErr.message },
+        details: { pg_code: invoiceErr.code },
       })
     }
+
+    const invoiceId = (invoice as { id: string }).id
 
     // Insert items. If this fails, roll back the invoice row to avoid
-    // orphaned headers.
-    const itemsToInsert = itemRows.map((r) => ({ ...r, invoice_id: (invoice as { id: string }).id }))
+    // orphaned headers. Scope the rollback by company_id (defense in depth
+    // against UUID collision / logic error in compensating logic) and
+    // check the delete result so a double-failure is visible.
+    const itemsToInsert = itemRows.map((r) => ({ ...r, invoice_id: invoiceId }))
     const { error: itemsErr } = await ctx.supabase.from('invoice_items').insert(itemsToInsert)
     if (itemsErr) {
-      await ctx.supabase.from('invoices').delete().eq('id', (invoice as { id: string }).id)
-      ctx.log.error('invoice items insert failed; rolled back invoice', itemsErr, {
-        invoiceId: (invoice as { id: string }).id,
-      })
-      return v1ErrorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { pg_code: itemsErr.code, pg_message: itemsErr.message },
-      })
-    }
-
-    // F-series number allocation for invoices and proformas.
-    if (documentType === 'invoice' || documentType === 'proforma') {
-      try {
-        await ensureInvoiceNumber(ctx.supabase, ctx.companyId!, invoice as unknown as Invoice)
-      } catch (err) {
-        // Soft-cancel: if generate_invoice_number bumped the sequence
-        // before failing to write the number back, hard-delete would leave
-        // a permanent gap in the F-series (ML 17 kap 24§ violation).
-        // Flip status='cancelled' so the row is preserved for audit.
-        await ctx.supabase
-          .from('invoices')
-          .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-          .eq('id', (invoice as { id: string }).id)
-          .eq('company_id', ctx.companyId!)
-          .eq('status', 'draft')
-        ctx.log.error('invoice number allocation failed; invoice soft-cancelled', err as Error, {
-          invoiceId: (invoice as { id: string }).id,
-        })
-        return v1ErrorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', ctx.log, {
-          requestId: ctx.requestId,
+      const { error: rollbackErr } = await ctx.supabase
+        .from('invoices')
+        .delete()
+        .eq('id', invoiceId)
+        .eq('company_id', ctx.companyId!)
+      if (rollbackErr) {
+        ctx.log.error(
+          'invoice items insert failed AND rollback delete failed — orphaned invoice header',
+          rollbackErr,
+          { invoiceId, companyId: ctx.companyId, originalPgCode: itemsErr.code },
+        )
+      } else {
+        ctx.log.error('invoice items insert failed; rolled back invoice', itemsErr, {
+          invoiceId,
+          companyId: ctx.companyId,
         })
       }
+      return v1ErrorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { pg_code: itemsErr.code },
+      })
     }
 
-    // Refetch with embedded customer + items for the response.
-    const { data: complete } = await ctx.supabase
+    // Note: F-series invoice_number is NOT allocated at draft-create.
+    // Allocation happens atomically on the first :send action (Phase 2
+    // PR-B-2b). Draft invoices keep invoice_number=null until then.
+    // Rationale: ML 17 kap 24§ p.2 requires the löpnummer series to be
+    // unbroken and to cover only issued invoices — consuming numbers for
+    // drafts that are later abandoned creates legal gaps.
+    // Delivery notes use a separate D-series sequence (already allocated
+    // on insert above) and are NOT subject to the F-series constraint.
+
+    // Refetch with embedded items for the response.
+    const { data: complete, error: refetchErr } = await ctx.supabase
       .from('invoices')
       .select(`${INVOICE_RESPONSE_COLUMNS}, items:invoice_items(${INVOICE_ITEMS_RESPONSE_COLUMNS})`)
-      .eq('id', (invoice as { id: string }).id)
+      .eq('id', invoiceId)
+      .eq('company_id', ctx.companyId!)
       .single()
+
+    if (refetchErr) {
+      // The invoice WAS created; the items WERE inserted. Refetch failed
+      // for a transient DB reason. Log it so the partial-response is
+      // visible; fall back to the header without items rather than
+      // mis-leading the agent with a 5xx.
+      ctx.log.warn('invoice refetch after create failed; returning header without items', {
+        invoiceId,
+        companyId: ctx.companyId,
+        pgCode: (refetchErr as { code?: string }).code,
+      })
+    }
 
     // Emit invoice.created only for real invoices — proformas and delivery
     // notes are informational and have no downstream consumer obligation.
@@ -645,7 +678,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           },
         })
       } catch (err) {
-        ctx.log.warn('invoice.created emit failed', err as Error)
+        ctx.log.warn('invoice.created emit failed', err as Error, {
+          invoiceId,
+          companyId: ctx.companyId,
+        })
       }
     }
 

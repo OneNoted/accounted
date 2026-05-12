@@ -6,7 +6,7 @@
  *         "metadata" subset (dates, references, notes); customer_id,
  *         currency, document_type, and items are immutable — changing any
  *         of those means delete-and-recreate (drafts are cheap). Returns
- *         409 INVOICE_DELETE_NOT_DRAFT (reusing existing code) if the
+ *         409 INVOICE_UPDATE_NOT_DRAFT (reusing existing code) if the
  *         invoice is not in draft status.
  *
  *         Idempotent (mandatory Idempotency-Key) and dry-runnable.
@@ -182,14 +182,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id',
   summary: 'Update a draft invoice (metadata fields only).',
   description:
-    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes. customer_id, currency, document_type, items, and computed totals are immutable — replace those by deleting the draft and recreating it. Returns 409 INVOICE_DELETE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
+    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes. customer_id, currency, document_type, items, and computed totals are immutable — replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
   useWhen:
     'You need to correct a typo, push the due date, or update a customer reference on a draft you have not sent yet. The invoice number stays null until the first :send action.',
   doNotUseFor:
     'Updating a sent / paid / credited invoice (those are immutable per ML 17 kap; issue a credit note via POST /:id:credit in PR-B-2b). Changing items, currency, or customer — drafts are cheap to delete and recreate.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'A 409 INVOICE_DELETE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The error code name is shared with the DELETE handler.',
+    'A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The error code name is shared with the DELETE handler.',
     'Items are immutable here — to change line items, delete the draft and POST a fresh one.',
   ],
   example: {
@@ -294,7 +294,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
     if ((current as { status: string }).status !== 'draft') {
-      return v1ErrorResponseFromCode('INVOICE_DELETE_NOT_DRAFT', ctx.log, {
+      return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: (current as { status: string }).status },
       })
@@ -319,7 +319,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (!data) {
       // Race: the invoice transitioned out of draft between the pre-flight
       // and the update. Treat as the same 409 as the pre-flight check.
-      return v1ErrorResponseFromCode('INVOICE_DELETE_NOT_DRAFT', ctx.log, {
+      return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'Invoice transitioned out of draft during update.' },
       })
