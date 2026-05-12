@@ -27,7 +27,7 @@ import {
   createInvoiceJournalEntry,
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
-import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { closePeriod, lockPeriod, unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -1635,6 +1635,18 @@ async function commitCreateVoucher(
     return { error: 'entry_date, description, and at least two lines are required', status: 400 }
   }
 
+  // Re-validate balance defensively. The MCP tool already checks before
+  // staging, but a tampered or hand-inserted pending_operations row would
+  // bypass that gate. createDraftEntry runs the same check internally — this
+  // is for a cleaner 400 + Swedish error before reaching the engine.
+  const balance = validateBalance(lines)
+  if (!balance.valid) {
+    return {
+      error: `Verifikationen balanserar inte: debet ${balance.totalDebit} SEK, kredit ${balance.totalCredit} SEK.`,
+      status: 400,
+    }
+  }
+
   // Resolve fiscal period: prefer explicit, fall back to date lookup so the
   // caller can post a voucher without first calling list_fiscal_periods.
   let fiscalPeriodId = params.fiscal_period_id as string | undefined
@@ -1658,7 +1670,10 @@ async function commitCreateVoucher(
         fiscal_period_id: fiscalPeriodId,
         entry_date: entryDate,
         description,
-        source_type: ((params.source_type as JournalEntrySourceType) || 'manual'),
+        // source_type is hardcoded — never trust params.source_type. The MCP
+        // tool stages 'manual', but a future direct-staging path could
+        // otherwise inject 'bank'/'invoice'/etc. and corrupt audit attribution.
+        source_type: 'manual' as JournalEntrySourceType,
         voucher_series: (params.voucher_series as string) || undefined,
         notes: (params.notes as string) || undefined,
         lines,
@@ -1723,6 +1738,12 @@ async function commitCorrectEntry(
   }
 
   try {
+    // correctEntry() posts both the storno and the corrected entry into the
+    // SAME fiscal_period_id and entry_date as the original (see
+    // lib/core/bookkeeping/storno-service.ts:99,102,195,198). So a rättelse
+    // made in May 2026 for a December 2025 voucher correctly lands in 2025,
+    // keeping that period's balances consistent. The is_closed pre-flight
+    // above is what blocks corrections to already-locked periods.
     const result = await correctEntry(supabase, companyId, userId, entryId, lines)
     return {
       data: {

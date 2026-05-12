@@ -182,6 +182,79 @@ describe('commitPendingOperation: create_voucher', () => {
     expect(result.http_status).toBe(400)
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
+
+  it('hardcodes source_type to manual even if params.source_type is tampered', async () => {
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-tamper', voucher_number: 8 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'attempt to spoof source_type',
+        fiscal_period_id: 'fp-1',
+        // Direct DB insert or future stager could put anything here.
+        source_type: 'bank_transaction',
+        lines: [
+          { account_number: '1010', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    // Critical assertion: source_type is ALWAYS 'manual', never the
+    // caller-supplied value. Bypassing this lets a tampered operation
+    // misrepresent the audit trail as a bank-feed or invoice entry.
+    expect(createJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'manual' }),
+      'mcp_create_voucher'
+    )
+    expect(createJournalEntry).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ source_type: 'bank_transaction' }),
+      expect.anything()
+    )
+  })
+
+  it('returns 400 with Swedish error when params are unbalanced (tamper defense)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'tampered: debit ≠ credit',
+        fiscal_period_id: 'fp-1',
+        // The MCP tool validates balance before staging, but a hand-inserted
+        // pending_operations row could bypass that. The executor's own
+        // validateBalance() gate catches it before reaching the engine.
+        lines: [
+          { account_number: '1010', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 800 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/balanserar inte/i)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
 })
 
 // ─── correct_entry ──────────────────────────────────────────────────

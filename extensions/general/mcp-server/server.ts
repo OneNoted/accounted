@@ -5394,7 +5394,7 @@ export const tools: McpTool[] = [
               currency: { type: 'string', description: 'ISO 4217, defaults to SEK' },
               amount_in_currency: { type: 'number', description: 'Original amount if currency is not SEK' },
               exchange_rate: { type: 'number' },
-              tax_code: { type: 'string' },
+              tax_code: { type: 'string', description: 'Free-text tag — does NOT drive momsdeklaration ruta mapping. The BAS account number is what determines which ruta the line lands in (e.g. 2641 → ruta 48, 2614 → ruta 30). Pick the correct account first.' },
               cost_center: { type: 'string' },
               project: { type: 'string' },
             },
@@ -5439,9 +5439,40 @@ export const tools: McpTool[] = [
         )
       }
 
-      // Resolve fiscal period for the preview/title.
+      // Resolve fiscal period. Two paths:
+      //   1. Caller supplied fiscal_period_id → verify it exists and is open.
+      //   2. Omitted → look up the open period covering entry_date.
+      // Both paths converge on a Swedish-language error if no valid open
+      // period is available. (NOTE: the executor re-checks period_lock at
+      // commit time — this staging gate is advisory and exists for UX, the
+      // commit-time guard is the authoritative one. Don't remove it as
+      // "redundant".)
       let fiscalPeriodId = (args.fiscal_period_id as string | undefined) ?? null
-      if (!fiscalPeriodId) {
+      if (fiscalPeriodId) {
+        const { data: period, error: periodErr } = await supabase
+          .from('fiscal_periods')
+          .select('id, is_closed, period_start, period_end, name')
+          .eq('id', fiscalPeriodId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (periodErr || !period) {
+          throw new Error(`Fiscal period ${fiscalPeriodId} not found for this company.`)
+        }
+        if (period.is_closed) {
+          throw new Error(
+            `Räkenskapsperioden "${period.name ?? fiscalPeriodId}" är låst. ` +
+            'Lås upp perioden, eller välj en öppen period.'
+          )
+        }
+        // Defense in depth: also verify the supplied period actually covers
+        // entry_date so the engine's EntryDateOutsideFiscalPeriodError surfaces
+        // as a Swedish message rather than a generic engine error.
+        if (entryDate < period.period_start || entryDate > period.period_end) {
+          throw new Error(
+            `Datumet ${entryDate} ligger utanför "${period.name ?? 'perioden'}" (${period.period_start}–${period.period_end}).`
+          )
+        }
+      } else {
         fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
       }
       if (!fiscalPeriodId) {
@@ -5450,7 +5481,9 @@ export const tools: McpTool[] = [
 
       // Resolve account names for the preview so the approver reads
       // "1010 Balanserade utgifter / 2440 Leverantörsskulder" rather than
-      // bare numbers.
+      // bare numbers. Also gate: refuse to stage when any line references an
+      // unknown or inactive account so the approver isn't shown a voucher
+      // that would fail at commit time anyway.
       const accountNumbers = [...new Set(lines.map((l) => l.account_number))]
       const { data: accounts } = await supabase
         .from('chart_of_accounts')
@@ -5464,16 +5497,35 @@ export const tools: McpTool[] = [
           active: Boolean(a.is_active),
         })
       }
+      const unknownAccounts = accountNumbers.filter((n) => !accountInfo.has(n))
+      const inactiveAccounts = accountNumbers.filter(
+        (n) => accountInfo.has(n) && !accountInfo.get(n)!.active,
+      )
+      if (unknownAccounts.length > 0 || inactiveAccounts.length > 0) {
+        const parts: string[] = []
+        if (unknownAccounts.length > 0) {
+          parts.push(`saknas i kontoplanen: ${unknownAccounts.join(', ')}`)
+        }
+        if (inactiveAccounts.length > 0) {
+          parts.push(`inaktiva: ${inactiveAccounts.join(', ')}`)
+        }
+        throw new Error(
+          `Kan inte skapa verifikation. Konton ${parts.join('; ')}. ` +
+          'Aktivera dem i kontoplanen eller välj andra konton.'
+        )
+      }
 
       const previewLines = lines.map((l) => ({
         account_number: l.account_number,
         account_name: accountInfo.get(l.account_number)?.name ?? null,
-        account_inactive: accountInfo.has(l.account_number) ? !accountInfo.get(l.account_number)!.active : true,
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
       }))
 
+      // NOTE: source_type is intentionally NOT included in the staged params.
+      // The executor hardcodes 'manual' so a tampered or future direct-staged
+      // pending_operations row can't misrepresent the entry's origin.
       return stagePendingOperation(supabase, companyId, userId, 'create_voucher',
         `Manuell verifikation: ${description}`,
         {
@@ -5482,7 +5534,6 @@ export const tools: McpTool[] = [
           fiscal_period_id: fiscalPeriodId,
           voucher_series: (args.voucher_series as string) || undefined,
           notes: (args.notes as string) || undefined,
-          source_type: 'manual',
           lines,
         },
         {
@@ -5503,7 +5554,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_correct_entry',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ (storno + new corrected entry, never in-place edit). Use when part of a posted entry is wrong — e.g. wrong VAT account (2641 → 2614/2645) while preserving the expense/asset leg. HIGH risk — always staged.',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ — storno + new corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645 while preserving the expense leg. Account drives momsdeklaration ruta, not tax_code. HIGH risk.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -5521,7 +5572,7 @@ export const tools: McpTool[] = [
               currency: { type: 'string' },
               amount_in_currency: { type: 'number' },
               exchange_rate: { type: 'number' },
-              tax_code: { type: 'string' },
+              tax_code: { type: 'string', description: 'Free-text tag — does NOT drive momsdeklaration ruta. Pick the correct BAS account first.' },
               cost_center: { type: 'string' },
               project: { type: 'string' },
             },
