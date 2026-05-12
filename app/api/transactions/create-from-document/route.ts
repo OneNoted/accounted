@@ -123,7 +123,10 @@ export async function POST(request: Request) {
     // Roll back our newly-created transaction (only safe because we own it
     // and it has no journal_entry_id yet) and return 409 so the client can
     // refetch and reuse the winning transaction instead of creating a dupe.
-    await supabase.from('transactions').delete().eq('id', newTx.id)
+    // Re-assert company_id on the delete (defence in depth — newTx.id is a
+    // fresh UUID from a company-scoped insert above, but scoping the rollback
+    // makes the invariant explicit).
+    await supabase.from('transactions').delete().eq('id', newTx.id).eq('company_id', companyId)
     return NextResponse.json(
       { error: 'Inkorgsposten kopplades av en parallell begäran. Försök igen.' },
       { status: 409 },
