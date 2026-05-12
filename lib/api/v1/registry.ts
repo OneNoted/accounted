@@ -204,9 +204,11 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
     }
     case 'union':
     case 'ZodUnion': {
-      // Best-effort: emit a oneOf with each member converted.
+      // Best-effort: emit a oneOf with each member converted. No top-level
+      // `type` constraint — the individual branches carry their own types
+      // (valid JSON Schema for a union).
       const options = (def as { options?: ZodTypeAny[] }).options ?? []
-      return { type: ['string', 'number', 'boolean', 'object'].length > 0 ? undefined : 'object', ...({ oneOf: options.map(zodToJsonSchema) } as unknown as JsonSchema) }
+      return { oneOf: options.map(zodToJsonSchema) } as unknown as JsonSchema
     }
     default:
       // Unknown construct → empty schema, accept anything.

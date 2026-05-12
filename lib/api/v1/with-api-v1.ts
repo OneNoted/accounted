@@ -232,14 +232,16 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         })
       }
 
-      // 2. Public endpoints: invoke handler directly with a minimal context.
-      //    Use the anon-key Supabase client (RLS-respecting) rather than the
-      //    service-role client — public routes have no authenticated user,
-      //    so a future accidental DB call from this path must not be
-      //    privileged. Least-privilege at the infrastructure layer.
+      // 2. Public endpoints: invoke handler with an anon context. If a Bearer
+      //    token IS supplied we opportunistically validate it so rate-limiting
+      //    and key attribution are applied — but a missing or invalid token
+      //    does NOT block the request (the route is, by definition, public).
+      //    Falling back to the anon client when unauthenticated keeps the
+      //    least-privilege guarantee: an accidental DB call from a public
+      //    handler hits RLS, not the service role.
       if (requiredScope === 'public') {
-        const supabase = createAnonClient()
-        const ctx: ApiV1Context = {
+        const token = extractBearerToken(request)
+        let publicCtx: ApiV1Context = {
           requestId,
           log,
           userId: 'anonymous',
@@ -247,11 +249,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyName: undefined,
           scopes: [],
           mode: 'live',
-          supabase,
+          supabase: createAnonClient(),
           dryRun: false,
           idempotencyKey: null,
         }
-        const response = await handler(request, ctx, params)
+        if (token) {
+          const auth = await validateApiKey(token)
+          if (!('error' in auth)) {
+            publicCtx = {
+              ...publicCtx,
+              log: log.child({ userId: auth.userId, apiKeyId: auth.apiKeyId, mode: auth.mode }),
+              userId: auth.userId,
+              apiKeyId: auth.apiKeyId,
+              apiKeyName: auth.apiKeyName,
+              scopes: auth.scopes,
+              mode: auth.mode,
+              supabase: createServiceClientNoCookies(),
+            }
+          }
+          // Invalid token on a public route is silently downgraded to anon —
+          // do not surface 401 since the route doesn't require auth at all.
+        }
+        const response = await handler(request, publicCtx, params)
         return stampHeaders(response, requestId)
       }
 

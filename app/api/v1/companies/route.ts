@@ -78,15 +78,21 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
   const decoded = decodeDefaultCursor(cursor)
 
   // Authorization boundary: the query below filters by `user_id = ctx.userId`
-  // BEFORE the cursor's joined_at is applied, so a tampered cursor can only
+  // BEFORE the cursor's keyset is applied, so a tampered cursor can only
   // reorder rows the caller is already entitled to see. Cursors are not
   // signed; that's intentional. See PR #450 review for the trade-off.
+  //
+  // Keyset pagination uses (joined_at ASC, id ASC) on `company_members`. Two
+  // memberships sharing a `joined_at` (bulk-imported, concurrent registrations)
+  // are disambiguated by the `company_members.id` tiebreaker so rows on a page
+  // boundary are never skipped or duplicated.
 
   // We over-fetch by one to determine whether a next page exists.
   let query = ctx.supabase
     .from('company_members')
     .select(
       `
+        id,
         role,
         joined_at,
         companies:company_id (
@@ -102,10 +108,15 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     .eq('user_id', ctx.userId)
     .is('companies.archived_at', null)
     .order('joined_at', { ascending: true })
+    .order('id', { ascending: true })
     .limit(limit + 1)
 
   if (decoded) {
-    query = query.gt('joined_at', decoded.ts)
+    // Compound keyset: joined_at > cursor.ts OR (joined_at = cursor.ts AND id > cursor.id).
+    // `.or()` takes a comma-separated PostgREST filter string.
+    query = query.or(
+      `joined_at.gt.${decoded.ts},and(joined_at.eq.${decoded.ts},id.gt.${decoded.id})`,
+    )
   }
 
   const { data, error } = await query
@@ -124,6 +135,9 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
   }
 
   type Row = {
+    // `company_members.id` — the membership row's own UUID, used as the
+    // cursor's secondary key. Not exposed in the response.
+    id: string
     role: 'owner' | 'admin' | 'member' | 'viewer'
     joined_at: string
     // PostgREST returns the joined company as either an object (one-to-one FK
@@ -169,10 +183,12 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     ctx.log.warn('companies.list: dropped rows with null company join', { droppedNulls })
   }
 
+  // Cursor encodes the LAST row's `(joined_at, company_members.id)` — always
+  // present, no null-guard needed. Independent of whether the joined company
+  // dropped out of the response shape.
   const last = trimmed[trimmed.length - 1]
-  const lastCompany = last ? pickCompany(last) : null
   const nextCursor = hasMore && last
-    ? encodeDefaultCursor({ id: lastCompany?.id ?? '', created_at: last.joined_at })
+    ? encodeDefaultCursor({ id: last.id, created_at: last.joined_at })
     : null
 
   return paginated(companies, {

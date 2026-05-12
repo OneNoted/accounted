@@ -400,6 +400,56 @@ describe('withApiV1 — public endpoints', () => {
     expect(res.status).toBe(200)
     expect(observedUserId).toBe('anonymous')
   })
+
+  it('opportunistically attributes a valid Bearer token on a public route', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      apiKeyId: 'ak_1',
+      apiKeyName: 'CI key',
+      scopes: ['companies:read'],
+      mode: 'live',
+    })
+
+    let observedUserId: string | null = null
+    let observedApiKeyId: string | undefined
+    const handler = withApiV1('health.check', async (_req, ctx) => {
+      observedUserId = ctx.userId
+      observedApiKeyId = ctx.apiKeyId
+      return ok({ status: 'ok' }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/health', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      emptyParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(observedUserId).toBe('user-1')
+    expect(observedApiKeyId).toBe('ak_1')
+  })
+
+  it('silently downgrades an invalid Bearer token to anon on a public route', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+
+    let observedUserId: string | null = null
+    const handler = withApiV1('health.check', async (_req, ctx) => {
+      observedUserId = ctx.userId
+      return ok({ status: 'ok' }, { requestId: ctx.requestId })
+    })
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/health', {
+        headers: { Authorization: 'Bearer gnubok_sk_invalid' },
+      }),
+      emptyParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(observedUserId).toBe('anonymous')
+  })
 })
 
 describe('withApiV1 — stable headers', () => {
