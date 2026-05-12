@@ -189,7 +189,15 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // expose personal IDs. The DETAIL endpoint (deliberate drill-in to one
     // record) still returns them. Business customers' org_numbers are
     // Bolagsverket public-record data and stay visible.
-    const INDIVIDUAL_TYPES = new Set(['individual'])
+    //
+    // 'eu_individual' is retained as defense-in-depth: it's not a valid
+    // value in the canonical CustomerTypeSchema (so newly created customers
+    // can never have it), but the `customer_type` DB column has no CHECK
+    // constraint, so legacy rows from prior schema iterations could in
+    // principle carry it. Masking is free when the value never appears and
+    // protective if it ever does. Adding 'eu_individual' as a first-class
+    // customer_type for EU natural persons is a separate product decision.
+    const INDIVIDUAL_TYPES = new Set(['individual', 'eu_individual'])
 
     const customers = trimmed.map((r) => {
       const isIndividual = INDIVIDUAL_TYPES.has(r.customer_type)

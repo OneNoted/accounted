@@ -5,6 +5,16 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 beforeAll(() => {
+  // Belt-and-braces: ensure we never reach a real DB from this test suite.
+  // Supabase clients are mocked, but if a future test refactor accidentally
+  // bypassed the mock, this assertion fails the run rather than silently
+  // touching production. (Compliance: ISO 27001:2022 A.8.33 — test data
+  // separation.)
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error(
+      `customers route tests require NODE_ENV=test (got ${process.env.NODE_ENV ?? 'undefined'})`,
+    )
+  }
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
 })
