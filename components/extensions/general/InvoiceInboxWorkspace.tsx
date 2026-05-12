@@ -661,23 +661,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             </div>
           )}
           {items.length === 0 ? (
-            showOnboarding ? (
-              <OnboardingCard
-                hasInboxAddress={hasInboxAddress}
-                hasAnyItem={hasAnyItem}
-                hasResolvedItem={hasResolvedItem}
-                onActivateInbox={handleRotateAddress}
-                onUploadClick={() => fileInputRef.current?.click()}
-                onDismiss={handleDismissOnboarding}
-                isActivating={isRotating}
-                compact
-              />
-            ) : (
-              <div className="p-6 text-center text-sm text-muted-foreground">
-                <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
-                Inkorgen är tom.
-              </div>
-            )
+            // Onboarding card lives in the preview pane (more space, primary
+            // surface). Keep the list column quiet to avoid showing the same
+            // explainer twice when the inbox is fresh.
+            <div className="p-6 text-center text-sm text-muted-foreground">
+              <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
+              Inkorgen är tom.
+            </div>
           ) : filteredItems.length === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               Inga poster matchar filtret.
