@@ -6,7 +6,7 @@ gnubok is a Swedish-focused accounting SaaS for sole traders (enskild firma) and
 
 **Tech stack**: Next.js 16.1.5 (App Router), React 19.2.3, TypeScript 5 (strict), Zod 4, Supabase (PostgreSQL + RLS + email/password + TOTP MFA auth), Tailwind CSS 4 + shadcn/ui, Vercel hosting, Docker (self-hosted).
 
-**Integrations**: Enable Banking (PSD2), TIC Identity (company lookup), Anthropic SDK, AWS Bedrock (`@aws-sdk/client-bedrock-runtime` for inbox smart-match), OpenAI (embeddings), Resend (email), Sentry (error tracking), Svix (webhooks), web-push (notifications), Upstash Redis + Ratelimit, Google Drive (cloud backup via OAuth), JSZip (archive export), sharp (image processing), Framer Motion (animations), Recharts (charts), PDF.js (`pdfjs-dist`), `@react-pdf/renderer` (invoice PDFs), xlsx, fuse.js (fuzzy search), ics (iCal feeds).
+**Integrations**: Enable Banking (PSD2), TIC Identity, Anthropic SDK, AWS Bedrock, OpenAI, Resend, Sentry, Svix, web-push, Upstash Redis, Google Drive, JSZip, sharp, Framer Motion, Recharts, PDF.js, `@react-pdf/renderer`, xlsx, fuse.js, ics.
 
 **Path alias**: `@/*` maps to the project root. **Language**: All code, comments, and commit messages in English. **License**: AGPL-3.0-or-later.
 
@@ -27,59 +27,41 @@ npm run setup:extensions # Regenerate extension registry from extensions.config.
 
 ## Key Architectural Relationships
 
-- **Multi-tenant model**: `companies` table owns all business data. `company_members` links users to companies with roles (owner/admin/member/viewer). `teams` group companies for consultants. Company context resolved via cookie (`gnubok-company-id`) in middleware (`lib/supabase/middleware.ts`).
-- **All journal entry creation** routes through `lib/bookkeeping/engine.ts`. Lifecycle: `createDraftEntry()` → `commitEntry()` (atomic voucher assignment via `commit_journal_entry` DB RPC). Convenience: `createJournalEntry()` does both. Reversal via `reverseEntry()`. Correction via `correctEntry()` in `lib/core/bookkeeping/storno-service.ts`.
-- **API routes** that emit events must call `ensureInitialized()` (from `lib/init.ts`) at module level. This loads extensions, wires event handlers, and registers the supplier invoice handler + event log handler.
-- **Event bus** (`lib/events/bus.ts`) is a module-level singleton. Handlers run via `Promise.allSettled` — failing handlers never crash the emitter. 36 event types defined in `lib/events/types.ts`. The event log handler persists actionable events to `event_log` table for external automation.
-- **Supabase clients**: browser (`lib/supabase/client.ts`), server with cookies (`createClient()` from `server.ts`), service role (`createServiceClient()`), cookieless service role for API key auth (`createServiceClientNoCookies()` from `lib/auth/api-keys.ts`). Pagination helper: `fetchAllRows()` in `lib/supabase/fetch-all.ts`.
-- **Extension system**: Opt-in via `extensions.config.json`. Core builds and runs with zero extensions. Currently enabled: `enable-banking`, `email`, `arcim-migration`, `tic`, `mcp-server`, `cloud-backup`.
-- **Core reports** (in `lib/reports/`, not extensions): balance sheet, income statement, trial balance, general ledger, AR/supplier ledger, AR/supplier reconciliation, VAT declaration, journal register, monthly breakdown, continuity check, opening balances, KPI (+ definitions), NE-bilaga, INK2 declaration, SIE export, full archive export, salary journal, vacation liability, avgifter basis (employer contributions).
-- **Types**: All shared types in `types/index.ts` (~2,570 lines, single source of truth). Import via `import type { T } from '@/types'`. Event types live in `lib/events/types.ts`. Extension types in `lib/extensions/types.ts`.
-- **Error messages**: `lib/errors/get-error-message.ts` maps technical errors to Swedish user messages (Zod → Postgres → HTTP → context fallback).
+- **Multi-tenant model**: `companies` owns all business data. `company_members` links users to companies (owner/admin/member/viewer). `teams` group companies. Context resolved via `gnubok-company-id` cookie in `lib/supabase/middleware.ts`.
+- **All journal entry creation** routes through `lib/bookkeeping/engine.ts`. Lifecycle: `createDraftEntry()` → `commitEntry()` (atomic voucher via `commit_journal_entry` RPC). `createJournalEntry()` does both. Reversal: `reverseEntry()`. Correction: `correctEntry()` in `lib/core/bookkeeping/storno-service.ts`.
+- **API routes** emitting events must call `ensureInitialized()` (`lib/init.ts`) at module level to load extensions and wire handlers.
+- **Event bus** (`lib/events/bus.ts`) is a module-level singleton using `Promise.allSettled`. 36 event types in `lib/events/types.ts`. Persisted to `event_log` table (30-day TTL).
+- **Supabase clients**: browser (`client.ts`), server cookies (`createClient()`), service role (`createServiceClient()`), cookieless service role for API keys (`createServiceClientNoCookies()`). Pagination: `fetchAllRows()`.
+- **Extension system**: Opt-in via `extensions.config.json`. Core runs with zero extensions. Enabled: `enable-banking`, `email`, `arcim-migration`, `tic`, `mcp-server`, `cloud-backup`.
+- **Core reports** (`lib/reports/`): balance sheet, income statement, trial balance, general ledger, AR/supplier ledger + reconciliation, VAT declaration, journal register, monthly breakdown, continuity check, opening balances, KPI, NE-bilaga, INK2, SIE export, full archive, salary journal, vacation liability, avgifter basis.
+- **Types**: Shared types in `types/index.ts` (~2,570 lines). Import via `import type { T } from '@/types'`. Event types in `lib/events/types.ts`. Extension types in `lib/extensions/types.ts`.
+- **Error messages**: `lib/errors/get-error-message.ts` maps to Swedish (Zod → Postgres → HTTP → fallback).
 
 ---
 
 ## Multi-Tenant Architecture
 
-### Data Model
+- **companies**: Business unit. All business data has a `company_id` column.
+- **company_members**: Roles `owner`/`admin`/`member`/`viewer`, source `direct`|`team`.
+- **teams**: Consultant grouping. Team members auto-sync to company_members via DB triggers.
+- **user_preferences**: Stores `active_company_id`.
 
-- **companies**: Business unit (name, org_number, entity_type, created_by, team_id). All business data (journal entries, invoices, transactions, etc.) has a `company_id` column.
-- **company_members**: Links users to companies (company_id, user_id, role, source='direct'|'team'). Roles: `owner`, `admin`, `member`, `viewer`.
-- **teams**: Consultant grouping (name, created_by). A company can belong to one team. Team members auto-sync to company_members via DB triggers.
-- **team_members**: Links users to teams (team_id, user_id, role='owner'|'admin'|'member').
-- **user_preferences**: Stores `active_company_id` per user.
+**Context resolution** (`lib/supabase/middleware.ts`): cookie → `user_preferences.active_company_id` → first membership. RLS uses `user_company_ids()` helper.
 
-### Company Context Resolution
-
-Middleware (`lib/supabase/middleware.ts`) resolves the active company on every request:
-1. Check `gnubok-company-id` cookie
-2. Fall back to `user_preferences.active_company_id`
-3. Fall back to first company membership
-
-RLS policies use `user_company_ids()` DB helper function to filter by companies the user has access to.
-
-### Invitations
-
-- **company_invitations**: Email-based invites with `gnubok_inv_` prefixed tokens (SHA-256 hashed, 7-day TTL).
-- **team_invitations**: Same pattern for team invites.
-- Token generation: `lib/auth/invite-tokens.ts`.
+**Invitations**: `company_invitations`/`team_invitations` with `gnubok_inv_` tokens (SHA-256, 7-day TTL). See `lib/auth/invite-tokens.ts`.
 
 ---
 
 ## Authentication
 
-Supabase Auth with **email+password** (primary) and **magic link** (fallback). MFA via TOTP is supported.
+Supabase Auth: email+password (primary), magic link (fallback), TOTP MFA. MFA enforced **application-side** (middleware + API routes), not in RLS.
 
-MFA is enforced **application-side** (middleware + API routes), **not** in RLS policies. Controlled by two env vars:
+- `NEXT_PUBLIC_SELF_HOSTED=true` → MFA never enforced
+- `NEXT_PUBLIC_REQUIRE_MFA=true` → middleware redirects to `/mfa/enroll` or `/mfa/verify` until AAL2
 
-- `NEXT_PUBLIC_SELF_HOSTED=true` → MFA never enforced (users can enable voluntarily)
-- `NEXT_PUBLIC_REQUIRE_MFA=true` (hosted/Vercel) → middleware redirects to `/mfa/enroll` or `/mfa/verify` until AAL2
-
-**API route auth** (`lib/auth/require-auth.ts`): `requireAuth()` returns `{ user, supabase, error }` discriminated union, enforces MFA on hosted.
-
-**API keys** (`lib/auth/api-keys.ts`): SHA-256 hashed with `gnubok_sk_` prefix. Scoped permissions (`TOOL_SCOPE_MAP`). Rate limited at 100 RPM via atomic DB RPC (`validate_and_increment_api_key`).
-
-**Cron auth** (`lib/auth/cron.ts`): `verifyCronSecret()` with constant-time comparison.
+**API route auth** (`lib/auth/require-auth.ts`): `requireAuth()` returns `{ user, supabase, error }`, enforces MFA on hosted.
+**API keys** (`lib/auth/api-keys.ts`): SHA-256 hashed, `gnubok_sk_` prefix. Scoped via `TOOL_SCOPE_MAP`. Rate limited 100 RPM via `validate_and_increment_api_key` RPC.
+**Cron auth** (`lib/auth/cron.ts`): `verifyCronSecret()` constant-time comparison.
 
 ---
 
@@ -87,20 +69,11 @@ MFA is enforced **application-side** (middleware + API routes), **not** in RLS p
 
 The engine (`lib/bookkeeping/engine.ts`) is the most critical system. All accounting flows route through it.
 
-**Lifecycle**: `createDraftEntry()` → `commitEntry()` (atomic voucher assignment via `commit_journal_entry` DB RPC). Convenience: `createJournalEntry()` does both in one call. Reversal via `reverseEntry()` (storno). Correction via `correctEntry()` in `lib/core/bookkeeping/storno-service.ts`.
+**Lifecycle**: `createDraftEntry()` → `commitEntry()` (atomic voucher via `commit_journal_entry` RPC). `createJournalEntry()` does both. `reverseEntry()` for storno; `correctEntry()` (`lib/core/bookkeeping/storno-service.ts`) for corrections.
 
-**Key engine files**:
-- `transaction-entries.ts` — Journal entries from bank transactions
-- `invoice-entries.ts` — Journal entries from customer invoices (`generatePerRateLines()` for mixed-rate)
-- `supplier-invoice-entries.ts` — Journal entries from supplier invoices
-- `vat-entries.ts` — VAT-related entries
-- `currency-revaluation.ts` — Multi-currency revaluation
-- `mapping-engine.ts` — Account mapping rules evaluation
-- `booking-templates.ts` / `counterparty-templates.ts` — Reusable templates
-- `propose-payment-lines.ts` / `propose-send-lines.ts` — AI-powered matching proposals
-- `handlers/supplier-invoice-handler.ts` — Event handler creating registration entries on confirmation
+**Engine files**: `transaction-entries.ts`, `invoice-entries.ts` (with `generatePerRateLines()` for mixed-rate), `supplier-invoice-entries.ts`, `vat-entries.ts`, `currency-revaluation.ts`, `mapping-engine.ts`, `booking-templates.ts`/`counterparty-templates.ts`, `propose-payment-lines.ts`/`propose-send-lines.ts`, `handlers/supplier-invoice-handler.ts`.
 
-**BAS data** (`bookkeeping/bas-data/`): Full BAS 2026 chart organized by class (1–8) + SRU mapping.
+**BAS data** (`bookkeeping/bas-data/`): Full BAS 2026 chart by class (1–8) + SRU mapping.
 
 ### Key BAS Accounts
 
@@ -114,14 +87,13 @@ Invoice items support individual `vat_rate` values (mixed-rate invoices). Use `g
 
 ### VAT Declaration Rutor (SKV 4700)
 
-The `VatDeclarationRutor` type maps to the Swedish tax authority's momsdeklaration form:
-
-- **Ruta 05**: Momspliktig försäljning — total domestic taxable sales (all rates combined, from 3001+3002+3003)
-- **Ruta 06/07**: Unused (momspliktiga uttag / vinstmarginalbeskattning), always 0
-- **Ruta 10/11/12**: Utgående moms 25%/12%/6% — output VAT per rate (from 2611/2621/2631)
-- **Ruta 39/40**: EU services / Export (from 3308/3305)
-- **Ruta 48**: Ingående moms — input VAT (from 2641/2645)
-- **Ruta 49**: Moms att betala/återfå = (ruta 10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - ruta 48
+`VatDeclarationRutor` type maps to momsdeklaration:
+- **Ruta 05**: Domestic taxable sales (3001+3002+3003)
+- **Ruta 06/07**: Unused, always 0
+- **Ruta 10/11/12**: Output VAT 25%/12%/6% (2611/2621/2631)
+- **Ruta 39/40**: EU services / Export (3308/3305)
+- **Ruta 48**: Input VAT (2641/2645)
+- **Ruta 49**: Moms att betala/återfå = (10+11+12+30+31+32+60+61+62) − 48
 
 ---
 
@@ -156,59 +128,29 @@ These rules exist for legal compliance, enforced by database triggers. **Never v
 
 ## Extension System
 
-Extensions are opt-in plugins in `extensions/general/<name>/`, controlled by `extensions.config.json`. Core builds and runs with zero extensions. `npm run setup:extensions` generates static imports in `lib/extensions/_generated/` (runs automatically via `predev`/`prebuild`). Extensions **cannot** use dynamic imports (Next.js bundling).
+Extensions are opt-in plugins in `extensions/general/<name>/`, controlled by `extensions.config.json`. Core runs with zero extensions. `npm run setup:extensions` generates static imports in `lib/extensions/_generated/` (auto via `predev`/`prebuild`). Extensions **cannot** use dynamic imports.
 
-### Available Extensions (12)
+**Available (12)**: Enabled — `enable-banking` (PSD2), `email` (Resend), `arcim-migration`, `tic` (org lookup), `mcp-server`, `cloud-backup` (Google Drive). Disabled — `inbox-smart-match`, `invoice-inbox`, `push-notifications`, `calendar`, `skatteverket`, `example-logger`.
 
-| Extension | Purpose | Currently Enabled |
-|-----------|---------|:-:|
-| `enable-banking` | PSD2 bank sync via Enable Banking | Yes |
-| `email` | Email delivery via Resend | Yes |
-| `arcim-migration` | Legacy ARCIM system data migration | Yes |
-| `tic` | TIC Identity company lookup (org number → name, VAT, address) | Yes |
-| `mcp-server` | MCP server for Claude Desktop/Code | Yes |
-| `cloud-backup` | Google Drive backup of SIE + receipts + processing history | Yes |
-| `inbox-smart-match` | AWS Bedrock AI matching of inbox receipts to bank transactions | No |
-| `invoice-inbox` | Email-based invoice document processing | No |
-| `push-notifications` | Web push notifications for events | No |
-| `calendar` | Payment calendar with iCal feed | No |
-| `skatteverket` | Skatteverket VAT declaration submission | No |
-| `example-logger` | Reference implementation — logs events to console (not registered by default) | No |
-
-### Extension Architecture
-
-**Registration** (`lib/extensions/registry.ts`): Singleton registry. `register()` wires event handlers to the bus. `get(id)`, `getAll()`, `getByCapability(key)`.
-
-**Context** (`lib/extensions/context-factory.ts`): Every handler receives `ExtensionContext` with: `userId`, `companyId`, `extensionId`, `supabase`, `emit()`, `settings` (key-value in `extension_data` table), `storage` (Supabase Storage), `log` (prefixed logger), `services` (e.g., `ingestTransactions`).
-
-**API routes**: Dispatched via catch-all at `app/api/extensions/ext/[...path]/route.ts`. URL: `/api/extensions/ext/{extensionId}/{routePath}`. Path params extracted as `_paramName` search params.
-
-**Service provider patterns**:
-- *Interface registration* (email): Core defines noop default in `lib/email/service.ts`, extension calls `registerEmailService()`, core uses `getEmailService()`.
-- *Services record* (ai-categorization): Extension exposes via `services` property, core looks up via `extensionRegistry.get('id')?.services?.method(...)`.
-
-**Creating extensions**: `npx tsx scripts/create-extension.ts --name my-ext --sector general --category operations --description "..."`, then add to `extensions.config.json`.
+**Registration** (`lib/extensions/registry.ts`): Singleton. `register()` wires handlers. `get(id)`, `getAll()`, `getByCapability(key)`.
+**Context** (`lib/extensions/context-factory.ts`): `ExtensionContext` = `userId`, `companyId`, `extensionId`, `supabase`, `emit()`, `settings`, `storage`, `log`, `services`.
+**API routes**: `app/api/extensions/ext/[...path]/route.ts` catch-all → `/api/extensions/ext/{extensionId}/{routePath}`. Path params as `_paramName` query.
+**Service patterns**: Interface registration (email — `registerEmailService()`/`getEmailService()`) or services record (extension exposes via `services` property).
+**Creating**: `npx tsx scripts/create-extension.ts --name my-ext --sector general --category operations --description "..."`.
 
 ---
 
 ## MCP Server & API Keys
 
-gnubok exposes its bookkeeping engine as an MCP (Model Context Protocol) server, letting users do bookkeeping through Claude Desktop, Claude Code, or any MCP-compatible client.
+gnubok exposes its bookkeeping engine as an MCP server for Claude Desktop/Code.
 
-**MCP extension** (`extensions/general/mcp-server/`): 35 tools — transactions, categorization, customers, suppliers, invoices, supplier invoices, accounts, fiscal periods, trial balance, general ledger, balance sheet, income statement, AR/supplier ledger, reconciliation, VAT report, KPI report, receipt matching, invoice payments/sending, inbox items, employees + salary runs (list/get/create/calculate), salary journal, AGI generation, document upload. JSON-RPC 2.0 protocol implemented directly (no SDK dependency). Endpoint: `/api/extensions/ext/mcp-server/mcp`.
+**MCP extension** (`extensions/general/mcp-server/`): 35 tools covering transactions, categorization, customers/suppliers, invoices, accounts, fiscal periods, reports (trial balance, GL, BS, IS, AR/supplier ledger, VAT, KPI), reconciliation, salary runs, AGI, document upload. JSON-RPC 2.0. Endpoint: `/api/extensions/ext/mcp-server/mcp`.
 
-**API key infrastructure** (`lib/auth/api-keys.ts`, `api_keys` table): SHA-256 hashed keys with `gnubok_sk_` prefix. Scoped permissions mapped via `TOOL_SCOPE_MAP`. Rate limited at 100 RPM via atomic DB RPC (`validate_and_increment_api_key`). `createServiceClientNoCookies()` creates a Supabase service client without cookies for API key auth — all queries filter by `company_id` (defense in depth).
+**API keys** (`lib/auth/api-keys.ts`, `api_keys` table): SHA-256, `gnubok_sk_` prefix, scoped via `TOOL_SCOPE_MAP`, 100 RPM via `validate_and_increment_api_key` RPC. `createServiceClientNoCookies()` — all queries filter by `company_id` (defense in depth).
 
-**OAuth 2.1** for Claude Desktop connectors:
-- `.well-known/oauth-protected-resource` and `.well-known/oauth-authorization-server` — discovery endpoints (excluded from auth middleware)
-- `/api/mcp-oauth/authorize` — consent page + auth code generation
-- `/api/mcp-oauth/token` — PKCE verification + API key creation
-- `/api/mcp-oauth/register` — dynamic client registration
-- Stateless encrypted auth codes (AES-256-GCM via `lib/auth/oauth-codes.ts`)
-- Single-use enforcement via `oauth_used_codes` table
-- Redirect URI allowlist: `claude.ai/api/*`, `claude.com/api/*`, `localhost`
+**OAuth 2.1** for Claude connectors: `.well-known/oauth-protected-resource` + `.well-known/oauth-authorization-server` discovery; `/api/mcp-oauth/authorize`, `/token` (PKCE), `/register`. Stateless AES-256-GCM auth codes (`lib/auth/oauth-codes.ts`). Single-use via `oauth_used_codes`. Allowlist: `claude.ai/api/*`, `claude.com/api/*`, `localhost`.
 
-**npm package** (`packages/gnubok-mcp`): Published as `gnubok-mcp` on npm. Stdio-to-HTTP bridge for Claude Desktop. Users configure `npx gnubok-mcp` with their API key.
+**npm package** (`packages/gnubok-mcp`): Stdio-to-HTTP bridge; users run `npx gnubok-mcp` with API key.
 
 ---
 
@@ -244,127 +186,60 @@ export async function POST(request: Request) {
 
 ## Key lib/ Directories
 
-| Directory | Purpose |
-|-----------|---------|
-| `bookkeeping/` | Engine, entry generators, mapping, templates, BAS data, template library + embeddings |
-| `core/` | Period service, year-end, storno, tax codes, audit, documents |
-| `events/` | Event bus singleton, 36 event types, event log handler |
-| `auth/` | API keys, require-auth, require-write, MFA, OAuth codes, invite tokens, cron auth, BankID |
-| `supabase/` | Browser/server/service clients, middleware, fetch-all pagination |
-| `api/` | Zod validation (`validateBody`/`validateQuery`), schemas |
-| `reports/` | 20 report generators (financial statements, ledgers, tax, exports, salary journal, vacation liability, avgifter basis) |
-| `invoices/` | Invoice/supplier matching, payment match log, reminders, VAT rules, PDF template |
-| `transactions/` | Multi-source ingestion (`ingest.ts`), AI category suggestions |
-| `import/` | SIE parser/import, bank file import, opening balance, account mapper |
-| `documents/` | Document matcher, receipt matcher, batch matching |
-| `extensions/` | Registry, loader, context factory, types, generated files |
-| `email/` | Service interface (noop default), Resend provider, templates (invite, invoice, reminder, consent) |
-| `company/` | Company context resolution, CRUD actions, fiscal period computation |
-| `company-lookup/` | Shared types for org-number → company info lookups |
-| `providers/` | Third-party accounting provider adapters (Fortnox, Bokio, Briox, BL/Björn Lundén, Visma) with OAuth, rate limiting, retry, consent resolution |
-| `salary/` | Payroll calculation engine, tax tables, absence/benefits/traktamente, AGI, KU, PDF payslips, löneväxling, personnummer, payment, salary entries, transaction matcher |
-| `processing-history/` | Processing-history append helper for audit/inbox timelines |
-| `reconciliation/` | Bank statement reconciliation |
-| `tax/` | Tax calculator, deadline config/generator, expense warnings, Swedish holidays |
-| `vat/` | VIES client, EU countries, MOMS box mapping |
-| `deadlines/` | Deadline status engine |
-| `currency/` | Riksbanken exchange rates |
-| `skatteverket/` | Tax authority data formatting |
-| `bankgiro/` | Luhn checksum validation |
-| `calendar/` | ICS generator, calendar utilities |
-| `errors/` | Swedish error message mapping (Zod → Postgres → HTTP → fallback) |
-| `rate-limits/` | Per-company Postgres-backed rate limiter (`checkInboxUploadRateLimit`) — used by inbox upload + email-inbound + retry-extraction. Calls `check_and_increment_inbox_quota` RPC; fails open on infra error. |
-| `hooks/` | React hooks (e.g., `use-unsaved-changes`, `use-can-write`) |
-| `logger.ts` | Structured logger with module prefixes, env-aware filtering |
-| `support.ts` | Server-side support recipient email (used by `/api/support/contact`) |
-| `utils.ts` | `cn()`, `formatCurrency()`, `formatDate()`, `formatOrgNumber()` |
+- `bookkeeping/` — Engine, entry generators, mapping, templates, BAS data
+- `core/` — Period, year-end, storno, tax codes, audit, documents
+- `events/` — Bus singleton, 36 event types, event log handler
+- `auth/` — API keys, require-auth/write, MFA, OAuth codes, invite tokens, cron, BankID
+- `supabase/` — Clients, middleware, `fetchAllRows` pagination
+- `api/` — Zod validation (`validateBody`/`validateQuery`), schemas
+- `reports/` — 20 report generators
+- `invoices/` — Matching, payment log, reminders, VAT rules, PDF
+- `transactions/` — `ingest.ts`, AI suggestions
+- `import/` — SIE, bank file, opening balance, account mapper
+- `documents/` — Matchers (single + batch)
+- `extensions/` — Registry, loader, context factory
+- `email/` — Service interface, Resend, templates
+- `company/` — Context resolution, CRUD, fiscal period computation
+- `providers/` — Fortnox, Bokio, Briox, BL, Visma (OAuth, retry, consent)
+- `salary/` — Payroll engine, tax tables, AGI, KU, payslips, löneväxling, personnummer
+- `processing-history/`, `reconciliation/`, `tax/`, `vat/` (VIES, MOMS box), `deadlines/`, `currency/` (Riksbanken), `skatteverket/`, `bankgiro/` (Luhn), `calendar/` (ICS)
+- `errors/` — Swedish error mapping (Zod → Postgres → HTTP → fallback)
+- `rate-limits/` — Postgres-backed `checkInboxUploadRateLimit` via `check_and_increment_inbox_quota` RPC; fails open
+- `hooks/`, `logger.ts`, `support.ts`, `utils.ts` (`cn()`, `formatCurrency()`, `formatDate()`, `formatOrgNumber()`)
 
 ---
 
 ## App Routes
 
-### Pages
+**Pages**: `/login`, `/register`, `/reset-password`, `/mfa/{enroll,verify}`, `/onboarding`, `/companies/new`, `/invite/[token]`, `/` (dashboard), `/transactions`, `/invoices[/new|/[id]|/[id]/credit]`, `/supplier-invoices[/new|/[id]]`, `/customers[/[id]]`, `/suppliers[/[id]]`, `/expenses[/new|/[id]]`, `/receipts[/scan]`, `/bookkeeping[/[id]|/year-end]`, `/salary[/employees|/runs]`, `/reports`, `/import`, `/kpi`, `/deadlines`, `/pending`, `/help`, `/extensions[/[sector]/[ext]]`, `/e/[sector]/[slug]` (workspace), `/settings/*`, `/dpa`, `/privacy`, `/invoice-action/[token]`, `/sandbox`.
 
-| Route | Purpose |
-|-------|---------|
-| `/login`, `/register`, `/reset-password` | Auth pages |
-| `/mfa/enroll`, `/mfa/verify` | MFA flow |
-| `/onboarding` | Multi-step company setup wizard |
-| `/companies/new` | Create new company |
-| `/invite/[token]` | Accept team/company invite |
-| `/` | Dashboard home |
-| `/transactions` | Bank transaction list & categorization |
-| `/invoices`, `/invoices/new`, `/invoices/[id]`, `/invoices/[id]/credit` | Customer invoicing |
-| `/supplier-invoices`, `/supplier-invoices/new`, `/supplier-invoices/[id]` | Supplier invoices |
-| `/customers`, `/customers/[id]` | Customer management |
-| `/suppliers`, `/suppliers/[id]` | Supplier management |
-| `/expenses`, `/expenses/new`, `/expenses/[id]` | Expense tracking |
-| `/receipts`, `/receipts/scan` | Receipt management |
-| `/bookkeeping`, `/bookkeeping/[id]`, `/bookkeeping/year-end` | Journal entries, chart of accounts, year-end |
-| `/salary`, `/salary/employees`, `/salary/runs` | Payroll: employees, salary runs, AGI, KU |
-| `/reports` | Financial reports |
-| `/import` | SIE and bank file import |
-| `/kpi` | KPI metrics + monthly trend chart |
-| `/deadlines` | Tax & business deadlines |
-| `/pending` | Pending operations queue |
-| `/help` | In-app help/support page |
-| `/extensions`, `/extensions/[sector]/[extension]` | Extension marketplace |
-| `/e/[sector]/[slug]` | Extension workspace |
-| `/settings/*` | Company, invoicing, bookkeeping, tax, team, banking, templates, salary, backup, account, API settings |
-| `/dpa`, `/privacy` | Legal pages |
-| `/invoice-action/[token]` | Public invoice payment link |
-| `/sandbox` | Test environment |
-
-### API Endpoints (key groups)
-
-- `/api/bookkeeping/*` — Accounts, fiscal periods (close/lock/year-end/opening-balances/currency-revaluation), journal entries (CRUD/reverse/correct/chain), mapping rules, voucher gaps
-- `/api/invoices/*` — CRUD, send, mark-sent/paid, convert, PDF, reminders cron
-- `/api/supplier-invoices/*` — CRUD, approve, mark-paid, credit
-- `/api/transactions/*` — Categorize, uncategorize, describe, book, match-invoice, match-supplier-invoice, batch operations, AI suggestions
+**API endpoints**:
+- `/api/bookkeeping/*` — accounts, fiscal periods, journal entries (CRUD/reverse/correct), mapping rules, voucher gaps
+- `/api/invoices/*`, `/api/supplier-invoices/*` — CRUD + state transitions
+- `/api/transactions/*` — categorize, describe, book, match-{invoice,supplier-invoice}, batch, AI suggestions
 - `/api/customers/*`, `/api/suppliers/*` — CRUD
-- `/api/documents/*` — CRUD, versions, link, verify, match-sweep, verify cron
-- `/api/reports/*` — 19 report endpoints (general-ledger, trial-balance, balance-sheet, income-statement, journal-register, ar-ledger, supplier-ledger, vat-declaration, sie-export, ink2, ne-bilaga, kpi, audit-trail, continuity-check, monthly-breakdown, full-archive, salary-journal, vacation-liability, avgifter-basis)
-- `/api/salary/*` — Employees, payroll-config, tax-tables, KU, salary runs (CRUD + calculate)
-- `/api/import/*` — Bank file (parse/execute), SIE (parse/execute/mappings/create-accounts)
-- `/api/reconciliation/bank/*` — Link, unlink, run, status, unmatched-entries
-- `/api/settings/*` — Company settings, API keys, logo upload, counterparty templates, booking templates
-- `/api/company/*` — Current, members (list/CRUD/invite), `[id]`
-- `/api/team/*` — Accept, invite, members
-- `/api/deadlines/*`, `/api/tax-deadlines/*` — Deadline CRUD and crons
-- `/api/pending-operations/*` — Queue, commit, reject
-- `/api/events/*` — Event log and cleanup cron
-- `/api/documents/*` — CRUD, counts, match-sweep, verify cron
-- `/api/calendar/feed/[token]` — iCal subscription feed
-- `/api/mcp-oauth/*` — Register, authorize, token
-- `/api/support/contact` — Support contact form submission
-- `/api/account/delete` — User account deletion
-- `/api/audit-trail/*` — Audit trail queries
-- `/api/log` — Client-side log ingestion
-- `/api/health` — Health check
-- `/api/vat/validate` — VIES VAT validation
-- `/api/currency/rate` — Riksbanken exchange rate lookup
-- `/api/sandbox/*` — Seed, cleanup cron
-- `/api/extensions/ext/[...path]` — Dynamic extension API routes (plus top-level `/api/extensions/enable-banking/*`, `/api/extensions/cloud-backup/*`, `/api/extensions/push-notifications/*`)
+- `/api/documents/*` — CRUD, versions, link, match-sweep, verify cron
+- `/api/reports/*` — 19 endpoints (GL, TB, BS, IS, AR/supplier ledger, VAT, SIE, INK2, NE-bilaga, KPI, audit, continuity, monthly, full-archive, salary, vacation, avgifter)
+- `/api/salary/*` — employees, payroll-config, tax-tables, KU, runs
+- `/api/import/*` — bank-file, SIE (parse/execute/mappings)
+- `/api/reconciliation/bank/*`, `/api/settings/*`, `/api/company/*`, `/api/team/*`
+- `/api/deadlines/*`, `/api/tax-deadlines/*` — CRUD + crons
+- `/api/pending-operations/*`, `/api/events/*`, `/api/audit-trail/*`
+- `/api/calendar/feed/[token]`, `/api/mcp-oauth/*`, `/api/support/contact`, `/api/account/delete`
+- `/api/log`, `/api/health`, `/api/vat/validate`, `/api/currency/rate`, `/api/sandbox/*`
+- `/api/extensions/ext/[...path]` — dynamic extension routes
 
 ---
 
 ## Testing
 
-**Framework**: Vitest 4, `globals: true`, `environment: 'node'`. Tests colocated in `__tests__/` directories. Scope: business logic in `lib/` and API routes in `app/api/`. No component or E2E tests.
+**Framework**: Vitest 4, `node` env, tests in `__tests__/`. Scope: `lib/` and `app/api/`. No component/E2E tests.
 
-**Test helpers** (`tests/helpers.ts`): `createMockSupabase()` (chainable proxy), `createQueuedMockSupabase()` (sequential calls), `createMockRequest()`, `parseJsonResponse()`, `createMockRouteParams()`, and fixture factories: `makeTransaction()`, `makeJournalEntry()`, `makeJournalEntryLine()`, `makeInvoice()`, `makeInvoicePayment()`, `makeCustomer()`, `makeSupplier()`, `makeSupplierInvoice()`, `makeFiscalPeriod()`, `makeReceipt()`, `makeDocumentAttachment()`, `makeCompanySettings()`, `makeCompany()`, `makeCompanyMember()`, `makeInvoiceInboxItem()`, `makeTaxCode()`, `makeCategorizationTemplate()`, `makeSIEVoucher()`, `makeBankConnection()`.
+**Helpers** (`tests/helpers.ts`): `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, `createMockRouteParams()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, `makeCustomer`, `makeSupplier`, `makeSupplierInvoice`, `makeFiscalPeriod`, `makeReceipt`, `makeDocumentAttachment`, `makeCompany`, `makeCompanySettings`, `makeTaxCode`, `makeSIEVoucher`, `makeBankConnection`, etc.).
 
-**Patterns**: Always mock `@/lib/supabase/server`. Use `vi.clearAllMocks()` and `eventBus.clear()` in `beforeEach`. API route tests: mock `@/lib/init` and lib functions, test auth (401), validation (400), not found (404), errors (500), happy path.
+**Patterns**: Always mock `@/lib/supabase/server`. `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Test auth (401), validation (400), 404, 500, happy path.
 
-### Testing database-level logic (pg-real)
-
-Mocked Supabase clients cannot exercise Postgres triggers, RPCs, or RLS policies. A parallel Vitest project `pg-real` runs against a real Postgres instance in CI (GitHub Actions `supabase/postgres:15` service container, migrations replayed from `supabase/migrations/` before the suite runs). Locally: `npm run test:pg` against a DATABASE_URL pointing at any Postgres with the Supabase `auth` schema and migrations applied.
-
-**File convention**: `*.pg.test.ts`. The `unit` project excludes this suffix; only `pg-real` picks it up.
-
-**Helpers**: `tests/pg/setup.ts` exposes `getPool()` and `withUserContext(userId, fn)` (sets `ROLE authenticated` + `request.jwt.claims` for RLS tests). `tests/pg/fixtures.ts` has `seedCompany()`, `insertDraftJournalEntry()`, `insertBalancedLines()`, etc.
-
-**When to add a pg-real test**: any PR that creates or modifies a trigger, RPC, RLS policy, or DEFERRABLE constraint must include or extend a `*.pg.test.ts` test covering the new behavior. Mock coverage is not sufficient — it will pass on a broken migration. The suite is intentionally small (compliance gate, not a rewrite of the mock suite); add only smoke-level tests for new DB-layer constructs.
+**pg-real**: Parallel Vitest project for triggers/RPCs/RLS using real Postgres (CI: `supabase/postgres:15`, migrations replayed). Local: `npm run test:pg`. File convention `*.pg.test.ts`. Helpers: `tests/pg/setup.ts` (`getPool()`, `withUserContext()`), `tests/pg/fixtures.ts` (`seedCompany()`, `insertDraftJournalEntry()`, etc.). **Required**: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts`.
 
 ---
 
@@ -374,35 +249,21 @@ Mocked Supabase clients cannot exercise Postgres triggers, RPCs, or RLS policies
 
 ### Key Tables (~60)
 
-**Multi-tenant**: `companies`, `company_members`, `company_invitations`, `teams`, `team_members`, `team_invitations`, `user_preferences`, `profiles`
-
-**Bookkeeping**: `chart_of_accounts`, `fiscal_periods`, `journal_entries`, `journal_entry_lines`, `account_balances`, `voucher_sequences`, `voucher_gap_explanations`
-
-**Invoicing**: `customers`, `invoices`, `invoice_items`, `invoice_payments`, `invoice_inbox_items`
-
-**Suppliers**: `suppliers`, `supplier_invoices`, `supplier_invoice_items`
-
-**Banking**: `bank_connections`, `transactions`, `bank_file_imports`, `payment_match_log`
-
-**Documents**: `document_attachments` (WORM), `receipts`, `receipt_line_items`
-
-**Settings & Config**: `company_settings`, `mapping_rules`, `categorization_templates`, `booking_template_library`, `extension_data`
-
-**Dimensions**: `cost_centers`, `projects`
-
-**Tax & Deadlines**: `tax_rates`, `tax_table_rates`, `deadlines`, `calendar_feeds`, `skatteverket_tokens`
-
-**API & Auth**: `api_keys` (with scopes), `oauth_used_codes`, `bankid_identities`
-
-**Audit & Ops**: `audit_log` (immutable), `event_log` (30-day TTL), `pending_operations`, `processing_history` (+ `processing_event_types`), `ai_usage_tracking`, `voucher_gap_explanations`, `automation_webhooks`
-
-**Inbox & Migration**: `invoice_inbox_items`, `company_inboxes`, `email_connections`
-
-**Salary**: `employees`, `salary_runs`, `salary_run_employees`, `salary_line_items`, `salary_payroll_config`, `agi_declarations`
-
-**Third-party providers**: `provider_consents`, `provider_consent_tokens`, `provider_otc`
-
-**Other**: `sandbox_users`
+- **Multi-tenant**: `companies`, `company_members`, `company_invitations`, `teams`, `team_members`, `team_invitations`, `user_preferences`, `profiles`
+- **Bookkeeping**: `chart_of_accounts`, `fiscal_periods`, `journal_entries`, `journal_entry_lines`, `account_balances`, `voucher_sequences`, `voucher_gap_explanations`
+- **Invoicing**: `customers`, `invoices`, `invoice_items`, `invoice_payments`, `invoice_inbox_items`
+- **Suppliers**: `suppliers`, `supplier_invoices`, `supplier_invoice_items`
+- **Banking**: `bank_connections`, `transactions`, `bank_file_imports`, `payment_match_log`
+- **Documents**: `document_attachments` (WORM), `receipts`, `receipt_line_items`
+- **Settings**: `company_settings`, `mapping_rules`, `categorization_templates`, `booking_template_library`, `extension_data`
+- **Dimensions**: `cost_centers`, `projects`
+- **Tax/Deadlines**: `tax_rates`, `tax_table_rates`, `deadlines`, `calendar_feeds`, `skatteverket_tokens`
+- **API/Auth**: `api_keys`, `oauth_used_codes`, `bankid_identities`
+- **Audit/Ops**: `audit_log` (immutable), `event_log` (30d TTL), `pending_operations`, `processing_history`, `ai_usage_tracking`, `automation_webhooks`
+- **Inbox**: `invoice_inbox_items`, `company_inboxes`, `email_connections`
+- **Salary**: `employees`, `salary_runs`, `salary_run_employees`, `salary_line_items`, `salary_payroll_config`, `agi_declarations`
+- **Providers**: `provider_consents`, `provider_consent_tokens`, `provider_otc`
+- **Other**: `sandbox_users`
 
 ### Key RPC Functions
 
@@ -431,14 +292,14 @@ Mocked Supabase clients cannot exercise Postgres triggers, RPCs, or RLS policies
 
 ### Migration Rules
 
-1. **Always enable RLS** and create policies using `user_company_ids()` for company-scoped data
-2. **Always add `updated_at` trigger** using `update_updated_at_column()`
-3. **UUID primary keys**: `DEFAULT uuid_generate_v4()`
-4. **Company ownership**: `company_id UUID REFERENCES companies NOT NULL` + `user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL`
-5. **Never modify existing migrations** — create new ones
-6. **Never modify enforcement triggers** (migration 017) — legally required
-7. **Apply via Supabase MCP tool**: `mcp__plugin_supabase_supabase__apply_migration`
-8. **Always include `NOTIFY pgrst, 'reload schema'`** at the end of migrations that alter table structure (ADD/DROP COLUMN, CREATE TABLE, ALTER TYPE). Without this, PostgREST serves stale schema until next reload.
+1. Enable RLS + policies using `user_company_ids()` for company-scoped data
+2. Add `updated_at` trigger via `update_updated_at_column()`
+3. UUID PKs: `DEFAULT uuid_generate_v4()`
+4. Company ownership: `company_id UUID REFERENCES companies NOT NULL` + `user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL`
+5. Never modify existing migrations — create new ones
+6. Never modify enforcement triggers (migration 017) — legally required
+7. Apply via Supabase MCP `apply_migration`
+8. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure
 
 ---
 
@@ -461,18 +322,7 @@ Mocked Supabase clients cannot exercise Postgres triggers, RPCs, or RLS policies
 
 ### Vercel (Hosted)
 
-Cron jobs defined in `vercel.json`:
-
-| Schedule | Endpoint | Purpose |
-|----------|----------|---------|
-| `0 6 * * *` | `/api/deadlines/status/cron` | Update deadline statuses |
-| `0 8 * * *` | `/api/invoices/reminders/cron` | Send invoice reminders |
-| `0 0 2 1 *` | `/api/tax-deadlines/cron` | Generate tax deadlines |
-| `0 5 * * *` | `/api/extensions/enable-banking/sync/cron` | Bank transaction sync |
-| `0 3 * * *` | `/api/documents/verify/cron` | Document integrity verification (daily) |
-| `0 4 * * *` | `/api/sandbox/cleanup/cron` | Sandbox user cleanup |
-| `0 2 * * *` | `/api/events/cleanup/cron` | Event log cleanup (30-day TTL) |
-| `0 * * * *` | `/api/extensions/cloud-backup/auto-sync/cron` | Hourly cloud backup auto-sync |
+Cron jobs in `vercel.json`: deadline status (`6:00`), invoice reminders (`8:00`), tax deadlines (yearly Jan 2), enable-banking sync (`5:00`), document verify (`3:00`), sandbox cleanup (`4:00`), event log cleanup (`2:00`, 30-day TTL), cloud-backup auto-sync (hourly).
 
 ### Docker (Self-Hosted)
 
@@ -515,20 +365,15 @@ Swedish sole traders (enskild firma) and small business owners (aktiebolag) who 
 
 ### Design Principles
 
-1. **Clarity over cleverness.** Every element immediately understandable. Clear labels (in Swedish), obvious hierarchy.
-2. **Earned minimalism.** Remove what doesn't serve the task, but don't strip context that prevents compliance errors.
-3. **Numbers are first-class.** Tabular-nums, proper alignment, adequate contrast, clear positive/negative distinction.
-4. **Trust through consistency.** Same patterns, spacing, and behavior everywhere.
-5. **Speed is a feature.** Optimize for the 90-second session.
+1. Clarity over cleverness — Swedish labels, obvious hierarchy.
+2. Earned minimalism — remove what doesn't serve the task, keep compliance context.
+3. Numbers are first-class — tabular-nums, alignment, positive/negative clarity.
+4. Trust through consistency.
+5. Speed is a feature — optimize for the 90-second session.
 
 ### Accessibility
 
-- **WCAG AA**: 4.5:1 text contrast, 3:1 UI components
-- Keyboard-navigable with visible focus rings
-- Respect `prefers-reduced-motion`
-- Color never sole indicator of state — always pair with icons, text, or shape
-- Touch targets ≥ 40px (shadcn `Button size="icon"` default) — bump higher to 44px (WCAG AAA) for new mobile-critical surfaces
-- Icon-only buttons must have `aria-label`
+WCAG AA (4.5:1 text, 3:1 UI). Keyboard-navigable + visible focus rings. Respect `prefers-reduced-motion`. Color never sole state indicator. Touch targets ≥40px (44px for mobile-critical). Icon-only buttons need `aria-label`.
 
 ### Design System Tokens
 
