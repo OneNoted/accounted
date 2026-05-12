@@ -177,7 +177,6 @@ export interface CompanySettings {
   // Entity info
   entity_type: EntityType
   company_name: string | null
-  trade_name: string | null
   org_number: string | null
 
   // Address
@@ -240,6 +239,7 @@ export interface CompanySettings {
   invoice_show_ocr: boolean
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
+  invoice_show_logo: boolean
   invoice_late_fee_text: string | null
   invoice_credit_terms_text: string | null
 
@@ -1264,7 +1264,6 @@ export interface BalansrapportReport {
 export interface SIEExportOptions {
   fiscal_period_id: string
   company_name: string
-  trade_name?: string | null
   org_number: string | null
   program_name?: string
 }

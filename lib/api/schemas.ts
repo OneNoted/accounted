@@ -359,7 +359,6 @@ export const MatchSupplierInvoiceSchema = z.object({
 export const UpdateSettingsSchema = z.object({
   entity_type: EntityTypeSchema.optional(),
   company_name: z.string().optional(),
-  trade_name: z.string().nullable().optional(),
   org_number: z.string().optional(),
   address_line1: z.string().optional(),
   address_line2: z.string().optional(),
@@ -399,6 +398,7 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_ocr: z.boolean().optional(),
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
+  invoice_show_logo: z.boolean().optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
   // AI agent flow
