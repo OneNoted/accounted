@@ -77,6 +77,10 @@ beforeEach(() => {
   })
 })
 
+// Deliberately fake org_number / vat_number: cannot be confused with real
+// Bolagsverket-registered entities and cannot pass VIES validation. The
+// 'TEST-' prefix makes it obvious to log scrapers and secret scanners that
+// these are test fixtures.
 const SAMPLE_CUSTOMER = {
   id: CUSTOMER_ID,
   name: 'Acme AB',
@@ -88,8 +92,8 @@ const SAMPLE_CUSTOMER = {
   postal_code: null,
   city: null,
   country: 'Sweden',
-  org_number: '556677-8899',
-  vat_number: 'SE556677889901',
+  org_number: 'TEST-0000-0001',
+  vat_number: 'SETEST00000001',
   vat_number_validated: true,
   vat_number_validated_at: '2025-04-12T09:00:00Z',
   default_payment_terms: 30,
@@ -117,7 +121,7 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     const body = await res.json()
     expect(body.data).toHaveLength(1)
     expect(body.data[0].name).toBe('Acme AB')
-    expect(body.data[0].org_number).toBe('556677-8899')
+    expect(body.data[0].org_number).toBe('TEST-0000-0001')
   })
 
   it('accepts include_archived=true', async () => {
@@ -203,6 +207,49 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.invoices).toBeUndefined()
   })
 
+  it('soft-degrades and signals partial_expansions when the invoices subquery fails', async () => {
+    // Custom mock: customers succeeds, invoices subquery returns an error.
+    const supabaseMock = {
+      from: vi.fn((table: string) => {
+        const result =
+          table === 'company_members'
+            ? { data: { company_id: COMPANY_ID, role: 'owner' }, error: null }
+            : table === 'customers'
+              ? { data: SAMPLE_CUSTOMER, error: null }
+              : table === 'invoices'
+                ? { data: null, error: { code: '42501', message: 'permission denied for table invoices' } }
+                : { data: null, error: null }
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) => resolve(result)
+            }
+            return (..._args: unknown[]) => new Proxy({}, handler)
+          },
+        }
+        return new Proxy({}, handler)
+      }),
+    }
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await getCustomer(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}?expand=invoices`,
+      ),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // Primary resource still returns.
+    expect(body.data.id).toBe(CUSTOMER_ID)
+    // Failed expansion falls back to an empty array …
+    expect(body.data.invoices).toEqual([])
+    // … and the caller is signalled via meta so they can detect the
+    // degraded response without re-parsing the body.
+    expect(body.meta.partial_expansions).toEqual(['invoices'])
+  })
+
   it('embeds open invoices when ?expand=invoices is requested', async () => {
     const openInvoice = {
       id: 'inv-open-1',
@@ -233,6 +280,8 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     const body = await res.json()
     expect(body.data.invoices).toHaveLength(1)
     expect(body.data.invoices[0].id).toBe('inv-open-1')
+    // Successful expansion MUST NOT set the partial flag.
+    expect(body.meta.partial_expansions).toBeUndefined()
   })
 
   it('returns 404 when the customer does not exist for the company', async () => {

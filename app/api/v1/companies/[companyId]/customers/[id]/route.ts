@@ -140,6 +140,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     // Open invoices expansion — separate query to avoid bloating the
     // customer base shape with a join that's only sometimes needed.
     let invoices: unknown[] | undefined
+    const partialExpansions: string[] = []
     if (expand.has('invoices')) {
       const { data: invs, error: invErr } = await ctx.supabase
         .from('invoices')
@@ -151,12 +152,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
       if (invErr) {
         // Soft-degrade: log but still return the customer. The agent gets
-        // the primary resource; ?expand is a hint, not a guarantee. Log
-        // only the error code/message — not the raw Supabase object.
+        // the primary resource; ?expand is a hint, not a guarantee.
+        // `meta.partial_expansions` signals which expansions failed so
+        // careful callers can retry or fall back without parsing the body.
         const errMsg = (invErr as { code?: string; message?: string }).message ?? 'unknown'
         const errCode = (invErr as { code?: string }).code ?? 'unknown'
         ctx.log.warn('customers.get: open-invoices expansion failed', { errCode, errMsg })
         invoices = []
+        partialExpansions.push('invoices')
       } else {
         invoices = invs ?? []
       }
@@ -164,7 +167,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     return ok(
       { ...customer, ...(invoices !== undefined ? { invoices } : {}) },
-      { requestId: ctx.requestId },
+      {
+        requestId: ctx.requestId,
+        partialExpansions: partialExpansions.length > 0 ? partialExpansions : undefined,
+      },
     )
   },
 )
