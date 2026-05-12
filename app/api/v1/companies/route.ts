@@ -136,10 +136,19 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     return Array.isArray(r.companies) ? (r.companies[0] ?? null) : r.companies
   }
 
+  // Defense in depth: PostgREST's `.is('companies.archived_at', null)` is
+  // expected to filter out archived companies before the row reaches us.
+  // If a `company_members` row arrives without an associated company object,
+  // the join filter behaved differently than expected — drop the row AND
+  // surface it as a warn so we notice silent data-integrity regressions.
+  let droppedNulls = 0
   const companies = trimmed
     .map((r) => {
       const c = pickCompany(r)
-      if (!c) return null
+      if (!c) {
+        droppedNulls += 1
+        return null
+      }
       return {
         id: c.id,
         name: c.name,
@@ -150,6 +159,10 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
       }
     })
     .filter((x): x is NonNullable<typeof x> => x !== null)
+
+  if (droppedNulls > 0) {
+    ctx.log.warn('companies.list: dropped rows with null company join', { droppedNulls })
+  }
 
   const last = trimmed[trimmed.length - 1]
   const lastCompany = last ? pickCompany(last) : null

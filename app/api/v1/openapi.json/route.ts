@@ -7,6 +7,7 @@
 
 import { NextResponse } from 'next/server'
 import { generateOpenApiSpec } from '@/lib/api/v1/registry'
+import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
 import '@/lib/api/v1/load-routes'
 
 export async function GET(request: Request) {
@@ -17,8 +18,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json(spec, {
     status: 200,
-    headers: {
+    headers: withPublicSecurityHeaders({
       'Cache-Control': 'public, max-age=300, s-maxage=300',
-    },
+    }),
   })
 }

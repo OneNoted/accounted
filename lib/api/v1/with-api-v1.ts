@@ -110,6 +110,21 @@ function generateRequestId(): string {
   return `req_${crypto.randomUUID()}`
 }
 
+/**
+ * Forensic identifiers for security event logs (failed auth, scope deny,
+ * company-membership deny). We log the source IP and user-agent so audit
+ * trails can correlate suspicious patterns across requests.
+ *
+ * Honors `x-forwarded-for` when set (Vercel / proxies); otherwise the IP is
+ * undefined. We never log the full `Cookie` or `Authorization` headers.
+ */
+function extractForensicContext(request: Request): { ip: string | undefined; userAgent: string | undefined } {
+  const fwd = request.headers.get('x-forwarded-for')
+  const ip = fwd ? fwd.split(',')[0]?.trim() : request.headers.get('x-real-ip') ?? undefined
+  const userAgent = request.headers.get('user-agent') ?? undefined
+  return { ip: ip || undefined, userAgent }
+}
+
 function isDryRun(request: Request, url: URL): boolean {
   if (url.searchParams.get('dry_run') === 'true') return true
   const headerVal = request.headers.get(DRY_RUN_HEADER)
@@ -148,6 +163,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
     const url = new URL(request.url)
     const path = url.pathname
+    const forensic = extractForensicContext(request)
 
     try {
       // 1. Determine required scope before auth. Public endpoints can skip
@@ -155,7 +171,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const requiredScope = options.requireScope ?? resolveRequiredScope(request.method, path)
 
       if (requiredScope === null) {
-        log.warn('endpoint not registered', { path, method: request.method })
+        log.warn('endpoint not registered', { path, method: request.method, ...forensic })
         return await v1ErrorResponseFromCode('NOT_FOUND', log, {
           requestId,
           details: { path, method: request.method },
@@ -184,13 +200,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // 3. Authenticate via Bearer token.
       const token = extractBearerToken(request)
       if (!token) {
-        log.warn('missing bearer token')
+        log.warn('missing bearer token', forensic)
         return await v1ErrorResponseFromCode('UNAUTHORIZED', log, { requestId })
       }
 
       const auth = await validateApiKey(token)
       if ('error' in auth) {
-        log.warn('api key validation failed', { status: auth.status, reason: auth.error })
+        log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
         const code = auth.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'
         return await v1ErrorResponseFromCode(code, log, { requestId, reason: auth.error })
       }
@@ -203,7 +219,11 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
       // 4. Scope check.
       if (!hasScope(auth.scopes, requiredScope)) {
-        userLog.warn('insufficient scope', { required: requiredScope, granted: auth.scopes })
+        userLog.warn('insufficient scope', {
+          required: requiredScope,
+          granted: auth.scopes,
+          ...forensic,
+        })
         return await v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', userLog, {
           requestId,
           details: { required_scope: requiredScope, granted_scopes: auth.scopes },
@@ -231,7 +251,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         }
 
         if (!membership) {
-          userLog.warn('user is not a member of company in URL', { companyId })
+          userLog.warn('user is not a member of company in URL', { companyId, ...forensic })
           // 404 (not 403) so we don't leak company existence to unauthorized callers.
           return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
             requestId,

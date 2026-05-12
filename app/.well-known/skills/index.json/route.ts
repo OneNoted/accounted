@@ -10,6 +10,7 @@
 import { NextResponse } from 'next/server'
 import { skills } from '@/extensions/general/mcp-server/skills'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
+import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
@@ -32,8 +33,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json(catalogue, {
     status: 200,
-    headers: {
+    headers: withPublicSecurityHeaders({
       'Cache-Control': 'public, max-age=300, s-maxage=300',
-    },
+    }),
   })
 }

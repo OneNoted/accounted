@@ -77,20 +77,30 @@ export function encodeDefaultCursor(row: { created_at: string; id: string } | nu
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }
 
+// Strict format guards — defence-in-depth against tampered cursors that
+// could otherwise inject untyped strings into a query's `.gt(field, value)`.
+// PostgREST would likely reject these, but validating here keeps the failure
+// mode predictable (stale cursor → "start over") rather than 400-ing.
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Decode a cursor produced by encodeDefaultCursor. Returns null when the
  * input is missing or malformed — callers should treat null as "start from
  * the beginning" rather than 400-ing on a stale cursor.
+ *
+ * `ts` must parse as an ISO 8601 timestamp and `id` must be a UUID; anything
+ * else is treated as a stale/corrupt cursor and discarded.
  */
 export function decodeDefaultCursor(cursor: string | null | undefined): DefaultCursor | null {
   if (!cursor) return null
   try {
     const json = Buffer.from(cursor, 'base64url').toString('utf8')
     const parsed = JSON.parse(json) as Partial<DefaultCursor>
-    if (typeof parsed.ts === 'string' && typeof parsed.id === 'string') {
-      return { ts: parsed.ts, id: parsed.id }
-    }
-    return null
+    if (typeof parsed.ts !== 'string' || typeof parsed.id !== 'string') return null
+    if (!ISO_TIMESTAMP.test(parsed.ts)) return null
+    if (!UUID.test(parsed.id)) return null
+    return { ts: parsed.ts, id: parsed.id }
   } catch {
     return null
   }
