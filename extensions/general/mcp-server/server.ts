@@ -42,7 +42,7 @@ import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { closePeriod, lockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 import { generateSIEExport } from '@/lib/reports/sie-export'
@@ -5362,6 +5362,283 @@ export const tools: McpTool[] = [
           import_opening_balances: Boolean(args.import_opening_balances),
           import_transactions: Boolean(args.import_transactions),
           will: 'parse SIE on commit, create fiscal period + opening balances + journal entries',
+        },
+        actor
+      )
+    },
+  },
+
+  // ── Phase 4: arbitrary-line bookkeeping primitives ───────────────
+
+  {
+    name: 'gnubok_create_voucher',
+    description: 'Stage a manual verifikation with arbitrary balanced lines. Use for capitalization (e.g. 1010), period-end accruals, FX adjustments, and rättelseposter outside categorize_transaction. HIGH risk — always staged, never auto-committed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entry_date: { type: 'string', description: 'Voucher date (YYYY-MM-DD)' },
+        description: { type: 'string', description: 'Verifikationstext (required, min 1 char)' },
+        fiscal_period_id: { type: 'string', description: 'UUID of fiscal period. If omitted, resolved from entry_date.' },
+        voucher_series: { type: 'string', description: 'Single letter A–Z. Defaults to A.' },
+        notes: { type: 'string', description: 'Internal notes (max 2000 chars) — visible on the verifikation but not on reports.' },
+        lines: {
+          type: 'array',
+          description: 'At least 2 balanced lines. sum(debit_amount) === sum(credit_amount), both > 0.',
+          items: {
+            type: 'object',
+            properties: {
+              account_number: { type: 'string', description: '4-digit BAS account number, e.g. "1010"' },
+              debit_amount: { type: 'number', description: 'Debit amount in SEK (≥ 0)' },
+              credit_amount: { type: 'number', description: 'Credit amount in SEK (≥ 0)' },
+              line_description: { type: 'string' },
+              currency: { type: 'string', description: 'ISO 4217, defaults to SEK' },
+              amount_in_currency: { type: 'number', description: 'Original amount if currency is not SEK' },
+              exchange_rate: { type: 'number' },
+              tax_code: { type: 'string' },
+              cost_center: { type: 'string' },
+              project: { type: 'string' },
+            },
+            required: ['account_number'],
+          },
+        },
+      },
+      required: ['entry_date', 'description', 'lines'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const entryDate = args.entry_date as string
+      const description = args.description as string
+      const rawLines = args.lines as Array<Record<string, unknown>> | undefined
+
+      if (!entryDate || !description || !Array.isArray(rawLines) || rawLines.length < 2) {
+        throw new Error('entry_date, description, and at least two lines are required')
+      }
+
+      // Normalize so validateBalance + preview see consistent numeric types.
+      const lines = rawLines.map((l) => ({
+        account_number: String(l.account_number ?? ''),
+        debit_amount: Number(l.debit_amount) || 0,
+        credit_amount: Number(l.credit_amount) || 0,
+        line_description: l.line_description ? String(l.line_description) : undefined,
+        currency: l.currency ? String(l.currency) : undefined,
+        amount_in_currency: l.amount_in_currency !== undefined ? Number(l.amount_in_currency) : undefined,
+        exchange_rate: l.exchange_rate !== undefined ? Number(l.exchange_rate) : undefined,
+        tax_code: l.tax_code ? String(l.tax_code) : undefined,
+        cost_center: l.cost_center ? String(l.cost_center) : undefined,
+        project: l.project ? String(l.project) : undefined,
+      }))
+
+      // Pre-flight: catch unbalanced lines before staging so the agent gets a
+      // tight feedback loop instead of a rejected pending_operation later.
+      const balance = validateBalance(lines)
+      if (!balance.valid) {
+        throw new Error(
+          `Lines are not balanced: debits ${balance.totalDebit} SEK, credits ${balance.totalCredit} SEK. ` +
+          'Both must be positive and equal.'
+        )
+      }
+
+      // Resolve fiscal period for the preview/title.
+      let fiscalPeriodId = (args.fiscal_period_id as string | undefined) ?? null
+      if (!fiscalPeriodId) {
+        fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
+      }
+      if (!fiscalPeriodId) {
+        throw new Error(`No open fiscal period covers ${entryDate}. Open a period or pick a different date.`)
+      }
+
+      // Resolve account names for the preview so the approver reads
+      // "1010 Balanserade utgifter / 2440 Leverantörsskulder" rather than
+      // bare numbers.
+      const accountNumbers = [...new Set(lines.map((l) => l.account_number))]
+      const { data: accounts } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number, account_name, is_active')
+        .eq('company_id', companyId)
+        .in('account_number', accountNumbers)
+      const accountInfo = new Map<string, { name: string; active: boolean }>()
+      for (const a of accounts || []) {
+        accountInfo.set(a.account_number as string, {
+          name: (a.account_name as string) ?? '',
+          active: Boolean(a.is_active),
+        })
+      }
+
+      const previewLines = lines.map((l) => ({
+        account_number: l.account_number,
+        account_name: accountInfo.get(l.account_number)?.name ?? null,
+        account_inactive: accountInfo.has(l.account_number) ? !accountInfo.get(l.account_number)!.active : true,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        line_description: l.line_description ?? null,
+      }))
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_voucher',
+        `Manuell verifikation: ${description}`,
+        {
+          entry_date: entryDate,
+          description,
+          fiscal_period_id: fiscalPeriodId,
+          voucher_series: (args.voucher_series as string) || undefined,
+          notes: (args.notes as string) || undefined,
+          source_type: 'manual',
+          lines,
+        },
+        {
+          entry_date: entryDate,
+          description,
+          fiscal_period_id: fiscalPeriodId,
+          voucher_series: (args.voucher_series as string) || 'A',
+          total_debit: balance.totalDebit,
+          total_credit: balance.totalCredit,
+          line_count: lines.length,
+          lines: previewLines,
+          will: 'create a posted journal entry with a fresh sequential voucher number',
+        },
+        actor
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_correct_entry',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ (storno + new corrected entry, never in-place edit). Use when part of a posted entry is wrong — e.g. wrong VAT account (2641 → 2614/2645) while preserving the expense/asset leg. HIGH risk — always staged.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entry_id: { type: 'string', description: 'UUID of the posted journal entry to correct' },
+        lines: {
+          type: 'array',
+          description: 'Replacement lines (≥ 2, balanced). Use the same accounts as the original where unchanged.',
+          items: {
+            type: 'object',
+            properties: {
+              account_number: { type: 'string' },
+              debit_amount: { type: 'number' },
+              credit_amount: { type: 'number' },
+              line_description: { type: 'string' },
+              currency: { type: 'string' },
+              amount_in_currency: { type: 'number' },
+              exchange_rate: { type: 'number' },
+              tax_code: { type: 'string' },
+              cost_center: { type: 'string' },
+              project: { type: 'string' },
+            },
+            required: ['account_number'],
+          },
+        },
+      },
+      required: ['entry_id', 'lines'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const entryId = args.entry_id as string
+      const rawLines = args.lines as Array<Record<string, unknown>> | undefined
+
+      if (!entryId || !Array.isArray(rawLines) || rawLines.length < 2) {
+        throw new Error('entry_id and at least two lines are required')
+      }
+
+      const lines = rawLines.map((l) => ({
+        account_number: String(l.account_number ?? ''),
+        debit_amount: Number(l.debit_amount) || 0,
+        credit_amount: Number(l.credit_amount) || 0,
+        line_description: l.line_description ? String(l.line_description) : undefined,
+        currency: l.currency ? String(l.currency) : undefined,
+        amount_in_currency: l.amount_in_currency !== undefined ? Number(l.amount_in_currency) : undefined,
+        exchange_rate: l.exchange_rate !== undefined ? Number(l.exchange_rate) : undefined,
+        tax_code: l.tax_code ? String(l.tax_code) : undefined,
+        cost_center: l.cost_center ? String(l.cost_center) : undefined,
+        project: l.project ? String(l.project) : undefined,
+      }))
+
+      const balance = validateBalance(lines)
+      if (!balance.valid) {
+        throw new Error(
+          `Correction lines not balanced: debits ${balance.totalDebit}, credits ${balance.totalCredit}. ` +
+          'Both must be positive and equal.'
+        )
+      }
+
+      // Pre-flight: the executor checks again, but failing fast here gives the
+      // agent a clearer error message than waiting until commit-time.
+      // The Supabase types don't infer through `fiscal_periods!inner(...)`,
+      // so we type the row shape manually rather than fight the generics.
+      type OriginalRow = {
+        id: string
+        status: string
+        entry_date: string
+        description: string
+        voucher_number: number
+        voucher_series: string
+        fiscal_period_id: string
+        fiscal_periods: { name?: string; is_closed?: boolean } | { name?: string; is_closed?: boolean }[] | null
+        lines: Array<{
+          account_number: string
+          debit_amount: number | string
+          credit_amount: number | string
+          line_description: string | null
+        }> | null
+      }
+      const { data, error: origErr } = await supabase
+        .from('journal_entries')
+        .select(
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
+          'fiscal_periods!inner(name, is_closed), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
+        )
+        .eq('id', entryId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const original = data as OriginalRow | null
+
+      if (origErr || !original) throw new Error('Journal entry not found')
+      if (original.status !== 'posted') {
+        throw new Error(`Only posted entries can be corrected. Current status: ${original.status}.`)
+      }
+      const periodInfo = Array.isArray(original.fiscal_periods)
+        ? original.fiscal_periods[0]
+        : original.fiscal_periods
+      if (periodInfo?.is_closed) {
+        throw new Error(
+          `Fiscal period "${periodInfo.name ?? 'okänd'}" is closed. Unlock the period, or use omprövning for already-filed VAT.`
+        )
+      }
+
+      const originalLines = original.lines || []
+
+      return stagePendingOperation(supabase, companyId, userId, 'correct_entry',
+        `Rättelse: V${original.voucher_series}${original.voucher_number} — ${original.description}`,
+        {
+          entry_id: entryId,
+          lines,
+        },
+        {
+          original: {
+            entry_id: entryId,
+            voucher: `${original.voucher_series}${original.voucher_number}`,
+            entry_date: original.entry_date,
+            description: original.description,
+            lines: originalLines.map((l) => ({
+              account_number: l.account_number,
+              debit_amount: Number(l.debit_amount),
+              credit_amount: Number(l.credit_amount),
+              line_description: l.line_description,
+            })),
+          },
+          correction: {
+            total_debit: balance.totalDebit,
+            total_credit: balance.totalCredit,
+            line_count: lines.length,
+            lines: lines.map((l) => ({
+              account_number: l.account_number,
+              debit_amount: l.debit_amount,
+              credit_amount: l.credit_amount,
+              line_description: l.line_description ?? null,
+            })),
+          },
+          will: 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
         },
         actor
       )
