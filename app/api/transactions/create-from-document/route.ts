@@ -58,9 +58,20 @@ export async function POST(request: Request) {
     )
   }
 
+  // Allowlist the currency — extracted_data.invoice.currency comes from the
+  // (deterministic, but still untrusted) PDF extractor, so an arbitrary
+  // string like "XYZ" or '"SEK\'"' could otherwise be persisted directly to
+  // the transactions table and break later formatCurrency / journal-entry
+  // bookings (BFL 5 kap 6 §). Coerce anything outside the supported set
+  // to SEK; the user can change it manually on the transaction.
+  const ALLOWED_CURRENCIES = new Set(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
+  const extractedCurrency = (
+    item.extracted_data as { invoice?: { currency?: string } } | null
+  )?.invoice?.currency
   const currency =
-    (item.extracted_data as { invoice?: { currency?: string } } | null)?.invoice?.currency ||
-    'SEK'
+    extractedCurrency && ALLOWED_CURRENCIES.has(extractedCurrency)
+      ? extractedCurrency
+      : 'SEK'
 
   const { data: newTx, error: insertError } = await supabase
     .from('transactions')
@@ -84,11 +95,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Kunde inte skapa transaktion.' }, { status: 500 })
   }
 
-  const { error: linkError } = await supabase
+  // Concurrency guard: the .is('matched_transaction_id', null) predicate +
+  // the rows-affected check turn this into an optimistic-lock release. If
+  // two requests with the same inbox_item_id race past the earlier
+  // matched_transaction_id check, only the first UPDATE will match a row
+  // here. The loser's transaction insert is then an orphan we proactively
+  // delete so the user doesn't get a duplicate uncategorized row.
+  const { data: linked, error: linkError } = await supabase
     .from('invoice_inbox_items')
     .update({ matched_transaction_id: newTx.id })
     .eq('id', inbox_item_id)
     .eq('company_id', companyId)
+    .is('matched_transaction_id', null)
+    .select('id')
 
   if (linkError) {
     console.error('[create-from-document] Failed to link inbox item:', linkError)
@@ -97,6 +116,18 @@ export async function POST(request: Request) {
     return NextResponse.json({
       data: { transaction_id: newTx.id, inbox_link_failed: true },
     })
+  }
+
+  if (!linked || linked.length === 0) {
+    // Lost a race — another concurrent request linked the inbox item first.
+    // Roll back our newly-created transaction (only safe because we own it
+    // and it has no journal_entry_id yet) and return 409 so the client can
+    // refetch and reuse the winning transaction instead of creating a dupe.
+    await supabase.from('transactions').delete().eq('id', newTx.id)
+    return NextResponse.json(
+      { error: 'Inkorgsposten kopplades av en parallell begäran. Försök igen.' },
+      { status: 409 },
+    )
   }
 
   return NextResponse.json({

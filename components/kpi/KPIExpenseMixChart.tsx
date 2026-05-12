@@ -90,9 +90,9 @@ export function KPIExpenseMixChart({ composition }: KPIExpenseMixChartProps) {
                 {totalCompact}
               </span>
             </div>
-            <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground">
               {chartData.map((seg, i) => (
-                <div key={seg.name} className="flex items-center gap-1.5">
+                <div key={seg.name} className="flex items-center gap-2">
                   <span
                     className="h-2 w-2 rounded-[2px]"
                     style={{ backgroundColor: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }}

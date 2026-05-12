@@ -149,6 +149,11 @@ export async function GET(request: Request) {
     total: number | null
     supplier: { id: string; name: string } | { id: string; name: string }[] | null
   }
+  if (topSuppliersResult.error) {
+    // Surface the failure rather than silently rendering an empty chart that
+    // matches the legitimate "no supplier invoices" empty state.
+    console.error('[kpi] topSuppliersResult error:', topSuppliersResult.error)
+  }
   const supplierTotals = new Map<string, { name: string; total: number }>()
   for (const row of (topSuppliersResult.data ?? []) as SupplierInvoiceRow[]) {
     if (!row.supplier_id) continue

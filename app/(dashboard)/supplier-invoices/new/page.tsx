@@ -307,12 +307,24 @@ export default function NewSupplierInvoicePage() {
   // the user hasn't typed a custom rate yet. Re-fetches when the invoice
   // date changes too. Never overwrites a user-entered rate.
   const watchedInvoiceDate = watch('invoice_date')
+  // The "user has manually edited the rate" flag is scoped *per currency*.
+  // Switching from EUR (rate 11.8 edited by hand) to USD must re-fetch — the
+  // EUR rate is meaningless for a USD invoice. Tracking last-fetched currency
+  // lets us reset the touched flag on a currency switch while still honoring
+  // a manual edit when only the invoice date changes within the same currency.
   const userTouchedRateRef = useRef(false)
+  const lastFxCurrencyRef = useRef<string | null>(null)
   useEffect(() => {
     if (watchedCurrency === 'SEK') {
       setValue('exchange_rate', '')
       userTouchedRateRef.current = false
+      lastFxCurrencyRef.current = null
       return
+    }
+    if (lastFxCurrencyRef.current !== watchedCurrency) {
+      // Currency switched — drop the previous currency's manual-edit flag.
+      userTouchedRateRef.current = false
+      lastFxCurrencyRef.current = watchedCurrency
     }
     if (userTouchedRateRef.current) return
     let cancelled = false

@@ -129,7 +129,7 @@ describe('POST /api/transactions/create-from-document', () => {
       error: null,
     })
     enqueue({ data: { id: 'new-tx-1' }, error: null }) // insert
-    enqueue({ data: null, error: null }) // inbox update
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // inbox update — one row affected
 
     const res = await POST(makeReq(validBody()))
     const { status, body } = await parseJsonResponse<{
@@ -138,6 +138,53 @@ describe('POST /api/transactions/create-from-document', () => {
     expect(status).toBe(200)
     expect(body.data.transaction_id).toBe('new-tx-1')
     expect(body.data.document_id).toBe('doc-1')
+  })
+
+  it('returns 409 and rolls back the orphan when a concurrent request linked first', async () => {
+    // Race scenario: both requests pass the matched_transaction_id IS NULL
+    // read; both insert their own transaction. The losing UPDATE matches
+    // zero rows because the .is('matched_transaction_id', null) predicate
+    // no longer holds. We delete the orphan and 409.
+    enqueue({
+      data: {
+        id: VALID_UUID,
+        document_id: 'doc-1',
+        matched_transaction_id: null,
+        created_supplier_invoice_id: null,
+        extracted_data: null,
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'orphan-tx' }, error: null }) // insert succeeds
+    enqueue({ data: [], error: null }) // inbox update affects zero rows — lost the race
+    enqueue({ data: null, error: null }) // rollback delete of the orphan
+
+    const res = await POST(makeReq(validBody()))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(409)
+    expect(body.error).toMatch(/parallell begäran/)
+  })
+
+  it('coerces an unrecognised extracted currency to SEK before insert', async () => {
+    // Defense-in-depth: the deterministic extractor can still emit garbage
+    // for malformed PDFs. We must not let arbitrary strings reach the
+    // transactions.currency column.
+    enqueue({
+      data: {
+        id: VALID_UUID,
+        document_id: null,
+        matched_transaction_id: null,
+        created_supplier_invoice_id: null,
+        extracted_data: { invoice: { currency: 'XYZ' } },
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'new-tx-3' }, error: null })
+    enqueue({ data: [{ id: VALID_UUID }], error: null })
+
+    const res = await POST(makeReq(validBody()))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
   })
 
   it('returns 500 when the transaction insert fails', async () => {

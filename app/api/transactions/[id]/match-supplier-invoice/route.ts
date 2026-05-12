@@ -142,6 +142,23 @@ export const POST = withRouteContext(
 
     const accountingMethod = settings?.accounting_method || 'accrual'
 
+    // Cash method (kontantmetoden) collapses registration + payment into a
+    // single entry that credits 1930 at sum(expenses_SEK). It has no
+    // exchange_rate_difference path — if the actual bank SEK differs from
+    // the invoice's booked SEK, the 1930 credit won't match the bank
+    // transaction and we'd silently leave a reconciliation gap. Block the
+    // combination and ask the user to switch to accrual or do a manual JE.
+    if (accountingMethod === 'cash' && exchangeRateDifference !== 0) {
+      return errorResponseFromCode('MATCH_SI_CASH_FX_UNSUPPORTED', txLog, {
+        requestId,
+        details: {
+          exchangeRateDifference,
+          invoiceCurrency: invoice.currency,
+          transactionCurrency: transaction.currency,
+        },
+      })
+    }
+
     let journalEntryId: string | null = null
     let journalEntryError: string | null = null
 
