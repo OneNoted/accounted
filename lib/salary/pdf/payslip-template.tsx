@@ -203,7 +203,7 @@ export interface PayslipData {
 
   // Employee
   employeeName: string
-  personnummerMasked: string // XXXXXXXX-XXXX
+  personnummerMasked: string // YYYYMMDD-XXXX
   employmentType: string
 
   // Period

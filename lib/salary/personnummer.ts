@@ -151,10 +151,11 @@ export function calculateAgeAtYearStart(personnummer: string, year: number): num
 }
 
 /**
- * Mask personnummer for display: XXXXXXXX-XXXX
+ * Mask personnummer for display: YYYYMMDD-XXXX (birthdate visible, suffix hidden).
  */
-export function maskPersonnummer(last4: string): string {
-  return `XXXXXXXX-${last4}`
+export function maskPersonnummer(personnummer: string): string {
+  const digits = personnummer.replace(/\D/g, '')
+  return `${digits.slice(0, 8)}-XXXX`
 }
 
 /**

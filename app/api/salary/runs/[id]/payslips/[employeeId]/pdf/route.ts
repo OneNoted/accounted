@@ -5,7 +5,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { PayslipPDF } from '@/lib/salary/pdf/payslip-template'
 import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-template'
-import { maskPersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 
 ensureInitialized()
 
@@ -41,7 +41,7 @@ export async function GET(
   // Load salary run employee
   const { data: sre } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(first_name, last_name, personnummer_last4, employment_type, tax_table_number, tax_column, clearing_number, bank_account_number), line_items:salary_line_items(*)')
+    .select('*, employee:employees(first_name, last_name, personnummer, personnummer_last4, employment_type, tax_table_number, tax_column, clearing_number, bank_account_number), line_items:salary_line_items(*)')
     .eq('salary_run_id', id)
     .eq('employee_id', employeeId)
     .single()
@@ -62,7 +62,7 @@ export async function GET(
   }
 
   const emp = sre.employee as {
-    first_name: string; last_name: string; personnummer_last4: string;
+    first_name: string; last_name: string; personnummer: string; personnummer_last4: string;
     employment_type: string; tax_table_number: number | null; tax_column: number;
     clearing_number: string | null; bank_account_number: string | null;
   }
@@ -104,7 +104,7 @@ export async function GET(
     companyName: company.name,
     companyOrgNumber: company.org_number || '',
     employeeName: `${emp.first_name} ${emp.last_name}`,
-    personnummerMasked: maskPersonnummer(emp.personnummer_last4),
+    personnummerMasked: maskPersonnummer(decryptPersonnummer(emp.personnummer)),
     employmentType: EMPLOYMENT_LABELS[emp.employment_type] || emp.employment_type,
     periodYear: run.period_year,
     periodMonth: run.period_month,

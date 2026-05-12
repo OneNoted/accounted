@@ -5,7 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import { encryptPersonnummer, extractLast4, validatePersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 
 ensureInitialized()
 
@@ -34,10 +34,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Mask personnummer — only show last 4
+  // Mask personnummer — show birthdate, hide the 4-digit suffix
   const masked = (data || []).map(emp => ({
     ...emp,
-    personnummer: `XXXXXXXX-${emp.personnummer_last4}`,
+    personnummer: maskPersonnummer(decryptPersonnummer(emp.personnummer)),
   }))
 
   return NextResponse.json({ data: masked })
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
   return NextResponse.json({
     data: {
       ...employee,
-      personnummer: `XXXXXXXX-${last4}`,
+      personnummer: maskPersonnummer(body.personnummer),
     },
   }, { status: 201 })
 }

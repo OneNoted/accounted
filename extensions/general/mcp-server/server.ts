@@ -38,6 +38,7 @@ import {
 import { toToolError } from './tool-result'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
+import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
@@ -4237,7 +4238,7 @@ export const tools: McpTool[] = [
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_employees',
-    description: 'List employees for the active company. Personnummer returned masked (XXXXXXXX-NNNN).',
+    description: 'List employees for the active company. Personnummer returned masked (YYYYMMDD-XXXX).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -4257,12 +4258,12 @@ export const tools: McpTool[] = [
       const activeOnly = args.active_only !== false
       let query = supabase
         .from('employees')
-        .select('id, first_name, last_name, personnummer_last4, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, is_active')
+        .select('id, first_name, last_name, personnummer, personnummer_last4, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, is_active')
         .eq('company_id', companyId)
       if (activeOnly) query = query.eq('is_active', true)
       const { data, error } = await query.order('last_name')
       if (error) throw new Error(`Database error: ${error.message}`)
-      const employees = (data || []).map(e => ({ ...e, personnummer: `XXXXXXXX-${e.personnummer_last4}` }))
+      const employees = (data || []).map(e => ({ ...e, personnummer: maskPersonnummer(decryptPersonnummer(e.personnummer as string)) }))
       return { employees, count: employees.length }
     },
   },
@@ -4289,9 +4290,9 @@ export const tools: McpTool[] = [
       if (error || !run) throw new Error('Salary run not found')
       const { data: employees } = await supabase
         .from('salary_run_employees')
-        .select('*, employee:employees(first_name, last_name, personnummer_last4)')
+        .select('*, employee:employees(first_name, last_name, personnummer, personnummer_last4)')
         .eq('salary_run_id', id)
-      return { ...run, employees: (employees || []).map(e => ({ ...e, employee: e.employee ? { ...(e.employee as Record<string, unknown>), personnummer: `XXXXXXXX-${(e.employee as Record<string, unknown>).personnummer_last4}` } : null })) }
+      return { ...run, employees: (employees || []).map(e => ({ ...e, employee: e.employee ? { ...(e.employee as Record<string, unknown>), personnummer: maskPersonnummer(decryptPersonnummer((e.employee as Record<string, unknown>).personnummer as string)) } : null })) }
     },
   },
   {

@@ -5,7 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import { encryptPersonnummer, extractLast4, validatePersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 
 ensureInitialized()
 
@@ -34,7 +34,7 @@ export async function GET(
   return NextResponse.json({
     data: {
       ...employee,
-      personnummer: `XXXXXXXX-${employee.personnummer_last4}`,
+      personnummer: maskPersonnummer(decryptPersonnummer(employee.personnummer)),
     },
   })
 }
@@ -117,7 +117,7 @@ export async function PATCH(
   return NextResponse.json({
     data: {
       ...updated,
-      personnummer: `XXXXXXXX-${updated.personnummer_last4}`,
+      personnummer: maskPersonnummer(decryptPersonnummer(updated.personnummer)),
     },
   })
 }

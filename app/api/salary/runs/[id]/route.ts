@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 
 ensureInitialized()
 
@@ -32,7 +33,7 @@ export async function GET(
   // Load employees with line items
   const { data: employees } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(id, first_name, last_name, personnummer_last4, employment_type), line_items:salary_line_items(*)')
+    .select('*, employee:employees(id, first_name, last_name, personnummer, personnummer_last4, employment_type), line_items:salary_line_items(*)')
     .eq('salary_run_id', id)
     .order('created_at')
 
@@ -61,7 +62,7 @@ export async function GET(
         ...emp,
         employee: emp.employee ? {
           ...emp.employee,
-          personnummer: `XXXXXXXX-${emp.employee.personnummer_last4}`,
+          personnummer: maskPersonnummer(decryptPersonnummer(emp.employee.personnummer)),
         } : null,
       })),
     },

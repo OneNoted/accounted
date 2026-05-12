@@ -80,8 +80,12 @@ describe('calculateAgeAtYearStart', () => {
 })
 
 describe('maskPersonnummer', () => {
-  it('masks with XXXXXXXX-XXXX format', () => {
-    expect(maskPersonnummer('9802')).toBe('XXXXXXXX-9802')
+  it('shows birthdate and masks the 4-digit suffix', () => {
+    expect(maskPersonnummer('199001019802')).toBe('19900101-XXXX')
+  })
+
+  it('strips non-digits before masking', () => {
+    expect(maskPersonnummer('19900101-9802')).toBe('19900101-XXXX')
   })
 })
 
