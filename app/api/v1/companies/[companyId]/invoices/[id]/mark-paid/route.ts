@@ -243,12 +243,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const isPartial =
       customLines !== undefined &&
-      Math.abs(paymentAmount - (typed.remaining_amount ?? typed.total)) > 0.005
+      Math.abs(paymentAmount - (typed.remaining_amount ?? typed.total)) > 0.005 // same half-öre epsilon as above
 
     const newRemaining = Math.max(
       0,
       Math.round(((typed.remaining_amount ?? typed.total) - paymentAmount) * 100) / 100,
     )
+    // 0.005 epsilon = half an öre. After rounding to 2 decimals above,
+    // newRemaining is in steps of 0.01; values ≤ 0.005 only arise from
+    // floating-point artefacts (e.g. 0.0000000001 from a SEK 99.99 payment
+    // against a SEK 99.99 invoice). Treating those as 'paid' avoids
+    // permanently-partially_paid invoices on full payment.
     const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
     const newPaidAmount =
       Math.round(((typed.paid_amount ?? 0) + paymentAmount) * 100) / 100
