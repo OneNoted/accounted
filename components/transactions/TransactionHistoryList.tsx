@@ -20,6 +20,7 @@ import {
   Loader2,
   Trash2,
 } from 'lucide-react'
+import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import type { TransactionWithInvoice, HistoryFilter } from './transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
@@ -216,7 +217,7 @@ function BankHistoryRow({
   onDelete?: (id: string) => void
 }) {
   return (
-    <Card className="hover:border-primary/50 transition-colors">
+    <Card data-tx-id={transaction.id} className="hover:border-primary/50 transition-colors">
       <CardContent className="py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -234,7 +235,10 @@ function BankHistoryRow({
               )}
             </div>
             <div>
-              <p className="font-medium">{transaction.description}</p>
+              <div className="flex items-center gap-1.5">
+                <p className="font-medium">{transaction.description}</p>
+                <TransactionAttachmentIndicator documentId={transaction.document_id} />
+              </div>
               <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <span>{formatDate(transaction.date)}</span>
                 {transaction.is_business !== null &&

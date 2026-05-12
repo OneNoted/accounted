@@ -1333,6 +1333,9 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
+  // Phase 4: arbitrary-line bookkeeping primitives
+  | 'create_voucher'
+  | 'correct_entry'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'
@@ -2456,6 +2459,13 @@ export interface KPIReport {
   periodComplete: boolean          // whether selected period is closed/complete
   months: { label: string; income: number; expenses: number; net: number }[]
   period: { start: string; end: string }
+  expenseComposition: {
+    class4: number
+    class5: number
+    class6: number
+    class7: number
+  }
+  topSuppliers: { supplier_id: string; supplier_name: string; total: number }[]
 }
 
 export interface KPIPreferences {

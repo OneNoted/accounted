@@ -16,7 +16,7 @@ import {
   Settings,
   LogOut,
   Upload,
-  Calendar,
+  Inbox,
   Menu,
   X,
   HelpCircle,
@@ -67,7 +67,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: '/', label: 'Översikt', icon: LayoutDashboard, group: 'main' },
   { href: '/kpi', label: 'Nyckeltal', icon: TrendingUp, group: 'main' },
-  { href: '/deadlines', label: 'Deadlines', icon: Calendar, group: 'main' },
+  { href: '/e/general/invoice-inbox', label: 'Dokumentinkorg', icon: Inbox, group: 'main', betaBadge: true },
   // AR — Accounts Receivable
   { href: '/invoices', label: 'Fakturor', icon: Receipt, group: 'försäljning' },
   { href: '/customers', label: 'Kunder', icon: Users, group: 'försäljning' },
@@ -213,7 +213,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                           "mr-2.5 h-[15px] w-[15px] flex-shrink-0",
                           active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                         )} />
-                        {item.label}
+                        <span className="flex-1">{item.label}</span>
+                        {item.comingSoon ? (
+                          <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                            Kommer snart
+                          </span>
+                        ) : item.devBadge ? (
+                          <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                            Dev
+                          </span>
+                        ) : item.betaBadge ? (
+                          <span className="ml-auto rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                            Beta
+                          </span>
+                        ) : null}
                       </>
                     )
                     const baseClass = cn(
@@ -551,7 +564,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
                   const content = (
                     <>
                       <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
-                      <span className="text-sm">{item.label}</span>
+                      <span className="text-sm flex-1">{item.label}</span>
+                      {item.comingSoon ? (
+                        <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                          Kommer snart
+                        </span>
+                      ) : item.devBadge ? (
+                        <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                          Dev
+                        </span>
+                      ) : item.betaBadge ? (
+                        <span className="rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5">
+                          Beta
+                        </span>
+                      ) : null}
                     </>
                   )
                   const baseClass = cn(
