@@ -118,19 +118,24 @@ export async function createSupplierInvoiceRegistrationEntry(
     // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
     // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
     //
-    // Skip basbeloppsraderna if the user already chose a 44xx/45xx basis
-    // account on the invoice item — those already populate ruta 20-24
-    // directly, and adding a parallel motkonto-pair would double-count.
+    // The basis-account check is done per (rate, account) bucket: if the user
+    // booked an item directly to a 44xx/45xx basis account at a given rate,
+    // that item's belopp already populates ruta 20-24 via the expense line —
+    // we only emit basbeloppsrader for the portion of that rate's base that
+    // went to NON-basis accounts. Mixed invoices (4535 + 6540 at 25%) used to
+    // skip basis lines entirely under a per-invoice flag, leaving ruta 30
+    // larger than ruta 21 by the 6540 portion — the exact FK004 pattern.
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    const userBookedBasisDirectly = Array.from(expenseByAccount.keys()).some(isBasisAccount)
     for (const [rate, amount] of vatByRate) {
       if (rate > 0 && amount > 0) {
         const baseAmount = amount / rate
         const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
         lines.push(...rcLines)
-        if (!userBookedBasisDirectly) {
-          const basisLines = generateReverseChargeBasisLines(baseAmount, rate, rcSupplierType)
+        const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
+        if (nonBasisBase > 0) {
+          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
           lines.push(...basisLines)
         }
       }
@@ -329,16 +334,18 @@ export async function createSupplierInvoiceCashEntry(
     // Without these the fiktiv moms (2614/2624/2634) populates ruta 30-32
     // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
     // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
+    // Per-rate bucketing: see registration entry above for the FK004 rationale.
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    const userBookedBasisDirectly = Array.from(expenseByAccount.keys()).some(isBasisAccount)
     for (const [rate, amount] of vatByRate) {
       if (rate > 0 && amount > 0) {
         const baseAmount = amount / rate
         const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
         lines.push(...rcLines)
-        if (!userBookedBasisDirectly) {
-          const basisLines = generateReverseChargeBasisLines(baseAmount, rate, rcSupplierType)
+        const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
+        if (nonBasisBase > 0) {
+          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
           lines.push(...basisLines)
         }
       }
@@ -432,12 +439,12 @@ export async function createSupplierCreditNoteEntry(
     // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
     const inputAccount = isDomesticRC ? '2647' : '2645'
     const vatByRate = groupVatByRate(items, creditNote.currency, creditNote.exchange_rate, true)
+    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, creditNote.currency, creditNote.exchange_rate, true)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    // Only reverse basbeloppsraderna if the original registration would have
-    // emitted them. When the user booked the expense directly to a 44xx/45xx
-    // basis account the registration skipped the parallel pair, so we must
-    // skip the reversal too to avoid leaving a spurious 4598-line.
-    const userBookedBasisDirectly = Array.from(expenseByAccount.keys()).some(isBasisAccount)
+    // Only reverse basbeloppsraderna for the portion the registration would
+    // have emitted them — namely the non-basis-account base per rate. Items
+    // booked directly to 44xx/45xx had no parallel basis lines in registration
+    // and so are reversed only via the expense credit line above.
     for (const [rate, amount] of vatByRate) {
       if (rate > 0 && amount > 0) {
         // Determine the output account for this rate
@@ -459,14 +466,14 @@ export async function createSupplierCreditNoteEntry(
           credit_amount: 0,
           line_description: `Omvänd fiktiv utgående moms ${Math.round(rate * 100)}% ${desc}`,
         })
-        if (!userBookedBasisDirectly) {
+        const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
+        if (nonBasisBase > 0) {
           // Reverse the basbeloppsrader (44xx/45xx debit & 4598 credit on the
           // registration entry become credits & debits here). Without this the
           // credit note would only undo the VAT amounts (ruta 30-32 + 48) but
           // leave ruta 20-24 still showing the original basbelopp — exactly
           // the same FK004-style mismatch the registration fix prevents.
-          const baseAmount = amount / rate
-          const basisLines = generateReverseChargeBasisLines(baseAmount, rate, rcSupplierType)
+          const basisLines = generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)
           // Swap debit/credit on every basis line so the credit note nets
           // against the original registration verifikat.
           for (const line of basisLines) {
@@ -538,4 +545,27 @@ function groupVatByRate(
     vatByRate.set(rate, (vatByRate.get(rate) || 0) + itemVat)
   }
   return vatByRate
+}
+
+/**
+ * Sum, per VAT rate, the base (line_total in SEK) of items booked to
+ * non-basis expense accounts. Items already booked to a 44xx/45xx basis
+ * account populate ruta 20-24 directly via the expense line, so they must be
+ * excluded here to avoid double-counting in basbeloppsraderna.
+ */
+function groupNonBasisBaseByRate(
+  items: SupplierInvoiceItem[],
+  currency: string,
+  exchangeRate: number | null,
+  useAbsoluteValues = false
+): Map<number, number> {
+  const baseByRate = new Map<number, number>()
+  for (const item of items) {
+    if (isBasisAccount(item.account_number)) continue
+    const rate = item.vat_rate ?? 0.25
+    let itemSek = resolveSekAmount(item.line_total, null, currency, exchangeRate)
+    if (useAbsoluteValues) itemSek = Math.abs(itemSek)
+    baseByRate.set(rate, (baseByRate.get(rate) || 0) + itemSek)
+  }
+  return baseByRate
 }
