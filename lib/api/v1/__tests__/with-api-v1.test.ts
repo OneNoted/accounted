@@ -5,8 +5,16 @@
  * the wrapper's auth / scope / company-membership / idempotency / dry-run
  * branches deterministically.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
+
+beforeAll(() => {
+  // The wrapper's public-scope path now fails closed if these env vars are
+  // missing; tests don't run against a real Supabase instance so we stub
+  // values just to clear the guard.
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
+})
 
 vi.mock('@/lib/auth/api-keys', async () => {
   const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
@@ -422,7 +430,17 @@ describe('truncateIp — privacy-preserving IP logging', () => {
 
   it('returns undefined for malformed input rather than leaking it raw', () => {
     expect(truncateIp('not-an-ip')).toBeUndefined()
-    expect(truncateIp('999.999.999.999')).toBe('999.999.999.0/24') // permissive on bytes; loose-format match is fine
+  })
+
+  it('rejects IPv4 with out-of-range octets to avoid pseudo-IPs in audit logs', () => {
+    expect(truncateIp('999.999.999.999')).toBeUndefined()
+    expect(truncateIp('256.0.0.1')).toBeUndefined()
+    expect(truncateIp('192.168.1.300')).toBeUndefined()
+  })
+
+  it('accepts edge IPv4 octets (0 and 255)', () => {
+    expect(truncateIp('0.0.0.0')).toBe('0.0.0.0/24')
+    expect(truncateIp('255.255.255.255')).toBe('255.255.255.0/24')
   })
 })
 

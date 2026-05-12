@@ -50,6 +50,7 @@ import {
 } from '@/lib/api/idempotency'
 import { createLogger, type Logger } from '@/lib/logger'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
+import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
@@ -114,12 +115,20 @@ function generateRequestId(): string {
  * Anon-key Supabase client for the wrapper's public-scope code path. RLS is
  * enforced (no service-role privilege escalation) so even an accidental DB
  * call from a public handler is constrained to anon-accessible rows.
+ *
+ * Fails closed at first-call if the required env vars are missing — better
+ * to surface the misconfiguration on the first request than silently 500
+ * deeper in the handler.
  */
 function createAnonClient(): SupabaseClient {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) {
+    throw new Error(
+      '[api/v1] NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set to serve public-scope v1 endpoints',
+    )
+  }
+  return createClient(url, key)
 }
 
 /**
@@ -138,9 +147,17 @@ function createAnonClient(): SupabaseClient {
  */
 export function truncateIp(ip: string | undefined): string | undefined {
   if (!ip) return undefined
-  // IPv4: drop last octet → "203.0.113.x"
-  const v4 = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(ip)
-  if (v4) return `${v4[1]}.0/24`
+  // IPv4: validate octets are 0-255, then drop last octet → "203.0.113.0/24".
+  // Out-of-range octets indicate a spoofed or malformed header; refuse to
+  // log a pseudo-IP that would pollute abuse-pattern analysis.
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip)
+  if (v4) {
+    const octets = [v4[1], v4[2], v4[3], v4[4]].map((s) => Number.parseInt(s, 10))
+    if (octets.every((o) => o >= 0 && o <= 255)) {
+      return `${octets[0]}.${octets[1]}.${octets[2]}.0/24`
+    }
+    return undefined
+  }
   // IPv6: keep first 3 hextets → "2001:db8:abc::/48"
   const v6 = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):/i.exec(ip)
   if (v6) return `${v6[1]}::/48`
@@ -403,6 +420,13 @@ function stampHeaders(response: Response, requestId: string): Response {
   if (!response.headers.get('X-Request-Id')) response.headers.set('X-Request-Id', requestId)
   if (!response.headers.get(API_V1_VERSION_HEADER)) {
     response.headers.set(API_V1_VERSION_HEADER, API_V1_VERSION)
+  }
+  // Apply security headers to every wrapped v1 response — same set as the
+  // public discovery routes PLUS X-Robots-Tag noai so authenticated payloads
+  // are excluded from AI training sets (Claude, ChatGPT, Perplexity, Google
+  // -Extended respect this; others won't).
+  for (const [k, v] of Object.entries(WRAPPED_RESPONSE_HEADERS)) {
+    if (!response.headers.get(k)) response.headers.set(k, v)
   }
   return response
 }

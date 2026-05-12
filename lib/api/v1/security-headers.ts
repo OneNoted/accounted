@@ -15,6 +15,13 @@
  *                                       legitimately render in a frame
  */
 
+/**
+ * Headers applied to BOTH public discovery routes and authenticated v1
+ * responses. Includes CSP, HSTS, and frame/sniff/referrer protections, but
+ * NOT X-Robots-Tag — discovery routes (llms.txt, skills index, OpenAPI)
+ * exist to be crawled by AI agents; authenticated routes get an additional
+ * X-Robots-Tag at the wrapper level via WRAPPED_RESPONSE_NOAI_HEADERS.
+ */
 export const PUBLIC_SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -26,6 +33,18 @@ export const PUBLIC_SECURITY_HEADERS: Record<string, string> = {
   // HSTS — every gnubok deployment is HTTPS-only. 1 year is the standard
   // production value; includeSubDomains because the apex serves everything.
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+}
+
+/**
+ * Additional headers applied ONLY to authenticated v1 responses. AI bots
+ * that respect X-Robots-Tag (Claude, ChatGPT, Perplexity, Google-Extended)
+ * will skip these payloads for training; others will ignore the hint.
+ * Public discovery routes deliberately omit this so they remain
+ * AI-discoverable.
+ */
+export const WRAPPED_RESPONSE_HEADERS: Record<string, string> = {
+  ...PUBLIC_SECURITY_HEADERS,
+  'X-Robots-Tag': 'noai, noimageai',
 }
 
 /**
