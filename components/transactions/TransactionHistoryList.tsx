@@ -24,7 +24,7 @@ import type { TransactionWithInvoice, HistoryFilter } from './transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
-} from '@/extensions/general/skatteverket/types'
+} from '@/types/skatteverket'
 
 type SourceFilter = 'all' | 'bank' | 'skatteverket'
 

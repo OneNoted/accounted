@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import type { StoredSkattekontoTransaction } from '@/extensions/general/skatteverket/types'
+import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 
 interface MatchCandidate {
   journal_entry_id: string

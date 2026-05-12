@@ -35,7 +35,8 @@ import type { TransactionWithInvoice, ViewMode, CategorizeHandler } from '@/comp
 import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
-} from '@/extensions/general/skatteverket/types'
+} from '@/types/skatteverket'
+import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -163,32 +164,10 @@ export default function TransactionsPage() {
 
   const skvUnmatched = skvRows.filter(r => !r.journal_entry_id)
 
-  // Bank tx ↔ unmatched SKV row hints. We surface a passive warning on
-  // bank cards so users don't book a 1930→1630 transfer twice (once via
-  // /transactions, once via /skattekonto). Rule: opposite signs (a transfer
-  // looks like -X on bank and +X on SKV, or vice versa), equal absolute
-  // amounts, transaktionsdatum within ±14 days of bank.date.
-  const bankToSkvHints = (() => {
-    const map = new Map<string, string>() // bankTxId → SKV transaktionsdatum
-    if (skvUnmatched.length === 0) return map
-    for (const tx of uncategorizedTransactions) {
-      const txAmount = Math.round(Math.abs(tx.amount) * 100) / 100
-      if (txAmount === 0) continue
-      const txDate = new Date(tx.date + 'T00:00:00Z').getTime()
-      for (const r of skvUnmatched) {
-        const skvAmount = Math.round(Math.abs(Number(r.belopp_skatteverket)) * 100) / 100
-        if (skvAmount !== txAmount) continue
-        // Transfer scenario: bank-side and SKV-side have opposite signs.
-        if (Math.sign(tx.amount) === Math.sign(Number(r.belopp_skatteverket))) continue
-        const rDate = new Date(r.transaktionsdatum + 'T00:00:00Z').getTime()
-        const diffDays = Math.abs(rDate - txDate) / 86_400_000
-        if (diffDays > 14) continue
-        map.set(tx.id, r.transaktionsdatum)
-        break
-      }
-    }
-    return map
-  })()
+  const bankToSkvHints = findBankSkvCounterparts({
+    bankRows: uncategorizedTransactions.map(t => ({ id: t.id, date: t.date, amount: t.amount })),
+    skvRows: skvUnmatched,
+  })
 
   const inboxItems: InboxItem[] = (() => {
     const items: InboxItem[] = []

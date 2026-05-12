@@ -9,7 +9,7 @@ import { AlertCircle, ArrowUpRight, ArrowDownRight, Landmark, Link2, Loader2 } f
 import type {
   SkattekontoMatchSuggestion,
   StoredSkattekontoTransaction,
-} from '@/extensions/general/skatteverket/types'
+} from '@/types/skatteverket'
 
 /**
  * Skattekonto-rad in the /transactions inbox.
