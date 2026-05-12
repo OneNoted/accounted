@@ -77,6 +77,11 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
   const { limit, cursor } = parsePaginationParams(url)
   const decoded = decodeDefaultCursor(cursor)
 
+  // Authorization boundary: the query below filters by `user_id = ctx.userId`
+  // BEFORE the cursor's joined_at is applied, so a tampered cursor can only
+  // reorder rows the caller is already entitled to see. Cursors are not
+  // signed; that's intentional. See PR #450 review for the trade-off.
+
   // We over-fetch by one to determine whether a next page exists.
   let query = ctx.supabase
     .from('company_members')

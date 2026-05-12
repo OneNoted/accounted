@@ -19,6 +19,10 @@ export const PUBLIC_SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'DENY',
+  // Discovery routes return JSON or plain text — no script, style, image, or
+  // form contexts. `default-src 'none'` is the strictest possible CSP and
+  // costs nothing here.
+  'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
 }
 
 /**

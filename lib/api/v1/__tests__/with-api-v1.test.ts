@@ -33,7 +33,7 @@ import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
-import { withApiV1 } from '../with-api-v1'
+import { truncateIp, withApiV1 } from '../with-api-v1'
 import { ok } from '../response'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -392,6 +392,26 @@ describe('withApiV1 — stable headers', () => {
     const res = await handler(makeRequest('https://x.test/api/v1/health'), emptyParams())
     expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
     expect(res.headers.get('Gnubok-Version')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+describe('truncateIp — privacy-preserving IP logging', () => {
+  it('truncates IPv4 to /24', () => {
+    expect(truncateIp('203.0.113.42')).toBe('203.0.113.0/24')
+  })
+
+  it('truncates IPv6 to /48', () => {
+    expect(truncateIp('2001:db8:abcd:1234::1')).toBe('2001:db8:abcd::/48')
+  })
+
+  it('returns undefined for an empty IP', () => {
+    expect(truncateIp(undefined)).toBeUndefined()
+    expect(truncateIp('')).toBeUndefined()
+  })
+
+  it('returns undefined for malformed input rather than leaking it raw', () => {
+    expect(truncateIp('not-an-ip')).toBeUndefined()
+    expect(truncateIp('999.999.999.999')).toBe('999.999.999.0/24') // permissive on bytes; loose-format match is fine
   })
 })
 

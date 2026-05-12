@@ -112,17 +112,35 @@ function generateRequestId(): string {
 
 /**
  * Forensic identifiers for security event logs (failed auth, scope deny,
- * company-membership deny). We log the source IP and user-agent so audit
- * trails can correlate suspicious patterns across requests.
+ * company-membership deny). We log a *truncated* source IP (last octet
+ * dropped for IPv4, last 80 bits zeroed for IPv6) and user-agent so audit
+ * trails can correlate suspicious patterns by network neighbourhood
+ * without persisting full identifying IPs in the log store.
  *
- * Honors `x-forwarded-for` when set (Vercel / proxies); otherwise the IP is
- * undefined. We never log the full `Cookie` or `Authorization` headers.
+ * Data minimisation: GDPR Art.5(1)(c) / Art.5(1)(f). Truncation preserves
+ * the diagnostic value (city-level geolocation, ASN, abuse-pattern
+ * correlation) while eliminating point-of-presence identification.
+ *
+ * Honors `x-forwarded-for` when set (Vercel / proxies); behind Vercel the
+ * leftmost value is rewritten by the edge so we accept it as authoritative.
  */
+export function truncateIp(ip: string | undefined): string | undefined {
+  if (!ip) return undefined
+  // IPv4: drop last octet → "203.0.113.x"
+  const v4 = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/.exec(ip)
+  if (v4) return `${v4[1]}.0/24`
+  // IPv6: keep first 3 hextets → "2001:db8:abc::/48"
+  const v6 = /^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):/i.exec(ip)
+  if (v6) return `${v6[1]}::/48`
+  return undefined
+}
+
 function extractForensicContext(request: Request): { ip: string | undefined; userAgent: string | undefined } {
   const fwd = request.headers.get('x-forwarded-for')
-  const ip = fwd ? fwd.split(',')[0]?.trim() : request.headers.get('x-real-ip') ?? undefined
+  const raw = fwd ? fwd.split(',')[0]?.trim() : request.headers.get('x-real-ip') ?? undefined
+  const ip = truncateIp(raw || undefined)
   const userAgent = request.headers.get('user-agent') ?? undefined
-  return { ip: ip || undefined, userAgent }
+  return { ip, userAgent }
 }
 
 function isDryRun(request: Request, url: URL): boolean {
