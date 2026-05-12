@@ -7,13 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
-import { Search, ArrowUpRight, ArrowDownRight, ArrowLeftRight, Check, Link2, FileText, Loader2 } from 'lucide-react'
+import { Search, ArrowUpRight, ArrowDownRight, ArrowLeftRight, Check, Link2, FileText, Loader2, Trash2 } from 'lucide-react'
 import type { TransactionWithInvoice, HistoryFilter } from './transaction-types'
 
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
+  onDelete?: (id: string) => void
   hasMore?: boolean
   isLoadingMore?: boolean
   onLoadMore?: () => void
@@ -23,6 +24,7 @@ export default function TransactionHistoryList({
   transactions,
   onOpenMatchDialog,
   onOpenCategoryDialog,
+  onDelete,
   hasMore,
   isLoadingMore,
   onLoadMore,
@@ -175,6 +177,17 @@ export default function TransactionHistoryList({
                         onClick={() => onOpenCategoryDialog(transaction)}
                       >
                         Bokför
+                      </Button>
+                    )}
+                    {!transaction.journal_entry_id && onDelete && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-destructive"
+                        onClick={() => onDelete(transaction.id)}
+                        aria-label="Ta bort transaktion"
+                      >
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     )}
                     <div className="text-right">

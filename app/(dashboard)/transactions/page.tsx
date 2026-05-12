@@ -940,6 +940,7 @@ export default function TransactionsPage() {
           transactions={transactions}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
+          onDelete={handleDeleteTransaction}
           hasMore={hasMore}
           isLoadingMore={isLoadingMore}
           onLoadMore={loadMoreTransactions}
