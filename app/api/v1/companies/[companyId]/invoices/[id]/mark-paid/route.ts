@@ -236,10 +236,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entityType = ((settings as { entity_type?: string } | null)?.entity_type ??
       'enskild_firma') as EntityType
 
-    // Compute the would-be payment amount (full unless custom lines).
+    // Compute the would-be payment amount. Default path (no customLines):
+    // use remaining_amount, not total — protects against over-crediting AR
+    // when a concurrent partial payment slips through the pre-flight check
+    // (pre-flight sees status='sent' but the race-guard UPDATE later sees
+    // status='partially_paid' so a second full-total amount would be booked
+    // against an already-reduced AR balance).
     const paymentAmount = customLines
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
-      : typed.total
+      : (typed.remaining_amount ?? typed.total)
 
     const isPartial =
       customLines !== undefined &&
