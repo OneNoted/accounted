@@ -21,6 +21,7 @@ import type { SalaryRun, SalaryRunEmployee, Employee, CreateJournalEntryLineInpu
 import { AGIPanel } from '@/components/salary/AGIPanel'
 import { PaymentFilePanel } from '@/components/salary/PaymentFilePanel'
 import { TaxPaymentPanel } from '@/components/salary/TaxPaymentPanel'
+import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
 
 type SalaryRunWithArbetsgivare = SalaryRun & { arbetsgivare?: string | null }
 
@@ -353,6 +354,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
             <CardTitle className="text-base">Beräkningsdetaljer</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <TaxTableStatus year={run.period_year} compact />
             {employees.filter(e => e.calculation_breakdown).map(sre => {
               const breakdown = sre.calculation_breakdown as { steps?: Array<{ label: string; formula: string; output: number | null }> }
               return (

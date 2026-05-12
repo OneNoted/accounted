@@ -677,13 +677,13 @@ export const SupplierImportExecuteSchema = z.object({
 export const EmploymentTypeSchema = z.enum(['employee', 'company_owner', 'board_member'])
 export const SalaryTypeSchema = z.enum(['monthly', 'hourly'])
 export const FSkattStatusSchema = z.enum(['a_skatt', 'f_skatt', 'fa_skatt', 'not_verified'])
-export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln'])
+export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln', 'none'])
 export const SalaryRunStatusSchema = z.enum(['draft', 'review', 'approved', 'paid', 'booked', 'corrected'])
 
 export const SalaryLineItemTypeSchema = z.enum([
   'monthly_salary', 'hourly_salary', 'overtime', 'bonus', 'commission',
   'gross_deduction_pension', 'gross_deduction_other',
-  'benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_other',
+  'benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other',
   'sick_karens', 'sick_day2_14', 'sick_day15_plus',
   'vab', 'parental_leave', 'vacation',
   'traktamente_taxfree', 'traktamente_taxable',
@@ -793,6 +793,47 @@ export const UpdateEmployeeSchema = EmployeeSchemaBase.partial().superRefine((da
       path: ['hourly_rate'],
     })
   }
+})
+
+export const EmployeeBenefitTypeSchema = z.enum(['bike', 'car', 'meals', 'housing', 'wellness', 'other'])
+
+export const CreateEmployeeBenefitSchema = z.object({
+  benefit_type: EmployeeBenefitTypeSchema,
+  description: z.string().min(1).max(200),
+  monthly_value: z.number().nonnegative().optional(),
+  /** For bike benefit: annual market value of the förmån. The server computes
+   * monthly_value = max(0, annual − 3000) / 12 per Skatteverket schablon. */
+  annual_market_value: z.number().nonnegative().optional(),
+  valid_from: isoDate,
+  valid_to: isoDate.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  if (data.benefit_type === 'bike') {
+    if (data.annual_market_value === undefined && data.monthly_value === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Cykelförmån kräver årligt marknadsvärde',
+        path: ['annual_market_value'],
+      })
+    }
+  } else if (data.monthly_value === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Månatligt förmånsvärde krävs',
+      path: ['monthly_value'],
+    })
+  }
+})
+
+export const UpdateEmployeeBenefitSchema = z.object({
+  description: z.string().min(1).max(200).optional(),
+  monthly_value: z.number().nonnegative().optional(),
+  annual_market_value: z.number().nonnegative().optional(),
+  valid_from: isoDate.optional(),
+  valid_to: isoDate.nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  is_active: z.boolean().optional(),
 })
 
 export const CreateSalaryRunSchema = z.object({
