@@ -317,6 +317,30 @@ export interface StoredSkattekontoTransaction {
   updated_at: string
 }
 
+/**
+ * Single best candidate verifikat for an unmatched SKV row. Attached by
+ * the `/skattekonto/transaktioner` endpoint when exactly one strong match
+ * exists, so the UI can offer a one-click "koppla till A12" hint instead
+ * of forcing the user to open the full Matcha-dialog.
+ */
+export interface SkattekontoMatchSuggestion {
+  journal_entry_id: string
+  voucher_number: number | null
+  voucher_series: string | null
+  entry_date: string
+  description: string
+  status: 'draft' | 'posted' | 'reversed'
+}
+
+/**
+ * API response variant: stored row plus optional auto-match suggestion.
+ * `match_suggestion` is optional because kommande/upcoming rows skip the
+ * enrichment step entirely (no journal entry can match a future event).
+ */
+export interface SkattekontoTransactionWithSuggestion extends StoredSkattekontoTransaction {
+  match_suggestion?: SkattekontoMatchSuggestion | null
+}
+
 /** Cached snapshot stored in extension_data under key skattekonto_balance_snapshot */
 export interface SkattekontoBalanceSnapshot {
   saldo: SkatteverketSaldoResponse

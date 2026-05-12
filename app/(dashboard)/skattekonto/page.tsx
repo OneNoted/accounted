@@ -7,6 +7,14 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import {
@@ -14,10 +22,12 @@ import {
   ExternalLink,
   FileCheck,
   Landmark,
+  Link2,
   RefreshCw,
 } from 'lucide-react'
 import type {
   SkatteverketSaldoResponse,
+  SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
 } from '@/extensions/general/skatteverket/types'
 
@@ -29,9 +39,20 @@ interface SaldoEnvelope {
 
 interface TransaktionerEnvelope {
   data: {
-    booked: StoredSkattekontoTransaction[]
+    booked: SkattekontoTransactionWithSuggestion[]
     upcoming: StoredSkattekontoTransaction[]
   }
+}
+
+interface MatchCandidate {
+  journal_entry_id: string
+  voucher_number: number | null
+  voucher_series: string | null
+  entry_date: string
+  description: string
+  status: 'draft' | 'posted' | 'reversed'
+  matched_amount: number
+  matched_side: 'debit' | 'credit'
 }
 
 export default function SkattekontoPage() {
@@ -42,6 +63,12 @@ export default function SkattekontoPage() {
   const [syncing, setSyncing] = useState(false)
   const [bookingId, setBookingId] = useState<string | null>(null)
   const [notConnected, setNotConnected] = useState(false)
+  const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
+    null,
+  )
+  const [matchCandidates, setMatchCandidates] = useState<MatchCandidate[] | null>(null)
+  const [matchLoading, setMatchLoading] = useState(false)
+  const [matchSubmitting, setMatchSubmitting] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -130,6 +157,62 @@ export default function SkattekontoPage() {
     }
   }
 
+  async function openMatch(row: StoredSkattekontoTransaction) {
+    setMatchOpenFor(row)
+    setMatchCandidates(null)
+    setMatchLoading(true)
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
+      )
+      const json = await res.json()
+      if (!res.ok) {
+        throw new Error(json.error || 'Kunde inte söka kandidater')
+      }
+      setMatchCandidates(json.data.candidates as MatchCandidate[])
+    } catch (err) {
+      toast({
+        title: 'Kunde inte hämta kandidater',
+        description: err instanceof Error ? err.message : undefined,
+        variant: 'destructive',
+      })
+      setMatchOpenFor(null)
+    } finally {
+      setMatchLoading(false)
+    }
+  }
+
+  async function confirmMatch(journalEntryId: string) {
+    if (!matchOpenFor) return
+    setMatchSubmitting(journalEntryId)
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${matchOpenFor.id}/match`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ journal_entry_id: journalEntryId }),
+        },
+      )
+      const json = await res.json()
+      if (!res.ok) {
+        throw new Error(json.error || 'Matchning misslyckades')
+      }
+      toast({ title: 'Transaktion kopplad till verifikat' })
+      setMatchOpenFor(null)
+      setMatchCandidates(null)
+      await reload()
+    } catch (err) {
+      toast({
+        title: 'Kunde inte koppla transaktionen',
+        description: err instanceof Error ? err.message : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setMatchSubmitting(null)
+    }
+  }
+
   function copyOcr(ocr: string) {
     navigator.clipboard
       .writeText(ocr)
@@ -182,7 +265,7 @@ export default function SkattekontoPage() {
           <Tabs defaultValue="booked">
             <TabsList>
               <TabsTrigger value="booked">
-                Bokförda {tx?.booked ? `(${tx.booked.length})` : ''}
+                Genomförda {tx?.booked ? `(${tx.booked.length})` : ''}
               </TabsTrigger>
               <TabsTrigger value="upcoming">
                 Kommande {tx?.upcoming ? `(${tx.upcoming.length})` : ''}
@@ -192,14 +275,16 @@ export default function SkattekontoPage() {
               <TransactionTable
                 rows={tx?.booked ?? []}
                 onBokfor={bokfor}
+                onMatch={openMatch}
                 bookingId={bookingId}
-                emptyText="Inga bokförda transaktioner än."
+                emptyText="Inga genomförda transaktioner än."
               />
             </TabsContent>
             <TabsContent value="upcoming" className="mt-4">
               <TransactionTable
                 rows={tx?.upcoming ?? []}
                 onBokfor={bokfor}
+                onMatch={openMatch}
                 bookingId={bookingId}
                 emptyText="Inga kommande transaktioner."
                 showForfallodatum
@@ -208,6 +293,18 @@ export default function SkattekontoPage() {
           </Tabs>
         </CardContent>
       </Card>
+
+      <MatchDialog
+        row={matchOpenFor}
+        candidates={matchCandidates}
+        loading={matchLoading}
+        submittingId={matchSubmitting}
+        onClose={() => {
+          setMatchOpenFor(null)
+          setMatchCandidates(null)
+        }}
+        onConfirm={confirmMatch}
+      />
     </div>
   )
 }
@@ -351,12 +448,14 @@ function BalanceHero({
 function TransactionTable({
   rows,
   onBokfor,
+  onMatch,
   bookingId,
   emptyText,
   showForfallodatum = false,
 }: {
-  rows: StoredSkattekontoTransaction[]
+  rows: SkattekontoTransactionWithSuggestion[]
   onBokfor: (id: string) => void
+  onMatch: (row: StoredSkattekontoTransaction) => void
   bookingId: string | null
   emptyText: string
   showForfallodatum?: boolean
@@ -387,7 +486,18 @@ function TransactionTable({
               {showForfallodatum && (
                 <TableCell className="tabular-nums">{row.forfallodatum ?? '–'}</TableCell>
               )}
-              <TableCell>{row.transaktionstext}</TableCell>
+              <TableCell>
+                {row.transaktionstext}
+                {!isBooked && row.match_suggestion && (
+                  <p className="mt-1 text-xs text-warning">
+                    Möjlig dublett av{' '}
+                    {row.match_suggestion.voucher_series && row.match_suggestion.voucher_number
+                      ? `${row.match_suggestion.voucher_series}${row.match_suggestion.voucher_number}`
+                      : 'utkast'}{' '}
+                    ({row.match_suggestion.entry_date})
+                  </p>
+                )}
+              </TableCell>
               <TableCell
                 className={`text-right tabular-nums ${negative ? 'text-destructive' : ''}`}
               >
@@ -398,6 +508,10 @@ function TransactionTable({
                   <Badge variant="secondary" className="gap-1">
                     <FileCheck className="h-3 w-3" />
                     Bokförd
+                  </Badge>
+                ) : row.match_suggestion ? (
+                  <Badge variant="outline" className="border-warning text-warning">
+                    Möjlig dublett
                   </Badge>
                 ) : (
                   <Badge variant="outline">Ej bokförd</Badge>
@@ -411,14 +525,25 @@ function TransactionTable({
                     </Link>
                   </Button>
                 ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => onBokfor(row.id)}
-                    disabled={bookingId === row.id}
-                  >
-                    {bookingId === row.id ? 'Bokför…' : 'Bokför'}
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onMatch(row)}
+                      title="Koppla till befintligt verifikat"
+                    >
+                      <Link2 className="mr-1 h-3.5 w-3.5" />
+                      Matcha
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onBokfor(row.id)}
+                      disabled={bookingId === row.id}
+                    >
+                      {bookingId === row.id ? 'Bokför…' : 'Bokför'}
+                    </Button>
+                  </div>
                 )}
               </TableCell>
             </TableRow>
@@ -426,5 +551,115 @@ function TransactionTable({
         })}
       </TableBody>
     </Table>
+  )
+}
+
+function MatchDialog({
+  row,
+  candidates,
+  loading,
+  submittingId,
+  onClose,
+  onConfirm,
+}: {
+  row: StoredSkattekontoTransaction | null
+  candidates: MatchCandidate[] | null
+  loading: boolean
+  submittingId: string | null
+  onClose: () => void
+  onConfirm: (journalEntryId: string) => void
+}) {
+  const open = !!row
+  return (
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
+          <DialogDescription>
+            {row && (
+              <>
+                {row.transaktionsdatum} • {row.transaktionstext} •{' '}
+                <span className="tabular-nums">
+                  {formatCurrency(Number(row.belopp_skatteverket))}
+                </span>
+              </>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Söker kandidater…
+          </p>
+        )}
+
+        {!loading && candidates && candidates.length === 0 && (
+          <div className="space-y-2 py-4 text-sm">
+            <p>Hittade inga verifikat med en matchande rad på konto 1630.</p>
+            <p className="text-muted-foreground">
+              Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar
+              från transaktionsdatumet, och får inte redan vara kopplad till en
+              annan skattekonto-transaktion. Använd <strong>Bokför</strong> för
+              att skapa ett nytt verifikat istället.
+            </p>
+          </div>
+        )}
+
+        {!loading && candidates && candidates.length > 0 && (
+          <div className="max-h-[420px] overflow-y-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Datum</TableHead>
+                  <TableHead>Verifikat</TableHead>
+                  <TableHead>Beskrivning</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {candidates.map(c => (
+                  <TableRow key={c.journal_entry_id}>
+                    <TableCell className="tabular-nums">{c.entry_date}</TableCell>
+                    <TableCell className="tabular-nums">
+                      {c.voucher_series && c.voucher_number
+                        ? `${c.voucher_series}${c.voucher_number}`
+                        : '–'}
+                    </TableCell>
+                    <TableCell className="max-w-[260px] truncate">
+                      {c.description}
+                    </TableCell>
+                    <TableCell>
+                      {c.status === 'posted' ? (
+                        <Badge variant="secondary">Bokförd</Badge>
+                      ) : c.status === 'draft' ? (
+                        <Badge variant="outline">Utkast</Badge>
+                      ) : (
+                        <Badge variant="destructive">Makulerad</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        onClick={() => onConfirm(c.journal_entry_id)}
+                        disabled={submittingId === c.journal_entry_id}
+                      >
+                        {submittingId === c.journal_entry_id ? 'Kopplar…' : 'Koppla'}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>
+            Avbryt
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

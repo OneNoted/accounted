@@ -20,6 +20,12 @@ import {
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
+import {
+  findMatchCandidates,
+  findMatchSuggestionsBulk,
+  matchSkattekontoToEntry,
+  SkattekontoMatchError,
+} from './lib/skattekonto-match'
 import type { SkattekontoBalanceSnapshot } from './types'
 import type { VatPeriodType } from '@/types'
 
@@ -1380,10 +1386,32 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: error.message }, { status: 500 })
         }
 
+        const rows = data ?? []
+        const booked = rows.filter(r => r.status === 'booked')
+
+        // Enrich obokförda rader with a single-best-candidate suggestion.
+        // Only attached when there's exactly one match — avoids the UI
+        // confidently pointing at the wrong verifikat.
+        const suggestions = await findMatchSuggestionsBulk(
+          ctx.supabase,
+          ctx.companyId,
+          booked.map(r => ({
+            id: r.id,
+            transaktionsdatum: r.transaktionsdatum,
+            belopp_skatteverket: Number(r.belopp_skatteverket),
+            journal_entry_id: r.journal_entry_id,
+          })),
+        )
+
+        const bookedEnriched = booked.map(r => ({
+          ...r,
+          match_suggestion: suggestions.get(r.id) ?? null,
+        }))
+
         return NextResponse.json({
           data: {
-            booked: (data ?? []).filter(r => r.status === 'booked'),
-            upcoming: (data ?? []).filter(r => r.status === 'upcoming'),
+            booked: bookedEnriched,
+            upcoming: rows.filter(r => r.status === 'upcoming'),
           },
         })
       },
@@ -1447,6 +1475,90 @@ export const skatteverketExtension: Extension = {
               { error: err.message, code: err.code },
               { status },
             )
+          }
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── Matcha mot befintligt verifikat ──────────────────────────────
+    // List candidate journal entries already touching 1630 with the right
+    // amount/side near the transaction date. Lets the user link the SKV
+    // row to a manually-booked bank transfer instead of creating a duplicate
+    // verifikat. Returns at most 25 candidates.
+    {
+      method: 'GET',
+      path: '/skattekonto/transaktioner/:id/match-candidates',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) {
+          return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
+        }
+        try {
+          const { candidates } = await findMatchCandidates(ctx.supabase, ctx.companyId, id)
+          return NextResponse.json({ data: { candidates } })
+        } catch (err) {
+          if (err instanceof SkattekontoMatchError) {
+            const status =
+              err.code === 'TRANSACTION_NOT_FOUND' ? 404
+              : err.code === 'ALREADY_BOOKED' ? 409
+              : 400
+            return NextResponse.json({ error: err.message, code: err.code }, { status })
+          }
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // Link the SKV row to a chosen candidate. No new verifikat is created
+    // — we just write journal_entry_id onto skattekonto_transactions. The
+    // candidate is re-validated server-side (matching 1630 line, not already
+    // linked) to catch races and a malicious client.
+    {
+      method: 'POST',
+      path: '/skattekonto/transaktioner/:id/match',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) {
+          return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
+        }
+        let body: { journal_entry_id?: string }
+        try {
+          body = (await request.json()) as { journal_entry_id?: string }
+        } catch {
+          return NextResponse.json({ error: 'Ogiltig request body' }, { status: 400 })
+        }
+        if (!body.journal_entry_id || typeof body.journal_entry_id !== 'string') {
+          return NextResponse.json(
+            { error: 'Saknar journal_entry_id' },
+            { status: 400 },
+          )
+        }
+        try {
+          await matchSkattekontoToEntry(
+            ctx.supabase,
+            ctx.companyId,
+            id,
+            body.journal_entry_id,
+          )
+          return NextResponse.json({ data: { ok: true } })
+        } catch (err) {
+          if (err instanceof SkattekontoMatchError) {
+            const status =
+              err.code === 'TRANSACTION_NOT_FOUND' ? 404
+              : err.code === 'ENTRY_NOT_FOUND' ? 404
+              : err.code === 'ALREADY_BOOKED' ? 409
+              : err.code === 'ENTRY_ALREADY_LINKED' ? 409
+              : 422
+            return NextResponse.json({ error: err.message, code: err.code }, { status })
           }
           return handleSkvError(err)
         }

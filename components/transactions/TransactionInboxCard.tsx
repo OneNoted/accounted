@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowUpRight, ArrowDownRight, FileText, Loader2, Trash2 } from 'lucide-react'
+import { AlertCircle, ArrowUpRight, ArrowDownRight, FileText, Loader2, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/info-tooltip'
 import { getAccountName, formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
@@ -18,6 +18,10 @@ interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
   suggestions?: SuggestedCategory[]
   templateSuggestions?: SuggestedTemplate[]
+  /** When set, this bank tx looks like the bank side of a 1930↔1630
+   *  transfer that the user will later see on /skattekonto. Renders a
+   *  hint warning so the user doesn't book both sides separately. */
+  skvCounterpartDate?: string
   processingId: string | null
   isBatchMode: boolean
   isSelected: boolean
@@ -37,6 +41,7 @@ export default function TransactionInboxCard({
   transaction,
   suggestions,
   templateSuggestions,
+  skvCounterpartDate,
   processingId,
   isBatchMode,
   isSelected,
@@ -92,6 +97,19 @@ export default function TransactionInboxCard({
         onClick={showCheckbox ? () => onToggleSelect(transaction.id) : undefined}
       >
         <CardContent className="py-4">
+          {skvCounterpartDate && (
+            <div className="mb-3 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
+              <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-warning" />
+              <p className="min-w-0">
+                <span className="font-medium">Möjlig 1930↔1630-överföring.</span>{' '}
+                Det finns en skattekonto-händelse den{' '}
+                <span className="tabular-nums">{skvCounterpartDate}</span> som
+                matchar — bokför detta verifikat först, koppla sedan
+                skattekonto-raden mot samma verifikat istället för att bokföra
+                två gånger.
+              </p>
+            </div>
+          )}
           <div className="flex items-start justify-between gap-4">
             {/* Left: checkbox + icon + info */}
             <div className="flex items-start gap-3 min-w-0 flex-1">
