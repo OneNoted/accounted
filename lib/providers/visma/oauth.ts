@@ -15,6 +15,8 @@ const DEFAULT_SCOPES = [
   'vls:api',
 ];
 
+const EACCOUNTING_ACR_VALUE = 'service:44643EB1-3F76-4C1C-A672-402AE8085934';
+
 export function buildVismaAuthUrl(
   config: OAuthConfig,
   options?: { scopes?: string[]; state?: string; acrValues?: string },
@@ -23,11 +25,8 @@ export function buildVismaAuthUrl(
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: 'code',
+    acr_values: options?.acrValues ?? EACCOUNTING_ACR_VALUE,
   });
-
-  if (options?.acrValues) {
-    params.set('acr_values', options.acrValues);
-  }
 
   const scopes = options?.scopes?.length ? options.scopes : DEFAULT_SCOPES;
   params.set('scope', scopes.join(' '));

@@ -27,13 +27,31 @@ export async function PATCH(
   if (!validation.success) return validation.response
   const body = validation.data
 
+  const { data: existing, error: fetchError } = await supabase
+    .from('employee_benefits')
+    .select('benefit_type, metadata')
+    .eq('id', benefitId)
+    .eq('employee_id', id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !existing) {
+    return NextResponse.json({ error: 'Förmån hittades inte' }, { status: 404 })
+  }
+
   const updates: Record<string, unknown> = { ...body }
 
-  // Recompute bike benefit if annual market value changed
   if (body.annual_market_value !== undefined) {
+    if (existing.benefit_type !== 'bike') {
+      return NextResponse.json(
+        { error: 'annual_market_value gäller endast cykelförmån' },
+        { status: 400 },
+      )
+    }
     const calc = calculateBikeBenefit(body.annual_market_value)
     updates.monthly_value = calc.monthlyValue
     updates.metadata = {
+      ...(existing.metadata as Record<string, unknown> ?? {}),
       ...(body.metadata ?? {}),
       annual_market_value: body.annual_market_value,
       annual_taxable: calc.annualTaxable,

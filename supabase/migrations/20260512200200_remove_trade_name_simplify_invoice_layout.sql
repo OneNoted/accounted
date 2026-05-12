@@ -8,11 +8,23 @@
 ALTER TABLE public.company_settings
   ADD COLUMN IF NOT EXISTS invoice_show_logo boolean DEFAULT true;
 
-UPDATE public.company_settings
-  SET company_name = trade_name
-  WHERE trade_name IS NOT NULL
-    AND trade_name <> ''
-    AND trade_name <> company_name;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'company_settings'
+      AND column_name = 'trade_name'
+  ) THEN
+    EXECUTE $sql$
+      UPDATE public.company_settings
+        SET company_name = trade_name
+        WHERE trade_name IS NOT NULL
+          AND trade_name <> ''
+          AND trade_name <> company_name
+    $sql$;
+  END IF;
+END $$;
 
 ALTER TABLE public.company_settings
   DROP COLUMN IF EXISTS trade_name;
