@@ -690,6 +690,47 @@ describe('PATCH /api/v1/companies/:companyId/customers/:id', () => {
 
     expect(res.status).toBe(404)
   })
+
+  it('accepts archived_at: null for un-archive', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: { ...SAMPLE_CUSTOMER, archived_at: null }, error: null },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        archived_at: null,
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.archived_at).toBeNull()
+  })
+
+  it('rejects an archived_at value that is not null', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await updateCustomer(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`, {
+        archived_at: '2026-05-12T00:00:00Z',
+      }),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────
@@ -751,6 +792,27 @@ describe('DELETE /api/v1/companies/:companyId/customers/:id', () => {
     )
 
     expect(res.status).toBe(404)
+  })
+
+  it('refuses to archive a customer with open invoices', async () => {
+    withWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // The open-invoice pre-flight query returns count > 0.
+        invoices: { data: [], error: null, count: 3 },
+      }),
+    )
+
+    const res = await deleteCustomer(
+      makeDeleteRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('CUSTOMER_HAS_INVOICES')
+    expect(body.error.details.open_invoice_count).toBe(3)
   })
 
   it('returns 400 VALIDATION_ERROR when :id is not a UUID', async () => {

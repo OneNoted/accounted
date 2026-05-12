@@ -243,8 +243,10 @@ const CustomerCreated = z.object({
   updated_at: z.string().nullable(),
 })
 
+// Drop vat_number_validated_at — declared in neither CustomerCreated nor
+// CustomerDetail; an internal timestamp with no documented consumer.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, vat_number_validated_at, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.create',
@@ -266,7 +268,7 @@ registerEndpoint({
   example: {
     request: {
       name: 'Acme AB',
-      customer_type: 'business',
+      customer_type: 'swedish_business',
       email: 'finance@acme.test',
       org_number: '556677-8899',
       default_payment_terms: 30,
@@ -275,7 +277,7 @@ registerEndpoint({
       data: {
         id: '0e9c…',
         name: 'Acme AB',
-        customer_type: 'business',
+        customer_type: 'swedish_business',
         email: 'finance@acme.test',
         org_number: '556677-8899',
         vat_number_validated: false,
@@ -351,6 +353,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       )
     }
 
+    // Best-effort VIES validation. Resolve BEFORE the insert so the
+    // resulting row reflects the validation state atomically and the
+    // API response can't expose stale vat_number_validated.
+    let vatValidated = false
+    let vatValidatedAt: string | null = null
+    if (body.customer_type === 'eu_business' && body.vat_number) {
+      try {
+        const vatResult = await validateVatNumber(body.vat_number)
+        if (vatResult.valid) {
+          vatValidated = true
+          vatValidatedAt = new Date().toISOString()
+        }
+      } catch (err) {
+        ctx.log.warn('auto-VIES validation failed on customer create', err as Error)
+      }
+    }
+
     const { data, error } = await ctx.supabase
       .from('customers')
       .insert({
@@ -367,6 +386,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         country: body.country ?? 'Sweden',
         org_number: body.org_number ?? null,
         vat_number: body.vat_number ?? null,
+        vat_number_validated: vatValidated,
+        vat_number_validated_at: vatValidatedAt,
         default_payment_terms: body.default_payment_terms ?? 30,
         notes: body.notes ?? null,
       })
@@ -381,27 +402,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    // Best-effort VIES validation for EU business customers. Non-blocking —
-    // a VIES timeout or failure does not roll back the customer create.
-    if (body.customer_type === 'eu_business' && body.vat_number) {
-      try {
-        const vatResult = await validateVatNumber(body.vat_number)
-        if (vatResult.valid) {
-          await ctx.supabase
-            .from('customers')
-            .update({
-              vat_number_validated: true,
-              vat_number_validated_at: new Date().toISOString(),
-            })
-            .eq('id', (data as { id: string }).id)
-            .eq('company_id', ctx.companyId!)
-          ;(data as { vat_number_validated: boolean }).vat_number_validated = true
-        }
-      } catch (err) {
-        ctx.log.warn('auto-VIES validation failed on customer create', err as Error)
-      }
     }
 
     // Emit customer.created so webhooks (Phase 2 PR-C) and downstream

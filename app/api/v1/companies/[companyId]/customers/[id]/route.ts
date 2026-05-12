@@ -4,8 +4,12 @@
  * GET    — full record. ?expand=invoices embeds open invoices.
  * PATCH  — partial update. Idempotent (mandatory Idempotency-Key).
  *          Dry-runnable. VIES re-validation on commit if vat_number changes.
+ *          Setting archived_at: null un-archives the customer.
  * DELETE — soft-delete (sets archived_at). Idempotent. Dry-runnable. 204
- *          on success. Refuses to delete if open invoices remain.
+ *          on success. REFUSES to archive when the customer has any open
+ *          (sent / partially_paid / overdue) invoice — preserves the
+ *          canonical buyer name/address that ML 17 kap 24§ requires the
+ *          invoice to carry. Issue a kreditfaktura first if needed.
  */
 
 import { z } from 'zod'
@@ -17,6 +21,13 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+
+// v1-only extension: allow PATCH to set archived_at back to null to
+// un-archive a customer. Restricted to literal `null` so the caller can't
+// fake an archive timestamp.
+const V1PatchCustomerSchema = UpdateCustomerSchema.extend({
+  archived_at: z.null().optional(),
+})
 
 const CustomerDetail = z.object({
   id: z.string().uuid(),
@@ -262,7 +273,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    const parsed = UpdateCustomerSchema.safeParse(rawBody)
+    const parsed = V1PatchCustomerSchema.safeParse(rawBody)
     if (!parsed.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -277,8 +288,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const body = parsed.data
 
     // Build the partial update set. Fields explicitly set to undefined in
-    // the body are not in the resulting object (UpdateCustomerSchema strips
-    // undefined). null IS allowed and means "clear the field".
+    // the body are not in the resulting object (Zod strips undefined). null
+    // IS allowed and means "clear the field" (or, for archived_at, "un-archive").
     const updateData: Record<string, unknown> = {}
     for (const key of [
       'name',
@@ -294,6 +305,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'vat_number',
       'default_payment_terms',
       'notes',
+      'archived_at',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }
@@ -329,6 +341,42 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return dryRunPreview({ ...current, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
     }
 
+    // Best-effort VIES re-validation if vat_number is changing on an
+    // eu_business customer. Resolve BEFORE the update so the result lands
+    // atomically with the rest of the change — the API response is then
+    // guaranteed to reflect committed DB state, not a stale value from a
+    // separate fire-and-forget update.
+    if (body.vat_number !== undefined) {
+      const wouldBeType =
+        body.customer_type ??
+        // Need the existing type if the caller didn't change it.
+        (
+          await ctx.supabase
+            .from('customers')
+            .select('customer_type')
+            .eq('company_id', ctx.companyId!)
+            .eq('id', customerId)
+            .maybeSingle()
+        ).data?.customer_type
+      if (wouldBeType === 'eu_business') {
+        if (body.vat_number) {
+          try {
+            const vatResult = await validateVatNumber(body.vat_number)
+            updateData.vat_number_validated = vatResult.valid
+            updateData.vat_number_validated_at = vatResult.valid ? new Date().toISOString() : null
+          } catch (err) {
+            ctx.log.warn('auto-VIES re-validation failed on customer update', err as Error)
+            updateData.vat_number_validated = false
+            updateData.vat_number_validated_at = null
+          }
+        } else {
+          // vat_number cleared
+          updateData.vat_number_validated = false
+          updateData.vat_number_validated_at = null
+        }
+      }
+    }
+
     const { data, error } = await ctx.supabase
       .from('customers')
       .update(updateData)
@@ -354,36 +402,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    // Best-effort VIES re-validation on vat_number change for eu_business.
-    const isEuBusiness = (body.customer_type || (data as { customer_type: string }).customer_type) === 'eu_business'
-    if (body.vat_number !== undefined && isEuBusiness) {
-      try {
-        if (body.vat_number) {
-          const vatResult = await validateVatNumber(body.vat_number)
-          const validatedAt = vatResult.valid ? new Date().toISOString() : null
-          await ctx.supabase
-            .from('customers')
-            .update({
-              vat_number_validated: vatResult.valid,
-              vat_number_validated_at: validatedAt,
-            })
-            .eq('id', customerId)
-            .eq('company_id', ctx.companyId!)
-          ;(data as { vat_number_validated: boolean }).vat_number_validated = vatResult.valid
-        } else {
-          // vat_number cleared
-          await ctx.supabase
-            .from('customers')
-            .update({ vat_number_validated: false, vat_number_validated_at: null })
-            .eq('id', customerId)
-            .eq('company_id', ctx.companyId!)
-          ;(data as { vat_number_validated: boolean }).vat_number_validated = false
-        }
-      } catch (err) {
-        ctx.log.warn('auto-VIES re-validation failed on customer update', err as Error)
-      }
-    }
-
     return ok(data, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
@@ -406,7 +424,7 @@ registerEndpoint({
     'Permanently deleting a customer with all history — the public API does not expose hard-delete. GDPR erasure requests go through a dedicated workflow.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'Archiving does NOT cancel open invoices. The customer-detail endpoint with ?expand=invoices still returns them.',
+    'A customer with any open invoice (sent / partially_paid / overdue) cannot be archived — returns 409 CUSTOMER_HAS_INVOICES. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.',
     '204 No Content is returned on success — there is no response body to parse.',
   ],
   example: {
@@ -433,6 +451,26 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       })
     }
     const customerId = idParse.data
+
+    // Pre-flight: check for open invoices BEFORE archiving. Preserves the
+    // canonical buyer record per ML 17 kap 24§ — an open invoice points at
+    // this customer for its statutory name/address fields.
+    const { count: openInvoiceCount, error: openErr } = await ctx.supabase
+      .from('invoices')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', ctx.companyId!)
+      .eq('customer_id', customerId)
+      .in('status', OPEN_INVOICE_STATUSES)
+
+    if (openErr) {
+      return v1ErrorResponse(openErr, ctx.log, { requestId: ctx.requestId })
+    }
+    if ((openInvoiceCount ?? 0) > 0) {
+      return v1ErrorResponseFromCode('CUSTOMER_HAS_INVOICES', ctx.log, {
+        requestId: ctx.requestId,
+        details: { open_invoice_count: openInvoiceCount },
+      })
+    }
 
     // Dry-run: confirm the customer exists. No state change.
     if (ctx.dryRun) {
