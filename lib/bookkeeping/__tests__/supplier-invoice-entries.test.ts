@@ -55,6 +55,23 @@ vi.mock('../vat-entries', () => ({
       ]
     }
   ),
+  generateReverseChargeBasisLines: vi.fn().mockImplementation(
+    (baseAmount: number, vatRate: number = 0.25, supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business') => {
+      if (baseAmount <= 0) return []
+      const rateIdx = vatRate === 0.25 ? 0 : vatRate === 0.12 ? 1 : vatRate === 0.06 ? 2 : -1
+      if (rateIdx < 0) return []
+      const accounts = {
+        eu_business: ['4535', '4536', '4537'],
+        non_eu_business: ['4531', '4532', '4533'],
+        swedish_business: ['4425', '4426', '4427'],
+      }[supplierType]
+      const amount = Math.round(baseAmount * 100) / 100
+      return [
+        { account_number: accounts[rateIdx], debit_amount: amount, credit_amount: 0, line_description: `basbelopp ${vatRate * 100}%` },
+        { account_number: '4598', debit_amount: 0, credit_amount: amount, line_description: `motkonto ${vatRate * 100}%` },
+      ]
+    }
+  ),
 }))
 
 const { createJournalEntry, findFiscalPeriod } = await import('../engine')
@@ -178,7 +195,7 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     assertBalanced(input)
   })
 
-  it('creates EU reverse charge entry at 25%', async () => {
+  it('creates EU reverse charge entry at 25% with basbelopp on 4535 (ruta 21)', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 10000,
       vat_amount: 0,
@@ -204,10 +221,70 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(credit2614).toHaveLength(1)
     expect(credit2614[0].credit_amount).toBe(2500)
 
+    // Basbeloppsrader för ruta 21 (EU tjänster huvudregeln) — utan dessa
+    // avvisar Skatteverket deklarationen med FK004.
+    const debit4535 = findByAccount(input.lines, '4535')
+    expect(debit4535).toHaveLength(1)
+    expect(debit4535[0].debit_amount).toBe(10000)
+
+    const credit4598 = findByAccount(input.lines, '4598')
+    expect(credit4598).toHaveLength(1)
+    expect(credit4598[0].credit_amount).toBe(10000)
+
     const credit2440 = findByAccount(input.lines, '2440')
-    // 2440 = totalDebits - totalCredits = (10000 + 2500) - 2500 = 10000
-    // The fiktiv moms (D 2645 / C 2614) are offsetting; 2440 only reflects actual supplier debt
+    // 2440 = totalDebits - totalCredits.
+    // Debit:  6540 (10 000) + 2645 (2 500) + 4535 (10 000) = 22 500
+    // Credit: 2614 (2 500) + 4598 (10 000)               = 12 500
+    // 2440  = 22 500 - 12 500 = 10 000 (faktisk leverantörsskuld)
     expect(credit2440[0].credit_amount).toBe(10000)
+
+    assertBalanced(input)
+  })
+
+  it('books non-EU services to 4531 (ruta 22) and motkonto 4598', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 8000,
+      vat_amount: 0,
+      total: 8000,
+      reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 8000, account_number: '6540', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'non_eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(findByAccount(input.lines, '4531')[0].debit_amount).toBe(8000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(8000)
+    // No EU-services account when supplier is non-EU
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+
+    assertBalanced(input)
+  })
+
+  it('books domestic RC services to 4425 (ruta 24) and motkonto 4598', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 20000,
+      vat_amount: 0,
+      total: 20000,
+      reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 20000, account_number: '4170', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(findByAccount(input.lines, '4425')[0].debit_amount).toBe(20000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(20000)
+    // Domestic RC uses 2647, not 2645
+    expect(findByAccount(input.lines, '2647')[0].debit_amount).toBe(5000)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(5000)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
 
     assertBalanced(input)
   })
@@ -233,6 +310,10 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     const credit2624 = findByAccount(input.lines, '2624')
     expect(credit2624).toHaveLength(1)
     expect(credit2624[0].credit_amount).toBe(600)
+
+    // 12%-raden går till 4536 (EU tjänster 12%)
+    expect(findByAccount(input.lines, '4536')[0].debit_amount).toBe(5000)
+    expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(5000)
 
     assertBalanced(input)
   })
@@ -450,6 +531,13 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(findByAccount(input.lines, '2645')).toHaveLength(0)
     // No regular input VAT
     expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+
+    // User picked 4425 directly as the expense account, so the engine must
+    // not add parallel basbeloppsrader on 4425/4598 — that would double the
+    // basis. Exactly one 4425 line (the user's expense) and zero 4598.
+    expect(findByAccount(input.lines, '4425')).toHaveLength(1)
+    expect(findByAccount(input.lines, '4425')[0].debit_amount).toBe(20000)
+    expect(findByAccount(input.lines, '4598')).toHaveLength(0)
 
     // 2440 = expense only (RC is offsetting)
     const credit2440 = findByAccount(input.lines, '2440')
@@ -911,7 +999,7 @@ describe('createSupplierCreditNoteEntry', () => {
     assertBalanced(input)
   })
 
-  it('EU reverse charge reversal (C 2645, D 2614)', async () => {
+  it('EU reverse charge reversal (C 2645, D 2614, reverses 4535/4598 basis)', async () => {
     const creditNote = makeSupplierInvoice({
       is_credit_note: true,
       subtotal: -10000,
@@ -939,8 +1027,19 @@ describe('createSupplierCreditNoteEntry', () => {
     const credit6540 = findByAccount(input.lines, '6540')[0]
     expect(credit6540.credit_amount).toBe(10000)
 
+    // Reverserade basbeloppsrader: 4535 ska krediteras och 4598 debiteras med
+    // samma belopp så att kreditfakturan nollställer ruta 21 från originalet.
+    const credit4535 = findByAccount(input.lines, '4535')[0]
+    expect(credit4535.credit_amount).toBe(10000)
+    expect(credit4535.debit_amount).toBe(0)
+
+    const debit4598 = findByAccount(input.lines, '4598')[0]
+    expect(debit4598.debit_amount).toBe(10000)
+    expect(debit4598.credit_amount).toBe(0)
+
     const debit2440 = findByAccount(input.lines, '2440')[0]
-    expect(debit2440.debit_amount).toBe(10000) // totalCredits - totalDebits = (2500 + 10000) - 2500
+    // totalCredits - totalDebits = (2500 + 10000 + 10000) - (2500 + 10000) = 10000
+    expect(debit2440.debit_amount).toBe(10000)
 
     assertBalanced(input)
   })

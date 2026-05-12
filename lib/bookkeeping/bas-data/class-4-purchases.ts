@@ -574,6 +574,17 @@ export const CLASS_4_ACCOUNTS: BASReferenceAccount[] = [
     k2_excluded: false,
   },
   {
+    account_number: '4598',
+    account_name: 'Motkonto beräknad omvänd moms',
+    account_class: 4,
+    account_group: '45',
+    account_type: 'expense',
+    normal_balance: 'credit',
+    description: 'Tekniskt motkonto till beräknad omvänd skattskyldighet (4415-4427, 4515-4537). Nettar ut basbeloppet i resultatrapporten samtidigt som 45xx-konton synliggör underlaget för momsdeklarationens ruta 20-24.',
+    sru_code: '7320',
+    k2_excluded: false,
+  },
+  {
     account_number: '4600',
     account_name: 'Inköp av tjänster, underentreprenader och legoarbeten i Sverige (gruppkonto)',
     account_class: 4,

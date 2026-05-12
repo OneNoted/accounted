@@ -79,6 +79,91 @@ export function generateSalesVatLines(config: VatEntryConfig): CreateJournalEntr
 }
 
 /**
+ * Generate reverse-charge basis lines for momsdeklaration ruta 20-24.
+ *
+ * The fiktiv-moms pair (2645/26x4 or 2647/26x4) only carries the VAT amounts
+ * (ruta 30-32 and the offsetting part of ruta 48). The underlying basbelopp
+ * (vad köpet de facto kostade) must also land on the 44xx/45xx series so
+ * Skatteverket sees ruta 20-24 populated — ML 13 kap kräver att både underlag
+ * och moms redovisas. SKV avvisar deklarationer med ruta 30-32 men tom 20-24
+ * (felkod FK004 "Eftersom det finns ett belopp i någon momsuppgift som avser
+ * utgående moms på inköp (30-32) måste det finnas ett belopp i någon av
+ * momsuppgifterna avseende momspliktiga inköp vid omvänd betalningsskyldighet
+ * (20-24)").
+ *
+ * Användarens valda kostnadskonto (t.ex. 6540) bibehålls i resultaträkningen
+ * via en parallell motkonto-rad: 45xx debiteras, 4598 krediteras med samma
+ * belopp. Resultaträkningen påverkas inte (4598 nettar ut 45xx), men 45xx
+ * fångas av momsdeklarationsberäkningen för rätt ruta 20-24.
+ *
+ * Konto-mappning (BAS 2026 + swedish-vat reference §7):
+ *
+ *   EU services       (huvudregeln)  4535/4536/4537 → ruta 21
+ *   Non-EU services                  4531/4532/4533 → ruta 22
+ *   Domestic services (byggtjänster) 4425/4426/4427 → ruta 24
+ *   Domestic goods    (RC varor)     4415/4416/4417 → ruta 23
+ *
+ * EU-varor (ruta 20, 4515/4516/4517) hanteras inte här eftersom våra supplier
+ * invoices saknar varor/tjänster-diskriminering. Standard-supplier-flödet är
+ * tjänster (SaaS, konsulttjänster); EU-varuhandel sker normalt via SIE-import
+ * eller manuell verifikation och får bokas direkt på 4515-konton.
+ */
+export function generateReverseChargeBasisLines(
+  baseAmount: number,
+  vatRate: number = 0.25,
+  supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business',
+): CreateJournalEntryLineInput[] {
+  if (baseAmount <= 0) return []
+
+  const basisAccount = pickBasisAccount(vatRate, supplierType)
+  if (!basisAccount) return []
+
+  const amount = Math.round(baseAmount * 100) / 100
+  const rateLabel = `${Math.round(vatRate * 100)}%`
+
+  return [
+    {
+      account_number: basisAccount.account,
+      debit_amount: amount,
+      credit_amount: 0,
+      line_description: `${basisAccount.label} ${rateLabel} (basbelopp omvänd skattskyldighet)`,
+    },
+    {
+      account_number: '4598',
+      debit_amount: 0,
+      credit_amount: amount,
+      line_description: `Motkonto beräknad omvänd moms ${rateLabel}`,
+    },
+  ]
+}
+
+function pickBasisAccount(
+  vatRate: number,
+  supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business',
+): { account: string; label: string } | null {
+  const rateIdx = vatRate === 0.25 ? 0 : vatRate === 0.12 ? 1 : vatRate === 0.06 ? 2 : -1
+  if (rateIdx < 0) return null
+
+  if (supplierType === 'eu_business') {
+    return {
+      account: ['4535', '4536', '4537'][rateIdx],
+      label: 'Inköp tjänster annat EU-land',
+    }
+  }
+  if (supplierType === 'non_eu_business') {
+    return {
+      account: ['4531', '4532', '4533'][rateIdx],
+      label: 'Inköp tjänster land utanför EU',
+    }
+  }
+  // swedish_business — domestic RC (byggtjänster m.m.)
+  return {
+    account: ['4425', '4426', '4427'][rateIdx],
+    label: 'Inköp tjänster i Sverige omvänd skattskyldighet',
+  }
+}
+
+/**
  * Generate reverse charge lines (fiktiv moms)
  * For EU/non-EU purchases: Debit 2645 + Credit 26x4 (offsetting entries)
  * For domestic reverse charge: Debit 2647 + Credit 26x4 (offsetting entries)

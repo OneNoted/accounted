@@ -94,6 +94,57 @@ describe('rutorToMomsuppgift', () => {
     expect(result.import).toBe(2000)
     expect(result.momsImportUtgaendeHog).toBe(500)
   })
+
+  // FK009 regression: SKV recomputes summaMoms from rounded rutor and
+  // compares against ours. If we round ruta49 from unrounded inputs while
+  // rounding each ruta independently we drift by ±1 SEK per fractional ruta.
+  it('summaMoms equals Σ(rounded output VAT rutor) - rounded ruta48', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      // Fractional öres on every VAT-amount ruta so banker's rounding can
+      // disagree between the orundad ruta49 and the rundade individual fält.
+      ruta10: 100.49,
+      ruta11: 50.51,
+      ruta12: 25.49,
+      ruta30: 10.51,
+      ruta31: 5.49,
+      ruta32: 2.51,
+      ruta60: 7.49,
+      ruta61: 3.51,
+      ruta62: 1.49,
+      ruta48: 80.51,
+      ruta49: 100.49 + 50.51 + 25.49 + 10.51 + 5.49 + 2.51 + 7.49 + 3.51 + 1.49 - 80.51,
+    }
+
+    const result = rutorToMomsuppgift(rutor)
+
+    const expectedSumma =
+      (result.momsForsaljningUtgaendeHog ?? 0) +
+      (result.momsForsaljningUtgaendeMedel ?? 0) +
+      (result.momsForsaljningUtgaendeLag ?? 0) +
+      (result.momsInkopUtgaendeHog ?? 0) +
+      (result.momsInkopUtgaendeMedel ?? 0) +
+      (result.momsInkopUtgaendeLag ?? 0) +
+      (result.momsImportUtgaendeHog ?? 0) +
+      (result.momsImportUtgaendeMedel ?? 0) +
+      (result.momsImportUtgaendeLag ?? 0) -
+      (result.ingaendeMomsAvdrag ?? 0)
+
+    expect(result.summaMoms).toBe(expectedSumma)
+    // Sanity-check: result is an integer (SKV requires whole kronor)
+    expect(Number.isInteger(result.summaMoms)).toBe(true)
+  })
+
+  it('summaMoms is negative when input VAT exceeds output VAT', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta48: 5000,
+      ruta49: -5000,
+    }
+
+    const result = rutorToMomsuppgift(rutor)
+    expect(result.summaMoms).toBe(-5000)
+  })
 })
 
 describe('formatRedovisare', () => {

@@ -1393,6 +1393,7 @@ function VatDeclarationView() {
         year={year}
         period={period}
         hasData={data !== null}
+        rutor={data?.rutor ?? null}
       />
 
       {!data && !loading && !error && (

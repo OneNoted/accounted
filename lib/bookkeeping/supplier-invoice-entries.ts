@@ -1,6 +1,6 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
-import { generateReverseChargeLines } from './vat-entries'
+import { generateReverseChargeLines, generateReverseChargeBasisLines } from './vat-entries'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -12,6 +12,29 @@ import type {
 } from '@/types'
 
 const log = createLogger('supplier-invoice-entries')
+
+/**
+ * Accounts that already populate momsdeklaration ruta 20-24 directly when
+ * debited. If the user picked one of these as the expense account on an RC
+ * invoice item, the engine must NOT add the parallel basbeloppsrader (those
+ * would double-count the basis).
+ */
+const RC_BASIS_ACCOUNTS = new Set([
+  // ruta 20 — EU goods
+  '4515', '4516', '4517',
+  // ruta 21 — EU services
+  '4535', '4536', '4537',
+  // ruta 22 — non-EU services
+  '4531', '4532', '4533',
+  // ruta 23 — domestic goods RC
+  '4415', '4416', '4417',
+  // ruta 24 — domestic services RC
+  '4425', '4426', '4427',
+])
+
+function isBasisAccount(account: string): boolean {
+  return RC_BASIS_ACCOUNTS.has(account)
+}
 
 /**
  * Build a BFL-compliant verifikation description with event type, counterparty, and suffix.
@@ -88,11 +111,28 @@ export async function createSupplierInvoiceRegistrationEntry(
   if (isReverseCharge) {
     // Reverse charge: fiktiv moms entries per rate group
     // Domestic (byggtjänster etc.): 2647/26x4, EU/non-EU: 2645/26x4
+    //
+    // Also generate basbeloppsrader on 44xx/45xx + motkonto 4598 so SKV's
+    // momsdeklaration ruta 20-24 reflects the underlying purchase amount.
+    // Without these the fiktiv moms (2614/2624/2634) populates ruta 30-32
+    // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
+    // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
+    //
+    // Skip basbeloppsraderna if the user already chose a 44xx/45xx basis
+    // account on the invoice item — those already populate ruta 20-24
+    // directly, and adding a parallel motkonto-pair would double-count.
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
+    const userBookedBasisDirectly = Array.from(expenseByAccount.keys()).some(isBasisAccount)
     for (const [rate, amount] of vatByRate) {
       if (rate > 0 && amount > 0) {
-        const rcLines = generateReverseChargeLines(amount / rate, rate, isDomesticRC)
+        const baseAmount = amount / rate
+        const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
         lines.push(...rcLines)
+        if (!userBookedBasisDirectly) {
+          const basisLines = generateReverseChargeBasisLines(baseAmount, rate, rcSupplierType)
+          lines.push(...basisLines)
+        }
       }
     }
   } else if (invoice.vat_amount > 0) {
@@ -283,11 +323,24 @@ export async function createSupplierInvoiceCashEntry(
   if (isReverseCharge) {
     // Reverse charge: fiktiv moms entries per rate group
     // Domestic (byggtjänster etc.): 2647/26x4, EU/non-EU: 2645/26x4
+    //
+    // Also generate basbeloppsrader on 44xx/45xx + motkonto 4598 so SKV's
+    // momsdeklaration ruta 20-24 reflects the underlying purchase amount.
+    // Without these the fiktiv moms (2614/2624/2634) populates ruta 30-32
+    // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
+    // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
     const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
+    const userBookedBasisDirectly = Array.from(expenseByAccount.keys()).some(isBasisAccount)
     for (const [rate, amount] of vatByRate) {
       if (rate > 0 && amount > 0) {
-        const rcLines = generateReverseChargeLines(amount / rate, rate, isDomesticRC)
+        const baseAmount = amount / rate
+        const rcLines = generateReverseChargeLines(baseAmount, rate, isDomesticRC)
         lines.push(...rcLines)
+        if (!userBookedBasisDirectly) {
+          const basisLines = generateReverseChargeBasisLines(baseAmount, rate, rcSupplierType)
+          lines.push(...basisLines)
+        }
       }
     }
   } else if (invoice.vat_amount > 0) {
@@ -379,6 +432,12 @@ export async function createSupplierCreditNoteEntry(
     // Input VAT account: 2647 for domestic RC, 2645 for EU/non-EU
     const inputAccount = isDomesticRC ? '2647' : '2645'
     const vatByRate = groupVatByRate(items, creditNote.currency, creditNote.exchange_rate, true)
+    const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
+    // Only reverse basbeloppsraderna if the original registration would have
+    // emitted them. When the user booked the expense directly to a 44xx/45xx
+    // basis account the registration skipped the parallel pair, so we must
+    // skip the reversal too to avoid leaving a spurious 4598-line.
+    const userBookedBasisDirectly = Array.from(expenseByAccount.keys()).some(isBasisAccount)
     for (const [rate, amount] of vatByRate) {
       if (rate > 0 && amount > 0) {
         // Determine the output account for this rate
@@ -400,6 +459,25 @@ export async function createSupplierCreditNoteEntry(
           credit_amount: 0,
           line_description: `Omvänd fiktiv utgående moms ${Math.round(rate * 100)}% ${desc}`,
         })
+        if (!userBookedBasisDirectly) {
+          // Reverse the basbeloppsrader (44xx/45xx debit & 4598 credit on the
+          // registration entry become credits & debits here). Without this the
+          // credit note would only undo the VAT amounts (ruta 30-32 + 48) but
+          // leave ruta 20-24 still showing the original basbelopp — exactly
+          // the same FK004-style mismatch the registration fix prevents.
+          const baseAmount = amount / rate
+          const basisLines = generateReverseChargeBasisLines(baseAmount, rate, rcSupplierType)
+          // Swap debit/credit on every basis line so the credit note nets
+          // against the original registration verifikat.
+          for (const line of basisLines) {
+            lines.push({
+              account_number: line.account_number,
+              debit_amount: line.credit_amount,
+              credit_amount: line.debit_amount,
+              line_description: line.line_description,
+            })
+          }
+        }
       }
     }
   } else {

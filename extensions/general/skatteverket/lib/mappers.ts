@@ -9,6 +9,14 @@ export { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/f
  *
  * Fields with value 0 are omitted (Skatteverket treats absent fields as 0).
  * This keeps the payload clean and avoids sending unnecessary data.
+ *
+ * Rounding: every ruta is rounded to whole kronor (SKV's schema is integers).
+ * summaMoms is recomputed from the rounded VAT-amount rutor — not from the
+ * pre-rounding ruta49 — so the payload is internally consistent with how
+ * Skatteverket recomputes the sum on their side. Rounding ruta49 separately
+ * from the components causes ±1 SEK drift on fractional-öres inputs and
+ * triggers SKV's FK009 ("summaMoms stämmer inte överens med övriga
+ * momsuppgifter") even when the underlying ledger arithmetic is correct.
  */
 export function rutorToMomsuppgift(rutor: VatDeclarationRutor): SkatteverketMomsuppgift {
   const result: SkatteverketMomsuppgift = {}
@@ -54,14 +62,26 @@ export function rutorToMomsuppgift(rutor: VatDeclarationRutor): SkatteverketMoms
   // Input VAT
   set('ingaendeMomsAvdrag', rutor.ruta48)
 
-  // Net VAT (must always be present, whole kronor)
-  result.summaMoms = Math.round(rutor.ruta49)
-
   // Import
   set('import', rutor.ruta50)
   set('momsImportUtgaendeHog', rutor.ruta60)
   set('momsImportUtgaendeMedel', rutor.ruta61)
   set('momsImportUtgaendeLag', rutor.ruta62)
+
+  // Net VAT must always be present, whole kronor. Compute from the already-
+  // rounded VAT-amount rutor so SKV's reconciliation (sum of integer rutor)
+  // never disagrees with our summaMoms by ±1 SEK.
+  result.summaMoms =
+    (result.momsForsaljningUtgaendeHog ?? 0) +
+    (result.momsForsaljningUtgaendeMedel ?? 0) +
+    (result.momsForsaljningUtgaendeLag ?? 0) +
+    (result.momsInkopUtgaendeHog ?? 0) +
+    (result.momsInkopUtgaendeMedel ?? 0) +
+    (result.momsInkopUtgaendeLag ?? 0) +
+    (result.momsImportUtgaendeHog ?? 0) +
+    (result.momsImportUtgaendeMedel ?? 0) +
+    (result.momsImportUtgaendeLag ?? 0) -
+    (result.ingaendeMomsAvdrag ?? 0)
 
   return result
 }

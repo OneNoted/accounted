@@ -21,8 +21,12 @@ import {
   ShieldAlert,
   Trash2,
 } from 'lucide-react'
-import type { VatPeriodType } from '@/types'
+import type { VatDeclarationRutor, VatPeriodType } from '@/types'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
+import {
+  runVatDeclarationChecks,
+  type VatDeclarationCheck,
+} from '@/lib/reports/vat-declaration-checks'
 
 interface SkatteverketStatus {
   connected: boolean
@@ -45,6 +49,13 @@ interface SkatteverketPanelProps {
   year: number
   period: number
   hasData: boolean
+  /**
+   * Calculated rutor for the current period. Used to run local pre-flight
+   * checks before Skatteverket sees the payload — SKV only validates internal
+   * arithmetic consistency, so we have to catch "ruta 30-32 present but
+   * 20-24 empty" locally before letting the user submit.
+   */
+  rutor?: VatDeclarationRutor | null
 }
 
 function formatAmount(amount: number): string {
@@ -58,7 +69,7 @@ export function SkatteverketPanel(props: SkatteverketPanelProps) {
   return <SkatteverketPanelInner {...props} />
 }
 
-function SkatteverketPanelInner({ periodType, year, period, hasData }: SkatteverketPanelProps) {
+function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: SkatteverketPanelProps) {
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -70,6 +81,14 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
     kvittensnummer?: string
     tidpunkt?: string
   } | null>(null)
+
+  // Local sanity checks against the calculated declaration, run before any
+  // SKV call. SKV's "OK" only confirms arithmetic — these checks confirm
+  // the declaration looks plausible (no orphaned RC output, no missing
+  // basis, no summaMoms drift).
+  const localChecks: VatDeclarationCheck[] = rutor ? runVatDeclarationChecks(rutor) : []
+  const localErrors = localChecks.filter((c) => c.status === 'ERROR')
+  const localBlocked = localErrors.length > 0
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -133,6 +152,13 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
   }
 
   const handleValidate = async () => {
+    if (localBlocked) {
+      setError(
+        'Lokala kontroller hittade fel i bokföringen. Åtgärda dessa innan ' +
+        'du skickar till Skatteverket.',
+      )
+      return
+    }
     setActionLoading('validate')
     setError(null)
     setKontroller([])
@@ -149,13 +175,19 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
         const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
         setKontroller(controls)
         if (controls.length === 0) {
-          setSuccess('Valideringen godkänd — inga fel eller varningar')
+          // SKV's OK only confirms arithmetic — it does NOT confirm that the
+          // declaration is materially correct. We say so explicitly so the
+          // user doesn't read this as a green light for actual filing.
+          setSuccess(
+            'Skatteverket har inga tekniska invändningar mot deklarationen. ' +
+            'Kontrollera siffrorna i förhandsgranskningen innan du skickar in.',
+          )
         } else {
           const errors = controls.filter(k => k.status === 'ERROR')
           if (errors.length > 0) {
             setError(`${errors.length} valideringsfel hittades`)
           } else {
-            setSuccess('Valideringen godkänd med varningar')
+            setSuccess('Skatteverket har inga tekniska invändningar (med varningar)')
           }
         }
       }
@@ -167,6 +199,13 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
   }
 
   const handleSaveDraft = async () => {
+    if (localBlocked) {
+      setError(
+        'Lokala kontroller hittade fel i bokföringen. Åtgärda dessa innan ' +
+        'du sparar utkastet hos Skatteverket.',
+      )
+      return
+    }
     setActionLoading('draft')
     setError(null)
     try {
@@ -439,11 +478,42 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
           </div>
         )}
 
-        {/* Validation results */}
+        {/* Local pre-flight check results — surfaced separately from SKV's
+            kontroller so the user knows these are gnubok's own sanity checks,
+            not Skatteverket's. ERRORs block the submit/validate buttons. */}
+        {localChecks.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+              Lokala kontroller
+            </p>
+            {localChecks.map((c, i) => (
+              <div
+                key={`${c.code}-${i}`}
+                className={`flex items-start gap-2 text-sm rounded-lg p-2.5 ${
+                  c.status === 'ERROR'
+                    ? 'bg-destructive/5 text-destructive'
+                    : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
+                }`}
+              >
+                {c.status === 'ERROR' ? (
+                  <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                )}
+                <div>
+                  <span className="font-mono text-xs mr-1.5">{c.code}</span>
+                  {c.message}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Validation results from Skatteverket */}
         {kontroller.length > 0 && (
           <div className="space-y-1.5">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-              Valideringsresultat
+              Skatteverkets valideringsresultat
             </p>
             {kontroller.map((k, i) => (
               <div
@@ -513,8 +583,9 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
             variant="outline"
             size="sm"
             onClick={handleValidate}
-            disabled={!hasData || actionLoading !== null}
+            disabled={!hasData || localBlocked || actionLoading !== null}
             className="gap-1.5"
+            title={localBlocked ? 'Åtgärda lokala kontrollfel innan validering' : undefined}
           >
             {actionLoading === 'validate' ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -528,8 +599,9 @@ function SkatteverketPanelInner({ periodType, year, period, hasData }: Skattever
             variant="outline"
             size="sm"
             onClick={handleSaveDraft}
-            disabled={!hasData || actionLoading !== null}
+            disabled={!hasData || localBlocked || actionLoading !== null}
             className="gap-1.5"
+            title={localBlocked ? 'Åtgärda lokala kontrollfel innan inlämning' : undefined}
           >
             {actionLoading === 'draft' ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
