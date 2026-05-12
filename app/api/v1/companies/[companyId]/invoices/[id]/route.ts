@@ -33,6 +33,23 @@ const InvoiceDetail = z.object({
 
 const ALLOWED_EXPAND = ['items', 'payments'] as const
 
+// Explicit projections. Detail endpoint is more verbose than list — includes
+// VAT treatment, conversion, FX, and notes — but still drops user_id and
+// company_id (internal scoping).
+const INVOICE_DETAIL_COLUMNS =
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+
+const CUSTOMER_DETAIL_COLUMNS =
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+
+const INVOICE_ITEM_COLUMNS =
+  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
+
+// Payment projection — drops invoice_id (redundant on the parent), user_id,
+// company_id (internal scoping).
+const INVOICE_PAYMENT_COLUMNS =
+  'id, payment_date, amount, currency, exchange_rate, exchange_rate_difference, journal_entry_id, transaction_id, notes, created_at'
+
 registerEndpoint({
   operation: 'invoices.get',
   method: 'GET',
@@ -78,6 +95,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
   'invoices.get',
   async (request, ctx, params) => {
     const { id } = await params.params
+
+    // Defense in depth: validate the path id is a UUID before touching the
+    // database or reflecting it in error details.
+    const idParse = z.string().uuid().safeParse(id)
+    if (!idParse.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'id', message: 'Invoice id must be a UUID.' },
+      })
+    }
+    const invoiceId = idParse.data
+
     const url = new URL(request.url)
 
     const expandResult = parseExpand(url, ALLOWED_EXPAND)
@@ -93,15 +122,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
     const expand = expandResult.expand
 
-    const itemsSelect = expand.has('items') ? ', items:invoice_items(*)' : ''
-    const paymentsSelect = expand.has('payments') ? ', payments:invoice_payments(*)' : ''
-    const selectClause = `*, customer:customers(*)${itemsSelect}${paymentsSelect}`
+    const itemsSelect = expand.has('items') ? `, items:invoice_items(${INVOICE_ITEM_COLUMNS})` : ''
+    const paymentsSelect = expand.has('payments')
+      ? `, payments:invoice_payments(${INVOICE_PAYMENT_COLUMNS})`
+      : ''
+    const selectClause = `${INVOICE_DETAIL_COLUMNS}, customer:customers(${CUSTOMER_DETAIL_COLUMNS})${itemsSelect}${paymentsSelect}`
 
     const { data, error } = await ctx.supabase
       .from('invoices')
       .select(selectClause)
       .eq('company_id', ctx.companyId!)
-      .eq('id', id)
+      .eq('id', invoiceId)
       .maybeSingle()
 
     if (error) {
@@ -109,9 +140,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
 
     if (!data) {
+      // Generic NOT_FOUND — do not echo the queried id back to the caller.
+      ctx.log.warn('invoices.get: not found', { invoiceId, companyId: ctx.companyId })
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,
-        details: { resource: 'invoice', id },
+        details: { resource: 'invoice' },
       })
     }
 

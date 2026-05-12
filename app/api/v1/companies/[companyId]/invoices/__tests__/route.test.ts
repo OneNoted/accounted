@@ -55,14 +55,14 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-const INVOICE_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
-const CUSTOMER_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const CUSTOMER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const USER_ID = 'user-1'
 
 function makeRequest(url: string, init?: RequestInit): Request {
   return new Request(url, {
     ...init,
-    headers: { Authorization: 'Bearer gnubok_sk_x', ...(init?.headers ?? {}) },
+    headers: { Authorization: 'Bearer test-fixture-not-a-real-key', ...(init?.headers ?? {}) },
   })
 }
 
@@ -193,7 +193,7 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
   it('emits a next_cursor when the page is full', async () => {
     const overFetched = [
       SAMPLE_INVOICE,
-      { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd' },
+      { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' },
     ]
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -266,6 +266,44 @@ describe('GET /api/v1/companies/:companyId/invoices/:id', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 400 VALIDATION_ERROR when :id is not a UUID', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await getInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/not-a-uuid`),
+      detailParams(COMPANY_ID, 'not-a-uuid'),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('id')
+  })
+
+  it('does not echo the queried id on 404 (enumeration hardening)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: null, error: null },
+      }),
+    )
+
+    const res = await getInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details).toEqual({ resource: 'invoice' })
+    expect(body.error.details.id).toBeUndefined()
   })
 })
 

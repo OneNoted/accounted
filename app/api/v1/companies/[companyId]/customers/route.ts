@@ -45,6 +45,11 @@ const CustomersListResponse = z.object({
   customers: z.array(CustomerSummary),
 })
 
+// Explicit projection — never SELECT *. Schema migrations adding columns
+// must update this list before the field becomes visible on the public API.
+const CUSTOMER_SUMMARY_COLUMNS =
+  'id, name, customer_type, email, org_number, vat_number, default_payment_terms, archived_at, created_at'
+
 registerEndpoint({
   operation: 'customers.list',
   method: 'GET',
@@ -119,7 +124,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     let query = ctx.supabase
       .from('customers')
-      .select('*')
+      .select(CUSTOMER_SUMMARY_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -132,9 +137,15 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       query = query.eq('customer_type', filters.customer_type)
     }
     if (filters.search) {
-      // Match against name or org_number prefix. PostgREST's `or` syntax
-      // takes a comma-separated list of filters.
-      const term = filters.search.replace(/[,()]/g, '') // strip delimiters that would break the or expression
+      // Build a safe ilike pattern. Two layers of escaping:
+      //   1. PostgREST `.or()` filter syntax uses commas + parens as
+      //      delimiters; strip them from the user-supplied term.
+      //   2. SQL LIKE treats `%` and `_` (and `\` as the default escape) as
+      //      wildcards; escape them so '100%' searches for the literal
+      //      string '100%' rather than 'anything containing 100'.
+      const term = filters.search
+        .replace(/[,()]/g, '')      // PostgREST delimiters
+        .replace(/[%_\\]/g, '\\$&') // LIKE wildcards
       query = query.or(`name.ilike.%${term}%,org_number.ilike.${term}%`)
     }
 

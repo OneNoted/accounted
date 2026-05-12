@@ -47,13 +47,13 @@ function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: 
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-const CUSTOMER_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+const CUSTOMER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const USER_ID = 'user-1'
 
 function makeRequest(url: string, init?: RequestInit): Request {
   return new Request(url, {
     ...init,
-    headers: { Authorization: 'Bearer gnubok_sk_x', ...(init?.headers ?? {}) },
+    headers: { Authorization: 'Bearer test-fixture-not-a-real-key', ...(init?.headers ?? {}) },
   })
 }
 
@@ -163,7 +163,7 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
         customers: {
           data: [
             SAMPLE_CUSTOMER,
-            { ...SAMPLE_CUSTOMER, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd' },
+            { ...SAMPLE_CUSTOMER, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' },
           ],
           error: null,
         },
@@ -251,5 +251,43 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
+  })
+
+  it('returns 400 VALIDATION_ERROR when :id is not a UUID', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/not-a-uuid`),
+      detailParams(COMPANY_ID, 'not-a-uuid'),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('id')
+  })
+
+  it('does not echo the queried id on 404 (enumeration hardening)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: null, error: null },
+      }),
+    )
+
+    const res = await getCustomer(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
+      detailParams(COMPANY_ID, CUSTOMER_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details).toEqual({ resource: 'customer' })
+    expect(body.error.details.id).toBeUndefined()
   })
 })

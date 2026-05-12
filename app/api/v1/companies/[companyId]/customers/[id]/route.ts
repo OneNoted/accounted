@@ -36,6 +36,14 @@ const CustomerDetail = z.object({
 const ALLOWED_EXPAND = ['invoices'] as const
 const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 
+// Explicit projection. Excludes user_id, company_id (internal scoping),
+// and vat_number_validated_at (internal timestamp not in the public schema).
+const CUSTOMER_DETAIL_COLUMNS =
+  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+
+const OPEN_INVOICE_COLUMNS =
+  'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
+
 registerEndpoint({
   operation: 'customers.get',
   method: 'GET',
@@ -82,6 +90,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
   'customers.get',
   async (request, ctx, params) => {
     const { id } = await params.params
+
+    // Defense in depth: validate the path id is a UUID before touching the
+    // database or reflecting it in error details.
+    const idParse = z.string().uuid().safeParse(id)
+    if (!idParse.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'id', message: 'Customer id must be a UUID.' },
+      })
+    }
+    const customerId = idParse.data
+
     const url = new URL(request.url)
 
     const expandResult = parseExpand(url, ALLOWED_EXPAND)
@@ -99,18 +119,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     const { data: customer, error } = await ctx.supabase
       .from('customers')
-      .select('*')
+      .select(CUSTOMER_DETAIL_COLUMNS)
       .eq('company_id', ctx.companyId!)
-      .eq('id', id)
+      .eq('id', customerId)
       .maybeSingle()
 
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
     if (!customer) {
+      // Generic NOT_FOUND — do not echo the queried id back to the caller
+      // (enumeration hardening).
+      ctx.log.warn('customers.get: not found', { customerId, companyId: ctx.companyId })
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,
-        details: { resource: 'customer', id },
+        details: { resource: 'customer' },
       })
     }
 
@@ -120,16 +143,19 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     if (expand.has('invoices')) {
       const { data: invs, error: invErr } = await ctx.supabase
         .from('invoices')
-        .select('id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount')
+        .select(OPEN_INVOICE_COLUMNS)
         .eq('company_id', ctx.companyId!)
-        .eq('customer_id', id)
+        .eq('customer_id', customerId)
         .in('status', OPEN_INVOICE_STATUSES)
         .order('invoice_date', { ascending: false })
 
       if (invErr) {
         // Soft-degrade: log but still return the customer. The agent gets
-        // the primary resource; ?expand is a hint, not a guarantee.
-        ctx.log.warn('customers.get: open-invoices expansion failed', invErr as Error)
+        // the primary resource; ?expand is a hint, not a guarantee. Log
+        // only the error code/message — not the raw Supabase object.
+        const errMsg = (invErr as { code?: string; message?: string }).message ?? 'unknown'
+        const errCode = (invErr as { code?: string }).code ?? 'unknown'
+        ctx.log.warn('customers.get: open-invoices expansion failed', { errCode, errMsg })
         invoices = []
       } else {
         invoices = invs ?? []
