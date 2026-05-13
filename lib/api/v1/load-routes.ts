@@ -15,6 +15,9 @@
 import '@/app/api/v1/health/route'
 import '@/app/api/v1/companies/route'
 
+// Phase 4 PR-2 (foundation) — async operations polling endpoint.
+import '@/app/api/v1/operations/[id]/route'
+
 // Phase 2 PR-A — invoice + customer reads.
 import '@/app/api/v1/companies/[companyId]/invoices/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/route'
