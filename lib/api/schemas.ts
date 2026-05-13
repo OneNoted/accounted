@@ -267,6 +267,9 @@ export const CreateSupplierInvoiceSchema = z.object({
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
   paid_with_private_funds: z.boolean().optional(),
+  // For paid_with_private_funds: the date the owner paid out-of-pocket.
+  // Defaults to invoice_date (common for kvitto where the two coincide).
+  payment_date: isoDate.optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 

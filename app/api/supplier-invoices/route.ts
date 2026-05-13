@@ -62,8 +62,8 @@ export const POST = withRouteContext(
     if (paidPrivately && body.reverse_charge) {
       // RC invoices come from registered businesses with formal invoices and
       // go through normal AP. "Privately paid" only makes sense for
-      // out-of-pocket kvitton — combining the two is a UI bug.
-      return errorResponseFromCode('SI_CREATE_FAILED', log, {
+      // out-of-pocket kvitton — combining the two is a UI bug. 400, not 500.
+      return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
         requestId,
         details: { reason: 'paid_with_private_funds is not supported with reverse_charge' },
       })
@@ -133,6 +133,27 @@ export const POST = withRouteContext(
     const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
     const vatAmount = items.reduce((sum, i) => sum + i.vat_amount, 0)
     const total = Math.round((subtotal + vatAmount) * 100) / 100
+
+    // Representation (BAS 6070–6079): ingående moms is only deductible up to
+    // 300 SEK base/person per ML 8 kap. 1 §, and the income-tax deduction was
+    // abolished in 2017 (IL 16 kap. 2 §). The engine debits 2641 for the full
+    // VAT; we surface a non-blocking warning so the user can adjust manually.
+    // Only emit on the new private-funds path for now — other AP paths share
+    // the flaw and are tracked separately.
+    const warnings: Array<{ code: string; message: string }> = []
+    if (paidPrivately) {
+      const repItems = items.filter(i => /^607\d$/.test(i.account_number))
+      if (repItems.length > 0) {
+        warnings.push({
+          code: 'REPRESENTATION_VAT_CAP',
+          message:
+            'Representation (konto 6070–6079): ingående moms är endast avdragsgill ' +
+            'upp till 300 kr/person (ML 8 kap. 1 §) och kostnaden är inte ' +
+            'inkomstskattemässigt avdragsgill (IL 16 kap. 2 §). Justera bokföringen ' +
+            'manuellt om beloppet överstiger gränsen.',
+        })
+      }
+    }
 
     const exchangeRate = body.exchange_rate || null
     const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
@@ -289,7 +310,10 @@ export const POST = withRouteContext(
             user_id: user.id,
             company_id: companyId,
             supplier_invoice_id: invoice.id,
-            payment_date: invoice.invoice_date,
+            // For an eget utlägg the actual out-of-pocket date may differ from
+            // the invoice/receipt date — accept an explicit payment_date and
+            // fall back to invoice_date for the common kvitto case.
+            payment_date: body.payment_date ?? invoice.invoice_date,
             amount: totalRounded,
             currency: invoice.currency,
             exchange_rate_difference: 0,
@@ -376,6 +400,7 @@ export const POST = withRouteContext(
         registration_journal_entry_id: registrationJournalEntryId,
         payment_journal_entry_id: paymentJournalEntryId,
       },
+      ...(warnings.length > 0 ? { warnings } : {}),
     })
   },
   { requireWrite: true },

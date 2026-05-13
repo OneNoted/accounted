@@ -1200,6 +1200,11 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantörsfakturan kunde inte skapas.',
     message_en: 'Failed to create supplier invoice.',
   },
+  SI_CREATE_INVALID_INPUT: {
+    httpStatus: 400,
+    message_sv: 'Ogiltig kombination av fakturafält. Kontrollera formuläret och försök igen.',
+    message_en: 'Invalid combination of supplier invoice fields.',
+  },
   SI_PAID_ALREADY: {
     httpStatus: 409,
     message_sv: 'Leverantörsfakturan är redan betald eller krediterad.',

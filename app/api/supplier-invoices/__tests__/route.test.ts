@@ -576,8 +576,8 @@ describe('POST /api/supplier-invoices', () => {
     const response = await POST(request)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(500)
-    expect(body.error.code).toBe('SI_CREATE_FAILED')
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
     // Make sure we never touched the engine paths.
     expect(mockCreateSupplierInvoicePrivatelyPaidEntry).not.toHaveBeenCalled()
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()

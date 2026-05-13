@@ -195,7 +195,9 @@ export async function generatePeriodiskSammanstallning(
       .in('account_number', PS_ACCOUNTS)
       .eq('journal_entries.company_id', companyId)
       .in('journal_entries.status', ['posted', 'reversed'])
-      .in('journal_entries.source_type', ['invoice_created', 'credit_note', 'invoice_cash_payment'])
+      // Cash sales on 3308/3108 are not a real flow (EU reverse-charge sales
+      // always go through AR); excluded to avoid phantom rows.
+      .in('journal_entries.source_type', ['invoice_created', 'credit_note'])
       .gte('journal_entries.entry_date', start)
       .lte('journal_entries.entry_date', end)
       .range(from, to) as unknown as PromiseLike<{ data: RawLine[] | null; error: { message: string } | null }>,
@@ -357,14 +359,16 @@ export async function generatePeriodiskSammanstallning(
     )
   }
 
-  // Goods-sold-with-quarterly-period — soft warning per plan (v1).
+  // Goods-sold-with-quarterly-period — blocking under SFL 35 kap. 2 §.
+  // Companies selling goods intra-EU must file PS monthly; a quarterly filing
+  // is structurally non-compliant and must not be exportable as CSV.
   if (goodsLineSeen && periodType === 'quarterly') {
     warnings.push({
-      level: 'warning',
+      level: 'error',
       code: 'GOODS_SOLD_WITH_QUARTERLY_PERIOD',
       message:
-        'Du har varuförsäljning i perioden. Periodisk sammanställning för varor ska normalt ' +
-        'rapporteras månadsvis (35 kap. 2 § SFL).',
+        'Du har varuförsäljning i perioden. Periodisk sammanställning för varor ska ' +
+        'rapporteras månadsvis (35 kap. 2 § SFL). Byt period eller kontakta Skatteverket.',
     })
   }
 
