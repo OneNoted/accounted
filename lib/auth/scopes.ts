@@ -63,6 +63,8 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/invoices/:id/mark-sent': 'invoices:write',
   'POST /api/v1/companies/:companyId/invoices/:id/mark-paid': 'invoices:write',
   'POST /api/v1/companies/:companyId/invoices/:id/credit': 'invoices:write',
+  'POST /api/v1/companies/:companyId/invoices/:id/send': 'invoices:write',
+  'POST /api/v1/companies/:companyId/invoices/bulk-create': 'invoices:write',
 
   // Webhooks (Phase 6 — placeholder so the catalogue is complete)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',

@@ -80,6 +80,11 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'För många förfrågningar. Vänta en stund och försök igen.',
     message_en: 'Rate limit exceeded.',
   },
+  NOT_IMPLEMENTED: {
+    httpStatus: 501,
+    message_sv: 'Funktionen är inte implementerad ännu.',
+    message_en: 'This feature is accepted by the schema but not yet implemented.',
+  },
   COMPANY_CONTEXT_MISSING: {
     httpStatus: 400,
     message_sv: 'Ingen aktiv företagskontext. Välj ett företag och försök igen.',
