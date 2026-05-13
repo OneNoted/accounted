@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import {
+  createSupplierInvoiceRegistrationEntry,
+  createSupplierInvoicePrivatelyPaidEntry,
+} from '@/lib/bookkeeping/supplier-invoice-entries'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
@@ -54,6 +57,17 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
     const body = validation.data
+    const paidPrivately = body.paid_with_private_funds === true
+
+    if (paidPrivately && body.reverse_charge) {
+      // RC invoices come from registered businesses with formal invoices and
+      // go through normal AP. "Privately paid" only makes sense for
+      // out-of-pocket kvitton — combining the two is a UI bug.
+      return errorResponseFromCode('SI_CREATE_FAILED', log, {
+        requestId,
+        details: { reason: 'paid_with_private_funds is not supported with reverse_charge' },
+      })
+    }
 
     const { data: supplier, error: supplierError } = await supabase
       .from('suppliers')
@@ -64,6 +78,25 @@ export const POST = withRouteContext(
 
     if (supplierError || !supplier) {
       return errorResponseFromCode('SUPPLIER_NOT_FOUND', log, { requestId })
+    }
+
+    // Entity type drives the credit account for privately-paid invoices:
+    // AB → 2893 (skuld till aktieägare), EF → 2018 (egen insättning). Loaded
+    // up front so we can fail early if the company row is missing.
+    let entityType: 'aktiebolag' | 'enskild_firma' | null = null
+    if (paidPrivately) {
+      const { data: company } = await supabase
+        .from('companies')
+        .select('entity_type')
+        .eq('id', companyId)
+        .single()
+      if (!company?.entity_type) {
+        return errorResponseFromCode('SI_CREATE_FAILED', log, {
+          requestId,
+          details: { reason: 'company entity_type missing — cannot pick owner account' },
+        })
+      }
+      entityType = company.entity_type as 'aktiebolag' | 'enskild_firma'
     }
 
     const { data: arrivalNum, error: arrivalError } = await supabase
@@ -106,6 +139,7 @@ export const POST = withRouteContext(
     const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
     const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
 
+    const totalRounded = Math.round(total * 100) / 100
     const { data: invoice, error: invoiceError } = await supabase
       .from('supplier_invoices')
       .insert({
@@ -117,19 +151,22 @@ export const POST = withRouteContext(
         invoice_date: body.invoice_date,
         due_date: body.due_date,
         delivery_date: body.delivery_date || null,
-        status: 'registered',
+        status: paidPrivately ? 'paid' : 'registered',
         currency: body.currency || 'SEK',
         exchange_rate: exchangeRate,
         vat_treatment: body.vat_treatment || 'standard_25',
         reverse_charge: body.reverse_charge || false,
         payment_reference: body.payment_reference || null,
+        paid_with_private_funds: paidPrivately,
         subtotal: Math.round(subtotal * 100) / 100,
         subtotal_sek: subtotalSek,
         vat_amount: Math.round(vatAmount * 100) / 100,
         vat_amount_sek: vatAmountSek,
-        total: Math.round(total * 100) / 100,
+        total: totalRounded,
         total_sek: totalSek,
-        remaining_amount: Math.round(total * 100) / 100,
+        paid_amount: paidPrivately ? totalRounded : 0,
+        remaining_amount: paidPrivately ? 0 : totalRounded,
+        paid_at: paidPrivately ? new Date().toISOString() : null,
         notes: body.notes || null,
       })
       .select()
@@ -214,6 +251,11 @@ export const POST = withRouteContext(
     // is fatal — an orphan supplier_invoices row without a registration JE
     // silently understates leverantörsskuld (2440) and ingående moms (2641)
     // for the momsdeklaration. Roll back instead.
+    //
+    // Privately-paid path bypasses both accrual and cash flows: a single
+    // verifikat books the expense + VAT against 2893 (AB) or 2018 (EF) at
+    // registration time, regardless of accounting_method. mark-paid is never
+    // invoked for these (status='paid' from the start).
     const { data: settings } = await supabase
       .from('company_settings')
       .select('accounting_method')
@@ -222,8 +264,56 @@ export const POST = withRouteContext(
 
     const accountingMethod = settings?.accounting_method || 'accrual'
     let registrationJournalEntryId: string | null = null
+    let paymentJournalEntryId: string | null = null
 
-    if (accountingMethod === 'accrual') {
+    if (paidPrivately && entityType) {
+      try {
+        const journalEntry = await createSupplierInvoicePrivatelyPaidEntry(
+          supabase,
+          companyId!,
+          user.id,
+          invoice as SupplierInvoice,
+          items as SupplierInvoiceItem[],
+          entityType,
+          supplier.name,
+        )
+        if (journalEntry) {
+          paymentJournalEntryId = journalEntry.id
+          await supabase
+            .from('supplier_invoices')
+            .update({ payment_journal_entry_id: journalEntry.id })
+            .eq('id', invoice.id)
+          // Mirror the payment in supplier_invoice_payments so AR/AP and
+          // payment-history queries stay consistent with the mark-paid path.
+          await supabase.from('supplier_invoice_payments').insert({
+            user_id: user.id,
+            company_id: companyId,
+            supplier_invoice_id: invoice.id,
+            payment_date: invoice.invoice_date,
+            amount: totalRounded,
+            currency: invoice.currency,
+            exchange_rate_difference: 0,
+            journal_entry_id: journalEntry.id,
+            notes: 'Eget utlägg — betalat privat',
+          })
+        }
+      } catch (err) {
+        await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+        if (isBookkeepingError(err)) {
+          return errorResponse(err, log, { requestId })
+        }
+        log.error('failed to create privately-paid journal entry', err as Error, {
+          invoiceId: invoice.id,
+        })
+        return errorResponseFromCode('SI_CREATE_FAILED', log, {
+          requestId,
+          details: {
+            reason: err instanceof Error ? err.message : 'unknown',
+            step: 'privately_paid_journal_entry',
+          },
+        })
+      }
+    } else if (accountingMethod === 'accrual') {
       try {
         const journalEntry = await createSupplierInvoiceRegistrationEntry(
           supabase,
@@ -264,6 +354,17 @@ export const POST = withRouteContext(
         type: 'supplier_invoice.registered',
         payload: { supplierInvoice: invoice as SupplierInvoice, companyId: companyId!, userId: user.id },
       })
+      if (paidPrivately) {
+        await eventBus.emit({
+          type: 'supplier_invoice.paid',
+          payload: {
+            supplierInvoice: invoice as SupplierInvoice,
+            paymentAmount: totalRounded,
+            companyId: companyId!,
+            userId: user.id,
+          },
+        })
+      }
     } catch (err) {
       log.warn('supplier_invoice.registered event emission failed', err as Error)
     }
@@ -273,6 +374,7 @@ export const POST = withRouteContext(
         ...invoice,
         items: itemInserts,
         registration_journal_entry_id: registrationJournalEntryId,
+        payment_journal_entry_id: paymentJournalEntryId,
       },
     })
   },

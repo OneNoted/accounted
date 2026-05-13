@@ -696,6 +696,44 @@ const VAT_REPORT: Record<string, StructuredErrorEntry> = {
   },
 }
 
+const PS_REPORT: Record<string, StructuredErrorEntry> = {
+  PS_REPORT_MISSING_PARAMS: {
+    httpStatus: 400,
+    message_sv: 'periodType, year och period krävs.',
+    message_en: 'periodType, year and period query parameters are required.',
+  },
+  PS_REPORT_INVALID_PERIOD_TYPE: {
+    httpStatus: 400,
+    message_sv: 'periodType måste vara monthly eller quarterly.',
+    message_en: 'periodType must be monthly or quarterly.',
+  },
+  PS_REPORT_INVALID_YEAR: {
+    httpStatus: 400,
+    message_sv: 'year måste vara ett giltigt årtal mellan 2000 och 2100.',
+    message_en: 'year must be a number between 2000 and 2100.',
+  },
+  PS_REPORT_INVALID_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'period är ogiltig för vald periodtyp.',
+    message_en: 'period is invalid for the chosen period type.',
+  },
+  PS_REPORT_GENERATION_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Periodisk sammanställning kunde inte beräknas.',
+    message_en: 'Failed to generate periodisk sammanställning.',
+  },
+  PS_REPORT_CSV_BLOCKED_BY_ERRORS: {
+    httpStatus: 400,
+    message_sv: 'CSV kan inte laddas ner. Åtgärda blockerande fel först.',
+    message_en: 'CSV download blocked by validation errors. Fix them first.',
+  },
+  PS_REPORT_MISSING_FILER_INFO: {
+    httpStatus: 400,
+    message_sv: 'Kontaktuppgifter saknas. Fyll i namn, telefon och e-post under Inställningar.',
+    message_en: 'Tax contact information is missing on company_settings.',
+  },
+}
+
 const SIE_EXPORT: Record<string, StructuredErrorEntry> = {
   SIE_EXPORT_COMPANY_NOT_FOUND: {
     httpStatus: 404,
@@ -1360,6 +1398,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...FX,
   ...REPORT,
   ...VAT_REPORT,
+  ...PS_REPORT,
   ...SIE_EXPORT,
   ...TAX_DECL,
   ...SIE_IMPORT,
