@@ -165,5 +165,8 @@ describe('GET /api/v1/companies/:companyId/fiscal-periods', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.fiscal_periods).toHaveLength(1)
+    // Phase 3 review fix: derived BFL 3 kap fields appear on every row.
+    expect(body.data.fiscal_periods[0].duration_days).toBe(365) // 2026-01-01 → 2026-12-31
+    expect(body.data.fiscal_periods[0].exceeds_18_months).toBe(false)
   })
 })

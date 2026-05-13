@@ -20,6 +20,9 @@ const FiscalPeriod = z.object({
   locked_at: z.string().nullable(),
   previous_period_id: z.string().uuid().nullable(),
   created_at: z.string(),
+  // Computed BFL-compliance flags. Persisted nowhere; derived per response.
+  duration_days: z.number().int(),
+  exceeds_18_months: z.boolean(),
 })
 
 const FiscalPeriodsResponse = z.object({ fiscal_periods: z.array(FiscalPeriod) })
@@ -67,6 +70,11 @@ registerEndpoint({
   response: { success: FiscalPeriodsResponse },
 })
 
+// 18 months as a day cap. BFL 3 kap caps a single räkenskapsår at 18 months
+// (first-year exception aside). Using days (rather than calendar months) keeps
+// the comparison deterministic across leap years.
+const EIGHTEEN_MONTHS_DAYS = 549
+
 export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'fiscal-periods.list',
   async (_request, ctx) => {
@@ -77,6 +85,24 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .order('period_start', { ascending: false })
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    return ok({ fiscal_periods: data ?? [] }, { requestId: ctx.requestId })
+
+    // Derive BFL 3 kap compliance flags so an automated client (year-end
+    // wizard, audit tool) can spot non-compliant period sequences without
+    // re-implementing date arithmetic.
+    type Row = { period_start: string; period_end: string } & Record<string, unknown>
+    const rows = (data ?? []) as unknown as Row[]
+    const enriched = rows.map((p) => {
+      const start = new Date(p.period_start)
+      const end = new Date(p.period_end)
+      const ms = end.getTime() - start.getTime()
+      const duration_days = Math.round(ms / (24 * 60 * 60 * 1000)) + 1
+      return {
+        ...p,
+        duration_days,
+        exceeds_18_months: duration_days > EIGHTEEN_MONTHS_DAYS,
+      }
+    })
+
+    return ok({ fiscal_periods: enriched }, { requestId: ctx.requestId })
   },
 )

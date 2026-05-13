@@ -15,6 +15,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
@@ -241,6 +242,27 @@ async function categorizeOne(
     }
   }
 
+  // Period-lock pre-check — same rationale as the single :categorize route.
+  // A locked period surfaces as PERIOD_LOCKED on the per-item error rather
+  // than a generic INTERNAL_ERROR from the trigger exception.
+  const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
+  if (periodLock.locked) {
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'PERIOD_LOCKED',
+        message: 'Period is locked or closed; cannot post journal entry.',
+        details: {
+          transaction_date: transaction.date,
+          reason: periodLock.reason,
+          fiscal_period_id: periodLock.fiscal_period_id,
+        },
+      },
+    }
+  }
+
   let journalEntryId: string | null = null
   let journalEntryError: string | null = null
   try {
@@ -295,6 +317,30 @@ async function categorizeOne(
         request_index: index,
         orphanJournalEntryId: journalEntryId,
       })
+      // Document the gap so the orphan is traceable per BFL 5 kap 5 §.
+      try {
+        const { data: orphan } = await supabase
+          .from('journal_entries')
+          .select('fiscal_period_id, voucher_series, voucher_number')
+          .eq('id', journalEntryId)
+          .single()
+        if (orphan) {
+          await supabase.from('voucher_gap_explanations').insert({
+            company_id: companyId,
+            fiscal_period_id: orphan.fiscal_period_id,
+            voucher_series: orphan.voucher_series || 'A',
+            gap_number: orphan.voucher_number,
+            explanation:
+              'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
+            created_by: userId,
+          })
+        }
+      } catch (gapErr) {
+        log.error('batch-categorize: failed to log voucher_gap_explanations', gapErr as Error, {
+          request_index: index,
+          orphanJournalEntryId: journalEntryId,
+        })
+      }
     }
     return {
       ok: false,

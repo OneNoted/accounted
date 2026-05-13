@@ -72,7 +72,7 @@ registerEndpoint({
     'Content-based dedup (date+amount) runs in addition: a CSV row that matches an already-booked transaction by date+amount is skipped even if external_id differs.',
     'raw_insert_only=true skips ALL post-insert pipeline steps (matching, categorization). Use for viewer-only imports.',
     'Max 500 items per call. For larger imports, split into pages of 500.',
-    'Dry-run preview only checks external_id-based dedup. Content-based dedup (date+amount against already-booked rows) only runs in the live pipeline, so a small mismatch between would_skip in dry-run and skipped_duplicates in the commit response is expected.',
+    'Dry-run runs both dedup checks (external_id AND content-based date+amount against booked rows), matching the live pipeline. Numbers should agree barring concurrent imports between preview and commit.',
   ],
   example: {
     request: {
@@ -128,27 +128,57 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const body = parsed.data
 
     if (ctx.dryRun) {
-      // Dry-run: report dedup decisions without inserting. Query the
-      // booked + unbooked-enable-banking maps against the requested rows.
+      // Dry-run runs BOTH dedup checks the live pipeline runs:
+      //   1. external_id match against any existing transaction
+      //   2. content match (date + amount) against already-booked rows
+      // The live pipeline narrows (2) to date range + booked-only, so we
+      // mirror that here. Without this, an integrator who relies on dry-run
+      // to confirm uniqueness can ingest a duplicate affärshändelse —
+      // BFL 5 kap requires löpande bokföring to reflect actual transactions
+      // and forbids double-bookings.
       const externalIds = body.transactions.map((t) => t.external_id)
+      const dates = [...body.transactions.map((t) => t.date)].sort()
+      const dateFrom = dates[0]
+      const dateTo = dates[dates.length - 1]
+
       const { data: existingByExtId } = await ctx.supabase
         .from('transactions')
         .select('external_id')
         .eq('company_id', ctx.companyId!)
         .in('external_id', externalIds)
-
       const knownExtIds = new Set(
         (existingByExtId ?? []).map((r) => (r as { external_id: string }).external_id),
       )
 
-      const previewRows = body.transactions.map((tx) => ({
-        external_id: tx.external_id,
-        date: tx.date,
-        amount: tx.amount,
-        currency: tx.currency,
-        would_skip: knownExtIds.has(tx.external_id),
-        skip_reason: knownExtIds.has(tx.external_id) ? 'external_id_match' : null,
-      }))
+      const { data: bookedInRange } = await ctx.supabase
+        .from('transactions')
+        .select('date, amount')
+        .eq('company_id', ctx.companyId!)
+        .not('journal_entry_id', 'is', null)
+        .gte('date', dateFrom)
+        .lte('date', dateTo)
+      const bookedKeys = new Set(
+        (bookedInRange ?? []).map((r) => `${(r as { date: string }).date}|${(r as { amount: number }).amount}`),
+      )
+
+      const previewRows = body.transactions.map((tx) => {
+        const extIdHit = knownExtIds.has(tx.external_id)
+        const contentHit = bookedKeys.has(`${tx.date}|${tx.amount}`)
+        const wouldSkip = extIdHit || contentHit
+        const reason = extIdHit
+          ? 'external_id_match'
+          : contentHit
+            ? 'content_match_booked'
+            : null
+        return {
+          external_id: tx.external_id,
+          date: tx.date,
+          amount: tx.amount,
+          currency: tx.currency,
+          would_skip: wouldSkip,
+          skip_reason: reason,
+        }
+      })
       const wouldImport = previewRows.filter((r) => !r.would_skip).length
       const wouldSkip = previewRows.filter((r) => r.would_skip).length
 

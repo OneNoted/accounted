@@ -19,6 +19,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import {
@@ -290,6 +291,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
+    // Period-lock pre-check. enforce_period_lock + enforce_company_lock_date
+    // triggers will block the JE insert anyway, but they surface as a generic
+    // 500. Catch the locked-period case here and return a structured
+    // PERIOD_LOCKED response so callers see actionable error semantics.
+    const periodLock = await checkPeriodLock(
+      ctx.supabase,
+      ctx.companyId!,
+      transaction.date,
+    )
+    if (periodLock.locked) {
+      return v1ErrorResponseFromCode('PERIOD_LOCKED', txLog, {
+        requestId: ctx.requestId,
+        details: {
+          transaction_date: transaction.date,
+          reason: periodLock.reason,
+          fiscal_period_id: periodLock.fiscal_period_id,
+        },
+      })
+    }
+
     // Live path: create the journal entry. The internal route runs a
     // duplicate-payment guard (Prong B) here that surfaces SI-match
     // suggestions; we preserve that behavior so v1 and the dashboard
@@ -371,11 +392,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId)
       } catch (revErr) {
-        // Storno failure on the orphan is rare but worth alerting on — the
-        // orphan stays in the ledger and someone needs to reconcile manually.
+        // Storno failure on the orphan is rare but creates an unreconcilable
+        // ledger state (posted JE with no reversal). BFL 5 kap 5 § requires
+        // every correction be traceable. Document the gap explicitly so a
+        // human can reconcile manually rather than losing the trail to logs.
         txLog.error('TX_CATEGORIZE_RACE: failed to storno orphaned JE', revErr as Error, {
           orphanJournalEntryId: journalEntryId,
         })
+        try {
+          const { data: orphan } = await ctx.supabase
+            .from('journal_entries')
+            .select('fiscal_period_id, voucher_series, voucher_number')
+            .eq('id', journalEntryId)
+            .single()
+          if (orphan) {
+            await ctx.supabase.from('voucher_gap_explanations').insert({
+              company_id: ctx.companyId!,
+              fiscal_period_id: orphan.fiscal_period_id,
+              voucher_series: orphan.voucher_series || 'A',
+              gap_number: orphan.voucher_number,
+              explanation:
+                'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
+              created_by: ctx.userId,
+            })
+          }
+        } catch (gapErr) {
+          txLog.error(
+            'TX_CATEGORIZE_RACE: failed to log voucher_gap_explanations after storno failure',
+            gapErr as Error,
+            { orphanJournalEntryId: journalEntryId },
+          )
+        }
       }
       return v1ErrorResponseFromCode('TX_CATEGORIZE_RACE', txLog, {
         requestId: ctx.requestId,
