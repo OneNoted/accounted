@@ -135,16 +135,21 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           {(settings.invoice_show_company_name ?? true) && (
             <div className="flex items-center justify-between pl-0">
               <p className="text-xs text-muted-foreground">Placering</p>
-              <div className="inline-flex rounded-md border border-border/60 p-0.5">
+              <div
+                role="group"
+                aria-label="Placering av företagsnamn"
+                className="inline-flex rounded-md border border-border/60 p-0.5"
+              >
                 {(['header', 'footer'] as const).map((pos) => {
                   const active = (settings.invoice_company_name_position ?? 'header') === pos
                   return (
                     <button
                       key={pos}
                       type="button"
+                      aria-pressed={active}
                       onClick={() => savePosition(pos)}
                       className={
-                        'px-3 py-1 text-xs rounded-sm transition-colors ' +
+                        'h-10 px-4 text-sm rounded-sm transition-colors ' +
                         (active
                           ? 'bg-muted text-foreground'
                           : 'text-muted-foreground hover:text-foreground')

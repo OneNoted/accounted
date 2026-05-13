@@ -11,7 +11,10 @@
 --   * Orphan 2610 / 2612 rows are only deleted if no journal line references
 --     them. The engine never routes to 2610/2612, so this should be true for
 --     all bad-seed companies; the guard is defense in depth.
---   * 2621 / 2631 are inserted only for companies that lack them.
+--   * 2621 / 2631 are inserted only for companies that show the bad-seed
+--     fingerprint (a mislabelled 2611 carrying one of the two bad-seed names).
+--     plan_type is derived from that sibling 2611 row rather than hardcoded
+--     to 'k1', so any company that manually adjusted plan_type keeps it.
 
 BEGIN;
 
@@ -22,7 +25,9 @@ UPDATE public.chart_of_accounts
  WHERE account_number = '2611'
    AND account_name IN ('Utgaende moms 12%', 'Utgående moms 12%');
 
--- 2. Insert missing 2621 (12%) for every company that does not have it
+-- 2. Insert missing 2621 (12%) for bad-seed companies that lack it.
+--    Scoped to companies that had the bad-seed fingerprint on 2611
+--    (rename in step 1 above, or the orphan 2610/2612 pattern in step 4).
 INSERT INTO public.chart_of_accounts
   (user_id, company_id, account_number, account_name, account_class,
    account_group, account_type, normal_balance, plan_type, is_system_account)
@@ -30,15 +35,19 @@ SELECT c.created_by,
        c.id,
        '2621',
        'Utgaende moms forsaljning inom Sverige, 12%',
-       2, '26', 'liability', 'credit', 'k1', true
+       2, '26', 'liability', 'credit', sibling.plan_type, true
   FROM public.companies c
- WHERE NOT EXISTS (
+  JOIN public.chart_of_accounts sibling
+    ON sibling.company_id = c.id
+   AND sibling.account_number = '2611'
+ WHERE sibling.account_name = 'Utgaende moms forsaljning inom Sverige, 25%'
+   AND NOT EXISTS (
          SELECT 1 FROM public.chart_of_accounts coa
           WHERE coa.company_id = c.id
             AND coa.account_number = '2621'
        );
 
--- 3. Insert missing 2631 (6%) for every company that does not have it
+-- 3. Insert missing 2631 (6%) for bad-seed companies that lack it.
 INSERT INTO public.chart_of_accounts
   (user_id, company_id, account_number, account_name, account_class,
    account_group, account_type, normal_balance, plan_type, is_system_account)
@@ -46,9 +55,13 @@ SELECT c.created_by,
        c.id,
        '2631',
        'Utgaende moms forsaljning inom Sverige,  6%',
-       2, '26', 'liability', 'credit', 'k1', true
+       2, '26', 'liability', 'credit', sibling.plan_type, true
   FROM public.companies c
- WHERE NOT EXISTS (
+  JOIN public.chart_of_accounts sibling
+    ON sibling.company_id = c.id
+   AND sibling.account_number = '2611'
+ WHERE sibling.account_name = 'Utgaende moms forsaljning inom Sverige, 25%'
+   AND NOT EXISTS (
          SELECT 1 FROM public.chart_of_accounts coa
           WHERE coa.company_id = c.id
             AND coa.account_number = '2631'
