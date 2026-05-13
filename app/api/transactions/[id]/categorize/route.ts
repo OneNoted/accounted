@@ -9,6 +9,10 @@ import { saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  DUPLICATE_AMOUNT_TOLERANCE_PCT,
+  escapeLikePattern,
+} from '@/lib/invoices/duplicate-payment-guard'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
@@ -265,24 +269,28 @@ export const POST = withRouteContext(
     // Prong B: intercept plain 2440 categorization of supplier payments when an
     // open supplier invoice already covers this amount. Categorizing direct to
     // 2440 leaves the invoice with status='approved' and lures the user into a
-    // duplicate "Markera som betald" later.
+    // duplicate "Markera som betald" later. Credit must be a bank/cash account
+    // (1xxx) — 2440 against a clearing account, equity, etc. isn't a supplier
+    // payment and the suggestion would misdirect the user.
     if (
       !body.confirm_no_match &&
       is_business &&
       transaction.amount < 0 &&
-      mappingResult.debit_account === '2440'
+      mappingResult.debit_account === '2440' &&
+      /^1\d{3}$/.test(mappingResult.credit_account)
     ) {
       const txAmountAbs = Math.abs(transaction.amount)
-      const windowLow = Math.round(txAmountAbs * 0.98 * 100) / 100
-      const windowHigh = Math.round(txAmountAbs * 1.02 * 100) / 100
+      const windowLow = Math.round(txAmountAbs * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+      const windowHigh = Math.round(txAmountAbs * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
 
       let supplierIds: string[] = []
       if (transaction.merchant_name) {
+        const escapedMerchant = escapeLikePattern(transaction.merchant_name)
         const { data: matchedSuppliers } = await supabase
           .from('suppliers')
           .select('id')
           .eq('company_id', companyId)
-          .ilike('name', `%${transaction.merchant_name}%`)
+          .ilike('name', `%${escapedMerchant}%`)
           .limit(10)
         supplierIds = (matchedSuppliers || []).map((s) => s.id)
       }

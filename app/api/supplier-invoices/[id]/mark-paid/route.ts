@@ -10,6 +10,11 @@ import { validateBody } from '@/lib/api/validate'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  DUPLICATE_AMOUNT_TOLERANCE_PCT,
+  DUPLICATE_DATE_WINDOW_DAYS,
+  escapeLikePattern,
+} from '@/lib/invoices/duplicate-payment-guard'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 ensureInitialized()
@@ -54,20 +59,24 @@ export const POST = withRouteContext(
     // exists for this supplier, surface it before booking a new payment entry.
     // Caller can override with `force: true`. Skipped on partial payments —
     // those are an explicit, deliberate action.
-    if (!body.force && paymentAmount >= invoice.remaining_amount) {
+    const paidRounded = Math.round(paymentAmount * 100) / 100
+    const remainingRounded = Math.round(invoice.remaining_amount * 100) / 100
+    if (!body.force && paidRounded >= remainingRounded) {
       const supplierName = (invoice as SupplierInvoice & { supplier?: { name?: string } })
         .supplier?.name
       if (supplierName) {
-        const windowLow = Math.round(paymentAmount * 0.98 * 100) / 100
-        const windowHigh = Math.round(paymentAmount * 1.02 * 100) / 100
+        const windowLow = Math.round(paymentAmount * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+        const windowHigh = Math.round(paymentAmount * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
         const dateMs = new Date(paymentDate).getTime()
-        const dateLow = new Date(dateMs - 60 * 24 * 3600 * 1000).toISOString().split('T')[0]
-        const dateHigh = new Date(dateMs + 60 * 24 * 3600 * 1000).toISOString().split('T')[0]
+        const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0]
+        const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0]
+        const escapedSupplierName = escapeLikePattern(supplierName)
 
         const { data: candidates } = await supabase
           .from('transactions')
           .select('id, date, amount, description, merchant_name, journal_entry_id')
           .eq('company_id', companyId!)
+          .eq('is_business', true)
           .is('supplier_invoice_id', null)
           .is('invoice_id', null)
           .lt('amount', 0)
@@ -75,7 +84,7 @@ export const POST = withRouteContext(
           .lte('amount', -windowLow)
           .gte('date', dateLow)
           .lte('date', dateHigh)
-          .ilike('merchant_name', `%${supplierName}%`)
+          .ilike('merchant_name', `%${escapedSupplierName}%`)
           .order('date', { ascending: false })
           .limit(5)
 
