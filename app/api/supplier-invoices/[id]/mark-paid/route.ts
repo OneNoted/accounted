@@ -50,6 +50,53 @@ export const POST = withRouteContext(
     const paymentAmount = body.amount || invoice.remaining_amount
     const now = new Date().toISOString()
 
+    // Duplicate-payment guard: if a likely-matching unlinked bank transaction
+    // exists for this supplier, surface it before booking a new payment entry.
+    // Caller can override with `force: true`. Skipped on partial payments —
+    // those are an explicit, deliberate action.
+    if (!body.force && paymentAmount >= invoice.remaining_amount) {
+      const supplierName = (invoice as SupplierInvoice & { supplier?: { name?: string } })
+        .supplier?.name
+      if (supplierName) {
+        const windowLow = Math.round(paymentAmount * 0.98 * 100) / 100
+        const windowHigh = Math.round(paymentAmount * 1.02 * 100) / 100
+        const dateMs = new Date(paymentDate).getTime()
+        const dateLow = new Date(dateMs - 60 * 24 * 3600 * 1000).toISOString().split('T')[0]
+        const dateHigh = new Date(dateMs + 60 * 24 * 3600 * 1000).toISOString().split('T')[0]
+
+        const { data: candidates } = await supabase
+          .from('transactions')
+          .select('id, date, amount, description, merchant_name, journal_entry_id')
+          .eq('company_id', companyId!)
+          .is('supplier_invoice_id', null)
+          .is('invoice_id', null)
+          .lt('amount', 0)
+          .gte('amount', -windowHigh)
+          .lte('amount', -windowLow)
+          .gte('date', dateLow)
+          .lte('date', dateHigh)
+          .ilike('merchant_name', `%${supplierName}%`)
+          .order('date', { ascending: false })
+          .limit(5)
+
+        if (candidates && candidates.length > 0) {
+          return errorResponseFromCode('SI_PAID_LIKELY_DUPLICATE', opLog, {
+            requestId,
+            details: {
+              candidates: candidates.map((c) => ({
+                id: c.id,
+                date: c.date,
+                amount: c.amount,
+                description: c.description,
+                merchant_name: c.merchant_name,
+                journal_entry_id: c.journal_entry_id,
+              })),
+            },
+          })
+        }
+      }
+    }
+
     const { data: settings } = await supabase
       .from('company_settings')
       .select('accounting_method')

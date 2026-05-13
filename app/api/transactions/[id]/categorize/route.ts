@@ -262,6 +262,61 @@ export const POST = withRouteContext(
       })
     }
 
+    // Prong B: intercept plain 2440 categorization of supplier payments when an
+    // open supplier invoice already covers this amount. Categorizing direct to
+    // 2440 leaves the invoice with status='approved' and lures the user into a
+    // duplicate "Markera som betald" later.
+    if (
+      !body.confirm_no_match &&
+      is_business &&
+      transaction.amount < 0 &&
+      mappingResult.debit_account === '2440'
+    ) {
+      const txAmountAbs = Math.abs(transaction.amount)
+      const windowLow = Math.round(txAmountAbs * 0.98 * 100) / 100
+      const windowHigh = Math.round(txAmountAbs * 1.02 * 100) / 100
+
+      let supplierIds: string[] = []
+      if (transaction.merchant_name) {
+        const { data: matchedSuppliers } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', companyId)
+          .ilike('name', `%${transaction.merchant_name}%`)
+          .limit(10)
+        supplierIds = (matchedSuppliers || []).map((s) => s.id)
+      }
+
+      if (supplierIds.length > 0) {
+        const { data: openInvoices } = await supabase
+          .from('supplier_invoices')
+          .select('id, supplier_invoice_number, invoice_date, remaining_amount, currency, supplier:suppliers(name)')
+          .eq('company_id', companyId)
+          .in('supplier_id', supplierIds)
+          .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+          .gte('remaining_amount', windowLow)
+          .lte('remaining_amount', windowHigh)
+          .order('invoice_date', { ascending: false })
+          .limit(5)
+
+        if (openInvoices && openInvoices.length > 0) {
+          return errorResponseFromCode('TX_CATEGORIZE_SUGGEST_SI_MATCH', txLog, {
+            requestId,
+            details: {
+              candidates: openInvoices.map((inv) => ({
+                supplier_invoice_id: inv.id,
+                invoice_number: inv.supplier_invoice_number,
+                invoice_date: inv.invoice_date,
+                remaining_amount: inv.remaining_amount,
+                currency: inv.currency,
+                supplier_name: (inv.supplier as { name?: string } | null)?.name ?? null,
+              })),
+            },
+          })
+        }
+      }
+    }
+
     await ensureFiscalPeriod(supabase, user.id, companyId, transaction.date, fiscalYearStartMonth, txLog)
 
     let journalEntryCreated = false
