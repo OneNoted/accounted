@@ -25,7 +25,21 @@ UPDATE public.chart_of_accounts
  WHERE account_number = '8411'
    AND account_name LIKE '%förlagsoch%';
 
--- 3. Periodiseringsfond name backfill.
+-- 3. BAS 2026 freed accounts 1250/1260; rename to the free-account label.
+--    Exact-match guard on the old seeded name leaves any customer rename alone.
+UPDATE public.chart_of_accounts
+   SET account_name = '(Fritt konto för Inventarier, verktyg och installationer)',
+       updated_at   = now()
+ WHERE account_number = '1250'
+   AND account_name  = 'Inventarier och verktyg';
+
+UPDATE public.chart_of_accounts
+   SET account_name = '(Fritt konto för Inventarier, verktyg och installationer)',
+       updated_at   = now()
+ WHERE account_number = '1260'
+   AND account_name  = 'Datorer';
+
+-- 4. Periodiseringsfond name backfill.
 --    BAS 2026 uses deterministic year mapping for accounts 2120-2139:
 --      2120 -> 2020,  2121 -> 2021,  2122 -> 2022,  2123 -> 2023,
 --      2124 -> 2024,  2125 -> 2025,  2126 -> 2026,  2127 -> 2027,

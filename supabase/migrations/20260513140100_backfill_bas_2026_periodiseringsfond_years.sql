@@ -8,10 +8,13 @@
 -- BAS 2026 reuses those same account numbers for years 2026/2027.
 --
 -- This migration aligns the year tag with the BAS 2026 meaning of each
--- account number. We only touch rows that still look like a seeded
--- Periodiseringsfond name (start with "Periodiseringsfond"). Customers who
--- renamed the account to something else (e.g. "Min fond 2016") keep their
--- name.
+-- account number. To avoid clobbering customer-customised names, we only
+-- touch rows whose name matches a known seeded shape:
+--   "Periodiseringsfond"
+--   "Periodiseringsfond YYYY"
+--   "Periodiseringsfond YYYY – nr 2"
+-- Anything else (e.g. "Min fond 2016", "Periodiseringsfond – avslutad") is
+-- left alone.
 
 BEGIN;
 
@@ -41,7 +44,7 @@ UPDATE public.chart_of_accounts
          '2120','2121','2122','2123','2124','2125','2126','2127','2129',
          '2130','2131','2132','2133','2134','2135','2136','2137','2139'
        )
-   AND account_name LIKE 'Periodiseringsfond%'
+   AND account_name ~ '^Periodiseringsfond( \d{4}( – nr 2)?)?$'
    AND account_name <> CASE account_number
          WHEN '2120' THEN 'Periodiseringsfond 2020'
          WHEN '2121' THEN 'Periodiseringsfond 2021'
