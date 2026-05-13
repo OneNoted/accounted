@@ -1450,8 +1450,8 @@ export default function TransactionsPage() {
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
               Det finns en öppen leverantörsfaktura med samma belopp från samma leverantör. Matcha mot
-              fakturan istället för att bokföra direkt på 2440 — då blir det ingen dubbelbokning när du
-              senare markerar den som betald.
+              fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars riskerar du både
+              en dubblerad verifikation och dubbelt avdrag av ingående moms (ML 8 kap 3 §).
             </p>
             <div className="space-y-2 rounded-md border bg-muted/30 p-3">
               {siMatchSuggestion?.candidates.map((c) => (
@@ -1487,7 +1487,7 @@ export default function TransactionsPage() {
                 }}
                 disabled={siMatchProcessing}
               >
-                Bokför på 2440 ändå
+                Bokför på leverantörsskulder ändå
               </Button>
             </div>
           </div>

@@ -72,6 +72,15 @@ export const POST = withRouteContext(
     if (!body.force && paidRounded >= remainingRounded) {
       const supplierName = (invoice as SupplierInvoice & { supplier?: { name?: string } })
         .supplier?.name
+      if (!supplierName) {
+        // An invoice without a resolved supplier name is arguably *higher* risk
+        // for duplicate booking, not lower (BFL 5 kap 7 § — motpart should be
+        // identifiable). Log the skip so the gap is visible in audit.
+        opLog.warn('duplicate-payment guard skipped', {
+          reason: 'missing_supplier_name',
+          supplierInvoiceId: id,
+        })
+      }
       if (supplierName) {
         const windowLow = Math.round(paymentAmount * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
         const windowHigh = Math.round(paymentAmount * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100

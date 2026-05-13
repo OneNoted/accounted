@@ -11,6 +11,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   DUPLICATE_AMOUNT_TOLERANCE_PCT,
+  DUPLICATE_DATE_WINDOW_DAYS,
   escapeLikePattern,
 } from '@/lib/invoices/duplicate-payment-guard'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -304,6 +305,17 @@ export const POST = withRouteContext(
       }
 
       if (supplierIds.length > 0) {
+        // Restrict candidates to invoices within the date window relative to
+        // the bank tx date. Without this, an open invoice from years back can
+        // surface as a match and misdirect the user (swedish-compliance bot).
+        const txDateMs = new Date(transaction.date).getTime()
+        const invoiceDateLow = new Date(txDateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
+          .toISOString()
+          .split('T')[0]
+        const invoiceDateHigh = new Date(txDateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
+          .toISOString()
+          .split('T')[0]
+
         const { data: openInvoices } = await supabase
           .from('supplier_invoices')
           .select('id, supplier_invoice_number, invoice_date, remaining_amount, currency, supplier:suppliers(name)')
@@ -312,6 +324,8 @@ export const POST = withRouteContext(
           .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
           .gte('remaining_amount', windowLow)
           .lte('remaining_amount', windowHigh)
+          .gte('invoice_date', invoiceDateLow)
+          .lte('invoice_date', invoiceDateHigh)
           .order('invoice_date', { ascending: false })
           .limit(5)
 
