@@ -39,7 +39,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/accounts',
   summary: 'List chart-of-accounts entries (BAS chart).',
   description:
-    'Returns every account in the company\'s chart of accounts, ordered by sort_order (the BAS canonical sequence). Filter by ?class=<1..8> (BAS account class — 1=assets, 2=equity/liabilities, 3=revenue, 4=cost of goods, 5=other costs, 6=other costs, 7=labour, 8=financial). Pass ?active=false to include archived accounts.',
+    'Returns every account in the company\'s chart of accounts, ordered by sort_order (the BAS canonical sequence). Filter by ?class=<1..8> (BAS account class — 1=assets, 2=equity/liabilities, 3=revenue, 4=cost of goods sold, 5=övriga externa kostnader (rents, supplies, services), 6=övriga externa kostnader (marketing, professional services, IT), 7=labour, 8=financial). Note: BAS 5xxx and 6xxx are both övriga externa kostnader but cover distinct subgroups — see the BAS chart for the canonical mapping. Pass ?active=false to include archived accounts.',
   useWhen:
     'You need account numbers and names to render verifikation tables, build a custom report, or look up the canonical BAS label for an account.',
   doNotUseFor:

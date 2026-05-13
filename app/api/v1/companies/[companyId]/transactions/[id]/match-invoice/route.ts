@@ -40,7 +40,12 @@ const MatchInvoiceResponse = z.object({
   paid_amount: z.number(),
   remaining_amount: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
-  category: z.string(),
+  // Preserved from the prior :categorize call (or whatever the existing
+  // value was). Returns null when the transaction had never been
+  // categorized — the v1 surface no longer guesses 'income_services'
+  // for unmatched-revenue rows because the wrong default flows into
+  // BAS 3001/3041/3530 selection and INK2R/SRU reporting.
+  category: z.string().nullable(),
 })
 
 registerEndpoint({
@@ -69,7 +74,7 @@ registerEndpoint({
         paid_amount: 12500,
         remaining_amount: 0,
         journal_entry_id: 'je_…',
-        category: 'income_services',
+        category: null,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -358,15 +363,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // When the tx already has a category (set by a prior :categorize call,
+    // could be income_products / rental / etc.), preserve it. When there is
+    // none, leave the column UNTOUCHED — the existing default ('uncategorized')
+    // persists. Writing a hardcoded 'income_services' here was the source of
+    // a known mis-classification for goods/rental flows (BAS 3001/3041/3530
+    // distinct accounts → wrong INK2R field → wrong SRU).
+    const txUpdate: Record<string, unknown> = {
+      invoice_id,
+      potential_invoice_id: null,
+      journal_entry_id: journalEntryId,
+      is_business: true,
+    }
+    if (existingTxCategory) txUpdate.category = existingTxCategory
+
     const { error: updateTxErr } = await ctx.supabase
       .from('transactions')
-      .update({
-        invoice_id,
-        potential_invoice_id: null,
-        journal_entry_id: journalEntryId,
-        is_business: true,
-        category: existingTxCategory ?? 'income_services',
-      })
+      .update(txUpdate)
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
     if (updateTxErr) {
@@ -409,7 +422,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,
-        category: existingTxCategory ?? 'income_services',
+        category: existingTxCategory,
       },
       { requestId: ctx.requestId },
     )

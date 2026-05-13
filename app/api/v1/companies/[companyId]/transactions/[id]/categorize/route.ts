@@ -259,7 +259,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
       if (transaction.amount < 0) mappingResult.debit_account = body.account_override
       else mappingResult.credit_account = body.account_override
-      if (accountExists.account_class === 2) mappingResult.vat_lines = []
+      // Drop auto-VAT lines when the override targets a balance-sheet
+      // (class 2) account — but NOT when it targets a 26xx VAT clearing
+      // account directly. BAS class 2 covers both equity/liabilities (where
+      // VAT shouldn't be auto-posted) and the VAT accounts themselves
+      // (2611/2641/etc., where the auto-VAT line WOULD be the correct posting).
+      // Without the 26xx exception we silently drop ingående/utgående moms
+      // when a user override happens to land on, e.g., 2440 leverantörsskulder.
+      const isVatAccount = body.account_override.startsWith('26')
+      if (accountExists.account_class === 2 && !isVatAccount) {
+        mappingResult.vat_lines = []
+      }
     }
 
     if (!mappingResult.debit_account || !mappingResult.credit_account) {

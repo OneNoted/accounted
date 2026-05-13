@@ -70,10 +70,37 @@ registerEndpoint({
   response: { success: FiscalPeriodsResponse },
 })
 
-// 18 months as a day cap. BFL 3 kap caps a single räkenskapsår at 18 months
-// (first-year exception aside). Using days (rather than calendar months) keeps
-// the comparison deterministic across leap years.
-const EIGHTEEN_MONTHS_DAYS = 549
+/**
+ * BFL 3 kap 1 § caps a räkenskapsår at 18 calendar months. "Calendar months"
+ * matters here: 18 months can span 540–549 days depending on which 31-day
+ * months and leap days fall in the window, so a fixed day count is either
+ * too generous (false negatives) or too strict (false positives near month
+ * boundaries). Use proper calendar arithmetic — the period end's anchor day
+ * 18 months after the period start.
+ */
+function exceedsEighteenMonths(periodStart: string, periodEnd: string): boolean {
+  // ISO date strings — UTC parse to avoid host-tz shifts.
+  const start = new Date(periodStart + 'T00:00:00Z')
+  const end = new Date(periodEnd + 'T00:00:00Z')
+  // Compute the calendar date 18 months after `start`. Using setUTCMonth
+  // (not adding ms) handles month-length differences correctly. JS clamps
+  // overflow days (e.g. start=Aug 31 + 18 months → wraps to Mar 3 of year+2);
+  // for the cap-check semantics we want the anchor day, not the clamp, so
+  // use a manual month/year computation.
+  const startY = start.getUTCFullYear()
+  const startM = start.getUTCMonth() // 0-indexed
+  const startD = start.getUTCDate()
+  const targetY = startY + Math.floor((startM + 18) / 12)
+  const targetM = (startM + 18) % 12
+  const cap = new Date(Date.UTC(targetY, targetM, startD))
+  return end.getTime() > cap.getTime()
+}
+
+function durationDays(periodStart: string, periodEnd: string): number {
+  const start = new Date(periodStart + 'T00:00:00Z')
+  const end = new Date(periodEnd + 'T00:00:00Z')
+  return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1
+}
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'fiscal-periods.list',
@@ -91,17 +118,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // re-implementing date arithmetic.
     type Row = { period_start: string; period_end: string } & Record<string, unknown>
     const rows = (data ?? []) as unknown as Row[]
-    const enriched = rows.map((p) => {
-      const start = new Date(p.period_start)
-      const end = new Date(p.period_end)
-      const ms = end.getTime() - start.getTime()
-      const duration_days = Math.round(ms / (24 * 60 * 60 * 1000)) + 1
-      return {
-        ...p,
-        duration_days,
-        exceeds_18_months: duration_days > EIGHTEEN_MONTHS_DAYS,
-      }
-    })
+    const enriched = rows.map((p) => ({
+      ...p,
+      duration_days: durationDays(p.period_start, p.period_end),
+      exceeds_18_months: exceedsEighteenMonths(p.period_start, p.period_end),
+    }))
 
     return ok({ fiscal_periods: enriched }, { requestId: ctx.requestId })
   },
