@@ -105,6 +105,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const body = parsed.data
 
+    // Ownership pre-check: the caller-supplied `fiscal_period_id` must belong
+    // to ctx.companyId. Otherwise an insert would persist a row with
+    // company_id from the URL pointing at a fiscal_period from another
+    // company — a broken-link state that confuses every downstream gap-
+    // detection query. (No cross-tenant data leak per se, but the row is
+    // garbage.)
+    const { data: periodCheck } = await ctx.supabase
+      .from('fiscal_periods')
+      .select('id')
+      .eq('id', body.fiscal_period_id)
+      .eq('company_id', ctx.companyId!)
+      .maybeSingle()
+    if (!periodCheck) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId,
+        details: { resource: 'fiscal_period', field: 'fiscal_period_id' },
+      })
+    }
+
     if (ctx.dryRun) {
       return dryRunPreview(
         {

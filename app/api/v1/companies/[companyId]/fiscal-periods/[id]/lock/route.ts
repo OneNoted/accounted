@@ -86,8 +86,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           details: { reason: msg },
         })
       }
-      // Uncategorised-transactions error message in Swedish.
-      return v1ErrorResponseFromCode('PERIOD_HAS_UNBOOKED_TRANSACTIONS', ctx.log, {
+      // lockPeriod's uncategorised-transactions error message is in Swedish
+      // ("affärstransaktion(er) saknar bokföring"). Only map TO that code
+      // when the message actually looks like that path — otherwise an
+      // infra error (DB timeout, network) would loop the agent through
+      // pointless remediation.
+      if (msg.includes('saknar bokföring') || msg.toLowerCase().includes('uncategorised')) {
+        return v1ErrorResponseFromCode('PERIOD_HAS_UNBOOKED_TRANSACTIONS', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: msg },
+        })
+      }
+      ctx.log.error('fiscal-periods.lock unexpected error', err as Error, { fiscalPeriodId: idParse.data })
+      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: msg },
       })
