@@ -44,4 +44,14 @@ import '@/app/api/v1/companies/[companyId]/transactions/batch-categorize/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/bank/run/route'
 import '@/app/api/v1/companies/[companyId]/reconciliation/bank/status/route'
 
+// Phase 4 PR-1 — AP world: suppliers + supplier-invoices verticals.
+import '@/app/api/v1/companies/[companyId]/suppliers/route'
+import '@/app/api/v1/companies/[companyId]/suppliers/[id]/route'
+import '@/app/api/v1/companies/[companyId]/suppliers/bulk-create/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/approve/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/mark-paid/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/credit/route'
+
 export {}

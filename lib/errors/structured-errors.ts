@@ -1127,6 +1127,28 @@ const SUPPLIER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantören kunde inte tas bort.',
     message_en: 'Failed to delete supplier.',
   },
+  // v1 archive refusal — leverantörsfakturor pointing at this supplier still
+  // need its name/address for BFL 7 kap audit. Issue credit notes first.
+  SUPPLIER_HAS_INVOICES: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantören kan inte arkiveras eftersom det finns öppna leverantörsfakturor som refererar till den.',
+    message_en:
+      'Supplier cannot be archived while open supplier invoices reference it.',
+    remediation: {
+      description:
+        'Close (credit / mark paid) every open supplier invoice before archiving the supplier. The dashboard exposes the same blocker.',
+    },
+  },
+  // v1 strict-mode: update / delete only allowed on `registered` SIs (the
+  // SI analogue of `draft`). Mirrors the dashboard internal route.
+  SI_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv:
+      'Leverantörsfakturan är inte längre i status "registrerad" och kan därför inte uppdateras eller tas bort.',
+    message_en:
+      'Supplier invoice is not in `registered` status and cannot be updated or deleted.',
+  },
 }
 
 const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {

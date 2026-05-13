@@ -69,6 +69,24 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/invoices/:id/pdf': 'invoices:read',
   'POST /api/v1/companies/:companyId/customers/bulk-create': 'customers:write',
 
+  // Phase 4 PR-1 — Suppliers + Supplier-invoices verticals (AP world).
+  // Suppliers
+  'GET /api/v1/companies/:companyId/suppliers': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/suppliers/:id': 'suppliers:read',
+  'POST /api/v1/companies/:companyId/suppliers': 'suppliers:write',
+  'PATCH /api/v1/companies/:companyId/suppliers/:id': 'suppliers:write',
+  'DELETE /api/v1/companies/:companyId/suppliers/:id': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/suppliers/bulk-create': 'suppliers:write',
+  // Supplier invoices
+  'GET /api/v1/companies/:companyId/supplier-invoices': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/supplier-invoices/:id': 'suppliers:read',
+  'POST /api/v1/companies/:companyId/supplier-invoices': 'suppliers:write',
+  'PATCH /api/v1/companies/:companyId/supplier-invoices/:id': 'suppliers:write',
+  // Note: no DELETE — supplier-invoice withdrawal is via :credit (mirrors v1 invoices).
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/approve': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/credit': 'suppliers:write',
+
   // Phase 3 — transactions + reconciliation vertical.
   // Reads
   'GET /api/v1/companies/:companyId/transactions': 'transactions:read',
