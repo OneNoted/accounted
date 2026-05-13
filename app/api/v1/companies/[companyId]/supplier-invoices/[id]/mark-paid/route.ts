@@ -229,13 +229,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const newPaidAmount = Math.round((typed.paid_amount + paymentAmount) * 100) / 100
 
     if (ctx.dryRun) {
+      // paid_at: the live UPDATE writes `new Date().toISOString()` (a full UTC
+      // timestamp). Mirror that shape here so callers validating dry-run vs
+      // live against the same regex don't see surprises. payment_date stays
+      // ISO date because it represents the user-supplied calendar date.
       return dryRunPreview(
         {
           ...typed,
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? paymentDate : null,
+          paid_at: newStatus === 'paid' ? new Date().toISOString() : null,
           payment_date: paymentDate,
           payment_amount: paymentAmount,
           would_create_payment_journal_entry: true,
@@ -326,13 +330,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .maybeSingle()
 
     if (updateErr) {
-      ctx.log.error('supplier-invoice mark-paid update failed', updateErr, {
+      ctx.log.error('supplier-invoice mark-paid update failed — attempting storno of orphaned JE', updateErr, {
         invoiceId,
         companyId: ctx.companyId,
+        journalEntryId,
       })
-      // Orphan JE: storno via reverseEntry would be ideal but requires fetching
-      // the entry first. Log loudly; the JE is on the books with source_id =
-      // invoiceId so it can be found and reversed manually.
+      // The payment JE is already posted but the SI update failed — without a
+      // storno, the AP ledger would carry a 2440/1930 entry with no matching
+      // SI status change (BFL 5 kap 5 § integrity violation). reverseEntry()
+      // takes the entry id directly (no pre-fetch needed), matching the CAS-
+      // race branch immediately below.
+      try {
+        const { reverseEntry } = await import('@/lib/bookkeeping/engine')
+        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
+      } catch (revErr) {
+        ctx.log.error('orphan JE storno failed after SI update error — manual reconciliation required', revErr as Error, {
+          invoiceId,
+          companyId: ctx.companyId,
+          journalEntryId,
+        })
+      }
       return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'si_update_failed', journal_entry_id: journalEntryId },

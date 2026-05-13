@@ -580,11 +580,38 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         )
         if (entry) {
           registrationJournalEntryId = entry.id
-          await ctx.supabase
+          const { error: linkErr } = await ctx.supabase
             .from('supplier_invoices')
             .update({ registration_journal_entry_id: entry.id })
             .eq('id', invoiceId)
             .eq('company_id', ctx.companyId!)
+          if (linkErr) {
+            // The JE is posted but the SI denormalised back-reference failed
+            // to update. Storno the orphan JE first, then roll back the SI row
+            // to preserve strict-mode atomicity (otherwise a subsequent GET
+            // would show registration_journal_entry_id=null with a live JE on
+            // the books). reverseEntry takes the entry id directly.
+            ctx.log.error('SI register: JE link update failed — stornoing JE and rolling back row', linkErr, {
+              invoiceId,
+              companyId: ctx.companyId,
+              journalEntryId: entry.id,
+            })
+            try {
+              const { reverseEntry } = await import('@/lib/bookkeeping/engine')
+              await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entry.id, body.invoice_date)
+            } catch (revErr) {
+              ctx.log.error('JE storno failed after SI link-update error — manual reconciliation required', revErr as Error, {
+                invoiceId,
+                companyId: ctx.companyId,
+                journalEntryId: entry.id,
+              })
+            }
+            await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'je_link_failed')
+            return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
+              requestId: ctx.requestId,
+              details: { step: 'registration_journal_entry_link' },
+            })
+          }
         } else {
           // Engine returned null (no open fiscal period). Strict-mode: roll back.
           await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'no_fiscal_period')

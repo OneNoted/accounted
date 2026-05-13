@@ -330,11 +330,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         )
         if (entry) {
           journalEntryId = entry.id
-          await ctx.supabase
+          const { error: linkErr } = await ctx.supabase
             .from('supplier_invoices')
             .update({ registration_journal_entry_id: entry.id })
             .eq('id', creditNoteId)
             .eq('company_id', ctx.companyId!)
+          if (linkErr) {
+            // Symmetric with the SI register path: storno the posted JE +
+            // roll back the credit note before returning, so we never leave
+            // a credit note row with registration_journal_entry_id=null while
+            // the reversing JE sits live on the books.
+            ctx.log.error('credit-note JE link update failed — stornoing JE and rolling back row', linkErr, {
+              creditNoteId,
+              originalId: typed.id,
+              journalEntryId: entry.id,
+              companyId: ctx.companyId,
+            })
+            try {
+              const { reverseEntry } = await import('@/lib/bookkeeping/engine')
+              await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entry.id, today)
+            } catch (revErr) {
+              ctx.log.error('JE storno failed after credit-note link-update error — manual reconciliation required', revErr as Error, {
+                creditNoteId,
+                journalEntryId: entry.id,
+              })
+            }
+            await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'je_link_failed')
+            return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
+              requestId: ctx.requestId,
+              details: { step: 'credit_journal_entry_link' },
+            })
+          }
         } else {
           await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'no_fiscal_period')
           return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
