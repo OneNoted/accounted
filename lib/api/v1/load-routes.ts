@@ -18,6 +18,15 @@ import '@/app/api/v1/companies/route'
 // Phase 4 PR-2 (foundation) — async operations polling endpoint.
 import '@/app/api/v1/operations/[id]/route'
 
+// Phase 4 PR-2 — journal-entries primitives + voucher-gap-explanations.
+import '@/app/api/v1/companies/[companyId]/journal-entries/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/commit/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/reverse/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/correct/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/batch-create/route'
+import '@/app/api/v1/companies/[companyId]/voucher-gap-explanations/route'
+
 // Phase 2 PR-A — invoice + customer reads.
 import '@/app/api/v1/companies/[companyId]/invoices/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/route'
