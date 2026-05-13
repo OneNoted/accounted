@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/documents/{id}/download
  *
- * Returns a signed Supabase Storage URL (60-minute expiry) for the
+ * Returns a signed Supabase Storage URL (15-minute expiry) for the
  * document's current version. The signed URL is a direct-download link
  * the caller can fetch from any HTTP client without re-presenting an
  * API key — keep it server-side and don't surface to end-users beyond
@@ -35,7 +35,14 @@ const DocumentDownloadResponse = z.object({
   expires_in_seconds: z.number().int(),
 })
 
-const SIGNED_URL_TTL_SECONDS = 60 * 60 // 60 minutes — matches the dashboard internal route.
+// 15 minutes. Three bots converged on this (SOC 2 CC6.1, GDPR Art. 5(1)(f),
+// ISO 27001 A.8.12) when the original 60-minute window was flagged as a
+// bearer-token-equivalent with too wide an exposure window. The dashboard
+// internal route still issues 60min URLs because it's gated by an active
+// session; the v1 surface has no session, only the URL itself — so the
+// shorter window applies. A caller that needs longer than 15 minutes for
+// a single download should re-request the URL.
+const SIGNED_URL_TTL_SECONDS = 15 * 60
 
 registerEndpoint({
   operation: 'documents.download',
@@ -60,7 +67,7 @@ registerEndpoint({
         mime_type: 'application/pdf',
         sha256_hash: '8a7f…',
         download_url: 'https://…supabase.co/storage/v1/object/sign/…',
-        expires_in_seconds: 3600,
+        expires_in_seconds: 900,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
