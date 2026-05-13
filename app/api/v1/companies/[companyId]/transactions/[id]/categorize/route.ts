@@ -260,14 +260,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (transaction.amount < 0) mappingResult.debit_account = body.account_override
       else mappingResult.credit_account = body.account_override
       // Drop auto-VAT lines when the override targets a balance-sheet
-      // (class 2) account — but NOT when it targets a 26xx VAT clearing
-      // account directly. BAS class 2 covers both equity/liabilities (where
-      // VAT shouldn't be auto-posted) and the VAT accounts themselves
-      // (2611/2641/etc., where the auto-VAT line WOULD be the correct posting).
-      // Without the 26xx exception we silently drop ingående/utgående moms
-      // when a user override happens to land on, e.g., 2440 leverantörsskulder.
-      const isVatAccount = body.account_override.startsWith('26')
-      if (accountExists.account_class === 2 && !isVatAccount) {
+      // (class 2) account — but NOT when it targets a moms-line account
+      // directly. BAS class 2 covers both equity/liabilities (where VAT
+      // shouldn't be auto-posted) and the specific VAT accounts themselves
+      // (2611/2621/2631 utgående moms, 2641/2645 ingående moms, etc.).
+      // Narrow the exception to the 2610–2649 range — 2650
+      // (momsredovisningskonto) and 2690 (diverse) are class-2 but NOT
+      // moms-line accounts, so writing the auto-VAT pair there would
+      // double-post on the momsredovisningskonto.
+      const overrideNum = parseInt(body.account_override, 10)
+      const isMomsLineAccount = overrideNum >= 2610 && overrideNum <= 2649
+      if (accountExists.account_class === 2 && !isMomsLineAccount) {
         mappingResult.vat_lines = []
       }
     }
@@ -415,11 +418,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             .select('fiscal_period_id, voucher_series, voucher_number')
             .eq('id', journalEntryId)
             .single()
-          if (orphan) {
+          if (orphan && orphan.voucher_series) {
+            // Skip the gap row when the engine didn't tag a series on the
+            // orphan. Filing under a fallback series (previously 'A') would
+            // index the gap explanation under the wrong key, hiding it from
+            // series-specific audit queries (BFL 5 kap 6 §). A missing series
+            // is logged above already; a human will reconcile via that trail.
             await ctx.supabase.from('voucher_gap_explanations').insert({
               company_id: ctx.companyId!,
               fiscal_period_id: orphan.fiscal_period_id,
-              voucher_series: orphan.voucher_series || 'A',
+              voucher_series: orphan.voucher_series,
               gap_number: orphan.voucher_number,
               explanation:
                 'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',

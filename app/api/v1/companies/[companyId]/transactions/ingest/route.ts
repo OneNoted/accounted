@@ -157,13 +157,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         .not('journal_entry_id', 'is', null)
         .gte('date', dateFrom)
         .lte('date', dateTo)
+      // Normalize the amount to a fixed-precision string before keying.
+      // Both JS number-to-string ("-349.5") and Postgres numeric round-trip
+      // ("-349.50") collapse to the same "-349.50" representation here, so
+      // a SIE amount with trailing-zero precision lines up with an already-
+      // booked row whose amount JSON-encodes without it.
+      const amountKey = (n: number): string => n.toFixed(2)
       const bookedKeys = new Set(
-        (bookedInRange ?? []).map((r) => `${(r as { date: string }).date}|${(r as { amount: number }).amount}`),
+        (bookedInRange ?? []).map((r) => {
+          const row = r as { date: string; amount: number }
+          return `${row.date}|${amountKey(row.amount)}`
+        }),
       )
 
       const previewRows = body.transactions.map((tx) => {
         const extIdHit = knownExtIds.has(tx.external_id)
-        const contentHit = bookedKeys.has(`${tx.date}|${tx.amount}`)
+        const contentHit = bookedKeys.has(`${tx.date}|${amountKey(tx.amount)}`)
         const wouldSkip = extIdHit || contentHit
         const reason = extIdHit
           ? 'external_id_match'

@@ -228,6 +228,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entityType: EntityType =
       (settings?.entity_type as EntityType) || 'enskild_firma'
 
+    // Reject cash-method partial payments. Under kontantmetoden, utgående
+    // moms must be reported in the period of actual receipt (ML 13 kap 8 §);
+    // the partial-payment branch below uses createInvoicePaymentJournalEntry
+    // (the accrual-style 1510/1930 clearing entry), which doesn't model the
+    // per-installment moms event. Rather than silently over-report moms,
+    // refuse the operation and document the constraint. Full payments
+    // (isFullyPaid=true) flow through createInvoiceCashEntry which IS the
+    // correct kontantmetod path.
+    if (accountingMethod === 'cash' && !isFullyPaid) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', txLog, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'accounting_method',
+          message:
+            'Kontantmetoden does not support partial-payment matching via this endpoint. ' +
+            'Match the full payment when received, or switch to accrual (faktureringsmetoden).',
+          accounting_method: 'cash',
+          payment_amount: paidAmount,
+          invoice_total: invoice.total,
+        },
+      })
+    }
+
     // Strict-mode for the public API: if the payment JE can't be created we
     // ABORT before touching invoice / payment / transaction state. The
     // dashboard's internal route soft-fails here and surfaces a banner so

@@ -324,11 +324,14 @@ async function categorizeOne(
           .select('fiscal_period_id, voucher_series, voucher_number')
           .eq('id', journalEntryId)
           .single()
-        if (orphan) {
+        if (orphan && orphan.voucher_series) {
+          // Same rationale as the single :categorize route: skip the gap row
+          // when no series exists rather than filing under a fallback series
+          // that an audit query won't find.
           await supabase.from('voucher_gap_explanations').insert({
             company_id: companyId,
             fiscal_period_id: orphan.fiscal_period_id,
-            voucher_series: orphan.voucher_series || 'A',
+            voucher_series: orphan.voucher_series,
             gap_number: orphan.voucher_number,
             explanation:
               'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',

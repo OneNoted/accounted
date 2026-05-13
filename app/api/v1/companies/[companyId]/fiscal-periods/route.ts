@@ -82,17 +82,20 @@ function exceedsEighteenMonths(periodStart: string, periodEnd: string): boolean 
   // ISO date strings — UTC parse to avoid host-tz shifts.
   const start = new Date(periodStart + 'T00:00:00Z')
   const end = new Date(periodEnd + 'T00:00:00Z')
-  // Compute the calendar date 18 months after `start`. Using setUTCMonth
-  // (not adding ms) handles month-length differences correctly. JS clamps
-  // overflow days (e.g. start=Aug 31 + 18 months → wraps to Mar 3 of year+2);
-  // for the cap-check semantics we want the anchor day, not the clamp, so
-  // use a manual month/year computation.
   const startY = start.getUTCFullYear()
   const startM = start.getUTCMonth() // 0-indexed
   const startD = start.getUTCDate()
   const targetY = startY + Math.floor((startM + 18) / 12)
   const targetM = (startM + 18) % 12
-  const cap = new Date(Date.UTC(targetY, targetM, startD))
+  // Clamp the day to the last valid day of the target month. Without this,
+  // start=2024-08-31 + 18 months → Date.UTC(2026, 1, 31) rolls into March 3,
+  // making the cap later than the BFL 3 kap 1 § ceiling and causing false
+  // negatives near month-end starts. Date.UTC(year, month, 0) returns the
+  // last day of the prior month, so passing targetM+1 with day=0 gives us
+  // the last day of targetM.
+  const lastDayOfTargetM = new Date(Date.UTC(targetY, targetM + 1, 0)).getUTCDate()
+  const cappedDay = Math.min(startD, lastDayOfTargetM)
+  const cap = new Date(Date.UTC(targetY, targetM, cappedDay))
   return end.getTime() > cap.getTime()
 }
 
