@@ -24,5 +24,7 @@ import '@/app/api/v1/companies/[companyId]/customers/[id]/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-sent/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/mark-paid/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/credit/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/send/route'
+import '@/app/api/v1/companies/[companyId]/invoices/bulk-create/route'
 
 export {}
