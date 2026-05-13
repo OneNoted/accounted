@@ -158,7 +158,11 @@ async function createOneInvoice(
 ): Promise<ResultItem> {
   const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
-  // Customer fetch (scoped to company).
+  // Customer fetch (scoped to company). We use the DB-returned `customer.id`
+  // (not `input.customer_id`) downstream as defense in depth — the .eq()
+  // pair already enforces company scoping, but echoing the trusted value
+  // from the query makes the guarantee explicit at the call site and
+  // immune to refactoring drift.
   const { data: customer } = await supabase
     .from('customers')
     .select('id, customer_type, vat_number_validated')
@@ -172,6 +176,7 @@ async function createOneInvoice(
       error: { code: 'INVOICE_CUSTOMER_NOT_FOUND', message: 'Customer not found in this company.' },
     }
   }
+  const verifiedCustomerId = (customer as { id: string }).id
 
   const vatRules = getVatRules(
     customer.customer_type as Parameters<typeof getVatRules>[0],
@@ -265,7 +270,7 @@ async function createOneInvoice(
       data: {
         preview: {
           invoice_number: null,
-          customer_id: input.customer_id,
+          customer_id: verifiedCustomerId,
           invoice_date: input.invoice_date,
           due_date: input.due_date,
           status: 'draft' as const,
@@ -286,7 +291,7 @@ async function createOneInvoice(
     .insert({
       user_id: userId,
       company_id: companyId,
-      customer_id: input.customer_id,
+      customer_id: verifiedCustomerId,
       invoice_number: null,
       invoice_date: input.invoice_date,
       due_date: input.due_date,

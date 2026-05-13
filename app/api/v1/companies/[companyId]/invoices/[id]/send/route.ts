@@ -200,9 +200,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // with their own number — there is no v1 path that produces a draft
     // credit note, so reaching :send with credited_invoice_id set is either
     // a misuse or a manual DB edit. Allowing it would give a credit note
-    // an F-series number (ML 17 kap 22–23§ require a distinct kreditfaktura
-    // series and a back-reference to the original invoice that this route
-    // would not enforce).
+    // an F-series number; ML 17 kap 22–23§ require (a) a distinct
+    // kreditfaktura series and (b) an explicit back-reference to the
+    // original invoice's löpnummer — neither enforced by this route.
+    // Any future "send a credit note" v1 path MUST honor both.
     if (typed.credited_invoice_id) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -233,7 +234,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 3: company settings.
+    // Step 3: company settings. The whole CompanySettings shape is passed to
+    // the InvoicePDF template — header info, bank details, contact, address,
+    // entity type. `select('*')` is intentional: CompanySettings is a flat
+    // owner-facing config object with no sensitive columns today (no API
+    // tokens, no billing data — those live in scoped tables). If a future
+    // migration adds a sensitive column, the right fix is to put it in a
+    // separate table, not retrofit a column allow-list here.
     const { data: company, error: companyErr } = await ctx.supabase
       .from('company_settings')
       .select('*')
