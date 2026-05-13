@@ -1,0 +1,82 @@
+/**
+ * GET /api/v1/companies/{companyId}/fiscal-periods
+ *
+ * List fiscal periods (räkenskapsår) for the company. Ordered newest first.
+ * Read-only in v1 — period creation, locking and closing land in Phase 4.
+ */
+import { z } from 'zod'
+import { ok } from '@/lib/api/v1/response'
+import { registerEndpoint } from '@/lib/api/v1/registry'
+import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { v1ErrorResponse } from '@/lib/api/v1/errors'
+
+const FiscalPeriod = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  period_start: z.string(),
+  period_end: z.string(),
+  is_closed: z.boolean(),
+  closed_at: z.string().nullable(),
+  locked_at: z.string().nullable(),
+  previous_period_id: z.string().uuid().nullable(),
+  created_at: z.string(),
+})
+
+const FiscalPeriodsResponse = z.object({ fiscal_periods: z.array(FiscalPeriod) })
+
+const FISCAL_PERIOD_COLUMNS =
+  'id, name, period_start, period_end, is_closed, closed_at, locked_at, ' +
+  'previous_period_id, created_at'
+
+registerEndpoint({
+  operation: 'fiscal-periods.list',
+  method: 'GET',
+  path: '/api/v1/companies/:companyId/fiscal-periods',
+  summary: 'List fiscal periods (räkenskapsår).',
+  description:
+    'Returns every fiscal period for the company ordered by period_start DESC. is_closed=true means bokslut has been signed; locked_at non-null means writes are blocked at the DB-trigger level.',
+  useWhen:
+    'You need to find the active period before booking, build a year-selector UI, or audit the period-lock history.',
+  doNotUseFor:
+    'Creating, locking, or closing periods — those land in Phase 4 (`POST /fiscal-periods/{id}/lock`, `:close`, `:year-end`). Use the dashboard or wait for Phase 4.',
+  pitfalls: [
+    'previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.',
+    'A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year per BFL 6 kap).',
+    'BFL 3 kap caps a single fiscal period at 18 months. First-year exceptions are allowed.',
+  ],
+  example: {
+    response: {
+      data: [
+        {
+          id: 'fp_2026',
+          name: 'Räkenskapsår 2026',
+          period_start: '2026-01-01',
+          period_end: '2026-12-31',
+          is_closed: false,
+          locked_at: null,
+        },
+      ],
+      meta: { request_id: 'req_…', api_version: '2026-05-12' },
+    },
+  },
+  scope: 'reports:read',
+  risk: 'low',
+  idempotent: true,
+  reversible: false,
+  dryRunSupported: false,
+  response: { success: FiscalPeriodsResponse },
+})
+
+export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
+  'fiscal-periods.list',
+  async (_request, ctx) => {
+    const { data, error } = await ctx.supabase
+      .from('fiscal_periods')
+      .select(FISCAL_PERIOD_COLUMNS)
+      .eq('company_id', ctx.companyId!)
+      .order('period_start', { ascending: false })
+
+    if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+    return ok({ fiscal_periods: data ?? [] }, { requestId: ctx.requestId })
+  },
+)
