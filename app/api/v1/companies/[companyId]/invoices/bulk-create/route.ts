@@ -8,7 +8,9 @@
  * Request:
  *   {
  *     invoices: CreateInvoiceSchema[],  // 1..50 items
- *     all_or_nothing?: boolean          // default false; not yet implemented (would need RPC)
+ *     all_or_nothing?: boolean          // default false. Passing true returns
+ *                                       // 501 NOT_IMPLEMENTED — the flag is
+ *                                       // reserved for a future DB-side RPC.
  *   }
  *
  * Response (200):
@@ -82,10 +84,10 @@ registerEndpoint({
   useWhen:
     'You\'re importing a batch of invoices from another system, or producing many invoices programmatically (e.g. monthly subscription billing). Use dry-run first to validate the whole batch before committing.',
   doNotUseFor:
-    'Sending the same invoice to multiple customers — POST /invoices once per customer. Long-running imports of > 50 invoices — split into pages. Transactional all-or-nothing imports — not yet supported (the flag is reserved for a future RPC implementation; today the flag is accepted but treated as false).',
+    'Sending the same invoice to multiple customers — POST /invoices once per customer. Long-running imports of > 50 invoices — split into pages. Transactional all-or-nothing imports — not yet supported (passing all_or_nothing: true returns 501 NOT_IMPLEMENTED; the flag is reserved for a future RPC).',
   pitfalls: [
     'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response — it does not retry only the failed items.',
-    'The all_or_nothing flag is accepted but not yet enforced. Mixed-success batches are the only behaviour today.',
+    'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag (or pass false).',
     'Each per-item invoice still goes through the same VAT-rule validation as POST /invoices. A mismatched per-item vat_rate produces a per-item failure, not a whole-batch failure.',
     'Currency conversion is best-effort PER ITEM. A failed Riksbanken fetch leaves that item\'s SEK columns null but does NOT fail the item.',
   ],
@@ -413,6 +415,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+
+    // Reject all_or_nothing: true loudly. The schema accepts it for forward
+    // compatibility, but a caller asking for atomic semantics must not get
+    // partial-success behaviour silently — that would let an automation
+    // depend on a guarantee that doesn't exist. The flag will be honored
+    // once a DB-side RPC ships; until then it's 501.
+    if (body.all_or_nothing) {
+      return v1ErrorResponseFromCode('NOT_IMPLEMENTED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'all_or_nothing',
+          message:
+            'all_or_nothing: true is not yet implemented. Omit the flag (or pass false) to use partial-success semantics.',
+        },
+      })
+    }
 
     // Run items sequentially. Parallel would be faster but the database-side
     // sequence allocation for delivery notes and the auditability of the

@@ -320,6 +320,56 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('rejects credit notes (credited_invoice_id set) with VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: { ...DRAFT_INVOICE, credited_invoice_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('credited_invoice_id')
+  })
+
+  it('flags status flip 0-row no-op as a warning instead of lying in the response', async () => {
+    // Status flip returns no rows (concurrent state change). Email is gone;
+    // response status must say 'draft' and carry STATUS_UPDATE_FAILED.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: { invoice_number: '2026-0042' }, error: null },
+          { data: [], error: null }, // status flip: 0 rows matched
+        ],
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('draft')
+    expect(body.data.warnings).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'STATUS_UPDATE_FAILED' })]),
+    )
+  })
+
   it('rejects keys without invoices:write scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,

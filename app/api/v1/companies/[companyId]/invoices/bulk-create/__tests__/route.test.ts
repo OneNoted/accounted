@@ -261,6 +261,34 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(insertedInvoice).toBe(false)
   })
 
+  it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        all_or_nothing: true,
+        invoices: [
+          {
+            customer_id: CUSTOMER_ID,
+            invoice_date: '2026-05-12',
+            due_date: '2026-06-11',
+            currency: 'SEK',
+            items: [SAMPLE_ITEM('A')],
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(501)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_IMPLEMENTED')
+  })
+
   it('rejects keys without invoices:write scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,

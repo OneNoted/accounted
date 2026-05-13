@@ -196,6 +196,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Reject credit notes. `:credit` creates them atomically in 'sent' state
+    // with their own number — there is no v1 path that produces a draft
+    // credit note, so reaching :send with credited_invoice_id set is either
+    // a misuse or a manual DB edit. Allowing it would give a credit note
+    // an F-series number (ML 17 kap 22–23§ require a distinct kreditfaktura
+    // series and a back-reference to the original invoice that this route
+    // would not enforce).
+    if (typed.credited_invoice_id) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'credited_invoice_id',
+          message:
+            'Credit notes cannot be sent via this endpoint. Use POST /invoices/{id}/credit, which creates and sends the credit note atomically.',
+        },
+      })
+    }
+
     if (!typed.moms_ruta) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -229,18 +247,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const settings = company as CompanySettings & { accounting_method?: string }
 
     const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
-
-    // Look up the original invoice's number if this is a credit note.
-    let originalInvoiceNumber: string | undefined
-    if (typed.credited_invoice_id) {
-      const { data: orig } = await ctx.supabase
-        .from('invoices')
-        .select('invoice_number')
-        .eq('id', typed.credited_invoice_id)
-        .eq('company_id', ctx.companyId!)
-        .maybeSingle()
-      if (orig) originalInvoiceNumber = (orig as { invoice_number?: string }).invoice_number ?? undefined
-    }
+    // Credit notes are rejected above, so originalInvoiceNumber is never
+    // needed on this code path. Kept undefined to satisfy the InvoicePDF
+    // signature (it tolerates undefined for non-credit-notes).
+    const originalInvoiceNumber: string | undefined = undefined
 
     // Step 5: preflight PDF render. Validate the pipeline with a placeholder
     // number BEFORE consuming an F-series number.
@@ -301,17 +311,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Step 7: final PDF render with the assigned number. typed.invoice_number
-    // was mutated by ensureInvoiceNumber. Re-read to be safe.
-    const { data: numbered } = await ctx.supabase
+    // was mutated by ensureInvoiceNumber. Re-read to be safe. A re-read
+    // failure (transient connection error) is non-fatal — `typed.invoice_number`
+    // was just written by the RPC in step 6, so it's the authoritative
+    // in-memory value. Log a warning and fall back.
+    const { data: numbered, error: reReadErr } = await ctx.supabase
       .from('invoices')
       .select('invoice_number')
       .eq('id', invoiceId)
       .eq('company_id', ctx.companyId!)
       .single()
-    const finalInvoiceNumber = (numbered as { invoice_number?: string } | null)?.invoice_number
+    if (reReadErr) {
+      ctx.log.warn(
+        'invoices.send: re-read after number allocation failed, falling back to in-memory value',
+        {
+          invoiceId,
+          companyId: ctx.companyId,
+          err: reReadErr,
+        },
+      )
+    }
+    const finalInvoiceNumber =
+      (numbered as { invoice_number?: string } | null)?.invoice_number ?? typed.invoice_number
     const renderableInvoice: Invoice = {
       ...(typed as Invoice),
-      invoice_number: finalInvoiceNumber ?? typed.invoice_number,
+      invoice_number: finalInvoiceNumber,
     }
 
     let pdfBuffer: Buffer
@@ -337,14 +361,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Step 8: send the email. Delivery notes were rejected earlier so
-    // docType is 'invoice' or 'proforma' here.
-    const isCreditNote = !!typed.credited_invoice_id
+    // Step 8: send the email. Delivery notes AND credit notes were rejected
+    // earlier so docType is 'invoice' or 'proforma' here.
     const docType = typed.document_type ?? 'invoice'
-    let filename: string
-    if (isCreditNote) filename = `kreditfaktura-${finalInvoiceNumber}.pdf`
-    else if (docType === 'proforma') filename = `proformafaktura-${finalInvoiceNumber}.pdf`
-    else filename = `faktura-${finalInvoiceNumber}.pdf`
+    const filename =
+      docType === 'proforma'
+        ? `proformafaktura-${finalInvoiceNumber}.pdf`
+        : `faktura-${finalInvoiceNumber}.pdf`
 
     const ccAddress = settings.email ?? null
     const emailData = { invoice: renderableInvoice, customer, company: settings }
@@ -379,21 +402,35 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Email has been delivered. Subsequent failures surface as warnings.
     const warnings: { code: string; message: string }[] = []
 
-    // Step 9a: status flip to 'sent'.
-    const { error: statusErr } = await ctx.supabase
+    // Step 9a: status flip to 'sent'. The `.eq('status', 'draft')` is an
+    // optimistic-lock guard against a concurrent state change between fetch
+    // and write. PostgREST returns `{ error: null }` for 0-row updates, so
+    // we MUST `.select('id')` and check the row count — a silent zero-row
+    // miss would leave the DB in 'draft' while the response claims 'sent'
+    // and the email is already gone.
+    let statusFlipped = true
+    const { data: flipRows, error: statusErr } = await ctx.supabase
       .from('invoices')
       .update({ status: 'sent', updated_at: new Date().toISOString() })
       .eq('id', invoiceId)
       .eq('company_id', ctx.companyId!)
       .eq('status', 'draft')
-    if (statusErr) {
-      ctx.log.error('invoices.send: status flip failed AFTER email delivery', statusErr as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
+      .select('id')
+    if (statusErr || !flipRows || flipRows.length === 0) {
+      statusFlipped = false
+      ctx.log.error(
+        'invoices.send: status flip failed AFTER email delivery',
+        (statusErr ?? new Error('0 rows matched (concurrent state change)')) as Error,
+        {
+          invoiceId,
+          companyId: ctx.companyId,
+          rowsMatched: flipRows?.length ?? 0,
+        },
+      )
       warnings.push({
         code: 'STATUS_UPDATE_FAILED',
-        message: 'Email delivered but the invoice could not be marked as sent. Reconcile manually.',
+        message:
+          'Email delivered but the invoice could not be marked as sent. Reconcile manually — the DB row may still be in draft.',
       })
     }
 
@@ -510,8 +547,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     return ok(
       {
         id: invoiceId,
-        invoice_number: finalInvoiceNumber,
-        status: 'sent' as const,
+        invoice_number: finalInvoiceNumber ?? typed.invoice_number ?? null,
+        status: statusFlipped ? ('sent' as const) : ('draft' as const),
         total: typed.total,
         message_id: result.messageId ?? null,
         sent_to: customer.email,
