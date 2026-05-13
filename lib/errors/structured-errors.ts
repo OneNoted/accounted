@@ -272,9 +272,9 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TX_CATEGORIZE_SUGGEST_SI_MATCH: {
     httpStatus: 409,
     message_sv:
-      'Det finns en öppen leverantörsfaktura från samma leverantör med samma belopp. Matcha mot fakturan istället för att bokföra direkt på leverantörsskuldskontot — annars riskerar ingående moms att dras av två gånger (ML 8 kap 3 §).',
+      'Det finns en öppen leverantörsfaktura från samma leverantör med samma belopp. Matcha mot fakturan istället för att bokföra direkt på leverantörsskuldskontot — annars skapas en dubblerad verifikation som måste stornas (BFL 5 kap 5 §).',
     message_en:
-      'An open supplier invoice from the same supplier matches this amount. Suggest matching to the invoice instead of a plain 244x categorization to avoid double-deducting input VAT (ML 8 kap 3 §).',
+      'An open supplier invoice from the same supplier matches this amount. Suggest matching to the invoice instead of a plain 244x categorization to avoid producing a duplicate verifikation (BFL 5 kap 5 §).',
     remediation: {
       description:
         'Match the transaction via POST /api/transactions/{id}/match-supplier-invoice, or resend with confirm_no_match: true to keep the plain 244x categorization.',

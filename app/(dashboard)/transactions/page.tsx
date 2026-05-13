@@ -1450,8 +1450,8 @@ export default function TransactionsPage() {
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
               Det finns en öppen leverantörsfaktura med samma belopp från samma leverantör. Matcha mot
-              fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars riskerar du både
-              en dubblerad verifikation och dubbelt avdrag av ingående moms (ML 8 kap 3 §).
+              fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
+              dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
             </p>
             <div className="space-y-2 rounded-md border bg-muted/30 p-3">
               {siMatchSuggestion?.candidates.map((c) => (
