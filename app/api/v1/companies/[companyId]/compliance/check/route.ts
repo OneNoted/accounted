@@ -77,6 +77,27 @@ type CheckType = (typeof SUPPORTED_TYPES)[number]
 
 const CheckTypeSchema = z.enum(SUPPORTED_TYPES)
 
+/**
+ * Verify that `fiscal_period_id` (a caller-supplied query param) belongs to
+ * `companyId` before we hand it to the engine. Cheap point lookup; returns
+ * true on match, false otherwise. Defense-in-depth: the engine's own queries
+ * also scope by company_id, so this just gives the caller a clean structured
+ * response instead of letting the engine surface a Swedish error string.
+ */
+async function ownsFiscalPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<boolean> {
+  const { data } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  return !!data
+}
+
 async function runYearEndReadinessCheck(
   supabase: SupabaseClient,
   companyId: string,
@@ -88,6 +109,15 @@ async function runYearEndReadinessCheck(
     return {
       error: 'year_end_readiness requires fiscal_period_id (UUID) query param.',
     }
+  }
+
+  // Defense-in-depth: confirm the period belongs to this company before
+  // handing the id to the engine. The engine ALSO scopes by company_id,
+  // but returning a clean structured "not found" here is a better UX than
+  // letting the engine throw a Swedish error string.
+  const periodCheck = await ownsFiscalPeriod(supabase, companyId, fiscalPeriodId)
+  if (!periodCheck) {
+    return { error: 'fiscal_period_id not found in this company.' }
   }
 
   const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
@@ -146,6 +176,13 @@ async function runVoucherGapsCheck(
   const fiscalPeriodId = url.searchParams.get('fiscal_period_id')
   if (!fiscalPeriodId || !z.string().uuid().safeParse(fiscalPeriodId).success) {
     return { error: 'voucher_gaps requires fiscal_period_id (UUID) query param.' }
+  }
+
+  // Same ownership pre-check as year_end_readiness — the RPC scopes by
+  // company_id but returning a clean error here is better UX.
+  const periodCheck = await ownsFiscalPeriod(supabase, companyId, fiscalPeriodId)
+  if (!periodCheck) {
+    return { error: 'fiscal_period_id not found in this company.' }
   }
 
   const { data, error } = await supabase.rpc('detect_voucher_gaps', {

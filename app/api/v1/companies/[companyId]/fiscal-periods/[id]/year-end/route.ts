@@ -2,7 +2,7 @@
  * POST /api/v1/companies/{companyId}/fiscal-periods/{id}/year-end
  *
  * Executes year-end closing for a fiscal period: runs currency revaluation,
- * posts the closing entry (zeroes out result accounts onto 2099 or 2069 etc).
+ * posts the closing entry (zeroes class 3-8 onto årets resultat — 2099 for AB, eget kapital range 2010-2019 for EF).
  * Wraps lib/core/bookkeeping/year-end-service.executeYearEndClosing.
  *
  * Records an operation row and returns 202 + operation_id so callers can
@@ -35,7 +35,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/fiscal-periods/:id/year-end',
   summary: 'Execute year-end closing (currency revaluation + closing entry).',
   description:
-    'Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto the equity account (2099 for AB, 2069 for EF). Returns 202 with operation_id; subscribe to operation.completed or poll /v1/operations/{id}.',
+    'Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma — the engine resolves which based on company.entity_type). Returns 202 with operation_id; subscribe to operation.completed or poll /v1/operations/{id}.',
   useWhen:
     'After /lock and a passing /compliance/check?type=year_end_readiness, you want to run the closing entry. This is step 2 of the lock → year-end → close flow.',
   doNotUseFor:
