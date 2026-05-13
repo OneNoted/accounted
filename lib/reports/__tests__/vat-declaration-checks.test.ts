@@ -48,7 +48,7 @@ describe('runVatDeclarationChecks', () => {
     const findings = runVatDeclarationChecks(rutor)
     const fk004 = findings.find((f) => f.code === 'RC_BASIS_MISSING')
     expect(fk004).toBeDefined()
-    expect(fk004?.status).toBe('ERROR')
+    expect(fk004?.status).toBe('WARNING')
     expect(fk004?.message).toMatch(/ruta 30-32/)
     expect(fk004?.message).toMatch(/ruta 20-24/)
   })
