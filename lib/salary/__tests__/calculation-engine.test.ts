@@ -384,6 +384,350 @@ describe('calculateSalary', () => {
   })
 })
 
+// ============================================================
+// Hardening — realistic API flow & cross-rule invariants
+// ============================================================
+//
+// These tests mirror the actual production input shape, where the
+// "Lägg till anställd" endpoint auto-creates a base salary line item
+// (monthly_salary or hourly_salary) before the engine runs. The plain
+// `makeBasicInput()` cases above don't include that line item, so they
+// miss the double-counting class of bug. The helper below adds it.
+
+type LineItem = {
+  itemType: string
+  amount: number
+  isTaxable: boolean
+  isAvgiftBasis: boolean
+  isVacationBasis: boolean
+  isGrossDeduction: boolean
+  isNetDeduction: boolean
+}
+
+function baseLineItem(amount: number, type: 'monthly_salary' | 'hourly_salary' = 'monthly_salary'): LineItem {
+  return {
+    itemType: type,
+    amount,
+    isTaxable: true,
+    isAvgiftBasis: true,
+    isVacationBasis: true,
+    isGrossDeduction: false,
+    isNetDeduction: false,
+  }
+}
+
+function lineItem(overrides: Partial<LineItem> & { itemType: string; amount: number }): LineItem {
+  return {
+    isTaxable: true,
+    isAvgiftBasis: true,
+    isVacationBasis: false,
+    isGrossDeduction: false,
+    isNetDeduction: false,
+    ...overrides,
+  }
+}
+
+describe('hardening — vacation rule contract', () => {
+  // Same input across all 4 vacation rules, locking in the relationships
+  // between them. This is the contract a Swedish accountant relies on.
+  const base = {
+    monthlySalary: 40000,
+    employmentDegree: 100,
+    vacationDaysPerYear: 25,
+    semestertillaggRate: 0.0043,
+    lineItems: [baseLineItem(40000)],
+  }
+
+  it('procentregeln: 12% accrued, 0 paid out', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln' }),
+      config2026, emptyTaxRates
+    )
+    expect(r.grossSalary).toBe(40000)
+    expect(r.vacationCompensation).toBe(0)
+    expect(r.vacationAccrual).toBe(4800)
+  })
+
+  it('semesterersattning: 0 accrued, 12% paid out into gross', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'semesterersattning' }),
+      config2026, emptyTaxRates
+    )
+    expect(r.grossSalary).toBe(44800) // 40000 + 4800
+    expect(r.vacationCompensation).toBe(4800)
+    expect(r.vacationAccrual).toBe(0)
+  })
+
+  it('sammaloneregeln: only tillägg accrued, 0 paid out', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'sammaloneregeln' }),
+      config2026, emptyTaxRates
+    )
+    expect(r.grossSalary).toBe(40000)
+    expect(r.vacationCompensation).toBe(0)
+    // dagslön 40000/21 × 0.43% × 25 ≈ 204.76
+    expect(r.vacationAccrual).toBeCloseTo(204.76, 1)
+  })
+
+  it('none: nothing accrued, nothing paid out', () => {
+    const r = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'none' }),
+      config2026, emptyTaxRates
+    )
+    expect(r.grossSalary).toBe(40000)
+    expect(r.vacationCompensation).toBe(0)
+    expect(r.vacationAccrual).toBe(0)
+    expect(r.vacationAccrualAvgifter).toBe(0)
+  })
+
+  it('procentregeln and semesterersattning produce identical totalEmployerCost', () => {
+    // Different bookkeeping (2920 accrual vs 7285 cash) but the same total
+    // cost to the company. Locking this is the cheapest sanity check.
+    const proc = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'procentregeln' }),
+      config2026, emptyTaxRates
+    )
+    const semer = calculateSalary(
+      makeBasicInput({ ...base, vacationRule: 'semesterersattning' }),
+      config2026, emptyTaxRates
+    )
+    expect(semer.totalEmployerCost).toBeCloseTo(proc.totalEmployerCost, 1)
+  })
+})
+
+describe('hardening — boundaries', () => {
+  it('vacation_days_per_year = 29 uses 12%', () => {
+    const r = calculateSalary(
+      makeBasicInput({ vacationRule: 'procentregeln', vacationDaysPerYear: 29 }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBeCloseTo(40000 * 0.12, 1)
+  })
+
+  it('vacation_days_per_year = 30 uses 14.4%', () => {
+    const r = calculateSalary(
+      makeBasicInput({ vacationRule: 'procentregeln', vacationDaysPerYear: 30 }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBeCloseTo(40000 * 0.144, 1)
+  })
+
+  it('semesterersättning at 29 vs 30 days flips rate', () => {
+    const r29 = calculateSalary(
+      makeBasicInput({ vacationRule: 'semesterersattning', vacationDaysPerYear: 29 }),
+      config2026, emptyTaxRates
+    )
+    const r30 = calculateSalary(
+      makeBasicInput({ vacationRule: 'semesterersattning', vacationDaysPerYear: 30 }),
+      config2026, emptyTaxRates
+    )
+    expect(r29.vacationCompensation).toBeCloseTo(40000 * 0.12, 1)
+    expect(r30.vacationCompensation).toBeCloseTo(40000 * 0.144, 1)
+  })
+
+  it('jämkning expires on validTo (inclusive)', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        jamkningPercentage: 10,
+        jamkningValidFrom: '2026-01-01',
+        jamkningValidTo: '2026-04-30',
+        paymentDate: '2026-04-30',
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.taxWithheld).toBe(4000) // 10% × 40000 — still valid on the last day
+  })
+
+  it('jämkning not applied the day after validTo', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        jamkningPercentage: 10,
+        jamkningValidFrom: '2026-01-01',
+        jamkningValidTo: '2026-04-30',
+        paymentDate: '2026-05-01',
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.taxWithheld).toBe(12000) // fallback 30%
+  })
+})
+
+describe('hardening — sammalöneregeln', () => {
+  it('part-time worker gets half the tillägg of a full-timer', () => {
+    const full = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', monthlySalary: 40000, employmentDegree: 100,
+        lineItems: [baseLineItem(40000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    const half = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', monthlySalary: 40000, employmentDegree: 50,
+        lineItems: [baseLineItem(20000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(half.vacationAccrual).toBeCloseTo(full.vacationAccrual / 2, 1)
+  })
+
+  it('respects custom semestertillagg_rate (CBA 0.8%)', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', semestertillaggRate: 0.008,
+        lineItems: [baseLineItem(40000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    // 40000/21 × 0.8% × 25 ≈ 380.95
+    expect(r.vacationAccrual).toBeCloseTo(380.95, 1)
+  })
+})
+
+describe('hardening — realistic combined scenarios', () => {
+  it('monthly worker with overtime, benefit, pension deduction, semesterersättning', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'semesterersattning',
+        vacationDaysPerYear: 25,
+        lineItems: [
+          baseLineItem(40000),
+          lineItem({ itemType: 'overtime', amount: 5000, isVacationBasis: true }),
+          lineItem({ itemType: 'benefit_car', amount: 3000 }), // not vacation basis
+          lineItem({ itemType: 'gross_deduction_pension', amount: -2000, isGrossDeduction: true, isVacationBasis: false }),
+        ],
+      }),
+      config2026, emptyTaxRates
+    )
+
+    // Vacation basis = 40000 base + 5000 overtime (benefits excluded, gross deduction excluded)
+    // Semesterersättning = 12% × 45000 = 5400
+    expect(r.vacationCompensation).toBe(5400)
+    // Gross = 40000 + 5000 overtime + 5400 semer − 2000 pension = 48400
+    expect(r.grossSalary).toBe(48400)
+    // Tax base = gross + benefits = 48400 + 3000 = 51400
+    expect(r.taxableIncome).toBe(51400)
+    expect(r.taxWithheld).toBe(15420) // 30% fallback
+    // Avgifter basis = gross + benefits = 51400
+    expect(r.avgifterBasis).toBe(51400)
+    expect(r.vacationAccrual).toBe(0)
+  })
+
+  it('hourly worker with no manual line items still gets correct semesterersättning', () => {
+    // Production sends an hourly_salary line item with the computed amount.
+    const r = calculateSalary(
+      makeBasicInput({
+        salaryType: 'hourly',
+        monthlySalary: 0,
+        hourlyRate: 250,
+        hoursWorked: 160,
+        vacationRule: 'semesterersattning',
+        lineItems: [baseLineItem(40000, 'hourly_salary')],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationCompensation).toBe(4800) // 12% × 40000, not 12% × 80000
+    expect(r.grossSalary).toBe(44800)
+  })
+
+  it('benefits do not inflate semesterersättning basis', () => {
+    // Förmånsvärden are NOT vacation basis (employee doesn't earn vacation
+    // pay on the value of their company car). The engine must exclude them.
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'semesterersattning',
+        lineItems: [
+          baseLineItem(40000),
+          lineItem({ itemType: 'benefit_car', amount: 10000, isVacationBasis: false }),
+        ],
+      }),
+      config2026, emptyTaxRates
+    )
+    // Should be 12% × 40000 = 4800, not 12% × 50000 = 6000
+    expect(r.vacationCompensation).toBe(4800)
+  })
+})
+
+describe('hardening — invariants', () => {
+  it('netSalary + taxWithheld + netDeductions = grossSalary (always)', () => {
+    for (const rule of ['procentregeln', 'sammaloneregeln', 'none', 'semesterersattning'] as const) {
+      const r = calculateSalary(
+        makeBasicInput({
+          vacationRule: rule,
+          lineItems: [
+            baseLineItem(40000),
+            lineItem({ itemType: 'net_deduction_advance', amount: -2000, isNetDeduction: true, isTaxable: false, isAvgiftBasis: false }),
+          ],
+        }),
+        config2026, emptyTaxRates
+      )
+      const reconstructed = Math.round((r.netSalary + r.taxWithheld + r.netDeductions) * 100) / 100
+      expect(reconstructed).toBeCloseTo(r.grossSalary, 1)
+    }
+  })
+
+  it('totalEmployerCost = grossSalary + avgifterAmount + vacationAccrual + vacationAccrualAvgifter', () => {
+    for (const rule of ['procentregeln', 'sammaloneregeln', 'none', 'semesterersattning'] as const) {
+      const r = calculateSalary(
+        makeBasicInput({ vacationRule: rule, lineItems: [baseLineItem(40000)] }),
+        config2026, emptyTaxRates
+      )
+      const expected = Math.round((r.grossSalary + r.avgifterAmount + r.vacationAccrual + r.vacationAccrualAvgifter) * 100) / 100
+      expect(expected).toBeCloseTo(r.totalEmployerCost, 1)
+    }
+  })
+
+  it('avgifterAmount = avgifterBasis × avgifterRate (within rounding)', () => {
+    const r = calculateSalary(
+      makeBasicInput({ lineItems: [baseLineItem(40000)] }),
+      config2026, emptyTaxRates
+    )
+    expect(r.avgifterAmount).toBeCloseTo(r.avgifterBasis * r.avgifterRate, 1)
+  })
+
+  it('semesterersattning never produces both vacationAccrual and vacationCompensation', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'semesterersattning',
+        lineItems: [baseLineItem(40000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    expect(r.vacationAccrual).toBe(0)
+    expect(r.vacationCompensation).toBeGreaterThan(0)
+  })
+})
+
+describe('hardening — tax table lookup (not just flat fallback)', () => {
+  const taxRates: TaxTableRate[] = [
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 0, incomeTo: 20000, taxAmount: 3000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 20001, incomeTo: 30000, taxAmount: 5500 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 50000, taxAmount: 10000 },
+  ]
+
+  it('uses table lookup when taxTableNumber is set', () => {
+    const r = calculateSalary(
+      makeBasicInput({ taxTableNumber: 32, taxColumn: 1, monthlySalary: 25000, lineItems: [baseLineItem(25000)] }),
+      config2026, taxRates
+    )
+    expect(r.taxWithheld).toBe(5500)
+  })
+
+  it('semesterersättning pushes brutto into a higher tax bracket', () => {
+    // Base 25000 + 12% semer = 28000, still in 20001-30000 bracket
+    const semer = calculateSalary(
+      makeBasicInput({
+        taxTableNumber: 32, taxColumn: 1, monthlySalary: 25000,
+        vacationRule: 'semesterersattning',
+        lineItems: [baseLineItem(25000)],
+      }),
+      config2026, taxRates
+    )
+    expect(semer.grossSalary).toBe(28000)
+    expect(semer.taxWithheld).toBe(5500) // still bracket 2
+  })
+})
+
 describe('calculateKarensavdrag', () => {
   it('calculates 20% of weekly sjuklön', () => {
     // Formula: 20% × (40000 × 12/52 × 0.80)
