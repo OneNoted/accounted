@@ -15,6 +15,7 @@ import {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -145,6 +146,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { currentStatus: invoice.status },
       })
+    }
+
+    // Storno any conflicting auto-categorization JE before booking the
+    // payment. Mirrors the match-invoice path. Without this, an earlier
+    // :categorize of the same transaction (e.g. as expense_office with a
+    // 5460/1930 entry) would leave its JE posted alongside the new
+    // 2440/1930 supplier-invoice payment entry — two verifikationer for
+    // one affärshändelse violates BFL 5 kap 6 §. If storno fails, abort
+    // before any further state change.
+    if (transaction.journal_entry_id) {
+      try {
+        await reverseEntry(
+          ctx.supabase,
+          ctx.companyId!,
+          ctx.userId,
+          transaction.journal_entry_id,
+        )
+        const { error: clearErr } = await ctx.supabase
+          .from('transactions')
+          .update({ journal_entry_id: null })
+          .eq('id', txId)
+          .eq('company_id', ctx.companyId!)
+        if (clearErr) {
+          txLog.warn('failed to clear journal_entry_id after storno', clearErr)
+        }
+      } catch (err) {
+        txLog.error('match-supplier-invoice: storno of conflicting JE failed', err as Error, {
+          conflictingJournalEntryId: transaction.journal_entry_id,
+        })
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
     }
 
     const txAmountAbs = Math.abs(transaction.amount)
