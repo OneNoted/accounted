@@ -278,15 +278,6 @@ h1, h2, h3 {
   animation: scaleIn var(--duration-base) var(--ease-out);
 }
 
-/* Refined hover effects — flat bg shift, no elevation */
-.hover-lift {
-  transition: background-color var(--duration-fast) var(--ease-out);
-}
-
-.hover-lift:hover {
-  background-color: hsl(var(--muted) / 0.6);
-}
-
 /* Soft focus states */
 .focus-ring:focus-visible {
   outline: none;
@@ -354,9 +345,5 @@ input[type="number"] {
   .stagger-enter > * {
     animation: none;
     opacity: 1;
-  }
-
-  .hover-lift:hover {
-    transform: none;
   }
 }
