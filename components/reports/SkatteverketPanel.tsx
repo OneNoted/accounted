@@ -684,15 +684,18 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                         <select
                           className="text-xs border rounded px-2 py-1 bg-background"
                           value={sel.supplierType}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            const next = e.target.value as typeof sel.supplierType
                             setGapSelections((prev) => ({
                               ...prev,
                               [gap.entryId]: {
-                                ...sel,
-                                supplierType: e.target.value as typeof sel.supplierType,
+                                supplierType: next,
+                                // Non-EU + goods is import VAT, not RC — coerce back
+                                // to service so the user can't submit an invalid combo.
+                                supplyType: next === 'non_eu_business' ? 'service' : sel.supplyType,
                               },
                             }))
-                          }
+                          }}
                           disabled={fixingId === gap.entryId}
                         >
                           <option value="eu_business">EU-leverantör</option>
@@ -714,7 +717,12 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
                           disabled={fixingId === gap.entryId}
                         >
                           <option value="service">Tjänst</option>
-                          <option value="goods">Vara</option>
+                          {/* Non-EU goods is import VAT, not reverse charge — hide the
+                              option for that combination so the fix endpoint never
+                              has to reject it. */}
+                          {sel.supplierType !== 'non_eu_business' && (
+                            <option value="goods">Vara</option>
+                          )}
                         </select>
                         <Button
                           variant="outline"

@@ -76,7 +76,7 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
   if (rcOutput > eps && rcBasis <= eps) {
     findings.push({
       code: 'RC_BASIS_MISSING',
-      status: 'WARNING',
+      status: 'ERROR',
       message:
         'Du har redovisat utgående moms på inköp (ruta 30-32) men inget ' +
         'basbelopp för omvänd skattskyldighet (ruta 20-24). Skatteverket ' +

@@ -35,19 +35,28 @@ function pickBasisAccount(
   outputAccount: string,
   supplierType: 'eu_business' | 'non_eu_business' | 'swedish_business',
   supplyType: 'service' | 'goods',
-): string | null {
+): { account: string; error?: undefined } | { account?: undefined; error: string } {
   const rateIdx = outputAccount === '2614' ? 0 : outputAccount === '2624' ? 1 : outputAccount === '2634' ? 2 : -1
-  if (rateIdx < 0) return null
+  if (rateIdx < 0) return { error: 'Okänt RC-utgående konto.' }
 
   // EU services 4535/4536/4537, EU goods 4515/4516/4517,
   // non-EU services 4531/4532/4533, domestic services 4425/4426/4427,
-  // domestic goods 4415/4416/4417
-  if (supplierType === 'eu_business' && supplyType === 'service') return ['4535', '4536', '4537'][rateIdx]
-  if (supplierType === 'eu_business' && supplyType === 'goods') return ['4515', '4516', '4517'][rateIdx]
-  if (supplierType === 'non_eu_business') return ['4531', '4532', '4533'][rateIdx]
-  if (supplierType === 'swedish_business' && supplyType === 'service') return ['4425', '4426', '4427'][rateIdx]
-  if (supplierType === 'swedish_business' && supplyType === 'goods') return ['4415', '4416', '4417'][rateIdx]
-  return null
+  // domestic goods 4415/4416/4417.
+  // Non-EU goods is NOT reverse charge — it's import VAT (ruta 50/60-62 via
+  // 4545-4547), a separate flow that doesn't belong on this correction path.
+  if (supplierType === 'eu_business' && supplyType === 'service') return { account: ['4535', '4536', '4537'][rateIdx] }
+  if (supplierType === 'eu_business' && supplyType === 'goods') return { account: ['4515', '4516', '4517'][rateIdx] }
+  if (supplierType === 'non_eu_business' && supplyType === 'service') return { account: ['4531', '4532', '4533'][rateIdx] }
+  if (supplierType === 'non_eu_business' && supplyType === 'goods') {
+    return {
+      error:
+        'Varor från leverantörer utanför EU hanteras som import (ruta 50/60-62), inte omvänd skattskyldighet. ' +
+        'Korrigera verifikationen manuellt med importmoms på 2615/4545.',
+    }
+  }
+  if (supplierType === 'swedish_business' && supplyType === 'service') return { account: ['4425', '4426', '4427'][rateIdx] }
+  if (supplierType === 'swedish_business' && supplyType === 'goods') return { account: ['4415', '4416', '4417'][rateIdx] }
+  return { error: 'Kunde inte välja basbeloppskonto för angiven leverantörstyp.' }
 }
 
 export const POST = withRouteContext(
@@ -109,13 +118,14 @@ export const POST = withRouteContext(
     }
 
     const rate = RATE_BY_OUTPUT[outputAccount]
-    const basisAccount = pickBasisAccount(outputAccount, supplierType, supplyType)
-    if (!basisAccount) {
+    const pick = pickBasisAccount(outputAccount, supplierType, supplyType)
+    if (!pick.account) {
       return errorResponseFromCode('VAT_REPORT_GENERATION_FAILED', log, {
         requestId,
-        details: { reason: 'Kunde inte välja basbeloppskonto för angiven leverantörstyp.' },
+        details: { reason: pick.error ?? 'Kunde inte välja basbeloppskonto.' },
       })
     }
+    const basisAccount: string = pick.account
 
     const basisAmount = Math.round((outputAmount / rate) * 100) / 100
     const rateLabel = `${Math.round(rate * 100)}%`

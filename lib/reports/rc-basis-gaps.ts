@@ -83,9 +83,10 @@ interface EntryFields {
   description: string
 }
 
-function pickEntry(row: RcLineRow): EntryFields {
+function pickEntry(row: RcLineRow): EntryFields | null {
   const j = row.journal_entries
-  return Array.isArray(j) ? j[0] : j
+  if (Array.isArray(j)) return j.length > 0 ? j[0] : null
+  return j ?? null
 }
 
 interface SiblingLineRow {
@@ -173,6 +174,7 @@ export async function findRcBasisGaps(
     if (actualBasis + eps >= expectedBasis) continue
 
     const entry = pickEntry(row)
+    if (!entry) continue
     gaps.push({
       entryId: row.journal_entry_id,
       voucherNumber: entry.voucher_number,
