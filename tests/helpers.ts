@@ -531,6 +531,7 @@ export function makeCompanySettings(
     invoice_show_bankgiro: true,
     invoice_show_plusgiro: true,
     invoice_show_logo: true,
+    invoice_show_company_name: true,
     invoice_late_fee_text: null,
     invoice_credit_terms_text: null,
     logo_url: null,

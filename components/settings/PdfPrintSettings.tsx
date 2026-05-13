@@ -106,6 +106,17 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
             onCheckedChange={(v) => saveToggle('invoice_show_logo', v)}
           />
         </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Visa företagsnamn i faktura</Label>
+            <p className="text-xs text-muted-foreground">Visa företagsnamn under loggan i fakturahuvudet</p>
+          </div>
+          <Switch
+            checked={settings.invoice_show_company_name ?? true}
+            onCheckedChange={(v) => saveToggle('invoice_show_company_name', v)}
+          />
+        </div>
       </div>
 
       <div className="space-y-4 pt-2">

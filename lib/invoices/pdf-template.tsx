@@ -377,7 +377,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
             {company.logo_url && (company.invoice_show_logo ?? true) && (
               <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start' }} />
             )}
-            <Text style={styles.companyName}>{company.company_name}</Text>
+            {(company.invoice_show_company_name ?? true) && (
+              <Text style={styles.companyName}>{company.company_name}</Text>
+            )}
           </View>
           <View style={{ textAlign: 'right' }}>
             <Text style={[styles.title, isCreditNote ? styles.creditNoteTitle : {}]}>
