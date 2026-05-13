@@ -55,6 +55,14 @@ export const POST = withRouteContext(
     const paymentAmount = body.amount || invoice.remaining_amount
     const now = new Date().toISOString()
 
+    if (body.force) {
+      opLog.warn('duplicate-payment guard bypassed', {
+        reason: 'force=true',
+        paymentAmount,
+        paymentDate,
+      })
+    }
+
     // Duplicate-payment guard: if a likely-matching unlinked bank transaction
     // exists for this supplier, surface it before booking a new payment entry.
     // Caller can override with `force: true`. Skipped on partial payments —
@@ -74,7 +82,7 @@ export const POST = withRouteContext(
 
         const { data: candidates } = await supabase
           .from('transactions')
-          .select('id, date, amount, description, merchant_name, journal_entry_id')
+          .select('id, date, amount, description, merchant_name')
           .eq('company_id', companyId!)
           .eq('is_business', true)
           .is('supplier_invoice_id', null)
@@ -98,7 +106,6 @@ export const POST = withRouteContext(
                 amount: c.amount,
                 description: c.description,
                 merchant_name: c.merchant_name,
-                journal_entry_id: c.journal_entry_id,
               })),
             },
           })

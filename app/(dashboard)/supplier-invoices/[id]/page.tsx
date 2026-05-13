@@ -63,7 +63,6 @@ export default function SupplierInvoiceDetailPage() {
       amount: number
       description: string | null
       merchant_name: string | null
-      journal_entry_id: string | null
     }> | null
   >(null)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()

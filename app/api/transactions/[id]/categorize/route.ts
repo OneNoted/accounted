@@ -266,17 +266,25 @@ export const POST = withRouteContext(
       })
     }
 
-    // Prong B: intercept plain 2440 categorization of supplier payments when an
-    // open supplier invoice already covers this amount. Categorizing direct to
-    // 2440 leaves the invoice with status='approved' and lures the user into a
-    // duplicate "Markera som betald" later. Credit must be a bank/cash account
-    // (1xxx) — 2440 against a clearing account, equity, etc. isn't a supplier
-    // payment and the suggestion would misdirect the user.
+    if (body.confirm_no_match && /^244\d$/.test(mappingResult.debit_account)) {
+      txLog.warn('supplier-invoice match suggestion bypassed', {
+        reason: 'confirm_no_match=true',
+        debitAccount: mappingResult.debit_account,
+        creditAccount: mappingResult.credit_account,
+      })
+    }
+
+    // Prong B: intercept plain 244x categorization of supplier payments when
+    // an open supplier invoice already covers this amount. Categorizing direct
+    // to 244x leaves the invoice with status='approved' and lures the user
+    // into a duplicate "Markera som betald" later. Credit must be a bank/cash
+    // account (1xxx) — 244x against a clearing account, equity, etc. isn't a
+    // supplier payment and the suggestion would misdirect the user.
     if (
       !body.confirm_no_match &&
       is_business &&
       transaction.amount < 0 &&
-      mappingResult.debit_account === '2440' &&
+      /^244\d$/.test(mappingResult.debit_account) &&
       /^1\d{3}$/.test(mappingResult.credit_account)
     ) {
       const txAmountAbs = Math.abs(transaction.amount)
