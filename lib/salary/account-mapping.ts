@@ -30,6 +30,7 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   vab: '7210',
   parental_leave: '7210',
   vacation: '7285',
+  semesterersattning: '7285',
   // Travel
   traktamente_taxfree: '7321',
   traktamente_taxable: '7322',
@@ -60,6 +61,7 @@ export function getLineItemAccount(
     if (baseAccount === '7281') return '7282'
     if (baseAccount === '7285') return '7286'
   }
+
   // Board member uses 7240
   if (employmentType === 'board_member') {
     const baseAccount = LINE_ITEM_ACCOUNTS[itemType]

@@ -29,6 +29,7 @@ const LINE_ITEM_TYPE_LABELS: Record<SalaryLineItemType, string> = {
   vab: 'VAB (vård av sjukt barn)',
   parental_leave: 'Föräldraledighet',
   vacation: 'Semester',
+  semesterersattning: 'Semesterersättning',
   traktamente_taxfree: 'Traktamente (skattefritt)',
   traktamente_taxable: 'Traktamente (skattepliktigt)',
   mileage_taxfree: 'Milersättning (skattefritt)',

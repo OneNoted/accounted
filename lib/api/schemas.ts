@@ -681,7 +681,7 @@ export const SupplierImportExecuteSchema = z.object({
 export const EmploymentTypeSchema = z.enum(['employee', 'company_owner', 'board_member'])
 export const SalaryTypeSchema = z.enum(['monthly', 'hourly'])
 export const FSkattStatusSchema = z.enum(['a_skatt', 'f_skatt', 'fa_skatt', 'not_verified'])
-export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln', 'none'])
+export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln', 'none', 'semesterersattning'])
 export const SalaryRunStatusSchema = z.enum(['draft', 'review', 'approved', 'paid', 'booked', 'corrected'])
 
 export const SalaryLineItemTypeSchema = z.enum([

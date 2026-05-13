@@ -334,6 +334,8 @@ export const POST = withRouteContext(
       .filter((li: Record<string, unknown>) => {
         if (DERIVED_ABSENCE_TYPES.includes(li.item_type as SalaryLineItemType)) return false
         if (li.source_benefit_id) return false
+        // Semesterersättning is derived by the engine on every calculate.
+        if (li.item_type === 'semesterersattning') return false
         return true
       })
       .map((li: Record<string, unknown>) => ({
@@ -458,6 +460,39 @@ export const POST = withRouteContext(
 
     if (empUpdateError) {
       return errorResponse(empUpdateError, opLog, { requestId })
+    }
+
+    // Persist a derived 'semesterersattning' line item so it appears in the
+    // lönerader UI, on the payslip, and books to BAS 7285 via the line-item
+    // flow in salary-entries.ts. Replace any prior derived row first.
+    const { error: delSemErr } = await supabase
+      .from('salary_line_items')
+      .delete()
+      .eq('salary_run_employee_id', sre.id)
+      .eq('item_type', 'semesterersattning')
+    if (delSemErr) {
+      return errorResponse(delSemErr, opLog, { requestId })
+    }
+    if (result.vacationCompensation > 0) {
+      const { error: insSemErr } = await supabase.from('salary_line_items').insert({
+        salary_run_employee_id: sre.id,
+        company_id: companyId,
+        item_type: 'semesterersattning',
+        description: 'Semesterersättning',
+        quantity: 1,
+        amount: Math.round(result.vacationCompensation * 100) / 100,
+        is_taxable: true,
+        is_avgift_basis: true,
+        // Not vacation basis itself — would create circular accrual.
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+        account_number: getLineItemAccount('semesterersattning', emp.employment_type),
+        sort_order: 50,
+      })
+      if (insSemErr) {
+        return errorResponse(insSemErr, opLog, { requestId })
+      }
     }
 
     totalGross += result.grossSalary

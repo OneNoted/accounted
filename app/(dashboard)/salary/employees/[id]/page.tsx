@@ -378,12 +378,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                   <SelectContent>
                     <SelectItem value="procentregeln">Procentregeln (12 %)</SelectItem>
                     <SelectItem value="sammaloneregeln">Sammalöneregeln</SelectItem>
+                    <SelectItem value="semesterersattning">Semesterersättning (betalas ut direkt)</SelectItem>
                     <SelectItem value="none">Ingen semesteravsättning</SelectItem>
                   </SelectContent>
                 </Select>
                 {vacationRule === 'none' && (
                   <p className="text-xs text-muted-foreground">
                     Ingen avsättning till 2920 bokas. Använd om semester ingår i månadslönen — vanligt för ägare som är enda anställd.
+                  </p>
+                )}
+                {vacationRule === 'semesterersattning' && (
+                  <p className="text-xs text-muted-foreground">
+                    12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp — vanligt för tim- och visstidsanställda.
                   </p>
                 )}
               </div>

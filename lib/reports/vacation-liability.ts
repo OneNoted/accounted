@@ -50,13 +50,16 @@ export async function generateVacationLiability(
 ): Promise<VacationLiabilityReport> {
   const r = (x: number) => Math.round(x * 100) / 100
 
-  // Load active employees
+  // Load active employees who actually accrue vacation. Employees on
+  // 'none' or 'semesterersattning' have no semesterlöneskuld liability —
+  // including them in the report would just show empty rows.
   const employees = await fetchAllRows(({ from, to }) =>
     supabase
       .from('employees')
       .select('id, first_name, last_name, personnummer_last4, vacation_rule, vacation_days_per_year, vacation_days_saved')
       .eq('company_id', companyId)
       .eq('is_active', true)
+      .not('vacation_rule', 'in', '("none","semesterersattning")')
       .order('last_name')
       .range(from, to)
   )

@@ -261,6 +261,99 @@ describe('calculateSalary', () => {
     expect(result.vacationAccrual).toBe(Math.round(40000 * 0.144 * 100) / 100)
   })
 
+  it('pays semesterersättning directly when vacation_rule = semesterersattning', () => {
+    const result = calculateSalary(
+      makeBasicInput({ vacationRule: 'semesterersattning', vacationDaysPerYear: 25 }),
+      config2026,
+      emptyTaxRates
+    )
+
+    const expectedCompensation = Math.round(40000 * 0.12 * 100) / 100
+    expect(result.vacationCompensation).toBe(expectedCompensation)
+    expect(result.grossSalary).toBe(40000 + expectedCompensation)
+    expect(result.vacationAccrual).toBe(0)
+    expect(result.vacationAccrualAvgifter).toBe(0)
+    // Avgifter basis includes the compensation
+    expect(result.avgifterBasis).toBe(40000 + expectedCompensation)
+  })
+
+  it('uses 14.4% for semesterersättning with 30+ vacation days', () => {
+    const result = calculateSalary(
+      makeBasicInput({ vacationRule: 'semesterersattning', vacationDaysPerYear: 30 }),
+      config2026,
+      emptyTaxRates
+    )
+
+    expect(result.vacationCompensation).toBe(Math.round(40000 * 0.144 * 100) / 100)
+    expect(result.vacationAccrual).toBe(0)
+  })
+
+  it('semesterersättning includes vacation-basis line items (e.g. overtime)', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'semesterersattning',
+        vacationDaysPerYear: 25,
+        lineItems: [
+          { itemType: 'overtime', amount: 5000, isTaxable: true, isAvgiftBasis: true, isVacationBasis: true, isGrossDeduction: false, isNetDeduction: false },
+        ],
+      }),
+      config2026,
+      emptyTaxRates
+    )
+
+    // 12% × (40000 base + 5000 overtime) = 5400
+    expect(result.vacationCompensation).toBe(5400)
+    // 40000 base + 5000 overtime + 5400 semesterersättning
+    expect(result.grossSalary).toBe(50400)
+  })
+
+  it('does not double-count base salary line items in vacation basis', () => {
+    // The API auto-creates a monthly_salary line item with amount = baseSalary
+    // and is_vacation_basis: true. The engine must not add it on top of its
+    // own baseSalary computation — otherwise procentregeln/semesterersättning
+    // would compute 2× the correct amount.
+    const monthlyResult = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 40000,
+        employmentDegree: 50, // grundlön = 20000
+        vacationRule: 'procentregeln',
+        lineItems: [
+          { itemType: 'monthly_salary', amount: 20000, isTaxable: true, isAvgiftBasis: true, isVacationBasis: true, isGrossDeduction: false, isNetDeduction: false },
+        ],
+      }),
+      config2026,
+      emptyTaxRates
+    )
+    expect(monthlyResult.vacationAccrual).toBe(2400) // 12% × 20000, not 12% × 40000
+
+    const compResult = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 40000,
+        employmentDegree: 50,
+        vacationRule: 'semesterersattning',
+        lineItems: [
+          { itemType: 'monthly_salary', amount: 20000, isTaxable: true, isAvgiftBasis: true, isVacationBasis: true, isGrossDeduction: false, isNetDeduction: false },
+        ],
+      }),
+      config2026,
+      emptyTaxRates
+    )
+    expect(compResult.vacationCompensation).toBe(2400)
+    expect(compResult.grossSalary).toBe(22400) // 20000 base + 2400 comp
+  })
+
+  it('skips accrual when vacation_rule = none', () => {
+    const result = calculateSalary(
+      makeBasicInput({ vacationRule: 'none' }),
+      config2026,
+      emptyTaxRates
+    )
+
+    expect(result.vacationAccrual).toBe(0)
+    expect(result.vacationCompensation).toBe(0)
+    expect(result.grossSalary).toBe(40000)
+  })
+
   it('adds benefit values to tax base but not gross', () => {
     const result = calculateSalary(
       makeBasicInput({

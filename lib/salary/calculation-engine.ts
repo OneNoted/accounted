@@ -31,7 +31,7 @@ export interface SalaryCalculationInput {
   paymentDate: string
 
   /** Vacation */
-  vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none'
+  vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
   vacationDaysPerYear: number
   semestertillaggRate: number
 
@@ -76,6 +76,8 @@ export interface SalaryCalculationResult {
   avgifterCategory: AvgifterCalculation['category']
   vacationAccrual: number
   vacationAccrualAvgifter: number
+  /** Semesterersättning paid out directly (vacation_rule = 'semesterersattning'). 0 otherwise. */
+  vacationCompensation: number
   totalEmployerCost: number
   steps: CalculationStep[]
 }
@@ -94,6 +96,19 @@ export interface AvgifterCalculation {
 
 function r(x: number): number {
   return Math.round(x * 100) / 100
+}
+
+/**
+ * Sum vacation-basis line items that ADD to base salary (overtime, bonus,
+ * etc). Excludes monthly_salary/hourly_salary because those line items mirror
+ * the engine's own baseSalary computation — counting them would double the
+ * vacation basis.
+ */
+function vacationBasisAdditions(lineItems: CalculationLineItem[]): number {
+  return lineItems
+    .filter(li => li.isVacationBasis)
+    .filter(li => li.itemType !== 'monthly_salary' && li.itemType !== 'hourly_salary')
+    .reduce((sum, li) => sum + li.amount, 0)
 }
 
 /**
@@ -206,12 +221,31 @@ export function calculateSalary(
     })
   }
 
-  // Gross salary = base + additions + absence (may be negative for deductions) - gross deductions
-  const grossSalary = r(baseSalary + totalAdditions + totalAbsence - totalGrossDeductions)
+  // ─── Step 4b: Semesterersättning (paid out directly per cycle) ───
+  // When vacation_rule = 'semesterersattning' the employer pays 12% (or 14.4%
+  // for 30+ days) on top of each paycheck instead of accruing semesterlöneskuld.
+  // It's part of bruttolön and counts for both tax and avgifter basis.
+  let vacationCompensation = 0
+  if (input.vacationRule === 'semesterersattning') {
+    const rate = input.vacationDaysPerYear >= 30 ? 0.144 : 0.12
+    const compensationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
+    vacationCompensation = r(compensationBasis * rate)
+    steps.push({
+      label: `Semesterersättning (${fmtPct(rate)})`,
+      formula: `semesterunderlag × ${fmtPct(rate)} (betalas ut, ingen avsättning)`,
+      input: { compensation_basis: compensationBasis, rate },
+      output: vacationCompensation,
+    })
+  }
+
+  // Gross salary = base + additions + absence (may be negative for deductions) + semesterersättning - gross deductions
+  const grossSalary = r(baseSalary + totalAdditions + totalAbsence + vacationCompensation - totalGrossDeductions)
   steps.push({
     label: 'Bruttolön',
-    formula: 'grundlön + tillägg + frånvaro − bruttoavdrag',
-    input: { base: baseSalary, additions: totalAdditions, absence: totalAbsence, gross_deductions: totalGrossDeductions },
+    formula: vacationCompensation > 0
+      ? 'grundlön + tillägg + frånvaro + semesterersättning − bruttoavdrag'
+      : 'grundlön + tillägg + frånvaro − bruttoavdrag',
+    input: { base: baseSalary, additions: totalAdditions, absence: totalAbsence, vacation_compensation: vacationCompensation, gross_deductions: totalGrossDeductions },
     output: grossSalary,
   })
 
@@ -350,16 +384,25 @@ export function calculateSalary(
   }
 
   // ─── Step 9: Vacation accrual ───
-  const vacationBasisItems = input.lineItems.filter(li => li.isVacationBasis)
-  const vacationBasis = r(
-    baseSalary + vacationBasisItems.reduce((sum, li) => sum + li.amount, 0)
-  )
+  // Vacation basis = baseSalary (computed at the top) + any *additional*
+  // vacation-basis line items (overtime, bonus, etc). We must NOT add
+  // monthly_salary/hourly_salary line items here — those are auto-created at
+  // employee-add time and represent the same baseSalary already accounted for.
+  const vacationBasis = r(baseSalary + vacationBasisAdditions(input.lineItems))
   let vacationAccrual: number
   if (input.vacationRule === 'none') {
     vacationAccrual = 0
     steps.push({
       label: 'Semesteravsättning (avstängd)',
       formula: 'ingen semesteravsättning bokas — semester ingår i månadslönen',
+      input: {},
+      output: 0,
+    })
+  } else if (input.vacationRule === 'semesterersattning') {
+    vacationAccrual = 0
+    steps.push({
+      label: 'Semesteravsättning (semesterersättning betald direkt)',
+      formula: 'ingen avsättning — 12 % betalas ut på varje lön',
       input: {},
       output: 0,
     })
@@ -378,7 +421,9 @@ export function calculateSalary(
     // Accrual = tillägg only (salary cost is already in normal monthly expense)
     // The liability (2920) for sammalöneregeln is the tillägg portion,
     // since the base salary is expensed monthly regardless of vacation.
-    const dailyRate = r(input.monthlySalary / 21)
+    // Use baseSalary (degree-adjusted) — a 50% part-timer's tillägg should be
+    // half a full-timer's, not the same.
+    const dailyRate = r(baseSalary / 21)
     const tillagg = r(dailyRate * input.semestertillaggRate * input.vacationDaysPerYear)
     vacationAccrual = tillagg
     steps.push({
@@ -420,6 +465,7 @@ export function calculateSalary(
     avgifterCategory: avgifterCalc.category,
     vacationAccrual,
     vacationAccrualAvgifter,
+    vacationCompensation,
     totalEmployerCost,
     steps,
   }
@@ -593,17 +639,19 @@ export function calculateSjuklon(
  */
 export function calculateVacationAccrual(params: {
   monthlySalary: number
-  vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none'
+  vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
   vacationDaysPerYear: number
   semestertillaggRate: number
   vacationBasis: number
 }): { accrual: number; steps: CalculationStep[] } {
   const steps: CalculationStep[] = []
 
-  if (params.vacationRule === 'none') {
+  if (params.vacationRule === 'none' || params.vacationRule === 'semesterersattning') {
     steps.push({
       label: 'Semesteravsättning (avstängd)',
-      formula: 'ingen semesteravsättning',
+      formula: params.vacationRule === 'semesterersattning'
+        ? 'semesterersättning betalas ut direkt — ingen avsättning'
+        : 'ingen semesteravsättning',
       input: {},
       output: 0,
     })

@@ -2482,7 +2482,7 @@ export interface KPIPreferences {
 export type EmploymentType = 'employee' | 'company_owner' | 'board_member'
 export type SalaryType = 'monthly' | 'hourly'
 export type FSkattStatus = 'a_skatt' | 'f_skatt' | 'fa_skatt' | 'not_verified'
-export type VacationRule = 'procentregeln' | 'sammaloneregeln' | 'none'
+export type VacationRule = 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
 export type SalaryRunStatus = 'draft' | 'review' | 'approved' | 'paid' | 'booked' | 'corrected'
 export type AGIStatus =
   | 'generated'         // XML built from a salary run; nothing sent to SKV yet
@@ -2497,7 +2497,7 @@ export type SalaryLineItemType =
   | 'gross_deduction_pension' | 'gross_deduction_other'
   | 'benefit_car' | 'benefit_housing' | 'benefit_meals' | 'benefit_wellness' | 'benefit_bike' | 'benefit_other'
   | 'sick_karens' | 'sick_day2_14' | 'sick_day15_plus'
-  | 'vab' | 'parental_leave' | 'vacation'
+  | 'vab' | 'parental_leave' | 'vacation' | 'semesterersattning'
   | 'traktamente_taxfree' | 'traktamente_taxable'
   | 'mileage_taxfree' | 'mileage_taxable'
   | 'net_deduction_advance' | 'net_deduction_union' | 'net_deduction_benefit_payment'
