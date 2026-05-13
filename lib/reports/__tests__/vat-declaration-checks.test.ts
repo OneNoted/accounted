@@ -101,4 +101,107 @@ describe('runVatDeclarationChecks', () => {
     const findings = runVatDeclarationChecks(rutor)
     expect(findings.find((f) => f.code === 'SUMMA_MOMS_DRIFT')).toBeUndefined()
   })
+
+  // SKV §4.1.1.4 rule 1 — taxable sales base without output VAT.
+  it('flags ERROR when taxable sales (ruta 05) booked without output VAT', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta05: 10000,
+      // ruta 10/11/12 all zero — SKV rule 1 violation
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    const finding = findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toMatch(/försäljning/)
+    expect(finding?.message).toMatch(/utgående moms/)
+  })
+
+  it('flags ERROR for ruta 06 (uttag) without output VAT', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta06: 5000,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')?.status).toBe('ERROR')
+  })
+
+  it('does not flag taxable sales without output VAT when output VAT is present', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta05: 10000,
+      ruta10: 2500,
+      ruta49: 2500,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'TAXABLE_SALES_WITHOUT_OUTPUT')).toBeUndefined()
+  })
+
+  // Mirror: output VAT without taxable sales base.
+  it('flags ERROR when output VAT booked without taxable sales base', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      // No ruta 05/06/07/08
+      ruta10: 2500,
+      ruta49: 2500,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'OUTPUT_VAT_WITHOUT_SALES_BASE')?.status).toBe('ERROR')
+  })
+
+  // SKV §4.1.1.4 rule 5 — import base without import output VAT.
+  it('flags ERROR when import base (ruta 50) without import output VAT', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 10000,
+      // ruta 60/61/62 all zero
+      ruta48: 0,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')?.status).toBe('ERROR')
+  })
+
+  // SKV §4.1.1.4 rule 6 — import output VAT without import base.
+  it('flags ERROR when import output VAT (ruta 60) without ruta 50', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta60: 2500,
+      ruta48: 2500,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')?.status).toBe('ERROR')
+  })
+
+  it('does not flag import checks when both base and output VAT are present', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta50: 10000,
+      ruta60: 2500,
+      ruta48: 2500,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'IMPORT_BASE_WITHOUT_OUTPUT')).toBeUndefined()
+    expect(findings.find((f) => f.code === 'IMPORT_OUTPUT_WITHOUT_BASE')).toBeUndefined()
+  })
+
+  // Multiple findings should surface together so the user sees the whole picture.
+  it('reports multiple distinct findings for a deeply broken declaration', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta05: 10000,    // taxable sales but no output VAT
+      ruta30: 2500,     // RC output but no RC basis
+      ruta50: 5000,     // import base but no import output
+      ruta48: 0,
+      ruta49: 2500,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    const codes = findings.map((f) => f.code).sort()
+    expect(codes).toContain('TAXABLE_SALES_WITHOUT_OUTPUT')
+    expect(codes).toContain('RC_BASIS_MISSING')
+    expect(codes).toContain('IMPORT_BASE_WITHOUT_OUTPUT')
+  })
 })

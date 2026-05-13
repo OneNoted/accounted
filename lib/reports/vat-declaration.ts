@@ -47,7 +47,7 @@ import type {
  *   4425/4426/4427 (domestic services reverse charge) → ruta 24
  *   4545/4546/4547 (import) → ruta 50
  */
-const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side: 'credit' | 'debit' }> = {
+export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side: 'credit' | 'debit' }> = {
   // Output VAT 25% → ruta 10
   '2610': { box: 'ruta10', side: 'credit' },  // Utgående moms 25% (summary/parent)
   '2611': { box: 'ruta10', side: 'credit' },  // Försäljning inom Sverige

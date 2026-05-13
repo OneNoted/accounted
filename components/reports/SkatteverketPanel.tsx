@@ -36,6 +36,22 @@ interface SkatteverketStatus {
   expiresAt?: string
 }
 
+/**
+ * Codes from /lib/api-client.ts's SkatteverketAuthError that mean "the user
+ * needs to reconnect with BankID before this action can succeed". When the API
+ * returns one of these codes we flip the local status.expired flag so the
+ * "Session utgången" badge + "Förnya session" button surface, even if the
+ * upstream /status endpoint hasn't reflected the change yet.
+ */
+const AUTH_RECONNECT_CODES = new Set([
+  'NOT_CONNECTED',
+  'SESSION_EXPIRED',
+  'REFRESH_EXHAUSTED',
+  'TOKEN_REVOKED',
+  'TOKEN_CORRUPTED',
+  'MISSING_SCOPE',
+])
+
 // Shape per Skatteverket Momsdeklaration v1.0.24 RAML
 // (kontrollResultat.resultat[].{kod, status, beskrivning})
 interface KontrollResult {
@@ -89,6 +105,21 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
   const localChecks: VatDeclarationCheck[] = rutor ? runVatDeclarationChecks(rutor) : []
   const localErrors = localChecks.filter((c) => c.status === 'ERROR')
   const localBlocked = localErrors.length > 0
+
+  /**
+   * Apply an API JSON error result. When the error indicates the SKV session
+   * has expired/been revoked/lost scope, immediately reflect that in the
+   * local status so the "Förnya session" CTA appears next to the message —
+   * the user shouldn't have to wait for /status to catch up.
+   */
+  const applyApiError = useCallback((result: { error?: string; code?: string } | null) => {
+    if (!result?.error) return false
+    setError(result.error)
+    if (result.code && AUTH_RECONNECT_CODES.has(result.code)) {
+      setStatus((prev) => prev ? { ...prev, expired: true } : prev)
+    }
+    return true
+  }, [])
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -169,8 +200,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         body: JSON.stringify({ periodType, year, period }),
       })
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else {
         const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
         setKontroller(controls)
@@ -215,8 +246,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         body: JSON.stringify({ periodType, year, period }),
       })
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else {
         const controls: KontrollResult[] = result.data?.kontrollResultat?.resultat || []
         setKontroller(controls)
@@ -245,8 +276,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         { method: 'PUT' }
       )
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else if (result.data?.signeringsLank) {
         setSigneringslank(result.data.signeringsLank)
         setSuccess('Utkastet är låst. Öppna signeringslänken för att signera med BankID.')
@@ -269,8 +300,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         { method: 'DELETE' }
       )
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else {
         setSigneringslank(null)
         setSuccess('Utkastet har låsts upp')
@@ -292,8 +323,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         )}&redovisningsperiod=${getRedovisningsperiod()}`
       )
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else if (result.data) {
         setSubmitted(result.data)
         setSuccess('Deklarationen har lämnats in')
@@ -323,7 +354,9 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         setSuccess('Utkastet har raderats från Eget utrymme')
       } else {
         const result = await res.json().catch(() => ({}))
-        setError(result.error || `Kunde inte radera utkast (${res.status})`)
+        if (!applyApiError(result)) {
+          setError(`Kunde inte radera utkast (${res.status})`)
+        }
       }
     } catch {
       setError('Kunde inte radera utkast')
@@ -342,8 +375,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         )}&redovisningsperiod=${getRedovisningsperiod()}`
       )
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else if (!result.data) {
         setSuccess('Inget sparat utkast hittades för perioden')
       } else {
@@ -369,8 +402,8 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
         )}&redovisningsperiod=${getRedovisningsperiod()}`
       )
       const result = await res.json()
-      if (result.error) {
-        setError(result.error)
+      if (applyApiError(result)) {
+        // surfaced + status updated; nothing more to do
       } else if (!result.data) {
         setSuccess('Inget beslut hittades för perioden')
       } else {

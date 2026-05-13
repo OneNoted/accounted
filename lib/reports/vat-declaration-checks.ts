@@ -43,6 +43,10 @@ export interface VatDeclarationCheck {
     | 'RC_OUTPUT_MISSING'
     | 'RC_INPUT_VAT_MISMATCH'
     | 'SUMMA_MOMS_DRIFT'
+    | 'TAXABLE_SALES_WITHOUT_OUTPUT'
+    | 'IMPORT_BASE_WITHOUT_OUTPUT'
+    | 'IMPORT_OUTPUT_WITHOUT_BASE'
+    | 'OUTPUT_VAT_WITHOUT_SALES_BASE'
   status: VatDeclarationCheckStatus
   /** Swedish user-facing message; safe to render directly in the UI. */
   message: string
@@ -113,6 +117,71 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
         'beräknad ingående moms (2645/2647) nolla ut den fiktiva utgående ' +
         'momsen. Kontrollera att 2645/2647 är bokförd för varje 2614/2624/2634-rad.',
       rutor: ['ruta30', 'ruta31', 'ruta32', 'ruta48'],
+    })
+  }
+
+  // SKV §4.1.1.4 rule 1 — taxable sales base requires output VAT.
+  // If user has booked revenue (3001-3003, uttag, VMB, frivillig uthyrning)
+  // without any output VAT (2611-2638), the declaration will be rejected.
+  // Common cause: revenue posted but VAT line forgotten, or revenue on a
+  // zero-rated account that should have been ruta 35/36/39/40.
+  const taxableSalesBase = rutor.ruta05 + rutor.ruta06 + rutor.ruta07 + rutor.ruta08
+  const taxableSalesOutput = rutor.ruta10 + rutor.ruta11 + rutor.ruta12
+  if (taxableSalesBase > eps && taxableSalesOutput <= eps) {
+    findings.push({
+      code: 'TAXABLE_SALES_WITHOUT_OUTPUT',
+      status: 'ERROR',
+      message:
+        'Du har redovisat momspliktig försäljning (ruta 05-08) men ingen ' +
+        'utgående moms (ruta 10-12). Skatteverket kräver att momspliktig ' +
+        'försäljning kombineras med utgående moms. Kontrollera att VAT-rader ' +
+        'är bokförda på 2611/2621/2631 — eller flytta intäkterna till rätt ' +
+        'momsfri ruta (35/36/39/40) om de inte är momspliktiga.',
+      rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
+    })
+  }
+
+  // Mirror — output VAT without taxable sales base. Output VAT booked
+  // standalone (e.g. manual correction without matching revenue posting)
+  // would also fail SKV's contract.
+  if (taxableSalesOutput > eps && taxableSalesBase <= eps) {
+    findings.push({
+      code: 'OUTPUT_VAT_WITHOUT_SALES_BASE',
+      status: 'ERROR',
+      message:
+        'Du har redovisat utgående moms (ruta 10-12) men ingen momspliktig ' +
+        'försäljning (ruta 05-08). Skatteverket kräver att utgående moms ' +
+        'matchas med ett försäljningsunderlag. Kontrollera att intäktskonton ' +
+        '(3001/3002/3003) är bokförda för varje VAT-rad.',
+      rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
+    })
+  }
+
+  // SKV §4.1.1.4 rule 5 — import base requires import output VAT.
+  const importOutput = rutor.ruta60 + rutor.ruta61 + rutor.ruta62
+  if (rutor.ruta50 > eps && importOutput <= eps) {
+    findings.push({
+      code: 'IMPORT_BASE_WITHOUT_OUTPUT',
+      status: 'ERROR',
+      message:
+        'Du har redovisat importunderlag (ruta 50) men ingen utgående ' +
+        'importmoms (ruta 60-62). Skatteverket kräver båda. Kontrollera ' +
+        'att importmoms är bokförd på 2615/2625/2635.',
+      rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'],
+    })
+  }
+
+  // SKV §4.1.1.4 rule 6 — import output VAT requires import base.
+  // This was the canary that the Phase 1b ruta50 wiring fixed.
+  if (importOutput > eps && rutor.ruta50 <= eps) {
+    findings.push({
+      code: 'IMPORT_OUTPUT_WITHOUT_BASE',
+      status: 'ERROR',
+      message:
+        'Du har redovisat utgående importmoms (ruta 60-62) men inget ' +
+        'importunderlag (ruta 50). Skatteverket kräver att importmoms ' +
+        'kombineras med tullvärdesunderlag på 4545/4546/4547.',
+      rutor: ['ruta50', 'ruta60', 'ruta61', 'ruta62'],
     })
   }
 
