@@ -23,6 +23,14 @@ const DocumentDownloadResponse = z.object({
   file_name: z.string(),
   mime_type: z.string().nullable(),
   sha256_hash: z.string(),
+  /**
+   * False when the requested id is a SUPERSEDED version (a newer version
+   * exists). The signed URL is still issued — old versions are retained
+   * for BFL 7 kap audit — but agents should treat the response as
+   * historical and re-resolve the current version via GET /documents
+   * if they need the latest bytes.
+   */
+  is_current_version: z.boolean(),
   download_url: z.string().url(),
   expires_in_seconds: z.number().int(),
 })
@@ -130,6 +138,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         file_name: typed.file_name,
         mime_type: typed.mime_type,
         sha256_hash: typed.sha256_hash,
+        is_current_version: typed.is_current_version,
         download_url: signed.signedUrl,
         expires_in_seconds: SIGNED_URL_TTL_SECONDS,
       },

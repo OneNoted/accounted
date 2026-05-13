@@ -50,7 +50,6 @@ const DocumentUploaded = z.object({
   sha256_hash: z.string(),
   version: z.number().int(),
   is_current_version: z.boolean(),
-  storage_path: z.string(),
   upload_source: z.string().nullable(),
   journal_entry_id: z.string().uuid().nullable(),
   journal_entry_line_id: z.string().uuid().nullable(),
@@ -157,11 +156,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Optional metadata fields.
+    // Optional metadata fields. upload_source is enum-validated at runtime
+    // (the column has no CHECK constraint, so an unrecognised value would
+    // persist as-is otherwise).
     const uploadSourceRaw = formData.get('upload_source')
-    const uploadSource = typeof uploadSourceRaw === 'string'
-      ? (uploadSourceRaw as DocumentUploadSource)
-      : 'file_upload' as DocumentUploadSource
+    const UploadSourceSchema = z.enum(['file_upload', 'camera', 'email', 'api'])
+    let uploadSource: DocumentUploadSource = 'file_upload'
+    if (typeof uploadSourceRaw === 'string') {
+      const parsed = UploadSourceSchema.safeParse(uploadSourceRaw)
+      if (!parsed.success) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'upload_source',
+            message: `upload_source must be one of: ${UploadSourceSchema.options.join(', ')}.`,
+            attempted: uploadSourceRaw,
+          },
+        })
+      }
+      uploadSource = parsed.data
+    }
 
     const journalEntryIdRaw = formData.get('journal_entry_id')
     const journalEntryId = typeof journalEntryIdRaw === 'string' ? journalEntryIdRaw : undefined
@@ -185,16 +199,56 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // document whose `journal_entry_id` points at another company's JE —
     // the DB has no FK enforcing cross-table tenancy.
     if (journalEntryId) {
-      const { data: jeRow } = await ctx.supabase
+      const { data: jeRow, error: jeErr } = await ctx.supabase
         .from('journal_entries')
         .select('id')
         .eq('id', journalEntryId)
         .eq('company_id', ctx.companyId!)
         .maybeSingle()
+      if (jeErr) {
+        ctx.log.error('documents.upload JE pre-check DB error', jeErr as Error, { journalEntryId })
+        return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId, details: { step: 'je_ownership_check' },
+        })
+      }
       if (!jeRow) {
         return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
           requestId: ctx.requestId,
           details: { resource: 'journal_entry', field: 'journal_entry_id' },
+        })
+      }
+    }
+
+    // If the caller supplied journal_entry_line_id, verify the line belongs
+    // to the supplied JE (and transitively to the company we already
+    // validated). Without this guard the row would persist with a
+    // line-level pointer to another company's JE line.
+    if (journalEntryLineId) {
+      if (!journalEntryId) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'journal_entry_line_id',
+            message: 'journal_entry_line_id requires journal_entry_id.',
+          },
+        })
+      }
+      const { data: lineRow, error: lineErr } = await ctx.supabase
+        .from('journal_entry_lines')
+        .select('id')
+        .eq('id', journalEntryLineId)
+        .eq('journal_entry_id', journalEntryId)
+        .maybeSingle()
+      if (lineErr) {
+        ctx.log.error('documents.upload JE-line pre-check DB error', lineErr as Error, { journalEntryLineId })
+        return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId, details: { step: 'je_line_ownership_check' },
+        })
+      }
+      if (!lineRow) {
+        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+          requestId: ctx.requestId,
+          details: { resource: 'journal_entry_line', field: 'journal_entry_line_id' },
         })
       }
     }
@@ -214,6 +268,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           journal_entry_line_id: journalEntryLineId,
         },
       )
+      // `storage_path` is deliberately omitted from the public response —
+      // the path encodes internal layout (userId prefix + timestamp) which
+      // /download deliberately keeps hidden. Use /download/{id} to fetch
+      // the actual bytes via a short-lived signed URL.
       return created(
         {
           id: document.id,
@@ -223,7 +281,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           sha256_hash: document.sha256_hash,
           version: document.version,
           is_current_version: document.is_current_version,
-          storage_path: document.storage_path,
           upload_source: document.upload_source,
           journal_entry_id: document.journal_entry_id,
           journal_entry_line_id: document.journal_entry_line_id,
