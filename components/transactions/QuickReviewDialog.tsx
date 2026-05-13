@@ -172,7 +172,7 @@ export default function QuickReviewDialog({
       }
       onOpenChange(o)
     }}>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-md sm:max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Granska bokföring</DialogTitle>
           <DialogDescription>
@@ -264,7 +264,13 @@ export default function QuickReviewDialog({
           {...(isCounterpartyTemplate
             ? { linePattern: counterpartyLinePattern ?? undefined }
             : templateId && template
-              ? { templateDebitAccount: template.debit_account, templateCreditAccount: template.credit_account, templateVatRate: template.vat_rate }
+              ? {
+                  templateDebitAccount: template.debit_account,
+                  templateCreditAccount: template.credit_account,
+                  templateVatRate: template.vat_rate,
+                  templateVatTreatment: template.vat_treatment,
+                  templateSupplierType: template.reverse_charge_supplier_type,
+                }
               : { category, vatTreatment: isLiabilityAccount ? 'none' : vatTreatment, accountOverride, entityType }
           )}
         />

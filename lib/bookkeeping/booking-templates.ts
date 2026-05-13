@@ -7,7 +7,12 @@ import type {
   VatTreatment,
   RiskLevel,
 } from '@/types'
-import { getVatRate, generateReverseChargeLines, generateInputVatLine } from './vat-entries'
+import {
+  getVatRate,
+  generateReverseChargeLines,
+  generateReverseChargeBasisLines,
+  generateInputVatLine,
+} from './vat-entries'
 
 // ============================================================
 // Types
@@ -59,6 +64,13 @@ export interface BookingTemplate {
   description_sv: string
   common: boolean
   requires_vat_registration_data?: boolean
+  /**
+   * Supplier-type hint for reverse-charge bookings. Determines which 44xx/45xx
+   * basbelopp account is emitted alongside the 2645/2614 fiktiv-moms pair so
+   * Skatteverket's momsdeklaration rutor 20–24 line up with rutor 30–32
+   * (felkod FK004 if absent). Default 'eu_business' when unset.
+   */
+  reverse_charge_supplier_type?: 'eu_business' | 'non_eu_business' | 'swedish_business'
 }
 
 export interface TemplateGroupInfo {
@@ -1537,6 +1549,15 @@ export function findMatchingTemplates(
 }
 
 /**
+ * Whether an account number sits in the reverse-charge basbelopp range
+ * (44xx/45xx series — ruta 20–24 inputs). Used to skip redundant basis
+ * emission when the template already books to such an account.
+ */
+function isBasisAccount(account: string): boolean {
+  return /^4[45]\d{2}$/.test(account)
+}
+
+/**
  * Convert a booking template into a MappingResult.
  * Follows the same pattern as buildMappingResultFromCategory in category-mapping.ts.
  */
@@ -1562,9 +1583,17 @@ export function buildMappingResultFromTemplate(
     const vatRate = getVatRate(template.vat_treatment)
 
     if (template.vat_treatment === 'reverse_charge' && isExpense) {
-      // EU reverse charge: fiktiv moms (offsetting entries)
+      // EU/non-EU/domestic reverse charge: emit BOTH the fiktiv-moms pair
+      // (2645|2647 / 2614) AND the basbelopp pair (44xx|45xx / 4598). The
+      // basbelopp pair populates momsdeklaration rutor 20–24; without it
+      // Skatteverket rejects with FK004 ("ruta 30-32 utan motsvarande
+      // basbelopp i 20-24" — ML 13 kap kräver båda sidor).
       const absAmount = Math.abs(transaction.amount)
-      const rcLines = generateReverseChargeLines(absAmount)
+      const supplierType = template.reverse_charge_supplier_type ?? 'eu_business'
+      const isDomestic = supplierType === 'swedish_business'
+      const rcRate = 0.25 // fiktiv moms rate; current templates are 25%
+
+      const rcLines = generateReverseChargeLines(absAmount, rcRate, isDomestic)
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -1572,6 +1601,20 @@ export function buildMappingResultFromTemplate(
           credit_amount: rcl.credit_amount,
           description: rcl.line_description || '',
         })
+      }
+
+      // Skip basbelopp emission if the template already books the expense
+      // directly to a basis account (44xx/45xx series) — would double-count.
+      if (!isBasisAccount(debitAccount)) {
+        const basisLines = generateReverseChargeBasisLines(absAmount, rcRate, supplierType)
+        for (const bl of basisLines) {
+          vatLines.push({
+            account_number: bl.account_number,
+            debit_amount: bl.debit_amount,
+            credit_amount: bl.credit_amount,
+            description: bl.line_description || '',
+          })
+        }
       }
     } else if (vatRate > 0 && isExpense) {
       // Input VAT deduction

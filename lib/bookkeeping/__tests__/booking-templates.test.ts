@@ -316,18 +316,80 @@ describe('buildMappingResultFromTemplate', () => {
     expect(result.vat_lines[0].debit_amount).toBe(30) // 530 * 0.06 / 1.06 = 30
   })
 
-  it('produces reverse charge lines for EU purchases', () => {
+  it('produces reverse charge lines for EU purchases (fiktiv moms + basbelopp)', () => {
     const template = getTemplate('it_saas_eu')
     const tx = makeTransaction({ amount: -1000 })
     const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
 
-    expect(result.vat_lines).toHaveLength(2)
-    // Fiktiv ingående moms
+    // Four lines: fiktiv-moms pair + basbelopp pair. Without the basbelopp
+    // pair the deklaration is rejected with FK004 (ruta 30-32 without 20-24).
+    expect(result.vat_lines).toHaveLength(4)
+    // Fiktiv ingående moms (EU: 2645)
     expect(result.vat_lines[0].account_number).toBe('2645')
     expect(result.vat_lines[0].debit_amount).toBe(250)
-    // Fiktiv utgående moms
+    // Fiktiv utgående moms (25%: 2614)
     expect(result.vat_lines[1].account_number).toBe('2614')
     expect(result.vat_lines[1].credit_amount).toBe(250)
+    // Basbelopp EU services 25% → ruta 21
+    expect(result.vat_lines[2].account_number).toBe('4535')
+    expect(result.vat_lines[2].debit_amount).toBe(1000)
+    // Motkonto basbelopp
+    expect(result.vat_lines[3].account_number).toBe('4598')
+    expect(result.vat_lines[3].credit_amount).toBe(1000)
+  })
+
+  it('defaults to eu_business supplier type when not set on template', () => {
+    // it_cloud_hosting has no explicit reverse_charge_supplier_type
+    const template = getTemplate('it_cloud_hosting')
+    const tx = makeTransaction({ amount: -800 })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    expect(result.vat_lines).toHaveLength(4)
+    // Defaults to EU services → 4535
+    expect(result.vat_lines[2].account_number).toBe('4535')
+    expect(result.vat_lines[2].debit_amount).toBe(800)
+  })
+
+  it('uses 4531 basbelopp for non-EU supplier type', () => {
+    const template: BookingTemplate = {
+      ...getTemplate('it_cloud_hosting'),
+      reverse_charge_supplier_type: 'non_eu_business',
+    }
+    const tx = makeTransaction({ amount: -1000 })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    expect(result.vat_lines).toHaveLength(4)
+    expect(result.vat_lines[0].account_number).toBe('2645') // non-EU still uses 2645
+    expect(result.vat_lines[2].account_number).toBe('4531') // non-EU services → ruta 22
+  })
+
+  it('uses 4425 basbelopp and 2647 for domestic (swedish) reverse charge', () => {
+    const template: BookingTemplate = {
+      ...getTemplate('it_cloud_hosting'),
+      reverse_charge_supplier_type: 'swedish_business',
+    }
+    const tx = makeTransaction({ amount: -1000 })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    expect(result.vat_lines).toHaveLength(4)
+    // Domestic RC uses 2647 (ML 16 kap) for the input pair
+    expect(result.vat_lines[0].account_number).toBe('2647')
+    // Domestic services (byggtjänster) → 4425, ruta 24
+    expect(result.vat_lines[2].account_number).toBe('4425')
+  })
+
+  it('skips basbelopp emission when template already debits a basis account', () => {
+    const template: BookingTemplate = {
+      ...getTemplate('it_cloud_hosting'),
+      debit_account: '4535', // user-customized template that books directly to basis
+    }
+    const tx = makeTransaction({ amount: -1000 })
+    const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+
+    // Only the fiktiv-moms pair — basbelopp would double-count.
+    expect(result.vat_lines).toHaveLength(2)
+    expect(result.vat_lines[0].account_number).toBe('2645')
+    expect(result.vat_lines[1].account_number).toBe('2614')
   })
 
   it('produces no VAT lines for exempt expenses', () => {

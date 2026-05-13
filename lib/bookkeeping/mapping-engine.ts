@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   generateInputVatLine,
   generateReverseChargeLines,
+  generateReverseChargeBasisLines,
 } from './vat-entries'
 import { findMatchingTemplates, buildMappingResultFromTemplate } from './booking-templates'
 import {
@@ -221,8 +222,13 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
   const vatLines: VatJournalLine[] = []
   if (isExpense && !rule.default_private && rule.vat_treatment) {
     if (rule.vat_treatment === 'reverse_charge') {
-      // EU reverse charge: fiktiv moms (offsetting entries)
-      const rcLines = generateReverseChargeLines(absAmount)
+      // Reverse charge: emit BOTH the fiktiv-moms pair (2645/2614) AND the
+      // basbelopp pair (44xx|45xx / 4598). The basbelopp pair populates
+      // momsdeklaration rutor 20–24; without it Skatteverket rejects with
+      // FK004. Mapping rules don't carry supplier-country today, so we
+      // default to EU services — the most common reverse-charge scenario.
+      const rcRate = 0.25
+      const rcLines = generateReverseChargeLines(absAmount, rcRate, false)
       for (const rcl of rcLines) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -230,6 +236,19 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType?: E
           credit_amount: rcl.credit_amount,
           description: rcl.line_description || '',
         })
+      }
+
+      // Skip basbelopp emission if the rule already books to a basis account.
+      if (!/^4[45]\d{2}$/.test(debitAccount)) {
+        const basisLines = generateReverseChargeBasisLines(absAmount, rcRate, 'eu_business')
+        for (const bl of basisLines) {
+          vatLines.push({
+            account_number: bl.account_number,
+            debit_amount: bl.debit_amount,
+            credit_amount: bl.credit_amount,
+            description: bl.line_description || '',
+          })
+        }
       }
     } else if (rule.vat_treatment === 'standard_25' || rule.vat_treatment === 'reduced_12' || rule.vat_treatment === 'reduced_6') {
       const vatRate =

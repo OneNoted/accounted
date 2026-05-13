@@ -1243,7 +1243,7 @@ function VatDeclarationView() {
                 {/* Utgående moms */}
                 <div>
                   <h4 className="font-semibold mb-3">Utgående moms (försäljning)</h4>
-                  <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[400px]">
+                  <div><table className="w-full text-sm">
                     <tbody>
                       {data.rutor.ruta05 > 0 && (
                         <tr className="border-b">
@@ -1305,7 +1305,7 @@ function VatDeclarationView() {
                     data.rutor.ruta30 > 0 || data.rutor.ruta31 > 0 || data.rutor.ruta32 > 0) && (
                     <>
                       <h4 className="font-semibold mb-3 mt-6">Omvänd skattskyldighet (inköp)</h4>
-                      <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[400px]">
+                      <div><table className="w-full text-sm">
                         <tbody>
                           <VatRutaRow ruta="20" label="Inköp av varor från annat EU-land" amount={0} baseAmount={data.rutor.ruta20} noVat />
                           <VatRutaRow ruta="21" label="Inköp av tjänster från annat EU-land" amount={0} baseAmount={data.rutor.ruta21} noVat />
@@ -1324,7 +1324,7 @@ function VatDeclarationView() {
                 {/* Ingående moms */}
                 <div>
                   <h4 className="font-semibold mb-3">Ingående moms (avdragsgill)</h4>
-                  <div className="overflow-x-auto -mx-2 px-2"><table className="w-full text-sm min-w-[400px]">
+                  <div><table className="w-full text-sm">
                     <tbody>
                       <tr className="border-b">
                         <td className="py-2">

@@ -455,10 +455,21 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
               Ansluten
             </Badge>
             {status.expired && (
-              <Badge variant="destructive" className="gap-1">
-                <AlertCircle className="h-3 w-3" />
-                Session utgången
-              </Badge>
+              <>
+                <Badge variant="destructive" className="gap-1">
+                  <AlertCircle className="h-3 w-3" />
+                  Session utgången
+                </Badge>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleConnect}
+                  className="gap-1.5 h-7"
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  Förnya session
+                </Button>
+              </>
             )}
           </div>
         </div>

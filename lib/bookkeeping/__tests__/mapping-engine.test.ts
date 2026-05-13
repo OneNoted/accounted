@@ -341,5 +341,114 @@ describe('mapping-engine', () => {
       expect(result.credit_account).toBe('1930')
       expect(result.confidence).toBe(0.95)
     })
+
+    it('emits both fiktiv-moms and basbelopp lines for reverse_charge rules', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -1000,
+        merchant_name: 'AWS',
+        description: 'AWS EU-WEST-1',
+      })
+
+      mockResult({
+        data: [
+          {
+            id: 'rule-rc',
+            user_id: 'user-1',
+            rule_name: 'AWS reverse charge',
+            rule_type: 'merchant_name',
+            priority: 10,
+            mcc_codes: null,
+            merchant_pattern: 'AWS',
+            description_pattern: null,
+            amount_min: null,
+            amount_max: null,
+            debit_account: '5421',
+            credit_account: '1930',
+            vat_treatment: 'reverse_charge',
+            vat_debit_account: null,
+            vat_credit_account: null,
+            risk_level: 'LOW',
+            default_private: false,
+            requires_review: false,
+            confidence_score: 0.9,
+            capitalization_threshold: null,
+            capitalized_debit_account: null,
+            is_active: true,
+            source: 'system',
+            user_description: null,
+            template_id: null,
+            created_at: '2024-01-01',
+            updated_at: '2024-01-01',
+          },
+        ],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+
+      // Fiktiv-moms pair + basbelopp pair = 4 lines (FK004 guard)
+      expect(result.vat_lines).toHaveLength(4)
+      expect(result.vat_lines[0].account_number).toBe('2645')
+      expect(result.vat_lines[0].debit_amount).toBe(250)
+      expect(result.vat_lines[1].account_number).toBe('2614')
+      expect(result.vat_lines[1].credit_amount).toBe(250)
+      expect(result.vat_lines[2].account_number).toBe('4535')
+      expect(result.vat_lines[2].debit_amount).toBe(1000)
+      expect(result.vat_lines[3].account_number).toBe('4598')
+      expect(result.vat_lines[3].credit_amount).toBe(1000)
+    })
+
+    it('skips basbelopp emission when rule already debits a basis account', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -1000,
+        merchant_name: 'AWS',
+      })
+
+      mockResult({
+        data: [
+          {
+            id: 'rule-rc-basis',
+            user_id: 'user-1',
+            rule_name: 'AWS RC to basis',
+            rule_type: 'merchant_name',
+            priority: 10,
+            mcc_codes: null,
+            merchant_pattern: 'AWS',
+            description_pattern: null,
+            amount_min: null,
+            amount_max: null,
+            debit_account: '4535',
+            credit_account: '1930',
+            vat_treatment: 'reverse_charge',
+            vat_debit_account: null,
+            vat_credit_account: null,
+            risk_level: 'LOW',
+            default_private: false,
+            requires_review: false,
+            confidence_score: 0.9,
+            capitalization_threshold: null,
+            capitalized_debit_account: null,
+            is_active: true,
+            source: 'system',
+            user_description: null,
+            template_id: null,
+            created_at: '2024-01-01',
+            updated_at: '2024-01-01',
+          },
+        ],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+
+      // Only fiktiv-moms pair — basbelopp already covered by the expense line
+      expect(result.vat_lines).toHaveLength(2)
+      expect(result.vat_lines[0].account_number).toBe('2645')
+      expect(result.vat_lines[1].account_number).toBe('2614')
+    })
   })
 })

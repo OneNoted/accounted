@@ -24,6 +24,8 @@ interface JournalEntryPreviewProps {
   templateDebitAccount?: string
   templateCreditAccount?: string
   templateVatRate?: number
+  templateVatTreatment?: VatTreatment | null
+  templateSupplierType?: 'eu_business' | 'non_eu_business' | 'swedish_business'
   /** For multi-line counterparty template bookings */
   linePattern?: LinePatternEntry[]
   settlementAccount?: string
@@ -39,6 +41,8 @@ export default function JournalEntryPreview({
   templateDebitAccount,
   templateCreditAccount,
   templateVatRate,
+  templateVatTreatment,
+  templateSupplierType,
   linePattern,
   settlementAccount = '1930',
 }: JournalEntryPreviewProps) {
@@ -91,6 +95,7 @@ export default function JournalEntryPreview({
       const vatAmt = extractVatAmount(absAmount, vatRate)
       const netAmt = extractNetAmount(absAmount, vatRate)
       const isIncome = amount > 0
+      const isReverseCharge = templateVatTreatment === 'reverse_charge' && !isIncome
 
       if (isIncome) {
         // Income: debit bank gross, credit revenue net, credit output VAT
@@ -100,6 +105,32 @@ export default function JournalEntryPreview({
           // Map rate → output VAT account (BAS 2611/2621/2631)
           const outputVatAccount = vatRate === 0.06 ? '2631' : vatRate === 0.12 ? '2621' : '2611'
           result.push({ side: 'kredit', account: outputVatAccount, amount: vatAmt })
+        }
+      } else if (isReverseCharge) {
+        // Expense with reverse charge: full reverse-charge verifikation
+        // (must match engine output in buildMappingResultFromTemplate).
+        const rcRate = 0.25
+        const rcVatAmt = Math.round(absAmount * rcRate * 100) / 100
+        const supplierType = templateSupplierType ?? 'eu_business'
+        const isDomestic = supplierType === 'swedish_business'
+
+        // Expense gross + bank
+        result.push({ side: 'debet', account: templateDebitAccount, amount: absAmount })
+        result.push({ side: 'kredit', account: templateCreditAccount, amount: absAmount })
+
+        // Fiktiv moms pair: 2645 (or 2647 domestic) / 2614
+        result.push({ side: 'debet', account: isDomestic ? '2647' : '2645', amount: rcVatAmt })
+        result.push({ side: 'kredit', account: '2614', amount: rcVatAmt })
+
+        // Basbelopp pair: 44xx|45xx / 4598 — populates rutor 20–24.
+        // Skip if the debit account is already a basis account.
+        if (!/^4[45]\d{2}$/.test(templateDebitAccount)) {
+          const basisAccount =
+            supplierType === 'eu_business' ? '4535'
+            : supplierType === 'non_eu_business' ? '4531'
+            : '4425'
+          result.push({ side: 'debet', account: basisAccount, amount: absAmount })
+          result.push({ side: 'kredit', account: '4598', amount: absAmount })
         }
       } else {
         // Expense: debit expense net + input VAT, credit bank gross
@@ -150,7 +181,7 @@ export default function JournalEntryPreview({
     }
 
     return result
-  }, [amount, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, linePattern, settlementAccount])
+  }, [amount, category, vatTreatment, accountOverride, entityType, templateDebitAccount, templateCreditAccount, templateVatRate, templateVatTreatment, templateSupplierType, linePattern, settlementAccount])
 
   if (lines.length === 0) return null
 
