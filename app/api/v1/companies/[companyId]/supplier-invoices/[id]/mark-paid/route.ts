@@ -26,6 +26,7 @@ import {
   createSupplierInvoiceCashEntry,
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -228,6 +229,39 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const newStatus: 'paid' | 'partially_paid' = newRemaining <= 0.005 ? 'paid' : 'partially_paid'
     const newPaidAmount = Math.round((typed.paid_amount + paymentAmount) * 100) / 100
 
+    // Settings fetch hoisted ahead of the dry-run branch so the FX-required
+    // check below fires in both preview and commit modes (and so dry-run can
+    // surface the requirement before a caller learns it the hard way).
+    const { data: settings } = await ctx.supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', ctx.companyId!)
+      .maybeSingle()
+    const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
+
+    // FX-required validation. Under accrual the registration JE used the
+    // invoice's exchange rate to compute subtotal_sek; the payment JE has to
+    // book any rate delta to 3960 / 7960 (BAS) or AP will carry a stranded
+    // 2440 balance after the bank line clears. The pitfall docs warn about
+    // this — enforce it.
+    if (
+      typed.currency !== 'SEK' &&
+      accountingMethod === 'accrual' &&
+      exchangeRateDifference === undefined
+    ) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: [{
+            field: 'exchange_rate_difference',
+            message:
+              'exchange_rate_difference (SEK delta vs the registration rate) is required when paying a non-SEK supplier invoice under faktureringsmetoden. Use 0 if there is no rate movement.',
+          }],
+          invoice_currency: typed.currency,
+        },
+      })
+    }
+
     if (ctx.dryRun) {
       // paid_at: the live UPDATE writes `new Date().toISOString()` (a full UTC
       // timestamp). Mirror that shape here so callers validating dry-run vs
@@ -247,14 +281,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { requestId: ctx.requestId, log: ctx.log },
       )
     }
-
-    // Fetch settings for accounting method.
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
 
     const pickSupplier = (s: SI['supplier']): SupplierObj | null => {
       if (!s) return null
@@ -333,6 +359,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ctx.log.error('supplier-invoice mark-paid update failed — attempting storno of orphaned JE', updateErr, {
         invoiceId,
         companyId: ctx.companyId,
+        userId: ctx.userId,
         journalEntryId,
       })
       // The payment JE is already posted but the SI update failed — without a
@@ -341,12 +368,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // takes the entry id directly (no pre-fetch needed), matching the CAS-
       // race branch immediately below.
       try {
-        const { reverseEntry } = await import('@/lib/bookkeeping/engine')
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
       } catch (revErr) {
         ctx.log.error('orphan JE storno failed after SI update error — manual reconciliation required', revErr as Error, {
           invoiceId,
           companyId: ctx.companyId,
+          userId: ctx.userId,
           journalEntryId,
         })
       }
@@ -361,15 +388,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ctx.log.warn('supplier-invoice mark-paid race — JE was orphaned, attempting storno', {
         invoiceId,
         companyId: ctx.companyId,
+        userId: ctx.userId,
         journalEntryId,
       })
       try {
-        const { reverseEntry } = await import('@/lib/bookkeeping/engine')
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, paymentDate)
       } catch (revErr) {
         ctx.log.error('orphan JE storno failed — manual reconciliation required', revErr as Error, {
           invoiceId,
           companyId: ctx.companyId,
+          userId: ctx.userId,
           journalEntryId,
         })
       }

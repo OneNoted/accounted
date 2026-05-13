@@ -325,25 +325,47 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       updateData.is_active = updateData.archived_at === null
     }
 
+    // Fetch the current row up front. Needed for the BFL 7 kap immutability
+    // check below — a supplier with `archived_at IS NOT NULL` is part of the
+    // räkenskapsinformation backing historical verifikationer and must not
+    // have its name / address / banking fields mutated. The single exception
+    // is un-archiving (PATCH archived_at: null).
+    const { data: current, error: currentFetchErr } = await ctx.supabase
+      .from('suppliers')
+      .select(SUPPLIER_DETAIL_COLUMNS)
+      .eq('company_id', ctx.companyId!)
+      .eq('id', supplierId)
+      .maybeSingle()
+
+    if (currentFetchErr) {
+      return v1ErrorResponse(currentFetchErr, ctx.log, { requestId: ctx.requestId })
+    }
+    if (!current) {
+      ctx.log.warn('suppliers.update: not found', { supplierId, companyId: ctx.companyId })
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId,
+        details: { resource: 'supplier' },
+      })
+    }
+
+    const currentArchivedAt = (current as { archived_at: string | null }).archived_at
+    const isUnArchiving = updateData.archived_at === null
+    if (currentArchivedAt && !isUnArchiving) {
+      // BFL 7 kap 1 §: verifikationerna pekar tillbaka på leverantörens
+      // namn/adress; en arkiverad post är historisk räkenskapsinformation
+      // som måste bevaras oförändrad i 7 år. Tillåt bara av-arkivering.
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'archived_at',
+          message:
+            'Supplier is archived and immutable per BFL 7 kap 1 §. Un-archive (PATCH archived_at: null) before editing identifying fields.',
+          archived_at: currentArchivedAt,
+        },
+      })
+    }
+
     if (ctx.dryRun) {
-      const { data: current, error: fetchErr } = await ctx.supabase
-        .from('suppliers')
-        .select(SUPPLIER_DETAIL_COLUMNS)
-        .eq('company_id', ctx.companyId!)
-        .eq('id', supplierId)
-        .maybeSingle()
-
-      if (fetchErr) {
-        return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-      }
-      if (!current) {
-        ctx.log.warn('suppliers.update dry-run: not found', { supplierId, companyId: ctx.companyId })
-        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId,
-          details: { resource: 'supplier' },
-        })
-      }
-
       return dryRunPreview({ ...current, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
     }
 

@@ -51,13 +51,22 @@ interface TableResp {
   count?: number | null
 }
 
-function makeFlexibleSupabase(byTable: Record<string, TableResp>) {
+function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
+  // Per-table queue: TableResp[] consumes one entry per await, then sticks
+  // on the last entry. Plain TableResp is treated as a constant.
+  const queues = new Map<string, TableResp[]>()
+  for (const [t, val] of Object.entries(byTable)) {
+    queues.set(t, Array.isArray(val) ? [...val] : [val])
+  }
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
-          return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
+          return (resolve: (v: unknown) => void) => {
+            const q = queues.get(table)
+            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
+            resolve(next)
+          }
         }
         return (..._args: unknown[]) => buildChain(table)
       },
@@ -368,6 +377,54 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
     )
 
     expect(res.status).toBe(400)
+  })
+
+  it('refuses to edit identifying fields on an archived supplier (BFL 7 kap)', async () => {
+    const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: archived, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await updateSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Renamed AB' }),
+      }),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('archived_at')
+    expect(body.error.details.archived_at).toBe('2026-01-01T00:00:00Z')
+  })
+
+  it('allows un-archive (archived_at: null) on an archived supplier', async () => {
+    const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // Queue: pre-flight fetch (archived) → final update select (un-archived)
+        suppliers: [
+          { data: archived, error: null },
+          { data: { ...archived, archived_at: null }, error: null },
+        ],
+        idempotency_keys: { data: null, error: null },
+      } as Record<string, TableResp | TableResp[]>),
+    )
+    const res = await updateSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ archived_at: null }),
+      }),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.archived_at).toBeNull()
   })
 })
 

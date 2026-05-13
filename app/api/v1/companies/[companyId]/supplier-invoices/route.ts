@@ -35,6 +35,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -346,14 +347,34 @@ interface ComputedItem {
   vat_amount: number
 }
 
-function computeItemsAndTotals(input: z.infer<typeof CreateSupplierInvoiceSchema>) {
-  const items: ComputedItem[] = input.items.map((item, index) => {
+// Swedish VAT rates per ML 2 kap 1 § + Skatteverket's 2026 satser. Allow
+// 0 (export / undantag / reverse charge), 6 (livsmedel / kultur), 12 (food
+// service / hotel), 25 (default). A misstated rate flows straight into the
+// registration JE → momsdeklaration Ruta 48 + INK2R, so reject anything
+// else at the surface rather than silently book a wrong figure.
+const ALLOWED_SV_VAT_RATES = new Set<number>([0, 0.06, 0.12, 0.25])
+
+function computeItemsAndTotals(input: z.infer<typeof CreateSupplierInvoiceSchema>):
+  | { ok: true; items: ComputedItem[]; subtotal: number; vatAmount: number; total: number }
+  | { ok: false; field: string; message: string; attempted_rate: number; index: number } {
+  const items: ComputedItem[] = []
+  for (let index = 0; index < input.items.length; index++) {
+    const item = input.items[index]
     const vatRate = item.vat_rate ?? 0.25
+    if (!ALLOWED_SV_VAT_RATES.has(vatRate)) {
+      return {
+        ok: false,
+        field: `items[${index}].vat_rate`,
+        message: 'vat_rate must be one of 0, 0.06, 0.12, or 0.25 (ML 2 kap 1 §).',
+        attempted_rate: vatRate,
+        index,
+      }
+    }
     const lineTotal = item.amount != null
       ? Math.round(item.amount * 100) / 100
       : Math.round((item.quantity ?? 1) * (item.unit_price ?? 0) * 100) / 100
     const vatAmount = Math.round(lineTotal * vatRate * 100) / 100
-    return {
+    items.push({
       sort_order: index,
       description: item.description,
       quantity: item.amount != null ? 1 : (item.quantity ?? 1),
@@ -364,12 +385,18 @@ function computeItemsAndTotals(input: z.infer<typeof CreateSupplierInvoiceSchema
       vat_code: item.vat_code || null,
       vat_rate: vatRate,
       vat_amount: vatAmount,
-    }
-  })
+    })
+  }
   const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
   const vatAmount = items.reduce((sum, i) => sum + i.vat_amount, 0)
   const total = Math.round((subtotal + vatAmount) * 100) / 100
-  return { items, subtotal: Math.round(subtotal * 100) / 100, vatAmount: Math.round(vatAmount * 100) / 100, total }
+  return {
+    ok: true,
+    items,
+    subtotal: Math.round(subtotal * 100) / 100,
+    vatAmount: Math.round(vatAmount * 100) / 100,
+    total,
+  }
 }
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
@@ -437,11 +464,35 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    const { items, subtotal, vatAmount, total } = computeItemsAndTotals(body)
+    const totalsResult = computeItemsAndTotals(body)
+    if (!totalsResult.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: [{ field: totalsResult.field, message: totalsResult.message }],
+          attempted_rate: totalsResult.attempted_rate,
+          allowed_rates: [0, 0.06, 0.12, 0.25],
+        },
+      })
+    }
+    const { items, subtotal, vatAmount, total } = totalsResult
     const exchangeRate = body.exchange_rate ?? null
     const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
     const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
     const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+
+    // Derive a sensible default for vat_treatment + reverse_charge from the
+    // supplier_type. EU/non-EU suppliers default to reverse-charge unless the
+    // caller explicitly overrides; Swedish suppliers default to standard 25%.
+    // The engine looks at `invoice.reverse_charge` (boolean) for the actual
+    // booking choice — `vat_treatment` is recorded as metadata. Keeping the
+    // two in sync prevents momsdeklaration Ruta 30 / 48 misclassification on
+    // EU-supplier rows that omit both fields.
+    const foreignSupplier =
+      supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business'
+    const reverseCharge = body.reverse_charge ?? foreignSupplier
+    const vatTreatment =
+      body.vat_treatment ?? (reverseCharge ? 'reverse_charge' : 'standard_25')
 
     // Dry-run preview — no arrival_number is allocated (would burn a sequence
     // number on a non-commit).
@@ -456,8 +507,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           status: 'registered',
           currency: body.currency ?? 'SEK',
           exchange_rate: exchangeRate,
-          vat_treatment: body.vat_treatment ?? 'standard_25',
-          reverse_charge: body.reverse_charge ?? false,
+          vat_treatment: vatTreatment,
+          reverse_charge: reverseCharge,
           subtotal,
           subtotal_sek: subtotalSek,
           vat_amount: vatAmount,
@@ -504,8 +555,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         status: 'registered',
         currency: body.currency ?? 'SEK',
         exchange_rate: exchangeRate,
-        vat_treatment: body.vat_treatment ?? 'standard_25',
-        reverse_charge: body.reverse_charge ?? false,
+        vat_treatment: vatTreatment,
+        reverse_charge: reverseCharge,
         payment_reference: body.payment_reference ?? null,
         subtotal,
         subtotal_sek: subtotalSek,
@@ -594,15 +645,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             ctx.log.error('SI register: JE link update failed — stornoing JE and rolling back row', linkErr, {
               invoiceId,
               companyId: ctx.companyId,
+              userId: ctx.userId,
               journalEntryId: entry.id,
             })
             try {
-              const { reverseEntry } = await import('@/lib/bookkeeping/engine')
               await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entry.id, body.invoice_date)
             } catch (revErr) {
               ctx.log.error('JE storno failed after SI link-update error — manual reconciliation required', revErr as Error, {
                 invoiceId,
                 companyId: ctx.companyId,
+                userId: ctx.userId,
                 journalEntryId: entry.id,
               })
             }

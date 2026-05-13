@@ -25,6 +25,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -345,14 +346,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               originalId: typed.id,
               journalEntryId: entry.id,
               companyId: ctx.companyId,
+              userId: ctx.userId,
             })
             try {
-              const { reverseEntry } = await import('@/lib/bookkeeping/engine')
               await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entry.id, today)
             } catch (revErr) {
               ctx.log.error('JE storno failed after credit-note link-update error — manual reconciliation required', revErr as Error, {
                 creditNoteId,
                 journalEntryId: entry.id,
+                userId: ctx.userId,
               })
             }
             await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'je_link_failed')
@@ -388,17 +390,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Step 5: flip the original to `credited`. CAS guard: only transition
     // from a non-terminal state (avoids a concurrent credit/credit race
     // leaving us with two credit notes against one original).
-    const newOriginalRemaining = Math.max(
-      0,
-      Math.round((typed.remaining_amount - typed.total) * 100) / 100,
-    )
-    const newOriginalStatus = newOriginalRemaining <= 0.005 ? 'credited' : typed.status
-
+    //
+    // A kreditfaktura nullifies the AP obligation on the original (BFL 5 kap
+    // 5 §); refunds of already-paid amounts are recorded separately via the
+    // transactions endpoints. So both `remaining_amount` and `status` are set
+    // unconditionally — no arithmetic on remaining_amount - total (the prior
+    // calc was a logic error: remaining_amount ≤ total, so the result was
+    // always ≤ 0, forcing status to 'credited' anyway via the clamp).
     const { data: originalUpdated, error: originalUpdateErr } = await ctx.supabase
       .from('supplier_invoices')
       .update({
-        status: newOriginalStatus,
-        remaining_amount: newOriginalRemaining,
+        status: 'credited',
+        remaining_amount: 0,
       })
       .eq('company_id', ctx.companyId!)
       .eq('id', typed.id)
@@ -427,15 +430,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         originalId: typed.id,
         creditNoteId,
         journalEntryId,
+        userId: ctx.userId,
       })
       if (journalEntryId) {
         try {
-          const { reverseEntry } = await import('@/lib/bookkeeping/engine')
           await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId, today)
         } catch (revErr) {
           ctx.log.error('orphan credit JE storno failed', revErr as Error, {
             creditNoteId,
             journalEntryId,
+            userId: ctx.userId,
           })
         }
       }

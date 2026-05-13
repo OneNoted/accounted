@@ -386,6 +386,105 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(mockedReg).not.toHaveBeenCalled()
   })
+
+  it('rejects a non-Swedish VAT rate with 400 VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...validBody,
+          items: [{ description: 'X', amount: 1000, account_number: '5410', vat_rate: 0.15 }],
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.attempted_rate).toBe(0.15)
+    expect(body.error.details.allowed_rates).toEqual([0, 0.06, 0.12, 0.25])
+  })
+
+  it('defaults vat_treatment to reverse_charge for eu_business suppliers', async () => {
+    let insertedRow: Record<string, unknown> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        if (table === 'suppliers') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) =>
+                  r({ data: { ...SAMPLE_SUPPLIER, supplier_type: 'eu_business' }, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        if (table === 'supplier_invoices') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'insert') {
+                return (row: Record<string, unknown>) => {
+                  insertedRow = row
+                  return new Proxy({}, {
+                    get(_t2, prop2) {
+                      if (prop2 === 'then') {
+                        return (r: (v: unknown) => void) => r({ data: SAMPLE_SI, error: null })
+                      }
+                      return () => new Proxy({}, this!)
+                    },
+                  })
+                }
+              }
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) => r({ data: SAMPLE_SI, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        return new Proxy({}, {
+          get(_t, prop) {
+            if (prop === 'then') {
+              const data = table === 'company_members'
+                ? { company_id: COMPANY_ID, role: 'owner' }
+                : table === 'fiscal_periods'
+                  ? { id: 'fp-1', is_closed: false, locked_at: null }
+                  : table === 'company_settings'
+                    ? { bookkeeping_locked_through: null, accounting_method: 'accrual' }
+                    : null
+              return (r: (v: unknown) => void) => r({ data, error: null })
+            }
+            return () => new Proxy({}, this!)
+          },
+        })
+      },
+      rpc: vi.fn(() => Promise.resolve({ data: 42, error: null })),
+    })
+
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        // No vat_treatment, no reverse_charge — supplier_type should drive both.
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedRow).not.toBeNull()
+    expect(insertedRow!.vat_treatment).toBe('reverse_charge')
+    expect(insertedRow!.reverse_charge).toBe(true)
+  })
 })
 
 describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
@@ -610,6 +709,61 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.error.code).toBe('SI_PAID_FAILED')
+  })
+
+  it('requires exchange_rate_difference for non-SEK accrual', async () => {
+    const eurSI = { ...approvedSI, currency: 'EUR' }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: { data: eurSI, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    // POST with NO body → no exchange_rate_difference supplied.
+    const res = await markPaidSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues[0].field).toBe('exchange_rate_difference')
+    expect(body.error.details.invoice_currency).toBe('EUR')
+    // JE engine must NOT have been called.
+    expect(mockedPayment).not.toHaveBeenCalled()
+  })
+
+  it('passes when exchange_rate_difference is supplied (even as 0) for non-SEK accrual', async () => {
+    const eurSI = { ...approvedSI, currency: 'EUR' }
+    const paidEurSI = { ...eurSI, status: 'paid', paid_amount: 1250, remaining_amount: 0 }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // 1st read: pre-flight (approved). 2nd read: post-update select (paid).
+        supplier_invoices: [
+          { data: eurSI, error: null },
+          { data: paidEurSI, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        supplier_invoice_payments: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await markPaidSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
+        method: 'POST',
+        body: JSON.stringify({ exchange_rate_difference: 0 }),
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(200)
+    expect(mockedPayment).toHaveBeenCalledTimes(1)
   })
 })
 
