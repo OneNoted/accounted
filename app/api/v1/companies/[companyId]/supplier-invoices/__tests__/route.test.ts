@@ -474,8 +474,15 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
         method: 'POST',
-        // No vat_treatment, no reverse_charge — supplier_type should drive both.
-        body: JSON.stringify(validBody),
+        // No vat_treatment, no reverse_charge — supplier_type should drive
+        // both. vat_rate: 0 because reverse-charge invoices must carry no
+        // line-item VAT (buyer self-assesses).
+        body: JSON.stringify({
+          ...validBody,
+          items: [
+            { description: 'Office supplies', amount: 1000, account_number: '5410', vat_rate: 0 },
+          ],
+        }),
       }),
       companyParams(COMPANY_ID),
     )
@@ -484,6 +491,34 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(insertedRow).not.toBeNull()
     expect(insertedRow!.vat_treatment).toBe('reverse_charge')
     expect(insertedRow!.reverse_charge).toBe(true)
+  })
+
+  it('rejects reverse_charge=true with non-zero item vat_rate (cross-field)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...validBody,
+          reverse_charge: true,
+          // item vat_rate still 0.25 — must be 0 under reverse charge
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.reverse_charge).toBe(true)
+    expect(body.error.details.attempted_rate).toBe(0.25)
   })
 })
 
@@ -764,6 +799,31 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     )
     expect(res.status).toBe(200)
     expect(mockedPayment).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a future payment_date with 400 VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // The pre-flight fetch should not even fire — the schema check runs first.
+        supplier_invoices: { data: approvedSI, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const future = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().split('T')[0]
+    const res = await markPaidSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
+        method: 'POST',
+        body: JSON.stringify({ payment_date: future }),
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('payment_date')
+    expect(body.error.details.attempted).toBe(future)
+    expect(mockedPayment).not.toHaveBeenCalled()
   })
 })
 

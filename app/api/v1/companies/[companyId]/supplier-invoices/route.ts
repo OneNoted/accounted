@@ -494,6 +494,27 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const vatTreatment =
       body.vat_treatment ?? (reverseCharge ? 'reverse_charge' : 'standard_25')
 
+    // Cross-field constraint for reverse-charge invoices: the Swedish supplier
+    // does not charge VAT, the buyer self-assesses (ML 1 kap 2§ p.4b /
+    // 16 kap 6 § / 16 kap 13 §). All item vat_rates MUST be 0 — otherwise the
+    // engine will mis-book ingående moms in Ruta 30 / 48 (BAS 2614 / 2645 /
+    // 2641). Reject up front rather than booking a phantom VAT line.
+    if (reverseCharge) {
+      const offending = items.findIndex((it) => it.vat_rate !== 0)
+      if (offending !== -1) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: `items[${offending}].vat_rate`,
+            message:
+              'reverse_charge invoices must have vat_rate=0 on every line item — the buyer self-assesses VAT.',
+            attempted_rate: items[offending].vat_rate,
+            reverse_charge: true,
+          },
+        })
+      }
+    }
+
     // Dry-run preview — no arrival_number is allocated (would burn a sequence
     // number on a non-commit).
     if (ctx.dryRun) {
@@ -724,21 +745,29 @@ async function rollbackSupplierInvoice(
   log: import('@/lib/logger').Logger,
   reason: string,
 ) {
-  // Items cascade-delete via FK; the items insert may have partially succeeded
-  // so explicitly remove them before the parent.
-  await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', invoiceId)
-  const { error: parentErr } = await supabase
+  // BFL 5 kap 5 § — rättelse av bokföringspost måste vara dokumenterad så att
+  // både den ursprungliga och den korrigerade noteringen är synliga. Att hård-
+  // radera SI-raden förstör räkenskapsinformation även om verifikationen
+  // (om en sådan hann skapas) bevaras separat via storno. Soft-mark mot
+  // status `'reversed'` (samma flagga som dashboardens "Ångra kreditering"
+  // använder) bevarar audit trail; uppslag mot supplier_invoice_number kan
+  // sedan tilldelas på nytt via en separat registrering om så önskas.
+  const { error: updateErr } = await supabase
     .from('supplier_invoices')
-    .delete()
+    .update({ status: 'reversed', reversed_at: new Date().toISOString() })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
-  if (parentErr) {
-    log.error('supplier-invoice rollback failed — orphaned header', parentErr, {
+  if (updateErr) {
+    log.error('supplier-invoice soft-rollback failed — manual reconciliation required', updateErr, {
       invoiceId,
       companyId,
       rollbackReason: reason,
     })
   } else {
-    log.warn('supplier-invoice rolled back', { invoiceId, rollbackReason: reason })
+    log.warn('supplier-invoice soft-rolled back (status=reversed)', {
+      invoiceId,
+      companyId,
+      rollbackReason: reason,
+    })
   }
 }

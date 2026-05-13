@@ -139,6 +139,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const today = new Date().toISOString().split('T')[0]
     const paymentDate = bodyPaymentDate || today
 
+    // Reject future payment_date at the schema layer. BFL 5 kap 2 §
+    // requires bokföring to follow real cash movement; a payment booked
+    // in the future is a scheduling artefact, not an affärshändelse.
+    // No legitimate v1 workflow needs to backstamp tomorrow; if the user
+    // wants to schedule, that's a different surface.
+    if (paymentDate > today) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'payment_date',
+          message: 'payment_date cannot be in the future.',
+          attempted: paymentDate,
+          today,
+        },
+      })
+    }
+
     // Fetch SI with supplier + items (needed by the engine for cash-basis).
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('supplier_invoices')

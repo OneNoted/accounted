@@ -34,8 +34,13 @@ import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/t
 const SI_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, created_at, updated_at'
 
+// GDPR Art.25 data minimisation: the original SI's `user_id` (the row's
+// historical creator) is never used in the credit flow — the new credit-note
+// row uses `ctx.userId` (the actor performing the credit). Don't fetch what
+// you don't need. `company_id` is already scoped by the `.eq('company_id')`
+// filter, so omit that too — the route can't write to a different one.
 const SI_FULL_COLUMNS = `
-  id, user_id, company_id, supplier_id, arrival_number, supplier_invoice_number,
+  id, supplier_id, arrival_number, supplier_invoice_number,
   invoice_date, due_date, received_date, delivery_date, status,
   currency, exchange_rate, exchange_rate_date,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
@@ -485,19 +490,30 @@ async function rollbackCreditNote(
   log: import('@/lib/logger').Logger,
   reason: string,
 ) {
-  await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', creditNoteId)
-  const { error: parentErr } = await supabase
+  // BFL 5 kap 5 § — same rationale as `rollbackSupplierInvoice`. Soft-mark
+  // the failed credit-note row as `'reversed'` (matches the dashboard's
+  // "Ångra kreditering" flag) and preserve the row + items rather than
+  // hard-deleting räkenskapsinformation. The new credit-note still has its
+  // unique (company_id, supplier_id, supplier_invoice_number) index entry,
+  // so retrying with the SAME number requires a different supplier_invoice_-
+  // number — the caller should treat the soft-rollback as a definitive
+  // "this attempt was abandoned, choose a fresh number" outcome.
+  const { error: updateErr } = await supabase
     .from('supplier_invoices')
-    .delete()
+    .update({ status: 'reversed', reversed_at: new Date().toISOString() })
     .eq('id', creditNoteId)
     .eq('company_id', companyId)
-  if (parentErr) {
-    log.error('credit-note rollback failed — orphaned credit-note row', parentErr, {
+  if (updateErr) {
+    log.error('credit-note soft-rollback failed — manual reconciliation required', updateErr, {
       creditNoteId,
       companyId,
       rollbackReason: reason,
     })
   } else {
-    log.warn('credit-note rolled back', { creditNoteId, rollbackReason: reason })
+    log.warn('credit-note soft-rolled back (status=reversed)', {
+      creditNoteId,
+      companyId,
+      rollbackReason: reason,
+    })
   }
 }
