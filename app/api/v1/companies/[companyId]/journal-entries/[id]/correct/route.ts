@@ -19,6 +19,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
@@ -135,6 +136,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('CANNOT_CORRECT_NON_POSTED', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
+      })
+    }
+
+    // Period-lock pre-check on the INHERITED entry_date. /reverse already has
+    // this guard against its `reversal_date`; /correct must match because
+    // both the storno and the corrected entry land on typed.entry_date and
+    // either fails the engine if the period is locked. Returning the
+    // structured PERIOD_LOCKED here beats letting the engine throw a Swedish
+    // string that falls through to BOOKKEEPING_DATABASE_ERROR.
+    const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, typed.entry_date)
+    if (lockVerdict.locked) {
+      return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: lockVerdict.reason,
+          fiscal_period_id: lockVerdict.fiscal_period_id,
+          entry_date: typed.entry_date,
+        },
       })
     }
 

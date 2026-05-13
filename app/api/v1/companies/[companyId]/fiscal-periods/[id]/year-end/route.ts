@@ -18,6 +18,7 @@ import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { startOperation, completeOperation, failOperation } from '@/lib/api/v1/operations'
 import { executeYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
 
@@ -77,17 +78,38 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const fiscalPeriodId = idParse.data
 
-    const { id: operationId } = await startOperation(
-      ctx.supabase,
-      {
-        companyId: ctx.companyId!,
-        userId: ctx.userId,
-        operationType: 'fiscal_periods.year_end',
-        params: { fiscal_period_id: fiscalPeriodId },
-        initialStatus: 'running',
-      },
-      ctx.log,
-    )
+    // Ownership pre-check on the URL period — fail fast before recording
+    // an operation row for a period the caller doesn't own.
+    if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, fiscalPeriodId))) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId, details: { resource: 'fiscal_period' },
+      })
+    }
+
+    // Wrap startOperation in its own try/catch — same rationale as
+    // currency-revaluation. A DB-unreachable failure here must NOT escape
+    // as an unstructured 500.
+    let operationId: string
+    try {
+      const started = await startOperation(
+        ctx.supabase,
+        {
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          operationType: 'fiscal_periods.year_end',
+          params: { fiscal_period_id: fiscalPeriodId },
+          initialStatus: 'running',
+        },
+        ctx.log,
+      )
+      operationId = started.id
+    } catch (err) {
+      ctx.log.error('startOperation failed for year-end', err as Error, { fiscalPeriodId })
+      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { step: 'operation_record_create', reason: (err as Error).message ?? 'unknown' },
+      })
+    }
 
     try {
       const result = await executeYearEndClosing(

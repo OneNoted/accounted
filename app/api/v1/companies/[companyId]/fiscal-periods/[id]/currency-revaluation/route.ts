@@ -15,6 +15,7 @@ import { accepted } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { startOperation, completeOperation, failOperation } from '@/lib/api/v1/operations'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 
@@ -96,7 +97,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyAsOfDate = parsed.data.as_of_date
     }
 
-    // Resolve as_of_date — default to period_end.
+    // Ownership pre-check on the URL period — UNCONDITIONAL. Round-3
+    // missed this when as_of_date was supplied in the body (the
+    // ownership-by-side-effect via period_end lookup was conditional).
+    if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, fiscalPeriodId))) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId, details: { resource: 'fiscal_period' },
+      })
+    }
+
+    // Resolve as_of_date — default to period_end. Ownership is already
+    // confirmed above, so this is a pure read.
     let asOfDate = bodyAsOfDate
     if (!asOfDate) {
       const { data: period } = await ctx.supabase
@@ -113,16 +124,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       asOfDate = (period as { period_end: string }).period_end
     }
 
-    const { id: operationId } = await startOperation(
-      ctx.supabase,
-      {
-        companyId: ctx.companyId!, userId: ctx.userId,
-        operationType: 'fiscal_periods.currency_revaluation',
-        params: { fiscal_period_id: fiscalPeriodId, as_of_date: asOfDate },
-        initialStatus: 'running',
-      },
-      ctx.log,
-    )
+    // Wrap startOperation in its own try/catch so a DB-unreachable failure
+    // is reported as a structured INTERNAL_ERROR rather than escaping as a
+    // 500 with no operation row recorded (BFNAR 2013:2 kap 8 §
+    // behandlingshistorik).
+    let operationId: string
+    try {
+      const started = await startOperation(
+        ctx.supabase,
+        {
+          companyId: ctx.companyId!, userId: ctx.userId,
+          operationType: 'fiscal_periods.currency_revaluation',
+          params: { fiscal_period_id: fiscalPeriodId, as_of_date: asOfDate },
+          initialStatus: 'running',
+        },
+        ctx.log,
+      )
+      operationId = started.id
+    } catch (err) {
+      ctx.log.error('startOperation failed for currency-revaluation', err as Error, { fiscalPeriodId })
+      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { step: 'operation_record_create', reason: (err as Error).message ?? 'unknown' },
+      })
+    }
 
     try {
       const result = await executeCurrencyRevaluation(

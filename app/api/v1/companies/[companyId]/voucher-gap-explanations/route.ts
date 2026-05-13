@@ -1,7 +1,9 @@
 /**
  * POST /api/v1/companies/{companyId}/voucher-gap-explanations
  *
- * Document a gap in a verifikationsserie per BFNAR 2013:2 kap 8 §. Voucher
+ * Document a gap in a verifikationsserie per BFL 5 kap 6-7 §§ (the
+ * unbroken-löpnummer obligation) — supplemented by BFNAR 2013:2 kap 8 §
+ * for the systemdokumentation / behandlingshistorik aspect. Voucher
  * numbers are sequential within (fiscal_period_id, voucher_series); any
  * missing number must have a documented explanation. The gap can be a
  * single number (gap_start = gap_end) or a range.
@@ -49,9 +51,9 @@ registerEndpoint({
   operation: 'voucher-gap-explanations.create',
   method: 'POST',
   path: '/api/v1/companies/:companyId/voucher-gap-explanations',
-  summary: 'Document a gap in the verifikationsserie (BFNAR 2013:2 kap 8 §).',
+  summary: 'Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§).',
   description:
-    'Records an explanation for one or more missing voucher numbers in a series. Required when a number is unaccounted for during audit (e.g. a failed commit that burned the number, or migration data that skipped a range). Idempotent. Dry-runnable.',
+    'Records an explanation for one or more missing voucher numbers in a series. Required when a number is unaccounted for during audit. Statutory basis: BFL 5 kap 6-7 §§ (verifikationsnummer i löpande följd utan luckor); BFNAR 2013:2 kap 8 § governs the systemdokumentation that surfaces the gap. Idempotent. Dry-runnable.',
   useWhen:
     'You\'re responding to a voucher-gap audit finding and need to document the cause. Also used by migration flows that claim numbers without filling them.',
   doNotUseFor:

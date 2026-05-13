@@ -105,6 +105,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Duplicate IB detection. `executeYearEndClosing` generates the opening
+    // balance entry as part of its own flow (see YearEndResult.openingBalance-
+    // Entry on the year-end route's result mapping). If a caller separately
+    // hits this endpoint after year-end ran, the engine would silently post
+    // a SECOND IB into the next period, doubling the equity. Reject up front
+    // with CONFLICT so the caller can inspect what's already there.
+    const { count: existingIbCount } = await ctx.supabase
+      .from('journal_entries')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', ctx.companyId!)
+      .eq('fiscal_period_id', parsed.data.next_period_id)
+      .eq('source_type', 'opening_balance')
+      .neq('status', 'cancelled')
+    if ((existingIbCount ?? 0) > 0) {
+      return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: 'opening_balance_already_posted',
+          next_period_id: parsed.data.next_period_id,
+          remediation:
+            '/year-end already generates the opening balance entry. If you ran /year-end first, no further call is needed. Inspect existing IB via GET /journal-entries?fiscal_period_id={next_period_id}&source_type=opening_balance.',
+        },
+      })
+    }
+
     try {
       const entry = await generateOpeningBalances(
         ctx.supabase, ctx.companyId!, ctx.userId,
