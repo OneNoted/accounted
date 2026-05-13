@@ -21,6 +21,15 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 
+// V1-only strict variant. The shared `UpdateSupplierInvoiceSchema` is also
+// consumed by the dashboard, where unknown keys are silently stripped — fine
+// for a UI that controls its own payload. The public API treats unknown keys
+// as a contract violation: if a future schema iteration ever adds a
+// protected field (status, company_id, user_id), `.strict()` makes the
+// mass-assignment vector structurally impossible regardless of whether the
+// downstream allowlist iteration catches it.
+const V1PatchSupplierInvoiceSchema = UpdateSupplierInvoiceSchema.strict()
+
 const SI_DETAIL_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, reversed_at, created_at, updated_at'
 
@@ -187,7 +196,7 @@ registerEndpoint({
   idempotent: true,
   reversible: true,
   dryRunSupported: true,
-  request: { body: UpdateSupplierInvoiceSchema },
+  request: { body: V1PatchSupplierInvoiceSchema },
   response: { success: SupplierInvoiceDetail },
 })
 
@@ -214,7 +223,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    const parsed = UpdateSupplierInvoiceSchema.safeParse(rawBody)
+    const parsed = V1PatchSupplierInvoiceSchema.safeParse(rawBody)
     if (!parsed.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,

@@ -351,18 +351,43 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     const currentArchivedAt = (current as { archived_at: string | null }).archived_at
     const isUnArchiving = updateData.archived_at === null
     if (currentArchivedAt && !isUnArchiving) {
-      // BFL 7 kap 1 §: verifikationerna pekar tillbaka på leverantörens
-      // namn/adress; en arkiverad post är historisk räkenskapsinformation
-      // som måste bevaras oförändrad i 7 år. Tillåt bara av-arkivering.
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'archived_at',
-          message:
-            'Supplier is archived and immutable per BFL 7 kap 1 §. Un-archive (PATCH archived_at: null) before editing identifying fields.',
-          archived_at: currentArchivedAt,
-        },
-      })
+      // BFL 7 kap 1 § protects räkenskapsinformation — the identifying
+      // fields that historical verifikationer reference through their join
+      // to this row. Internal notes / payment-config don't qualify, so we
+      // only refuse the PATCH when an identifying field is in the update.
+      // The dashboard equivalent allows the same narrow exception.
+      const PROTECTED_FIELDS = new Set([
+        'name',
+        'supplier_type',
+        'org_number',
+        'vat_number',
+        'address_line1',
+        'address_line2',
+        'postal_code',
+        'city',
+        'country',
+        'bankgiro',
+        'plusgiro',
+        'bank_account',
+        'iban',
+        'bic',
+      ])
+      const offendingFields = Object.keys(updateData).filter((k) => PROTECTED_FIELDS.has(k))
+      if (offendingFields.length > 0) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'archived_at',
+            message:
+              'Supplier is archived; identifying fields (name, address, banking, org/vat number) are räkenskapsinformation under BFL 7 kap 1 § and cannot be edited. Un-archive (PATCH archived_at: null) first if a correction is needed.',
+            archived_at: currentArchivedAt,
+            offending_fields: offendingFields,
+          },
+        })
+      }
+      // Non-identifying fields (notes, default_payment_terms,
+      // default_expense_account, default_currency, email, phone) are not
+      // räkenskapsinformation — fall through and allow the update.
     }
 
     if (ctx.dryRun) {

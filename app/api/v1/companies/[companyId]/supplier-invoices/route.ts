@@ -491,8 +491,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const foreignSupplier =
       supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business'
     const reverseCharge = body.reverse_charge ?? foreignSupplier
-    const vatTreatment =
-      body.vat_treatment ?? (reverseCharge ? 'reverse_charge' : 'standard_25')
+    // Force `vat_treatment` to track the resolved `reverse_charge` flag.
+    // Otherwise a caller could pass `vat_treatment: 'standard_25'` explicitly
+    // and have it co-exist with `reverse_charge=true` (driven by
+    // supplier_type), producing inconsistent metadata: the engine books via
+    // `reverse_charge` (Ruta 30 / 48) but a downstream momsdeklaration
+    // export reading `vat_treatment` would mis-classify. Normalisation here
+    // keeps the two fields in lock-step; an explicit override only sticks
+    // when it agrees with the boolean flag.
+    const vatTreatment = reverseCharge
+      ? 'reverse_charge'
+      : (body.vat_treatment ?? 'standard_25')
 
     // Cross-field constraint for reverse-charge invoices: the Swedish supplier
     // does not charge VAT, the buyer self-assesses (ML 1 kap 2§ p.4b /

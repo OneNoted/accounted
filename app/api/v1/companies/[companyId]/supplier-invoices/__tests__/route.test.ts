@@ -520,6 +520,88 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(body.error.details.reverse_charge).toBe(true)
     expect(body.error.details.attempted_rate).toBe(0.25)
   })
+
+  it('normalises vat_treatment to "reverse_charge" when reverse_charge resolves true', async () => {
+    // Caller explicitly passes vat_treatment='standard_25' for an
+    // eu_business supplier and omits reverse_charge. Supplier-type drives
+    // reverse_charge=true; vat_treatment must follow.
+    let insertedRow: Record<string, unknown> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        if (table === 'suppliers') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) =>
+                  r({ data: { ...SAMPLE_SUPPLIER, supplier_type: 'eu_business' }, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        if (table === 'supplier_invoices') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'insert') {
+                return (row: Record<string, unknown>) => {
+                  insertedRow = row
+                  return new Proxy({}, {
+                    get(_t2, prop2) {
+                      if (prop2 === 'then') {
+                        return (r: (v: unknown) => void) => r({ data: SAMPLE_SI, error: null })
+                      }
+                      return () => new Proxy({}, this!)
+                    },
+                  })
+                }
+              }
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) => r({ data: SAMPLE_SI, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        return new Proxy({}, {
+          get(_t, prop) {
+            if (prop === 'then') {
+              const data = table === 'company_members'
+                ? { company_id: COMPANY_ID, role: 'owner' }
+                : table === 'fiscal_periods'
+                  ? { id: 'fp-1', is_closed: false, locked_at: null }
+                  : table === 'company_settings'
+                    ? { bookkeeping_locked_through: null, accounting_method: 'accrual' }
+                    : null
+              return (r: (v: unknown) => void) => r({ data, error: null })
+            }
+            return () => new Proxy({}, this!)
+          },
+        })
+      },
+      rpc: vi.fn(() => Promise.resolve({ data: 42, error: null })),
+    })
+
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...validBody,
+          vat_treatment: 'standard_25',  // explicit but should be overridden
+          items: [
+            { description: 'Office supplies', amount: 1000, account_number: '5410', vat_rate: 0 },
+          ],
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedRow).not.toBeNull()
+    // Even with explicit vat_treatment='standard_25', the resolved
+    // reverse_charge=true forces normalisation to 'reverse_charge'.
+    expect(insertedRow!.vat_treatment).toBe('reverse_charge')
+    expect(insertedRow!.reverse_charge).toBe(true)
+  })
 })
 
 describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
@@ -562,6 +644,27 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('SI_NOT_DRAFT')
+  })
+
+  it('rejects unknown body keys (V4.5 strict schema)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: { data: SAMPLE_SI, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await updateSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
+        method: 'PATCH',
+        // `status` is not in UpdateSupplierInvoiceSchema — must be rejected.
+        body: JSON.stringify({ status: 'approved' }),
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 })
 

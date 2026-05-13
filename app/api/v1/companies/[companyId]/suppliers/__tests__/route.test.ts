@@ -426,6 +426,32 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
     const body = await res.json()
     expect(body.data.archived_at).toBeNull()
   })
+
+  it('allows non-identifying field edits (notes) on an archived supplier', async () => {
+    // BFL 7 kap protects räkenskapsinformation — internal notes are not
+    // referenced by any verifikation, so they remain editable.
+    const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: [
+          { data: archived, error: null },
+          { data: { ...archived, notes: 'Updated internal note' }, error: null },
+        ],
+        idempotency_keys: { data: null, error: null },
+      } as Record<string, TableResp | TableResp[]>),
+    )
+    const res = await updateSupplier(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ notes: 'Updated internal note' }),
+      }),
+      detailParams(COMPANY_ID, SUPPLIER_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.notes).toBe('Updated internal note')
+  })
 })
 
 describe('DELETE /api/v1/companies/:companyId/suppliers/:id', () => {
