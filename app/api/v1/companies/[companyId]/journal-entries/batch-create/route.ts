@@ -20,6 +20,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { createDraftEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -179,6 +180,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         requestId: ctx.requestId,
         details: { field: 'all_or_nothing', message: 'all_or_nothing: true is not yet implemented.' },
       })
+    }
+
+    // Ownership pre-check on every distinct fiscal_period_id in the batch.
+    // Bulk endpoints are particularly attractive for cross-tenant probing
+    // (50 ids per call vs 1) so we batch-verify up front rather than per-
+    // item. Any unknown id fails the entire batch with a structured error
+    // — partial-success semantics only apply AFTER ownership is established.
+    const uniquePeriodIds = Array.from(new Set(body.journal_entries.map((e) => e.fiscal_period_id)))
+    for (const periodId of uniquePeriodIds) {
+      if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, periodId))) {
+        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+          requestId: ctx.requestId,
+          details: { resource: 'fiscal_period', field: 'fiscal_period_id', value: periodId },
+        })
+      }
     }
 
     const results: ResultItem[] = []

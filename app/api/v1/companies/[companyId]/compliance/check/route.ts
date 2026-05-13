@@ -23,6 +23,7 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 
 // NOTE: `vat_close` is documented in the plan as a supported check type but
@@ -76,27 +77,6 @@ const SUPPORTED_TYPES = [
 type CheckType = (typeof SUPPORTED_TYPES)[number]
 
 const CheckTypeSchema = z.enum(SUPPORTED_TYPES)
-
-/**
- * Verify that `fiscal_period_id` (a caller-supplied query param) belongs to
- * `companyId` before we hand it to the engine. Cheap point lookup; returns
- * true on match, false otherwise. Defense-in-depth: the engine's own queries
- * also scope by company_id, so this just gives the caller a clean structured
- * response instead of letting the engine surface a Swedish error string.
- */
-async function ownsFiscalPeriod(
-  supabase: SupabaseClient,
-  companyId: string,
-  fiscalPeriodId: string,
-): Promise<boolean> {
-  const { data } = await supabase
-    .from('fiscal_periods')
-    .select('id')
-    .eq('id', fiscalPeriodId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  return !!data
-}
 
 async function runYearEndReadinessCheck(
   supabase: SupabaseClient,

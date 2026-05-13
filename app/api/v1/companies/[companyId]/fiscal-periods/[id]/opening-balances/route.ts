@@ -15,6 +15,7 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { generateOpeningBalances } from '@/lib/core/bookkeeping/year-end-service'
 
 const Body = z.object({ next_period_id: z.string().uuid() }).strict()
@@ -83,6 +84,24 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
+      })
+    }
+
+    // Ownership pre-check on BOTH ids: the closed period (URL) and the next
+    // period (body). The wrapper has already verified the user's membership
+    // in companyId, but the period ids themselves come from caller input
+    // and need to be confirmed to belong to that company before the engine
+    // call.
+    if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, idParse.data))) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId,
+        details: { resource: 'fiscal_period', field: 'id' },
+      })
+    }
+    if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, parsed.data.next_period_id))) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId,
+        details: { resource: 'fiscal_period', field: 'next_period_id' },
       })
     }
 

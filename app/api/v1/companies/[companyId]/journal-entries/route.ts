@@ -25,6 +25,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { createDraftEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -269,6 +270,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const input = parsed.data
+
+    // Ownership pre-check: the caller-supplied fiscal_period_id must belong
+    // to ctx.companyId. The engine scopes by company_id internally but the
+    // engine throws a Swedish error string on mismatch; the route returns
+    // a structured envelope before the engine call.
+    if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, input.fiscal_period_id))) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
+        requestId: ctx.requestId,
+        details: { resource: 'fiscal_period', field: 'fiscal_period_id' },
+      })
+    }
 
     // Balance pre-check — same logic the engine runs, but cheap to fail fast.
     const balance = validateBalance(input.lines)
