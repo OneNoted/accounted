@@ -72,6 +72,7 @@ registerEndpoint({
     'Content-based dedup (date+amount) runs in addition: a CSV row that matches an already-booked transaction by date+amount is skipped even if external_id differs.',
     'raw_insert_only=true skips ALL post-insert pipeline steps (matching, categorization). Use for viewer-only imports.',
     'Max 500 items per call. For larger imports, split into pages of 500.',
+    'Dry-run preview only checks external_id-based dedup. Content-based dedup (date+amount against already-booked rows) only runs in the live pipeline, so a small mismatch between would_skip in dry-run and skipped_duplicates in the commit response is expected.',
   ],
   example: {
     request: {

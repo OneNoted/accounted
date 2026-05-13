@@ -24,6 +24,7 @@ import {
   validateTemplateForEntity,
 } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
@@ -283,11 +284,18 @@ async function categorizeOne(
     }
   }
   if ((!updated || updated.length === 0) && journalEntryId) {
-    // CAS race — cancel orphan, return per-item error.
-    await supabase
-      .from('journal_entries')
-      .update({ status: 'cancelled' })
-      .eq('id', journalEntryId)
+    // CAS race — storno the orphan (BFL 5 kap 5 §). Direct status flip
+    // would be blocked by enforce_journal_entry_immutability since the
+    // engine writes the JE as posted. Same fix as the single :categorize
+    // route. Storno keeps the verifikationsnummer series unbroken.
+    try {
+      await reverseEntry(supabase, companyId, userId, journalEntryId)
+    } catch (revErr) {
+      log.error('batch-categorize TX_CATEGORIZE_RACE: failed to storno orphaned JE', revErr as Error, {
+        request_index: index,
+        orphanJournalEntryId: journalEntryId,
+      })
+    }
     return {
       ok: false,
       request_index: index,

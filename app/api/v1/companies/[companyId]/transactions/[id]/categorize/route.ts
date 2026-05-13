@@ -31,6 +31,7 @@ import {
   buildMappingResultFromCounterpartyTemplate,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -345,7 +346,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // CAS guard: another request must not have categorized this transaction
-    // between fetch and write. Cancel the orphaned JE + document the gap.
+    // between fetch and write.
     const { data: updateResult, error: updateErr } = await ctx.supabase
       .from('transactions')
       .update({
@@ -361,24 +362,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (updateErr) return v1ErrorResponse(updateErr, txLog, { requestId: ctx.requestId })
 
     if ((!updateResult || updateResult.length === 0) && journalEntryId) {
-      const { data: orphan } = await ctx.supabase
-        .from('journal_entries')
-        .select('fiscal_period_id, voucher_series, voucher_number')
-        .eq('id', journalEntryId)
-        .single()
-      await ctx.supabase
-        .from('journal_entries')
-        .update({ status: 'cancelled' })
-        .eq('id', journalEntryId)
-      if (orphan) {
-        await ctx.supabase.from('voucher_gap_explanations').insert({
-          company_id: ctx.companyId!,
-          fiscal_period_id: orphan.fiscal_period_id,
-          voucher_series: orphan.voucher_series || 'A',
-          gap_number: orphan.voucher_number,
-          explanation:
-            'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-          created_by: ctx.userId,
+      // Lost the race. The orphan JE was created with status='posted' by the
+      // engine, so the immutability trigger blocks a direct status flip to
+      // 'cancelled'. BFL 5 kap 5 § requires corrections via a reversing
+      // entry (storno) — issue one. The pair (orphan + storno) keeps the
+      // verifikationsnummer series unbroken; no voucher_gap_explanations row
+      // is needed because there's no gap.
+      try {
+        await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId)
+      } catch (revErr) {
+        // Storno failure on the orphan is rare but worth alerting on — the
+        // orphan stays in the ledger and someone needs to reconcile manually.
+        txLog.error('TX_CATEGORIZE_RACE: failed to storno orphaned JE', revErr as Error, {
+          orphanJournalEntryId: journalEntryId,
         })
       }
       return v1ErrorResponseFromCode('TX_CATEGORIZE_RACE', txLog, {

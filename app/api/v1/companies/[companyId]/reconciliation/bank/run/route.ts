@@ -17,10 +17,22 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
 
-const RunRequest = z.object({
-  date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-})
+const RunRequest = z
+  .object({
+    date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  // Bound the window so a key with no explicit range can't trigger an
+  // unbounded join across years. 366 days covers a full räkenskapsår + a
+  // leap day; longer reconciliations should be paged.
+  .refine(
+    (d) => {
+      if (!d.date_from || !d.date_to) return true
+      const ms = new Date(d.date_to).getTime() - new Date(d.date_from).getTime()
+      return ms >= 0 && ms <= 366 * 24 * 60 * 60 * 1000
+    },
+    { message: 'date range must be ≤ 366 days; page longer reconciliations.' },
+  )
 
 const MatchOut = z.object({
   transaction_id: z.string().uuid(),

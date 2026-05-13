@@ -27,7 +27,6 @@ const MatchSIResponse = z.object({
   paid_amount: z.number(),
   remaining_amount: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
-  journal_entry_error: z.string().optional(),
 })
 
 registerEndpoint({
@@ -189,8 +188,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Strict-mode for the public API: abort before mutating state if the
+    // payment JE can't be created. See the parallel comment in match-invoice.
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
     try {
       if (accountingMethod === 'cash') {
         const je = await createSupplierInvoiceCashEntry(
@@ -216,12 +216,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         if (je) journalEntryId = je.id
       }
     } catch (err) {
-      txLog.error('payment JE creation failed', err as Error)
-      if (isBookkeepingError(err)) {
-        journalEntryError = getErrorMessage(err, { context: 'supplier_invoice' })
-      } else {
-        journalEntryError = err instanceof Error ? err.message : 'Unknown error'
-      }
+      txLog.error('match-supplier-invoice: payment JE creation failed — aborting before state mutation', err as Error)
+      const message = isBookkeepingError(err)
+        ? getErrorMessage(err, { context: 'supplier_invoice' })
+        : err instanceof Error
+          ? err.message
+          : 'Unknown error'
+      return v1ErrorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, {
+        requestId: ctx.requestId,
+        details: { reason: message },
+      })
     }
 
     const newRemaining = Math.max(
@@ -245,7 +249,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       .eq('id', supplier_invoice_id)
       .eq('company_id', ctx.companyId!)
-      .in('status', ['registered', 'approved', 'partially_paid'])
+      // 'overdue' must appear here — the early status guard accepts it as
+      // matchable, so excluding it here would return MATCH_SI_NOT_OPEN
+      // for a legitimately payable invoice.
+      .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
       .select('id')
     if (updateInvErr) return v1ErrorResponse(updateInvErr, txLog, { requestId: ctx.requestId })
     if (!updatedRows || updatedRows.length === 0) {
@@ -321,7 +328,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,
-        ...(journalEntryError ? { journal_entry_error: journalEntryError } : {}),
       },
       { requestId: ctx.requestId },
     )

@@ -41,7 +41,7 @@ registerEndpoint({
     'Creating, locking, or closing periods — those land in Phase 4 (`POST /fiscal-periods/{id}/lock`, `:close`, `:year-end`). Use the dashboard or wait for Phase 4.',
   pitfalls: [
     'previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.',
-    'A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year per BFL 6 kap).',
+    'A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year — see BFL 5 kap 2 § for the löpande bokföring deadline).',
     'BFL 3 kap caps a single fiscal period at 18 months. First-year exceptions are allowed.',
   ],
   example: {

@@ -37,8 +37,8 @@ const TransactionListResponse = z.object({
   transactions: z.array(TransactionSummary),
 })
 
-// Explicit projection — no SELECT *. Any new column added to transactions
-// stays internal until consciously surfaced here.
+// Explicit projection — no SELECT *. created_at is required for cursor
+// stability (see ordering rationale in the GET handler).
 const TRANSACTION_SUMMARY_COLUMNS =
   'id, date, description, amount, currency, reference, merchant_name, ' +
   'journal_entry_id, invoice_id, supplier_invoice_id, is_business, category, ' +
@@ -50,7 +50,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/transactions',
   summary: 'List transactions for a company.',
   description:
-    'Cursor-paginated transaction list ordered by date DESC, id ASC. Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description ilike).',
+    'Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imported first; the `date` column is the transaction date and is filterable but not the sort key). Filter by ?status=booked|unbooked, ?currency, ?date_from / ?date_to, ?search (description ilike).',
   useWhen:
     'You need to walk a company\'s bank ledger — building a categorization queue, reconciling against external statements, or sampling for audit.',
   doNotUseFor:
@@ -126,11 +126,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const f = filtersResult.data
 
+    // Sort by (created_at DESC, id ASC). created_at is the stable cursor
+    // anchor — it's a real timestamp (passes ISO-8601 validation in
+    // decodeDefaultCursor), unique within a company at the row insertion
+    // grain, and total-orderable. Sorting by `date` directly broke the
+    // cursor (date is YYYY-MM-DD only, decoder rejects it). For users
+    // who care about transaction-date ordering specifically, the date
+    // is still in every row and ?date_from / ?date_to filters work.
     let query = ctx.supabase
       .from('transactions')
       .select(TRANSACTION_SUMMARY_COLUMNS)
       .eq('company_id', ctx.companyId!)
-      .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
       .order('id', { ascending: true })
       .limit(limit + 1)
 
@@ -147,9 +154,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     if (decoded) {
-      // Cursor is on (date DESC, id ASC). Date moves backward; id breaks ties.
+      // Cursor is on (created_at DESC, id ASC). created_at moves backward;
+      // id breaks ties.
       query = query.or(
-        `date.lt.${decoded.ts},and(date.eq.${decoded.ts},id.gt.${decoded.id})`,
+        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
       )
     }
 
@@ -158,13 +166,15 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 
-    type Row = { id: string; date: string } & Record<string, unknown>
+    type Row = { id: string; created_at: string } & Record<string, unknown>
     const rows = (data ?? []) as unknown as Row[]
     const trimmed = rows.slice(0, limit)
     const hasMore = rows.length > limit
     const last = trimmed[trimmed.length - 1]
     const nextCursor =
-      hasMore && last ? encodeDefaultCursor({ id: last.id, created_at: last.date }) : null
+      hasMore && last
+        ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
+        : null
 
     return paginated(trimmed, {
       requestId: ctx.requestId,

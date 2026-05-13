@@ -40,7 +40,6 @@ const MatchInvoiceResponse = z.object({
   paid_amount: z.number(),
   remaining_amount: z.number(),
   journal_entry_id: z.string().uuid().nullable(),
-  journal_entry_error: z.string().nullable(),
   category: z.string(),
 })
 
@@ -132,6 +131,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
       })
     }
+    // Preserve any prior category (e.g. income_products for goods sales).
+    // Only fall back to the generic 'income_services' default if the
+    // transaction has never been categorized — Greptile + Swedish-compliance
+    // flagged the dashboard's hardcode-on-write as a wrong BAS classification
+    // for goods/rental income flows.
+    const existingTxCategory = (transaction as { category?: string | null }).category ?? null
     if (transaction.amount <= 0) {
       return v1ErrorResponseFromCode('MATCH_INVOICE_NOT_INCOME', txLog, {
         requestId: ctx.requestId,
@@ -218,8 +223,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entityType: EntityType =
       (settings?.entity_type as EntityType) || 'enskild_firma'
 
+    // Strict-mode for the public API: if the payment JE can't be created we
+    // ABORT before touching invoice / payment / transaction state. The
+    // dashboard's internal route soft-fails here and surfaces a banner so
+    // the user can re-book manually; the v1 caller is an automation with
+    // no UI, so a partial state (invoice marked paid, GL has no entry) is
+    // strictly worse than a clean failure to retry.
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
     try {
       if (accountingMethod === 'cash' && isFullyPaid) {
         const je = await createInvoiceCashEntry(
@@ -249,12 +259,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (err instanceof AccountsNotInChartError) {
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
-      txLog.error('payment JE creation failed', err as Error)
-      if (isBookkeepingError(err)) {
-        journalEntryError = getErrorMessage(err, { context: 'invoice' })
-      } else {
-        journalEntryError = err instanceof Error ? err.message : 'Unknown error'
-      }
+      txLog.error('match-invoice: payment JE creation failed — aborting before state mutation', err as Error)
+      const message = isBookkeepingError(err)
+        ? getErrorMessage(err, { context: 'invoice' })
+        : err instanceof Error
+          ? err.message
+          : 'Unknown error'
+      return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', txLog, {
+        requestId: ctx.requestId,
+        details: { reason: message },
+      })
     }
 
     // Re-attach invoice PDF to the payment JE (BFL 7 kap underlag).
@@ -351,7 +365,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         potential_invoice_id: null,
         journal_entry_id: journalEntryId,
         is_business: true,
-        category: 'income_services',
+        category: existingTxCategory ?? 'income_services',
       })
       .eq('id', txId)
       .eq('company_id', ctx.companyId!)
@@ -395,8 +409,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,
-        journal_entry_error: journalEntryError,
-        category: 'income_services',
+        category: existingTxCategory ?? 'income_services',
       },
       { requestId: ctx.requestId },
     )
