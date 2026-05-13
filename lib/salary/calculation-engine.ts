@@ -646,12 +646,20 @@ export function calculateVacationAccrual(params: {
 }): { accrual: number; steps: CalculationStep[] } {
   const steps: CalculationStep[] = []
 
-  if (params.vacationRule === 'none' || params.vacationRule === 'semesterersattning') {
+  if (params.vacationRule === 'none') {
     steps.push({
       label: 'Semesteravsättning (avstängd)',
-      formula: params.vacationRule === 'semesterersattning'
-        ? 'semesterersättning betalas ut direkt — ingen avsättning'
-        : 'ingen semesteravsättning',
+      formula: 'ingen semesteravsättning',
+      input: {},
+      output: 0,
+    })
+    return { accrual: 0, steps }
+  }
+
+  if (params.vacationRule === 'semesterersattning') {
+    steps.push({
+      label: 'Semesteravsättning (semesterersättning betald direkt)',
+      formula: 'ingen avsättning — 12 % betalas ut på varje lön',
       input: {},
       output: 0,
     })
@@ -669,7 +677,10 @@ export function calculateVacationAccrual(params: {
     })
     return { accrual, steps }
   } else {
-    const dailyRate = r(params.monthlySalary / 21)
+    // Sammalöneregeln: tillägg per vacation day. Use vacationBasis as the
+    // degree-adjusted reference — callers must pass the part-time-adjusted
+    // monthly amount, never the raw full-time monthlySalary.
+    const dailyRate = r(params.vacationBasis / 21)
     const accrual = r(dailyRate * params.semestertillaggRate * params.vacationDaysPerYear)
     steps.push({
       label: `Semesteravsättning (sammalöneregeln ${fmtPct(params.semestertillaggRate)})`,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { calculateSalary, calculateKarensavdrag, calculateSjuklon, calculateAvgifterRate } from '../calculation-engine'
+import { calculateSalary, calculateKarensavdrag, calculateSjuklon, calculateAvgifterRate, calculateVacationAccrual } from '../calculation-engine'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
 
@@ -725,6 +725,77 @@ describe('hardening — tax table lookup (not just flat fallback)', () => {
     )
     expect(semer.grossSalary).toBe(28000)
     expect(semer.taxWithheld).toBe(5500) // still bracket 2
+  })
+})
+
+describe('calculateVacationAccrual (standalone export)', () => {
+  it('procentregeln: 12% of vacationBasis under 30 days', () => {
+    const r = calculateVacationAccrual({
+      monthlySalary: 40000,
+      vacationRule: 'procentregeln',
+      vacationDaysPerYear: 25,
+      semestertillaggRate: 0.0043,
+      vacationBasis: 40000,
+    })
+    expect(r.accrual).toBe(4800)
+  })
+
+  it('procentregeln: 14.4% at 30+ days', () => {
+    const r = calculateVacationAccrual({
+      monthlySalary: 40000,
+      vacationRule: 'procentregeln',
+      vacationDaysPerYear: 30,
+      semestertillaggRate: 0.0043,
+      vacationBasis: 40000,
+    })
+    expect(r.accrual).toBeCloseTo(5760, 1)
+  })
+
+  it('sammaloneregeln: uses vacationBasis, not monthlySalary (degree-adjusted)', () => {
+    // 50% worker — caller passes vacationBasis = 20000 (degree-adjusted),
+    // not the raw 40000 monthlySalary. Result must be half the full-time amount.
+    const partTime = calculateVacationAccrual({
+      monthlySalary: 40000, // ignored
+      vacationRule: 'sammaloneregeln',
+      vacationDaysPerYear: 25,
+      semestertillaggRate: 0.0043,
+      vacationBasis: 20000,
+    })
+    const fullTime = calculateVacationAccrual({
+      monthlySalary: 40000,
+      vacationRule: 'sammaloneregeln',
+      vacationDaysPerYear: 25,
+      semestertillaggRate: 0.0043,
+      vacationBasis: 40000,
+    })
+    expect(partTime.accrual).toBeCloseTo(fullTime.accrual / 2, 1)
+    // Independent check: 20000/21 × 0.43% × 25 ≈ 102.38
+    expect(partTime.accrual).toBeCloseTo(102.38, 1)
+  })
+
+  it('semesterersattning: 0 accrual with the correct step label', () => {
+    const r = calculateVacationAccrual({
+      monthlySalary: 40000,
+      vacationRule: 'semesterersattning',
+      vacationDaysPerYear: 25,
+      semestertillaggRate: 0.0043,
+      vacationBasis: 40000,
+    })
+    expect(r.accrual).toBe(0)
+    expect(r.steps[0].label).toContain('semesterersättning betald direkt')
+  })
+
+  it('none: 0 accrual, no "betald direkt" wording', () => {
+    const r = calculateVacationAccrual({
+      monthlySalary: 40000,
+      vacationRule: 'none',
+      vacationDaysPerYear: 25,
+      semestertillaggRate: 0.0043,
+      vacationBasis: 40000,
+    })
+    expect(r.accrual).toBe(0)
+    expect(r.steps[0].label).toBe('Semesteravsättning (avstängd)')
+    expect(r.steps[0].label).not.toContain('semesterersättning')
   })
 })
 

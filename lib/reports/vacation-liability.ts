@@ -59,7 +59,7 @@ export async function generateVacationLiability(
       .select('id, first_name, last_name, personnummer_last4, vacation_rule, vacation_days_per_year, vacation_days_saved')
       .eq('company_id', companyId)
       .eq('is_active', true)
-      .not('vacation_rule', 'in', '("none","semesterersattning")')
+      .not('vacation_rule', 'in', '(none,semesterersattning)')
       .order('last_name')
       .range(from, to)
   )
