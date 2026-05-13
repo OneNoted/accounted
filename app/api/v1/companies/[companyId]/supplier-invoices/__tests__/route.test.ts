@@ -928,6 +928,34 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(body.error.details.attempted).toBe(future)
     expect(mockedPayment).not.toHaveBeenCalled()
   })
+
+  it('rejects payment amount exceeding remaining_amount', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // approvedSI.remaining_amount === 1250
+        supplier_invoices: { data: approvedSI, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await markPaidSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
+        method: 'POST',
+        // 1500 > 1250 remaining — must be rejected, not silently clamped.
+        body: JSON.stringify({ amount: 1500 }),
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('amount')
+    expect(body.error.details.attempted).toBe(1500)
+    expect(body.error.details.remaining_amount).toBe(1250)
+    expect(mockedPayment).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () => {

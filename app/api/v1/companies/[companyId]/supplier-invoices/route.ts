@@ -632,7 +632,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .from('supplier_invoice_items')
       .insert(itemInserts)
     if (itemsErr) {
-      await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'items_insert')
+      // items_insert fires before any engine call — no JE could exist.
+      await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'items_insert', false)
       return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
         requestId: ctx.requestId,
         details: { step: 'items_insert', pg_code: (itemsErr as { code?: string }).code },
@@ -688,7 +689,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
                 journalEntryId: entry.id,
               })
             }
-            await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'je_link_failed')
+            // je_link_failed: the JE was posted (and we just stornoed it
+            // above). Soft-mark keeps the audit trail visible per BFL 5:5.
+            await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'je_link_failed', true)
             return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
               requestId: ctx.requestId,
               details: { step: 'registration_journal_entry_link' },
@@ -696,14 +699,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           }
         } else {
           // Engine returned null (no open fiscal period). Strict-mode: roll back.
-          await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'no_fiscal_period')
+          // Engine returned null before posting — no JE exists.
+          await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'no_fiscal_period', false)
           return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
             requestId: ctx.requestId,
             details: { step: 'registration_journal_entry', reason: 'no_fiscal_period' },
           })
         }
       } catch (err) {
-        await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'registration_journal_entry')
+        // Engine threw — conservatively assume the JE may have committed
+        // before the throw (createJournalEntry is the atomic write inside
+        // the engine; a throw after that point would still leave a posted
+        // JE). Soft-mark to preserve any half-committed audit trail.
+        await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'registration_journal_entry', true)
         if (isBookkeepingError(err)) {
           return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
         }
@@ -753,14 +761,45 @@ async function rollbackSupplierInvoice(
   companyId: string,
   log: import('@/lib/logger').Logger,
   reason: string,
+  journalEntryPosted: boolean,
 ) {
-  // BFL 5 kap 5 § — rättelse av bokföringspost måste vara dokumenterad så att
-  // både den ursprungliga och den korrigerade noteringen är synliga. Att hård-
-  // radera SI-raden förstör räkenskapsinformation även om verifikationen
-  // (om en sådan hann skapas) bevaras separat via storno. Soft-mark mot
-  // status `'reversed'` (samma flagga som dashboardens "Ångra kreditering"
-  // använder) bevarar audit trail; uppslag mot supplier_invoice_number kan
-  // sedan tilldelas på nytt via en separat registrering om så önskas.
+  // BFL 5 kap 5 § applies once a verifikation has been committed to the
+  // books. A failed insert that never produced a JE (items_insert error,
+  // engine returning null because no fiscal period covers the date) is a
+  // failed insertion, not a bokföringspost — a row with status='reversed'
+  // and registration_journal_entry_id=null would be a dangling
+  // räkenskapsinformation entry harder to audit than a clean removal.
+  //
+  // So: soft-mark `reversed` ONLY when a JE existed at the point of
+  // failure. Pre-JE failures hard-delete (with explicit items wipe in case
+  // the items insert partially succeeded — which Postgres makes atomic for
+  // a single INSERT, but the defense is cheap).
+  if (!journalEntryPosted) {
+    await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', invoiceId)
+    const { error: parentErr } = await supabase
+      .from('supplier_invoices')
+      .delete()
+      .eq('id', invoiceId)
+      .eq('company_id', companyId)
+    if (parentErr) {
+      log.error('supplier-invoice hard-rollback failed — orphan row', parentErr, {
+        invoiceId,
+        companyId,
+        rollbackReason: reason,
+      })
+    } else {
+      log.warn('supplier-invoice hard-rolled back (no JE existed)', {
+        invoiceId,
+        companyId,
+        rollbackReason: reason,
+      })
+    }
+    return
+  }
+
+  // Post-JE soft-mark. Status='reversed' is the same flag the dashboard
+  // uses for "Ångra kreditering"; the row + items remain queryable, the
+  // already-stornoed verifikation pair stays visible on the JE side.
   const { error: updateErr } = await supabase
     .from('supplier_invoices')
     .update({ status: 'reversed', reversed_at: new Date().toISOString() })

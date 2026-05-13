@@ -238,6 +238,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Reject overpayment up front. Without this, the silent `Math.max(0, ...)`
+    // clamp below would book the full payment_amount in the JE but only
+    // reduce the SI balance to 0 — the difference would be an unaccounted
+    // overpayment on the 2440 ledger. If a refund is genuinely due, the
+    // caller credits the SI (which reverses the obligation) and books the
+    // refund as a separate bank transaction. Half-öre tolerance allows
+    // legitimate rounding artefacts from FX-difference adjustments.
+    if (paymentAmount > typed.remaining_amount + 0.005) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'amount',
+          message:
+            'amount exceeds remaining_amount. Issue a credit note via :credit for over-billing, or book the refund through the transactions endpoints.',
+          attempted: paymentAmount,
+          remaining_amount: typed.remaining_amount,
+        },
+      })
+    }
+
     const newRemaining = Math.max(
       0,
       Math.round((typed.remaining_amount - paymentAmount) * 100) / 100,

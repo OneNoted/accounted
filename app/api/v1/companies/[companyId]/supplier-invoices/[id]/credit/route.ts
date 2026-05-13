@@ -39,14 +39,23 @@ const SI_RESPONSE_COLUMNS =
 // row uses `ctx.userId` (the actor performing the credit). Don't fetch what
 // you don't need. `company_id` is already scoped by the `.eq('company_id')`
 // filter, so omit that too — the route can't write to a different one.
+// GDPR Art.25 data minimisation: only fields actually read in the credit
+// flow are projected. `user_id` and `company_id` were dropped earlier; this
+// round drops `notes` (the original SI's free-text notes are never copied
+// onto the credit note and never inspected) plus several housekeeping
+// fields (`paid_at`, `payment_journal_entry_id`, `transaction_id`,
+// `document_id`, `payment_reference`, `paid_amount`, `delivery_date`,
+// `received_date`, `is_credit_note`, `reversed_at`, `created_at`,
+// `updated_at`) that the credit handler never reads. SEK-conversion fields
+// (`subtotal_sek` / `vat_amount_sek` / `total_sek`) ARE read — they're
+// copied verbatim onto the credit-note row so the 2440 reversal nets
+// correctly.
 const SI_FULL_COLUMNS = `
-  id, supplier_id, arrival_number, supplier_invoice_number,
-  invoice_date, due_date, received_date, delivery_date, status,
-  currency, exchange_rate, exchange_rate_date,
+  id, supplier_id, supplier_invoice_number, invoice_date, status,
+  currency, exchange_rate,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
-  vat_treatment, reverse_charge, payment_reference, paid_at, paid_amount, remaining_amount,
-  is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id,
-  transaction_id, document_id, notes, reversed_at, created_at, updated_at,
+  vat_treatment, reverse_charge, remaining_amount,
+  is_credit_note, credited_invoice_id, arrival_number,
   supplier:suppliers(id, name, supplier_type),
   items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount)
 `
@@ -303,7 +312,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         .from('supplier_invoice_items')
         .insert(creditItems)
       if (itemsErr) {
-        await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'items_insert')
+        // items_insert fires before any engine call — no JE could exist.
+        await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'items_insert', false)
         return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
           requestId: ctx.requestId,
           details: { step: 'credit_items_insert', pg_code: (itemsErr as { code?: string }).code },
@@ -362,21 +372,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
                 userId: ctx.userId,
               })
             }
-            await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'je_link_failed')
+            // je_link_failed: the credit-note JE was posted (and we just
+            // stornoed it above). Soft-mark keeps the trail per BFL 5:5.
+            await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'je_link_failed', true)
             return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
               requestId: ctx.requestId,
               details: { step: 'credit_journal_entry_link' },
             })
           }
         } else {
-          await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'no_fiscal_period')
+          // Engine returned null before posting — no JE exists.
+          await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'no_fiscal_period', false)
           return v1ErrorResponseFromCode('SI_CREDIT_FAILED', ctx.log, {
             requestId: ctx.requestId,
             details: { step: 'credit_journal_entry', reason: 'no_fiscal_period' },
           })
         }
       } catch (err) {
-        await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'credit_journal_entry')
+        // Engine threw — conservatively assume the JE may have committed.
+        await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'credit_journal_entry', true)
         if (isBookkeepingError(err)) {
           return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
         }
@@ -448,7 +462,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           })
         }
       }
-      await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'credit_race')
+      // credit_race: the credit-note JE was posted (and just stornoed above).
+      await rollbackCreditNote(ctx.supabase, creditNoteId, ctx.companyId!, ctx.log, 'credit_race', true)
       return v1ErrorResponseFromCode('SI_CREDIT_ALREADY_CREDITED', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'race' },
@@ -489,15 +504,36 @@ async function rollbackCreditNote(
   companyId: string,
   log: import('@/lib/logger').Logger,
   reason: string,
+  journalEntryPosted: boolean,
 ) {
-  // BFL 5 kap 5 § — same rationale as `rollbackSupplierInvoice`. Soft-mark
-  // the failed credit-note row as `'reversed'` (matches the dashboard's
-  // "Ångra kreditering" flag) and preserve the row + items rather than
-  // hard-deleting räkenskapsinformation. The new credit-note still has its
-  // unique (company_id, supplier_id, supplier_invoice_number) index entry,
-  // so retrying with the SAME number requires a different supplier_invoice_-
-  // number — the caller should treat the soft-rollback as a definitive
-  // "this attempt was abandoned, choose a fresh number" outcome.
+  // BFL 5 kap 5 § applies once a verifikation has been committed to the
+  // books. Pre-JE failures (items_insert, engine-returned-null) are not
+  // bokföringsposter and should hard-delete. Post-JE failures soft-mark
+  // `'reversed'` so the audit trail of the attempt (and the JE+storno pair
+  // on the verifikation side) stays visible.
+  if (!journalEntryPosted) {
+    await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', creditNoteId)
+    const { error: parentErr } = await supabase
+      .from('supplier_invoices')
+      .delete()
+      .eq('id', creditNoteId)
+      .eq('company_id', companyId)
+    if (parentErr) {
+      log.error('credit-note hard-rollback failed — orphan row', parentErr, {
+        creditNoteId,
+        companyId,
+        rollbackReason: reason,
+      })
+    } else {
+      log.warn('credit-note hard-rolled back (no JE existed)', {
+        creditNoteId,
+        companyId,
+        rollbackReason: reason,
+      })
+    }
+    return
+  }
+
   const { error: updateErr } = await supabase
     .from('supplier_invoices')
     .update({ status: 'reversed', reversed_at: new Date().toISOString() })
