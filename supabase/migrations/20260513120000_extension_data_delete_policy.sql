@@ -6,6 +6,7 @@
 -- consent reset). The fix is to expose a real DELETE on the row and have
 -- ExtensionSettings.clear() use it.
 
+DROP POLICY IF EXISTS "extension_data_delete" ON public.extension_data;
 CREATE POLICY "extension_data_delete" ON public.extension_data
   FOR DELETE USING (company_id IN (SELECT public.user_company_ids()));
 
