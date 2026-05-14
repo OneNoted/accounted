@@ -5,8 +5,11 @@ import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { createLogger } from '@/lib/logger'
 
 ensureInitialized()
+
+const log = createLogger('api.bookkeeping.commit')
 
 export async function POST(
   request: Request,
@@ -26,9 +29,15 @@ export async function POST(
   const companyId = await requireCompanyId(supabase, user.id)
 
   try {
-    const posted = await commitEntry(supabase, companyId, user.id, id, 'manual')
+    const posted = await commitEntry(supabase, companyId, user.id, id, 'user_accept')
     return NextResponse.json({ data: posted })
   } catch (err) {
+    log.error('commit endpoint failed', err as Error, {
+      companyId,
+      userId: user.id,
+      entityType: 'journal_entry',
+      entityId: id,
+    })
     const typed = bookkeepingErrorResponse(err)
     if (typed) return typed
     return NextResponse.json(

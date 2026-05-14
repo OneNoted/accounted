@@ -78,7 +78,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {
       'company-1',
       'user-1',
       'entry-1',
-      'manual'
+      'user_accept'
     )
   })
 
