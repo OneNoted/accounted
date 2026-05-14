@@ -203,12 +203,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Duplicate-file check before starting the operation.
+    // Duplicate-file check before starting the operation. Log the
+    // existing import id + timestamp server-side for operator forensics
+    // (CC7.2 audit trail), but do NOT echo them in the response body —
+    // symmetry with the bank IDOR fix. The agent learns "this file is
+    // already imported" via the error code; the server log carries the
+    // context for debugging.
     const dup = await checkDuplicateImport(ctx.supabase, ctx.companyId!, content)
     if (dup) {
+      ctx.log.info('SIE duplicate import rejected', {
+        fileHash,
+        existingImportId: dup.id,
+        existingImportedAt: dup.imported_at,
+      })
       return v1ErrorResponseFromCode('SIE_IMPORT_DUPLICATE', ctx.log, {
         requestId: ctx.requestId,
-        details: { existing_import_id: dup.id, imported_at: dup.imported_at },
+        // Deliberately empty details. Server log has the forensic info.
       })
     }
 

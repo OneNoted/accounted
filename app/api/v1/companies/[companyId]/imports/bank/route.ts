@@ -319,6 +319,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     } catch (err) {
       ctx.log.error('bank file import failed', err as Error, {
         operationId: op.id,
+        userId: ctx.userId,
+        companyId: ctx.companyId,
         filename: file.name,
         fileHash,
       })
