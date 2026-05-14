@@ -27,6 +27,11 @@ const METHOD_LABELS: Record<string, string> = {
 
 interface ReconciliationStatus {
   bank_transaction_total: number
+  /**
+   * @deprecated Use `gl_1930_period_movement` for the reconciliation diff.
+   * Preserved for back-compat with persisted snapshots; includes IB and so
+   * over-reports period movement by the IB amount.
+   */
   gl_1930_balance: number
   // Optional for back-compat with status snapshots produced before the
   // IB-exclusion change (PR 3 of #443).

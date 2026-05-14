@@ -36,7 +36,14 @@ export interface ReconciliationRunResult {
 
 export interface ReconciliationStatus {
   bank_transaction_total: number
-  /** Total ledger movement on 1930 in the period including IB. Kept for back-compat. */
+  /**
+   * @deprecated Use `gl_1930_period_movement` for the reconciliation diff. This
+   * field is preserved for back-compat with persisted status snapshots produced
+   * before the IB-exclusion change; new consumers reading this to compute the
+   * "real" difference will be off by the IB amount whenever a SIE-imported
+   * opening balance exists on 1930. The `difference` field on this interface
+   * is computed against `gl_1930_period_movement`, not this.
+   */
   gl_1930_balance: number
   /** Ledger movement on 1930 excluding source_type='opening_balance' lines. */
   gl_1930_period_movement: number
