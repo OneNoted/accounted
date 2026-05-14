@@ -510,4 +510,36 @@ describe('DELETE /api/v1/companies/:companyId/salary-runs/:id', () => {
 
     expect(res.status).toBe(404)
   })
+
+  it('refuses to delete a draft that already has journal-entry foreign keys set (BFL 5 kap)', async () => {
+    // Defense in depth: if a hypothetical partial failure ever left a row
+    // in status=draft with non-null salary_entry_id, the DELETE must NOT
+    // orphan the verifikation. The route's .is('salary_entry_id', null)
+    // filter trips, count comes back 0, and we surface the race-style
+    // 400 SALARY_RUN_DELETE_NOT_DRAFT.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          // First read: row is status=draft (passes the pre-flight)
+          { data: { id: RUN_ID, status: 'draft' }, error: null },
+          // DELETE: the FK-null guards trip, count=0
+          { error: null, count: 0 },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await deleteSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'DELETE',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_DELETE_NOT_DRAFT')
+    expect(body.error.details.reason).toBe('race')
+  })
 })

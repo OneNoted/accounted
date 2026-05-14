@@ -329,14 +329,23 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       )
     }
 
-    // Optimistic-lock the status filter so a concurrent :calculate doesn't
-    // race the delete and remove a row that just acquired numbers.
+    // BFL 5 kap räkenskapsinformation defense: in addition to optimistic-
+    // locking on status='draft', require all journal-entry foreign keys to
+    // be null. status='draft' is the primary gate (the lifecycle never
+    // populates salary_entry_id / avgifter_entry_id / vacation_entry_id
+    // before advancing past draft), but if a partial PR-2 failure ever
+    // leaves the run in a status='draft' state with a posted JE attached,
+    // a hard delete would orphan räkenskapsinformation. The null guards
+    // turn that hypothetical into a clean 400 instead.
     const { error, count } = await ctx.supabase
       .from('salary_runs')
       .delete({ count: 'exact' })
       .eq('company_id', ctx.companyId!)
       .eq('id', idParse.data)
       .eq('status', 'draft')
+      .is('salary_entry_id', null)
+      .is('avgifter_entry_id', null)
+      .is('vacation_entry_id', null)
 
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })

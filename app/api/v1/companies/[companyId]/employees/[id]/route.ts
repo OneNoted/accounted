@@ -273,7 +273,15 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     // explicitly-supplied keys so unmentioned columns aren't overwritten to
     // their `default()` values (e.g. is_sidoinkomst would silently reset
     // to false on every PATCH if we passed it unconditionally).
-    const rawKeys = Object.keys(rawBody as object)
+    //
+    // OWASP V4.5 defense-in-depth: strip prototype-polluting own-properties
+    // from the key list. JSON.parse can produce `{ "__proto__": ..., }` as
+    // an own (data) property — our Zod-parsed `body` would never include
+    // those keys and the subsequent intersection with rawKeys already
+    // prevents them reaching the DB, but the explicit filter makes the
+    // intent unambiguous for future readers.
+    const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+    const rawKeys = Object.keys(rawBody as object).filter((k) => !POLLUTING_KEYS.has(k))
     const updates: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(body) as Array<[string, unknown]>) {
       if (rawKeys.includes(key)) {
