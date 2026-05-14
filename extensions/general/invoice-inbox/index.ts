@@ -1399,14 +1399,15 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
-        // Mark the inbox item as confirmed. status='confirmed' is the
-        // terminal state already used by the supplier-invoice path.
+        // Mark the inbox item as resolved by writing the FK. The status
+        // column is intentionally left at 'received' — terminal state is
+        // encoded via created_journal_entry_id / matched_transaction_id
+        // (see migration 20260504180000_invoice_inbox_remove_ai_columns).
         const { error: updateError } = await ctx.supabase
           .from('invoice_inbox_items')
           .update({
             created_journal_entry_id: journalEntry.id,
             matched_transaction_id: transaction?.id ?? null,
-            status: 'confirmed',
           })
           .eq('id', id)
           .eq('company_id', ctx.companyId)
