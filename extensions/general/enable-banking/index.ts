@@ -639,10 +639,12 @@ export const enableBankingExtension: Extension = {
             const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
 
             const completedAt = new Date().toISOString()
+            // Don't re-write accounts_data here — the first update already wrote it.
+            // Including it again races with any concurrent writer (e.g. cron firing in
+            // the sub-60s window) and would silently overwrite their changes.
             await supabase
               .from('bank_connections')
               .update({
-                accounts_data: updatedAccounts,
                 last_synced_at: completedAt,
                 initial_sync_completed_at: completedAt,
                 initial_sync_requested_from: fromDate,

@@ -53,7 +53,10 @@ export function AccountPickerDialog({
   onSaved,
 }: AccountPickerDialogProps) {
   const { toast } = useToast()
-  const supabase = createClient()
+  // Memoise so the client has a stable reference across re-renders. Without this,
+  // listing `supabase` in the SIE-fetch effect's deps would re-fire that query on
+  // every checkbox tick or parent re-render.
+  const supabase = useMemo(() => createClient(), [])
   const { company } = useCompany()
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
