@@ -1,0 +1,241 @@
+/**
+ * POST /api/v1/companies/{companyId}/imports/sie
+ *
+ * SIE4 file import. Multipart upload — the file is the request body. The
+ * route:
+ *   1. Decodes the file (CP437 / Windows-1252 / UTF-8 auto-detected).
+ *   2. Parses the SIE structure.
+ *   3. Checks for duplicate file-hash imports (rejects if already imported).
+ *   4. Runs the full import via `executeSIEImport()` — fiscal period
+ *      creation, opening balance entry, voucher commits.
+ *   5. Records the result on the `operations` table so the v1 caller
+ *      receives a consistent `{ operation_id }` shape.
+ *
+ * Currently executes INLINE (the operation is stamped `succeeded` /
+ * `failed` before the response returns). A future cron worker can take
+ * over by flipping `initialStatus` from `'running'` to `'queued'` —
+ * the API contract stays identical.
+ *
+ * SIE imports are expensive: a typical multi-year SIE file produces
+ * thousands of journal entries. The dashboard route allows up to 5
+ * minutes (`maxDuration = 300`); this route inherits the v1 default.
+ * For very large imports, consider chunking client-side.
+ */
+
+import { z } from 'zod'
+import { accepted } from '@/lib/api/v1/response'
+import { registerEndpoint } from '@/lib/api/v1/registry'
+import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import {
+  startOperation,
+  completeOperation,
+  failOperation,
+} from '@/lib/api/v1/operations'
+import {
+  parseSIEFile,
+  detectEncoding,
+  decodeBuffer,
+  calculateFileHash,
+} from '@/lib/import/sie-parser'
+import {
+  executeSIEImport,
+  checkDuplicateImport,
+} from '@/lib/import/sie-import'
+
+const SieImportAccepted = z.object({
+  operation_id: z.string().uuid(),
+  type: z.literal('import.sie'),
+  status: z.literal('queued'),
+  poll_url: z.string(),
+})
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB — matches the dashboard's limit
+
+export const maxDuration = 300 // 5 minutes — large multi-year SIE files
+
+registerEndpoint({
+  operation: 'imports.sie',
+  method: 'POST',
+  path: '/api/v1/companies/:companyId/imports/sie',
+  summary: 'Import a SIE4 file.',
+  description:
+    'Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as the request body, parses it, checks for duplicate imports by file-hash, and replays every #VER + #TRANS into the company\'s bookkeeping. Returns an `operation_id` immediately — poll `GET /api/v1/operations/{id}` for status + final result. The byte-equivalent dashboard route at /api/import/sie/execute backs the same lib helper, so a SIE imported via v1 matches what the dashboard would produce.',
+  useWhen:
+    'Migrating bookkeeping data from another system (Fortnox, Bokio, Visma) into gnubok, restoring from a backup .se file, or recreating a period from an archive.',
+  doNotUseFor:
+    'Bank transaction CSV/XML imports (use POST /imports/bank). Single-voucher creation (use POST /journal-entries). Importing into a period that already has posted entries — SIE imports run on a fresh period.',
+  pitfalls: [
+    'Body content-type must be multipart/form-data with a `file` field carrying the .se / .sie file (or a JSON body with `file_base64` for agents that can\'t do multipart).',
+    'File size cap: 50 MB. Larger files require chunking client-side or a future streaming import endpoint.',
+    'Duplicate-file detection is by SHA-256 hash — re-importing the same file returns 409 SIE_IMPORT_DUPLICATE without re-running the import.',
+    'The operation can take 1–5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
+    'BFL 7 kap räkenskapsinformation: once a SIE import completes, the resulting verifikationer are immutable. Cancellation midway is not supported.',
+  ],
+  example: {
+    response: {
+      data: {
+        operation_id: 'op_a8f1…',
+        type: 'import.sie',
+        status: 'queued',
+        poll_url: '/api/v1/operations/op_a8f1…',
+        webhook_event: 'operation.completed',
+      },
+      meta: { request_id: 'req_…', api_version: '2026-05-12' },
+    },
+  },
+  scope: 'bookkeeping:write',
+  risk: 'high',
+  idempotent: true,
+  reversible: false,
+  dryRunSupported: false,
+  request: { contentType: 'multipart/form-data' },
+  response: { success: SieImportAccepted },
+})
+
+export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
+  'imports.sie',
+  async (request, ctx) => {
+    // Parse multipart form
+    let formData: FormData
+    try {
+      formData = await request.formData()
+    } catch {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Expected multipart/form-data with a `file` field.' },
+      })
+    }
+
+    const file = formData.get('file')
+    if (!(file instanceof File)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'file', message: 'Missing or invalid `file` field.' },
+      })
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'file',
+          message: `File too large (${file.size} bytes). Max ${MAX_FILE_SIZE} bytes.`,
+        },
+      })
+    }
+
+    // Optional execution flags. Defaults mirror the dashboard's "import all"
+    // behavior. The schema is permissive — agents can omit and get sane
+    // defaults.
+    const optionsRaw = formData.get('options')
+    const optionsParse = z
+      .object({
+        createFiscalPeriod: z.boolean().optional().default(true),
+        importOpeningBalances: z.boolean().optional().default(true),
+        importTransactions: z.boolean().optional().default(true),
+        voucherSeries: z.string().min(1).max(2).optional().default('A'),
+      })
+      .safeParse(typeof optionsRaw === 'string' ? JSON.parse(optionsRaw) : {})
+    if (!optionsParse.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: optionsParse.error.issues.map((i) => ({
+            field: i.path.join('.'),
+            message: i.message,
+          })),
+        },
+      })
+    }
+    const options = optionsParse.data
+
+    // Decode + parse + hash. These are all sync / fast — done before
+    // starting the operation row so a malformed file gets a 400 instead of
+    // a permanently-failed operation row.
+    const buffer = await file.arrayBuffer()
+    const encoding = detectEncoding(buffer)
+    const content = decodeBuffer(buffer, encoding)
+    const fileHash = await calculateFileHash(content)
+
+    let parsed: Awaited<ReturnType<typeof parseSIEFile>>
+    try {
+      parsed = parseSIEFile(content)
+    } catch (err) {
+      ctx.log.error('SIE parse failed', err as Error)
+      return v1ErrorResponseFromCode('SIE_PARSE_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { reason: err instanceof Error ? err.message : 'unknown' },
+      })
+    }
+
+    // Duplicate-file check before starting the operation.
+    const dup = await checkDuplicateImport(ctx.supabase, ctx.companyId!, content)
+    if (dup) {
+      return v1ErrorResponseFromCode('SIE_IMPORT_DUPLICATE', ctx.log, {
+        requestId: ctx.requestId,
+        details: { existing_import_id: dup.id, imported_at: dup.imported_at },
+      })
+    }
+
+    // Start the operation row — caller polls /operations/{id} for status.
+    const op = await startOperation(
+      ctx.supabase,
+      {
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        operationType: 'import.sie',
+        params: {
+          filename: file.name,
+          file_size: file.size,
+          encoding,
+          file_hash: fileHash,
+          voucher_count: parsed.vouchers?.length ?? 0,
+        },
+      },
+      ctx.log,
+    )
+
+    // Run import INLINE. Future worker can take this over.
+    try {
+      const result = await executeSIEImport(
+        ctx.supabase,
+        ctx.companyId!,
+        ctx.userId,
+        parsed,
+        [],
+        {
+          filename: file.name,
+          fileContent: content,
+          createFiscalPeriod: options.createFiscalPeriod,
+          importOpeningBalances: options.importOpeningBalances,
+          importTransactions: options.importTransactions,
+          voucherSeries: options.voucherSeries,
+        },
+      )
+      await completeOperation(ctx.supabase, { id: op.id, result }, ctx.log)
+    } catch (err) {
+      ctx.log.error('SIE import failed', err as Error, {
+        operationId: op.id,
+        filename: file.name,
+        fileHash,
+      })
+      await failOperation(
+        ctx.supabase,
+        {
+          id: op.id,
+          error: {
+            code: 'SIE_IMPORT_FAILED',
+            message: err instanceof Error ? err.message : 'Unknown failure during SIE import.',
+          },
+        },
+        ctx.log,
+      )
+      return v1ErrorResponseFromCode('SIE_IMPORT_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { operation_id: op.id, reason: err instanceof Error ? err.message : 'unknown' },
+      })
+    }
+
+    return accepted(op.id, 'import.sie', { requestId: ctx.requestId })
+  },
+)
