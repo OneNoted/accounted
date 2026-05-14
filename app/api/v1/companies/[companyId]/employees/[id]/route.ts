@@ -7,8 +7,14 @@
  * PATCH  — update a subset of fields. Idempotent (Idempotency-Key recommended,
  *          not enforced). Dry-runnable.
  * DELETE — soft-delete via is_active=false. The employees table has no
- *          archived_at column; BFL 7 kap requires the row to remain for 7
- *          years for audit. Hard delete is never exposed.
+ *          archived_at column; the row is preserved because past salary
+ *          runs reference it via salary_run_employees and those
+ *          verifikationer are räkenskapsinformation under BFL 7 kap.
+ *          (BFL retention attaches to the verifikationer, not to the
+ *          personnummer attribute on the master row — a future GDPR
+ *          Art.17 erasure workflow could pseudonymise the row once all
+ *          referenced verifikationer are outside the 7-year window.)
+ *          Hard delete is never exposed from v1.
  */
 
 import { z } from 'zod'
@@ -111,7 +117,9 @@ registerEndpoint({
         id: 'a8f1…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer: '190001010000',
+        // Format placeholder (ÅÅÅÅMMDDNNNN) rather than a numeric value —
+        // ISO A.5.34: do not embed production-format PII in OpenAPI docs.
+        personnummer: 'YYYYMMDDNNNN',
         employment_type: 'employee',
         employment_start: '2024-01-15',
         employment_end: null,
@@ -215,6 +223,18 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'Body is not valid JSON.' },
+      })
+    }
+
+    // OWASP V4.5: require a plain JSON object. Zod would catch a non-object
+    // body downstream, but the rawKeys filter below uses Object.keys on
+    // rawBody directly — guarding here makes the contract explicit and the
+    // Object.keys call unambiguously safe (e.g. an array body would pass
+    // `typeof === 'object'` but yield numeric-string keys).
+    if (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Body must be a JSON object.' },
       })
     }
 
@@ -340,7 +360,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id',
   summary: 'Soft-delete an employee.',
   description:
-    'Sets `is_active=false`. The row persists for the 7-year retention period required by BFL 7 kap; salary runs that include the employee remain queryable. Hard delete is never exposed.',
+    'Sets `is_active=false`. The row is preserved because past salary runs reference it via salary_run_employees and those verifikationer are räkenskapsinformation under BFL 7 kap (BFL retention attaches to the verifikationer themselves, not strictly to the personnummer attribute on the master row). Hard delete is never exposed.',
   useWhen:
     'An employee has left the company and should no longer appear in active rosters or default to new salary runs.',
   doNotUseFor:

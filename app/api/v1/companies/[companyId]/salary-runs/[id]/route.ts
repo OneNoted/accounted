@@ -185,6 +185,17 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
+    // OWASP V4.5: require a plain JSON object. Zod would catch a non-object
+    // body downstream, but the rawKeys filter below uses Object.keys on
+    // rawBody directly — guarding here makes the contract explicit and the
+    // Object.keys call unambiguously safe.
+    if (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Body must be a JSON object.' },
+      })
+    }
+
     const parsed = UpdateSalaryRunSchema.safeParse(rawBody)
     if (!parsed.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -218,7 +229,14 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
-    const rawKeys = Object.keys(rawBody as object)
+    // Filter the explicitly-supplied keys so unmentioned columns aren't
+    // overwritten to their `default()` values. Same OWASP V4.5 defense-in-
+    // depth as employees PATCH — strip prototype-polluting own-properties
+    // before extracting the key list. The intersection with the Zod-parsed
+    // `body` already prevents these keys from reaching the DB, but the
+    // filter makes the intent unambiguous.
+    const POLLUTING_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+    const rawKeys = Object.keys(rawBody as object).filter((k) => !POLLUTING_KEYS.has(k))
     const updates: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(body) as Array<[string, unknown]>) {
       if (rawKeys.includes(key)) {

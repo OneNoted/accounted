@@ -83,7 +83,7 @@ registerEndpoint({
           id: 'a8f1…',
           first_name: 'Anna',
           last_name: 'Andersson',
-          personnummer_masked: '19000101XXXX',
+          personnummer_masked: 'YYYYMMDDXXXX',
           employment_type: 'employee',
           employment_start: '2024-01-15',
           employment_end: null,
@@ -271,7 +271,11 @@ registerEndpoint({
     request: {
       first_name: 'Anna',
       last_name: 'Andersson',
-      personnummer: '190001010000',
+      // Clear placeholder — the regex requires 12 digits in real calls,
+      // but the docs show the format pattern (ÅÅÅÅMMDDNNNN) rather than a
+      // literal value to avoid embedding production-format PII in
+      // generated OpenAPI / SDK docs.
+      personnummer: 'YYYYMMDDNNNN',
       employment_type: 'employee',
       employment_start: '2024-01-15',
       salary_type: 'monthly',
@@ -285,7 +289,7 @@ registerEndpoint({
         id: 'a8f1…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer_masked: '19000101XXXX',
+        personnummer_masked: 'YYYYMMDDXXXX',
         employment_type: 'employee',
         employment_start: '2024-01-15',
         employment_end: null,
