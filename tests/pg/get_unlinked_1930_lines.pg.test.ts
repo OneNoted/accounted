@@ -42,12 +42,14 @@ async function insertPostedJournalEntry(params: {
       params.sourceType,
     ],
   )
-  // Balanced pair on 1930 + 2099 (equity counterpart for IB; harmless for others).
+  // Balanced pair on 1930 + 2091 (balanserad vinst/förlust — the realistic
+  // carried-forward counterpart for an IB on a bank account; harmless for the
+  // other source_types where the test only cares about the 1930 side).
   await getPool().query(
     `INSERT INTO public.journal_entry_lines
        (journal_entry_id, account_number, debit_amount, credit_amount)
      VALUES ($1, '1930', $2, 0),
-            ($1, '2099', 0, $2)`,
+            ($1, '2091', 0, $2)`,
     [id, amount],
   )
   return id

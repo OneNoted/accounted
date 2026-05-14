@@ -52,6 +52,12 @@ AS $$
   WHERE jel.account_number = '1930'
     AND je.company_id = p_company_id
     AND je.status = 'posted'
+    -- Unconditional exclusion. By gnubok's data model 'opening_balance' is
+    -- reserved for the fiscal-year IB voucher (always posts on period_start);
+    -- mid-year corrective entries use 'correction' or 'manual'. So this filter
+    -- can't accidentally hide a legitimate mid-period unmatched entry — there
+    -- is no such thing as a mid-period opening_balance.
+    --
     -- IS DISTINCT FROM is NULL-safe. Today journal_entries.source_type is
     -- NOT NULL, so the only behavioural difference vs `<>` is defensive: if the
     -- NOT NULL constraint is ever relaxed, `<>` would silently drop NULL rows

@@ -28,15 +28,12 @@ const METHOD_LABELS: Record<string, string> = {
 interface ReconciliationStatus {
   bank_transaction_total: number
   /**
-   * @deprecated Use `gl_1930_period_movement` for the reconciliation diff.
-   * Preserved for back-compat with persisted snapshots; includes IB and so
-   * over-reports period movement by the IB amount.
+   * @deprecated Kept on the server response for back-compat. The UI no longer
+   * reads it — `gl_1930_period_movement` is required.
    */
   gl_1930_balance: number
-  // Optional for back-compat with status snapshots produced before the
-  // IB-exclusion change (PR 3 of #443).
-  gl_1930_period_movement?: number
-  gl_1930_opening_balance?: number
+  gl_1930_period_movement: number
+  gl_1930_opening_balance: number
   difference: number
   is_reconciled: boolean
   matched_count: number
@@ -310,9 +307,7 @@ export function BankReconciliationView() {
               <div className="flex justify-between">
                 <span>Bokfört på <AccountNumber number="1930" /> i perioden</span>
                 <span className="font-mono">
-                  {/* Prefer period_movement (excludes IB) when the API exposes it; fall back
-                      to gl_1930_balance for older API responses. */}
-                  {formatCurrency(status.gl_1930_period_movement ?? status.gl_1930_balance)}
+                  {formatCurrency(status.gl_1930_period_movement)}
                 </span>
               </div>
               <div className="flex justify-between pt-2 border-t font-semibold">
@@ -321,7 +316,7 @@ export function BankReconciliationView() {
                   {formatCurrency(status.difference)}
                 </span>
               </div>
-              {status.gl_1930_opening_balance != null && status.gl_1930_opening_balance !== 0 && (
+              {status.gl_1930_opening_balance !== 0 && (
                 <p className="pt-2 text-xs text-muted-foreground">
                   Ingående balans (IB) på <AccountNumber number="1930" />:{' '}
                   <span className="font-mono">{formatCurrency(status.gl_1930_opening_balance)}</span>
