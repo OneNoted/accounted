@@ -774,6 +774,32 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
       path: ['tax_municipality'],
     })
   }
+
+  // Phase 5 PR-1 carry-over (PR-2 enforcement): if vaxa_stod_eligible is set,
+  // require vaxa_stod_start. The end date is optional (some eligibility
+  // windows run open-ended until the maximum benefit period is reached).
+  // Birth-year age gate (the actual eligibility rule — born 2003-2007 for
+  // 2026) is checked at calculation-time by the engine, not here, because
+  // it depends on the payment year of each run — a 22-year-old at hire
+  // becomes 23 the next year and the rate switches without a row edit.
+  if (data.vaxa_stod_eligible && !data.vaxa_stod_start) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat',
+      path: ['vaxa_stod_start'],
+    })
+  }
+  if (
+    data.vaxa_stod_start &&
+    data.vaxa_stod_end &&
+    data.vaxa_stod_end < data.vaxa_stod_start
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Växa-stödets slutdatum måste vara efter startdatumet',
+      path: ['vaxa_stod_end'],
+    })
+  }
 })
 
 export const UpdateEmployeeSchema = EmployeeSchemaBase.partial().superRefine((data, ctx) => {
