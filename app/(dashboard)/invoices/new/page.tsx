@@ -473,11 +473,9 @@ export default function NewInvoicePage() {
       )}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 pb-28 md:pb-0">
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Main content */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Customer selection */}
-            <Card>
+        <div className="grid gap-6 lg:grid-cols-3 lg:auto-rows-min lg:items-start">
+          {/* Customer selection */}
+          <Card className="lg:col-span-2 lg:row-start-1">
               <CardHeader>
                 <CardTitle>Kund<RequiredMark /></CardTitle>
                 <CardDescription>Välj vilken kund fakturan ska skickas till</CardDescription>
@@ -518,8 +516,8 @@ export default function NewInvoicePage() {
               </CardContent>
             </Card>
 
-            {/* Invoice items */}
-            <Card>
+          {/* Invoice items */}
+          <Card className="lg:col-span-3 lg:row-start-2">
               <CardHeader>
                 <CardTitle>Fakturarader</CardTitle>
                 <CardDescription>Lägg till produkter eller tjänster</CardDescription>
@@ -669,8 +667,8 @@ export default function NewInvoicePage() {
               </CardContent>
             </Card>
 
-            {/* Notes */}
-            <Card>
+          {/* Notes */}
+          <Card className="lg:col-span-2 lg:row-start-3">
               <CardHeader>
                 <CardTitle>Anteckningar</CardTitle>
                 <CardDescription>Valfritt meddelande på fakturan</CardDescription>
@@ -682,12 +680,9 @@ export default function NewInvoicePage() {
                 />
               </CardContent>
             </Card>
-          </div>
 
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Invoice details */}
-            <Card>
+          {/* Invoice details */}
+          <Card className="lg:col-start-3 lg:row-start-1">
               <CardHeader>
                 <CardTitle>Fakturadetaljer</CardTitle>
               </CardHeader>
@@ -785,8 +780,8 @@ export default function NewInvoicePage() {
               </CardContent>
             </Card>
 
-            {/* Summary */}
-            <Card>
+          {/* Summary */}
+          <Card className="lg:col-start-3 lg:row-start-3">
               <CardHeader>
                 <CardTitle>Summering</CardTitle>
               </CardHeader>
@@ -827,18 +822,17 @@ export default function NewInvoicePage() {
               </CardContent>
             </Card>
 
-            {/* Actions — desktop/tablet only */}
-            <Button
-              type="submit"
-              className="w-full hidden md:block"
-              size="lg"
-              disabled={isSubmitting || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
-            >
-              {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              Granska & skapa
-            </Button>
-          </div>
+          {/* Actions — desktop/tablet only */}
+          <Button
+            type="submit"
+            className="w-full hidden md:block lg:col-start-3 lg:row-start-4"
+            size="lg"
+            disabled={isSubmitting || !canWrite}
+            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+          >
+            {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
+            Granska & skapa
+          </Button>
         </div>
 
         {/* Mobile sticky total bar */}

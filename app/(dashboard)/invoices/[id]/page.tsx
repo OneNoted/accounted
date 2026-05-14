@@ -468,11 +468,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Main content */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Customer info */}
-          <Card>
+      <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
+        {/* Customer info */}
+        <Card className="lg:col-span-2 lg:row-start-1">
             <CardHeader>
               <CardTitle>Kund</CardTitle>
             </CardHeader>
@@ -507,8 +505,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </CardContent>
           </Card>
 
-          {/* Invoice items */}
-          <Card>
+        {/* Invoice items */}
+        <Card className="lg:col-span-2 lg:row-start-2">
             <CardHeader>
               <CardTitle>Fakturarader</CardTitle>
             </CardHeader>
@@ -619,9 +617,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </CardContent>
           </Card>
 
-          {/* Notes */}
-          {(invoice.notes || invoice.reverse_charge_text) && (
-            <Card>
+        {/* Notes */}
+        {(invoice.notes || invoice.reverse_charge_text) && (
+            <Card className="lg:col-span-2 lg:row-start-3">
               <CardHeader>
                 <CardTitle>Anteckningar</CardTitle>
               </CardHeader>
@@ -636,10 +634,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </CardContent>
             </Card>
           )}
-        </div>
 
         {/* Sidebar */}
-        <div className="space-y-6">
+        <div className="lg:col-start-3 lg:row-start-1 lg:row-span-3 space-y-6">
           {/* Invoice details */}
           <Card>
             <CardHeader>
