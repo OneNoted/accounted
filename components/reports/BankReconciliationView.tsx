@@ -28,6 +28,10 @@ const METHOD_LABELS: Record<string, string> = {
 interface ReconciliationStatus {
   bank_transaction_total: number
   gl_1930_balance: number
+  // Optional for back-compat with status snapshots produced before the
+  // IB-exclusion change (PR 3 of #443).
+  gl_1930_period_movement?: number
+  gl_1930_opening_balance?: number
   difference: number
   is_reconciled: boolean
   matched_count: number
@@ -295,12 +299,16 @@ export function BankReconciliationView() {
           <CardContent>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
-                <span>Banktransaktioner (summa)</span>
+                <span>Banktransaktioner i perioden</span>
                 <span className="font-mono">{formatCurrency(status.bank_transaction_total)}</span>
               </div>
               <div className="flex justify-between">
-                <span><AccountNumber number="1930" /> saldo (huvudbok)</span>
-                <span className="font-mono">{formatCurrency(status.gl_1930_balance)}</span>
+                <span>Bokfört på <AccountNumber number="1930" /> i perioden</span>
+                <span className="font-mono">
+                  {/* Prefer period_movement (excludes IB) when the API exposes it; fall back
+                      to gl_1930_balance for older API responses. */}
+                  {formatCurrency(status.gl_1930_period_movement ?? status.gl_1930_balance)}
+                </span>
               </div>
               <div className="flex justify-between pt-2 border-t font-semibold">
                 <span>Differens</span>
@@ -308,6 +316,13 @@ export function BankReconciliationView() {
                   {formatCurrency(status.difference)}
                 </span>
               </div>
+              {status.gl_1930_opening_balance != null && status.gl_1930_opening_balance !== 0 && (
+                <p className="pt-2 text-xs text-muted-foreground">
+                  Ingående balans (IB) på <AccountNumber number="1930" />:{' '}
+                  <span className="font-mono">{formatCurrency(status.gl_1930_opening_balance)}</span>
+                  {' '}— räknas inte i avstämningen.
+                </p>
+              )}
               <div className="flex gap-4 pt-2 text-xs text-muted-foreground">
                 <span>Matchade: {status.matched_count}</span>
                 <span>Omatchade transaktioner: {status.unmatched_transaction_count}</span>
