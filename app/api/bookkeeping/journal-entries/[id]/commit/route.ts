@@ -32,14 +32,15 @@ export async function POST(
     const posted = await commitEntry(supabase, companyId, user.id, id, 'user_accept')
     return NextResponse.json({ data: posted })
   } catch (err) {
-    log.error('commit endpoint failed', err as Error, {
+    const typed = bookkeepingErrorResponse(err)
+    if (typed) return typed
+    // Untyped error path: engine logging didn't fire, so log here.
+    log.error('commit endpoint failed (untyped)', err as Error, {
       companyId,
       userId: user.id,
       entityType: 'journal_entry',
       entityId: id,
     })
-    const typed = bookkeepingErrorResponse(err)
-    if (typed) return typed
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to commit entry' },
       { status: 400 }

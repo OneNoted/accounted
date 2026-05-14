@@ -29,6 +29,15 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   commitEntry: (...args: unknown[]) => mockCommitEntry(...args),
 }))
 
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn().mockReturnThis(),
+  }),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/bookkeeping/journal-entries/[id]/commit', () => {

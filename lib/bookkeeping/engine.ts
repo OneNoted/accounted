@@ -11,14 +11,14 @@ import {
   JournalEntryNotBalancedError,
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
-
-const log = createLogger('bookkeeping.engine')
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
+
+const log = createLogger('bookkeeping.engine')
 
 /**
  * Validate that a set of journal entry lines is balanced (debits = credits)
@@ -264,7 +264,19 @@ export async function createDraftEntry(
       pgDetails: (linesError as { details?: string }).details,
       pgHint: (linesError as { hint?: string }).hint,
     })
-    await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', entry.id)
+    const { error: cancelError } = await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .eq('id', entry.id)
+    if (cancelError) {
+      log.error('orphan draft cleanup failed (phantom draft remains)', cancelError, {
+        operation: 'create_entry_lines.cleanup',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: entry.id,
+        pgCode: (cancelError as { code?: string }).code,
+      })
+    }
     throw new BookkeepingDatabaseError('create_entry_lines', linesError.message)
   }
 
@@ -367,13 +379,28 @@ export async function createJournalEntry(
     // before failing downstream, immutability trigger blocks draft→cancelled
     // on a posted row anyway — the filter just avoids firing the trigger.
     try {
-      await supabase
+      const { error: cancelError } = await supabase
         .from('journal_entries')
         .update({ status: 'cancelled' })
         .eq('id', draft.id)
         .eq('status', 'draft')
-    } catch {
-      // Swallow rollback failure — surface the original commit error
+      if (cancelError) {
+        log.error('orphan draft cleanup failed (phantom draft remains)', cancelError, {
+          operation: 'create_journal_entry.cleanup',
+          companyId,
+          entityType: 'journal_entry',
+          entityId: draft.id,
+          pgCode: (cancelError as { code?: string }).code,
+        })
+      }
+    } catch (cleanupErr) {
+      // Surface the original commit error, but don't lose the cleanup signal.
+      log.error('orphan draft cleanup threw (phantom draft remains)', cleanupErr as Error, {
+        operation: 'create_journal_entry.cleanup',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: draft.id,
+      })
     }
     throw commitError
   }
