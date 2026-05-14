@@ -706,6 +706,14 @@ export const enableBankingExtension: Extension = {
                 { strategy: 'longest' }
               ))
             )
+            // If the timeout wins the race, the underlying Promise.all keeps
+            // running. Without a registered handler, a late rejection from the
+            // bank API would surface as an unhandledRejection — Node 22 (the
+            // self-hosted Docker runtime) terminates the process by default on
+            // those, taking the whole server down. The cron retries the
+            // backfill via initial_sync_completed_at IS NULL, so a no-op
+            // catch is the right policy here.
+            syncPromise.catch(() => {})
 
             const TIMEOUT_MS = 60_000
             const timeoutPromise = new Promise<never>((_, reject) => {
