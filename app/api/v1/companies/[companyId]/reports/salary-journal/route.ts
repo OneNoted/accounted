@@ -19,7 +19,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/salary-journal',
   summary: 'Salary journal (lönejournal) for a year and optional month range.',
   description:
-    'Returns per-employee salary figures (gross / tax / net / avgifter / vacation accrual) summed across booked salary runs in `year`. Optional `month_from` and `month_to` limit the window. The output mirrors the dashboard\'s lönejournal export and feeds annual KU (kontrolluppgift) preparation.',
+    'Returns per-employee salary figures (gross / tax / net / avgifter / vacation accrual) summed across booked salary runs in `year`. Optional `month_from` and `month_to` limit the window. The output mirrors the dashboard\'s lönejournal export. ⚠️ KU (kontrolluppgift) preparation requires the FULL annual paid amount per employee — if any salary runs are in paid-but-unbooked state at KU time, generating KU from this report will understate wages (an SFL obligation breach). Confirm all paid runs are booked before using this report for KU.',
   useWhen:
     'Year-end KU preparation, employee comp reviews, reconciliation against the 7xxx wage accounts.',
   doNotUseFor:

@@ -149,6 +149,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         importTransactions: z.boolean().optional().default(true),
         voucherSeries: z.string().min(1).max(2).optional().default('A'),
       })
+      // OWASP V4.5: reject unknown keys so a future schema-extension
+      // (or a careless edit) doesn't silently pass mass-assigned fields
+      // through. Zod's default is to strip unknowns — `.strict()` is
+      // belt-and-suspenders.
+      .strict()
       .safeParse(parsedOptions)
     if (!optionsParse.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -173,21 +178,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // OWASP V5.2: cheap content-shape check before letting the SIE parser
     // chew on arbitrary bytes. A valid SIE4 file's first 4 KiB contains at
-    // least one of #FLAGGA / #PROGRAM / #FORMAT / #SIETYP — these are
-    // mandatory header records. An HTML / executable / JSON payload that
-    // got past the multipart filter will lack all of them and we can
-    // reject without invoking parseSIEFile.
+    // least one of #FLAGGA / #PROGRAM / #FORMAT / #SIETYP at the start
+    // of a line. The regex requires line-start anchoring so an HTML
+    // payload with `<!-- #FLAGGA -->` in a comment can't bypass — the
+    // round-3 string-contains check was tighter than no-check, but the
+    // regex is tighter still.
     const headerSlice = content.slice(0, 4096)
-    if (
-      !headerSlice.includes('#FLAGGA') &&
-      !headerSlice.includes('#PROGRAM') &&
-      !headerSlice.includes('#FORMAT') &&
-      !headerSlice.includes('#SIETYP')
-    ) {
+    if (!/(^|\n)\s*#(FLAGGA|PROGRAM|FORMAT|SIETYP)\b/.test(headerSlice)) {
       return v1ErrorResponseFromCode('SIE_PARSE_FAILED', ctx.log, {
         requestId: ctx.requestId,
         details: {
-          reason: 'File does not appear to be SIE4 — no #FLAGGA / #PROGRAM / #FORMAT / #SIETYP header record found in the first 4 KiB.',
+          reason: 'File does not appear to be SIE4 — no #FLAGGA / #PROGRAM / #FORMAT / #SIETYP header record at the start of a line in the first 4 KiB.',
         },
       })
     }

@@ -19,7 +19,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/vacation-liability',
   summary: 'Vacation liability (semesterlöneskuld) per employee at year-end.',
   description:
-    'Returns per-employee semesterlöneskuld balances as of year-end based on their vacation_rule (procentregeln / sammaloneregeln) and accrued days. For employees on procentregeln or sammaloneregeln the row total contributes to the BAS 2920 closing balance. Employees on `none` or `semesterersattning` are excluded because they have no accrued balance-sheet liability — `semesterersattning` is expensed immediately rather than accrued, so the 2920 reconciliation only matches when no employees use that rule. Feeds the K2/K3 årsredovisning notes.',
+    'Returns per-employee semesterlöneskuld balances as of year-end based on their vacation_rule (procentregeln / sammaloneregeln) and accrued days. For employees on procentregeln or sammaloneregeln the row total contributes to the BAS 2920 closing balance. Employees on `none` or `semesterersattning` are excluded because their cost is expensed immediately (no balance-sheet accrual) — the BAS 2920 reconciliation against this report is therefore CORRECT whether or not the company has semesterersättning employees, since those employees contribute zero to both the report and the 2920 balance. Feeds the K2/K3 årsredovisning notes.',
   useWhen:
     'Year-end reconciliation between the accrued liability on 2920 and the per-employee detail. Audit prep.',
   doNotUseFor:

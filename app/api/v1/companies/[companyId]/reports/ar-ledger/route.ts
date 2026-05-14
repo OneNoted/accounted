@@ -63,6 +63,23 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           details: { field: 'as_of_date', message: 'Not a valid calendar date.' },
         })
       }
+      // Sanity range: year 2000 → current+1. Outside this window is
+      // either a typo or a resource-abuse probe (an as_of_date in year
+      // 9999 would still parse but the report generator may walk
+      // arbitrary-large invoice histories). The +1 tolerance allows a
+      // year-end filing for the year that just turned over without
+      // refusing on Jan 1.
+      const year = probe.getUTCFullYear()
+      const maxYear = new Date().getUTCFullYear() + 1
+      if (year < 2000 || year > maxYear) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'as_of_date',
+            message: `Year out of supported range. Accepted: 2000 to ${maxYear}.`,
+          },
+        })
+      }
     }
 
     const gen = await safeGenerate(

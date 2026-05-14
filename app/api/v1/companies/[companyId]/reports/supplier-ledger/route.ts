@@ -62,6 +62,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           details: { field: 'as_of_date', message: 'Not a valid calendar date.' },
         })
       }
+      // Sanity range: year 2000 → current+1 (see ar-ledger comment).
+      const year = probe.getUTCFullYear()
+      const maxYear = new Date().getUTCFullYear() + 1
+      if (year < 2000 || year > maxYear) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'as_of_date',
+            message: `Year out of supported range. Accepted: 2000 to ${maxYear}.`,
+          },
+        })
+      }
     }
 
     const gen = await safeGenerate(

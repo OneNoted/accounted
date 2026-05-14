@@ -62,7 +62,7 @@ registerEndpoint({
     'File size cap: 10 MB. Larger files require splitting client-side.',
     '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, generic_csv, camt053.',
     'Duplicate detection is by external_id (composed from date + amount + counterparty); a re-import of the same file with the same flag set typically deduplicates rather than creating doubles.',
-    'BFL 5 kap 1 § note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The bookkeeping obligation isn\'t discharged until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), which posts the journal entry. A successful import here means the data is ingested — not booked.',
+    'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested — not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
   ],
   example: {
@@ -287,7 +287,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         raw,
       )
 
-      // Mark the bank_file_imports row complete.
+      // Mark the bank_file_imports row complete. Scope by all three
+      // identifying fields — `(user_id, file_hash)` is the unique
+      // constraint today but adding `company_id` is defense in depth:
+      // even if a concurrent same-user same-hash import in a different
+      // company slipped past the pre-check, this update can never
+      // overwrite the wrong company's status row.
       await ctx.supabase
         .from('bank_file_imports')
         .update({
@@ -297,6 +302,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
         .eq('file_hash', fileHash)
         .eq('user_id', ctx.userId)
+        .eq('company_id', ctx.companyId!)
 
       await completeOperation(
         ctx.supabase,
