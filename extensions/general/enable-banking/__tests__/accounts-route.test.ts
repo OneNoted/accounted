@@ -29,7 +29,14 @@ interface SupabaseStub {
     accounts_data: StoredAccount[]
   } | null
   connectionError?: { message: string } | null
+  /** Error returned for every update. Use updateErrorByCall for per-call control. */
   updateError?: { message: string } | null
+  /**
+   * Per-call update errors. Indexed by 0-based call number. Lets a test
+   * succeed the first update (status flip) and fail the second (metadata).
+   * Falls back to updateError when the index isn't present.
+   */
+  updateErrorByCall?: Array<{ message: string } | null>
   /** Last update payload (may be overwritten by a follow-up metadata update). */
   capturedUpdate?: Record<string, unknown>
   /** All update payloads in order — first is the status flip, second the initial-sync metadata. */
@@ -37,6 +44,7 @@ interface SupabaseStub {
 }
 
 function buildSupabase(stub: SupabaseStub) {
+  let updateCallCount = 0
   return {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: stub.authUser }, error: null }),
@@ -49,10 +57,15 @@ function buildSupabase(stub: SupabaseStub) {
         error: stub.connectionError ?? null,
       }),
       update: vi.fn((payload: Record<string, unknown>) => {
+        const callIndex = updateCallCount++
         stub.capturedUpdate = payload
         ;(stub.capturedUpdates ??= []).push(payload)
+        const error =
+          stub.updateErrorByCall && callIndex < stub.updateErrorByCall.length
+            ? stub.updateErrorByCall[callIndex]
+            : stub.updateError ?? null
         return {
-          eq: vi.fn().mockResolvedValue({ error: stub.updateError ?? null }),
+          eq: vi.fn().mockResolvedValue({ error }),
         }
       }),
     })),
@@ -522,6 +535,53 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(stub.capturedUpdates?.[1]?.initial_sync_lookback_days).toBe(365)
+    })
+
+    it('surfaces metadata_update_failed when the second update errors after a successful sync', async () => {
+      // Sync runs and ingests transactions, but persisting initial_sync_completed_at
+      // fails. The client must see the failure (not a fake success) so the UI can
+      // show a retry warning; the cron will gate on initial_sync_completed_at IS NULL
+      // and self-heal on its next run.
+      mockedSync.mockResolvedValue({
+        imported: 12,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-03-01',
+        returnedMaxBookingDate: '2026-05-13',
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+        // First update (status flip) succeeds; second (metadata) fails.
+        updateErrorByCall: [null, { message: 'connection lost' }],
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          initial_lookback_days: 90,
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      // No fake success: initial_sync must NOT be populated.
+      expect(body.initial_sync).toBeUndefined()
+      // The error code surfaces the metadata-update failure mode so the UI
+      // and audit log can distinguish it from an ingest-side failure.
+      expect(body.initial_sync_error).toMatch(/^metadata_update_failed:/)
+      // Status flip still happened — connection is active, cron will retry backfill.
+      expect(stub.capturedUpdates?.[0]?.status).toBe('active')
+      expect(stub.capturedUpdates).toHaveLength(2)
     })
   })
 })

@@ -642,7 +642,7 @@ export const enableBankingExtension: Extension = {
             // Don't re-write accounts_data here — the first update already wrote it.
             // Including it again races with any concurrent writer (e.g. cron firing in
             // the sub-60s window) and would silently overwrite their changes.
-            await supabase
+            const { error: metaUpdateError } = await supabase
               .from('bank_connections')
               .update({
                 last_synced_at: completedAt,
@@ -654,18 +654,35 @@ export const enableBankingExtension: Extension = {
               })
               .eq('id', connection.id)
 
-            initialSyncSummary = {
-              imported: totalImported,
-              duplicates: totalDuplicates,
-              requested_from: fromDate,
-              returned_min_date: returnedMin,
-              returned_max_date: returnedMax,
-            }
+            if (metaUpdateError) {
+              // The sync itself succeeded (transactions are ingested) but we
+              // couldn't persist that. Falsely reporting success would tell the
+              // client "imported N transactions" while the DB still has
+              // initial_sync_completed_at = NULL, causing the cron to re-run a
+              // 90-day backfill next morning. Surface this as initial_sync_error
+              // so the UI shows a "background sync needs retry" warning, and the
+              // cron's gate (initial_sync_completed_at IS NULL) will self-heal.
+              initialSyncError = `metadata_update_failed: ${metaUpdateError.message}`
+              log.error('[enable-banking] Failed to persist initial_sync metadata after backfill', {
+                connectionId: connection.id,
+                error: metaUpdateError.message,
+                userId: user.id,
+                companyId,
+              })
+            } else {
+              initialSyncSummary = {
+                imported: totalImported,
+                duplicates: totalDuplicates,
+                requested_from: fromDate,
+                returned_min_date: returnedMin,
+                returned_max_date: returnedMax,
+              }
 
-            log.info('[enable-banking] Inline initial backfill complete', {
-              connectionId: connection.id,
-              ...initialSyncSummary,
-            })
+              log.info('[enable-banking] Inline initial backfill complete', {
+                connectionId: connection.id,
+                ...initialSyncSummary,
+              })
+            }
           } catch (syncError) {
             initialSyncError = syncError instanceof Error ? syncError.message : String(syncError)
             log.error('[enable-banking] Inline initial backfill failed — cron will retry', {
