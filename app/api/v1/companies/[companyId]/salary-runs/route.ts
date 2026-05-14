@@ -306,15 +306,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .single()
 
     if (error) {
+      // Disambiguate 23505 by constraint name. The salary_runs table has one
+      // unique index today: (company_id, period_year, period_month). A future
+      // migration could add another; mapping every 23505 here to
+      // SALARY_RUN_DUPLICATE_PERIOD would be misleading once that happens.
       if (error.code === '23505') {
-        return v1ErrorResponseFromCode('SALARY_RUN_DUPLICATE_PERIOD', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            field: 'period',
-            period_year: body.period_year,
-            period_month: body.period_month,
-          },
-        })
+        const constraint = (error as { constraint?: string }).constraint
+        if (constraint && constraint.includes('period_year')) {
+          return v1ErrorResponseFromCode('SALARY_RUN_DUPLICATE_PERIOD', ctx.log, {
+            requestId: ctx.requestId,
+            details: {
+              field: 'period',
+              period_year: body.period_year,
+              period_month: body.period_month,
+            },
+          })
+        }
       }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }

@@ -83,7 +83,7 @@ registerEndpoint({
           id: 'a8f1…',
           first_name: 'Anna',
           last_name: 'Andersson',
-          personnummer_masked: '19850412XXXX',
+          personnummer_masked: '19000101XXXX',
           employment_type: 'employee',
           employment_start: '2024-01-15',
           employment_end: null,
@@ -271,7 +271,7 @@ registerEndpoint({
     request: {
       first_name: 'Anna',
       last_name: 'Andersson',
-      personnummer: '198504121234',
+      personnummer: '190001010000',
       employment_type: 'employee',
       employment_start: '2024-01-15',
       salary_type: 'monthly',
@@ -285,7 +285,7 @@ registerEndpoint({
         id: 'a8f1…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer_masked: '19850412XXXX',
+        personnummer_masked: '19000101XXXX',
         employment_type: 'employee',
         employment_start: '2024-01-15',
         employment_end: null,
@@ -416,13 +416,27 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .single()
 
     if (error) {
+      // Disambiguate 23505 by constraint name — the employees table currently
+      // has only one unique index (company_id, personnummer), but a future
+      // migration could add another (e.g. (company_id, email)). Mapping every
+      // 23505 to EMPLOYEE_DUPLICATE_PERSONNUMMER would be a regression once
+      // that happens. Postgres auto-names inline `UNIQUE (...)` constraints
+      // as `<table>_<columns>_key`. Match conservatively by substring so a
+      // future rename of the constraint doesn't silently fall through.
       if (error.code === '23505') {
-        // GDPR Art.5(1)(c): NEVER echo back the supplied personnummer in the
-        // duplicate-error payload — caller only gets the field name.
-        return v1ErrorResponseFromCode('EMPLOYEE_DUPLICATE_PERSONNUMMER', ctx.log, {
-          requestId: ctx.requestId,
-          details: { field: 'personnummer' },
-        })
+        const constraint = (error as { constraint?: string }).constraint
+        if (constraint && constraint.includes('personnummer')) {
+          // GDPR Art.5(1)(c): NEVER echo back the supplied personnummer in the
+          // duplicate-error payload — caller only gets the field name.
+          return v1ErrorResponseFromCode('EMPLOYEE_DUPLICATE_PERSONNUMMER', ctx.log, {
+            requestId: ctx.requestId,
+            details: { field: 'personnummer' },
+          })
+        }
+        // Unknown unique-constraint violation — surface as a generic DB
+        // error rather than a misleading personnummer-specific code. The
+        // route-level log line will capture the constraint name for
+        // operators investigating the next 23505.
       }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }

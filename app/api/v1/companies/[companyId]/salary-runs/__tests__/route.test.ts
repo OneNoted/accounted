@@ -262,7 +262,17 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        salary_runs: { data: null, error: { code: '23505', message: 'duplicate' } },
+        salary_runs: {
+          data: null,
+          error: {
+            code: '23505',
+            message: 'duplicate',
+            // The inline `UNIQUE (company_id, period_year, period_month)`
+            // constraint is auto-named `<table>_<columns>_key`. The route
+            // disambiguates 23505s by substring-matching on the columns.
+            constraint: 'salary_runs_company_id_period_year_period_month_key',
+          },
+        },
         idempotency_keys: { data: null, error: null },
       }),
     )

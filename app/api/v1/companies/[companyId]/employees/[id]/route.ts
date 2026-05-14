@@ -63,6 +63,33 @@ const EmployeeDetail = z.object({
 const EMPLOYEE_DETAIL_COLUMNS =
   'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, is_active, created_at, updated_at'
 
+/**
+ * Shape returned by PATCH (success + dry-run preview) and by no-change PATCH.
+ * Replaces the GET-only `personnummer` field with `personnummer_masked` so
+ * write responses never echo back the natural-person identifier — symmetric
+ * with the POST response shape (GDPR Art.5(1)(c)).
+ */
+const EmployeeWriteResponse = EmployeeDetail
+  .omit({ personnummer: true })
+  .extend({ personnummer_masked: z.string() })
+
+type ExistingRow = {
+  id: string
+  personnummer: string
+  [key: string]: unknown
+}
+
+/**
+ * Convert a freshly-fetched / updated employee row into the write-response
+ * shape: drop `personnummer`, add `personnummer_masked`. Caller is
+ * responsible for passing a row that includes the raw `personnummer` field
+ * (always the case for EMPLOYEE_DETAIL_COLUMNS reads).
+ */
+function maskExistingForResponse(row: ExistingRow): Record<string, unknown> {
+  const { personnummer, ...rest } = row
+  return { ...rest, personnummer_masked: maskPersonnummer(personnummer) }
+}
+
 registerEndpoint({
   operation: 'employees.get',
   method: 'GET',
@@ -84,7 +111,7 @@ registerEndpoint({
         id: 'a8f1…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer: '198504121234',
+        personnummer: '190001010000',
         employment_type: 'employee',
         employment_start: '2024-01-15',
         employment_end: null,
@@ -164,7 +191,9 @@ registerEndpoint({
   reversible: false,
   dryRunSupported: true,
   request: { body: UpdateEmployeeSchema },
-  response: { success: EmployeeDetail },
+  // Write responses mask personnummer (GDPR Art.5(1)(c)) — only the GET
+  // drill-in returns the full value. Symmetric with the POST response.
+  response: { success: EmployeeWriteResponse },
 })
 
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
@@ -186,6 +215,27 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'body', message: 'Body is not valid JSON.' },
+      })
+    }
+
+    // Reject personnummer in the body explicitly — natural-person identity
+    // is immutable post-create. SOC 2 PI1.3 / processing integrity: surface
+    // the intent error rather than silently dropping the field. The Zod
+    // schema accepts personnummer as optional (inherited from the base
+    // schema's .partial()), so this guard runs BEFORE parse to give the
+    // caller the most specific message.
+    if (
+      rawBody !== null &&
+      typeof rawBody === 'object' &&
+      'personnummer' in rawBody
+    ) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'personnummer',
+          message:
+            'personnummer cannot be modified — identity is immutable post-create. DELETE and recreate if the natural-person identity has genuinely changed.',
+        },
       })
     }
 
@@ -219,13 +269,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
 
-    // Block personnummer change explicitly — UpdateEmployeeSchema doesn't
-    // include the field (EmployeeSchemaBase.partial() preserves it as
-    // optional, but our intent is forbid). Defensive guard: if a caller
-    // somehow supplied it, drop the value rather than alter identity.
-    type PersonnummerAttempt = { personnummer?: unknown }
-    delete (body as PersonnummerAttempt).personnummer
-
     // The Zod schema accepts all base fields as optional. Filter to the
     // explicitly-supplied keys so unmentioned columns aren't overwritten to
     // their `default()` values (e.g. is_sidoinkomst would silently reset
@@ -239,13 +282,23 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
 
     if (Object.keys(updates).length === 0) {
-      return ok(existing, { requestId: ctx.requestId })
+      // GDPR Art.5(1)(c): no-change PATCH still returns a write-shape, so
+      // mask personnummer just like the POST + PATCH success path.
+      return ok(maskExistingForResponse(existing as ExistingRow), {
+        requestId: ctx.requestId,
+      })
     }
 
     if (ctx.dryRun) {
-      // Merge for the preview; mask personnummer in the dry-run shape too.
-      const merged = { ...(existing as object), ...updates }
-      return dryRunPreview(merged, { requestId: ctx.requestId, log: ctx.log })
+      // Merge for the preview, then mask the natural-person identifier.
+      // Phase 5 PR-1 design: writes never echo back the supplied identity,
+      // only the GET drill-in does. The dry-run preview is a write-shape so
+      // it follows the write rule.
+      const merged = { ...(existing as ExistingRow), ...updates }
+      return dryRunPreview(maskExistingForResponse(merged), {
+        requestId: ctx.requestId,
+        log: ctx.log,
+      })
     }
 
     const { data, error } = await ctx.supabase
@@ -260,7 +313,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 
-    return ok(data, { requestId: ctx.requestId })
+    // GDPR Art.5(1)(c) — mask the natural-person identifier in the write
+    // response. The detail GET endpoint still returns the full value for
+    // callers who deliberately drill in.
+    return ok(maskExistingForResponse(data as ExistingRow), {
+      requestId: ctx.requestId,
+    })
   },
 )
 

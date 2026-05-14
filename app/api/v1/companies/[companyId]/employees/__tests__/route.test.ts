@@ -108,9 +108,12 @@ beforeEach(() => {
   })
 })
 
-// 12-digit personnummer; the value chosen has a `1234` last-4 that's easy to
-// spot in test assertions when verifying the GDPR mask.
-const SAMPLE_PERSONNUMMER = '198504121234'
+// 12-digit synthetic personnummer — passes the schema's `^\d{12}$` regex
+// while being obviously not a real birthdate (year 1900, day 1, zero
+// suffix). ISO A.5.34 / GDPR Art.5(1)(c): test fixtures must not look like
+// production-format PII. Last-4 is '0000' so the mask assertion is still
+// easy to spot.
+const SAMPLE_PERSONNUMMER = '190001010000'
 
 const SAMPLE_EMPLOYEE = {
   id: EMPLOYEE_ID,
@@ -166,7 +169,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
     expect(body.data).toHaveLength(1)
     expect(body.data[0].first_name).toBe('Anna')
     // GDPR Art.5(1)(c) — birthdate visible, last-4 hidden.
-    expect(body.data[0].personnummer_masked).toBe('19850412XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
     // The full personnummer must NEVER appear in the response, even in
     // unrelated fields.
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -293,7 +296,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(res.status).toBe(201)
     const body = await res.json()
     expect(body.data.first_name).toBe('Anna')
-    expect(body.data.personnummer_masked).toBe('19850412XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101XXXX')
     // Response shape never contains the raw personnummer.
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -302,7 +305,18 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        employees: { data: null, error: { code: '23505', message: 'duplicate' } },
+        employees: {
+          data: null,
+          error: {
+            code: '23505',
+            message: 'duplicate',
+            // Postgres auto-names the inline `UNIQUE (company_id, personnummer)`
+            // constraint as `<table>_<columns>_key`. The route disambiguates
+            // 23505s by substring-matching this name (see the constraint
+            // disambiguation comment in employees/route.ts).
+            constraint: 'employees_company_id_personnummer_key',
+          },
+        },
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -320,6 +334,37 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(body.error.code).toBe('EMPLOYEE_DUPLICATE_PERSONNUMMER')
     // GDPR Art.5(1)(c) defense-in-depth: never echo the value back, ever.
     expect(JSON.stringify(body.error)).not.toContain(SAMPLE_PERSONNUMMER)
+  })
+
+  it('does not misattribute a 23505 from a future unique index to EMPLOYEE_DUPLICATE_PERSONNUMMER', async () => {
+    // Defensive: if a future migration adds another unique constraint on
+    // employees (e.g. (company_id, email)), a 23505 raised by that
+    // constraint must NOT be mapped to EMPLOYEE_DUPLICATE_PERSONNUMMER.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: {
+          data: null,
+          error: {
+            code: '23505',
+            message: 'duplicate',
+            constraint: 'employees_company_id_email_key', // hypothetical
+          },
+        },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    const body = await res.json()
+    expect(body.error.code).not.toBe('EMPLOYEE_DUPLICATE_PERSONNUMMER')
   })
 
   it('returns a dry-run preview without committing when ?dry_run=true', async () => {
@@ -355,7 +400,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     // The dry-run preview must mask personnummer the same way the live
     // response shape does — never echo back the supplied identifier.
     const body = await res.json()
-    expect(body.data.preview.personnummer_masked).toBe('19850412XXXX')
+    expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
@@ -410,7 +455,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
         body: JSON.stringify({
           first_name: 'Bo',
           last_name: 'Berg',
-          personnummer: '199012105678',
+          personnummer: '190001020000',
           employment_start: '2024-02-01',
           salary_type: 'monthly',
           monthly_salary: 30000,
@@ -452,6 +497,11 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.monthly_salary).toBe(38000)
+    // GDPR Art.5(1)(c): PATCH success response masks personnummer (write
+    // shape) — the full value is only echoed by the GET drill-in.
+    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
   it('returns 404 EMPLOYEE_NOT_FOUND when the row is missing', async () => {
@@ -475,12 +525,14 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
   })
 
-  it('ignores personnummer changes (identity is immutable post-create)', async () => {
-    const updated = { ...SAMPLE_EMPLOYEE, monthly_salary: 40000 }
+  it('returns 400 when the body contains personnummer (identity is immutable)', async () => {
+    // SOC 2 PI1.3 / processing integrity: surface the intent error instead
+    // of silently dropping the field. Caller learns the constraint
+    // explicitly rather than being misled into thinking the value was
+    // applied.
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        employees: [{ data: SAMPLE_EMPLOYEE, error: null }, { data: updated, error: null }],
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -488,21 +540,46 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     const res = await updateEmployee(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
         method: 'PATCH',
-        // Caller attempts to change personnummer + a permitted field. The
-        // permitted field should land; the personnummer attempt is dropped.
         body: JSON.stringify({
-          personnummer: '199001019999',
+          personnummer: '190001029999',
           monthly_salary: 40000,
         }),
       }),
       detailParams(COMPANY_ID, EMPLOYEE_ID),
     )
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(400)
     const body = await res.json()
-    // The response (from the mock) carries the original personnummer
-    // unchanged — the route would never propagate the attempted new one.
-    expect(body.data.personnummer).toBe(SAMPLE_PERSONNUMMER)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('personnummer')
+  })
+
+  it('returns a dry-run preview with masked personnummer', async () => {
+    // GDPR Art.5(1)(c) — the dry-run preview is a write-shape so it follows
+    // the same masking rule as POST and PATCH success. The full value is
+    // only echoed by the GET drill-in.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}?dry_run=true`, {
+        method: 'PATCH',
+        body: JSON.stringify({ monthly_salary: 38000 }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.preview.personnummer).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 })
 
