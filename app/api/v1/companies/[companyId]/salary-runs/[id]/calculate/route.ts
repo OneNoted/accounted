@@ -143,7 +143,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const result = await runSalaryCalculation({
       supabase: ctx.supabase,
       companyId: ctx.companyId!,
-      userId: ctx.userId,
       salaryRunId,
       log: ctx.log,
       requestId: ctx.requestId,

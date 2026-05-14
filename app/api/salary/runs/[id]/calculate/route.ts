@@ -25,12 +25,11 @@ export const POST = withRouteContext(
   'salary_run.calculate',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { user, supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, log, requestId } = ctx
 
     const result = await runSalaryCalculation({
       supabase,
       companyId: companyId!,
-      userId: user.id,
       salaryRunId: id,
       log,
       requestId,

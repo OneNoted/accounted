@@ -58,11 +58,11 @@ export async function GET(
     })
   }
 
-  // OWASP V1.2.5 — sanitise header-interpolated values. orgNumber comes
-  // from company_settings (user-editable) and period_* from the run's
-  // own columns, but defense-in-depth requires we strip anything that
-  // could be construed as a header-injection character before splicing
-  // into Content-Disposition.
+  // OWASP V3.2 / V4 (HTTP response header injection prevention) — sanitise
+  // header-interpolated values. orgNumber comes from company_settings
+  // (user-editable) and period_* from the run's own columns, but defense
+  // in depth requires we strip anything that could be construed as a
+  // header-injection character before splicing into Content-Disposition.
   const safeOrg = result.orgNumber.replace(/[^0-9A-Za-z-]/g, '')
   const safePeriod = `${result.periodYear}${String(result.periodMonth).padStart(2, '0')}`.replace(
     /[^0-9]/g,

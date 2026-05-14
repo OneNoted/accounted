@@ -56,7 +56,6 @@ const BENEFIT_TYPE_TO_LINE_ITEM: Record<string, SalaryLineItemType> = {
 export interface RunSalaryCalculationArgs {
   supabase: SupabaseClient
   companyId: string
-  userId: string
   salaryRunId: string
   log: Logger
   requestId: string
@@ -82,7 +81,7 @@ export type RunSalaryCalculationResult =
 export async function runSalaryCalculation(
   args: RunSalaryCalculationArgs,
 ): Promise<RunSalaryCalculationResult> {
-  const { supabase, companyId, userId: _userId, salaryRunId: id, log, requestId } = args
+  const { supabase, companyId, salaryRunId: id, log, requestId } = args
   const opLog = log.child({ salaryRunId: id })
 
   // 1. Precondition: run exists, owned by company, is in draft status.

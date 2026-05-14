@@ -317,7 +317,12 @@ export async function generateAgiDeclaration(
         total_gross: run.total_gross,
         total_tax: run.total_tax,
         total_avgifter_basis: totals.totalAvgifterBasis,
-        total_avgifter: run.total_avgifter,
+        // Use the per-category sum that drives the XML rather than the
+        // run-level denormalised total. Both should agree, but a
+        // round-then-sum vs sum-then-round can produce öre drift; the
+        // agi_declarations row should align with what was actually
+        // serialised into the XML (which Skatteverket sees).
+        total_avgifter: totals.totalAvgifterAmount,
         employee_count: employeeData.length,
         is_correction: true,
         salary_run_id: run.id,
@@ -341,7 +346,12 @@ export async function generateAgiDeclaration(
         total_gross: run.total_gross,
         total_tax: run.total_tax,
         total_avgifter_basis: totals.totalAvgifterBasis,
-        total_avgifter: run.total_avgifter,
+        // Use the per-category sum that drives the XML rather than the
+        // run-level denormalised total. Both should agree, but a
+        // round-then-sum vs sum-then-round can produce öre drift; the
+        // agi_declarations row should align with what was actually
+        // serialised into the XML (which Skatteverket sees).
+        total_avgifter: totals.totalAvgifterAmount,
         employee_count: employeeData.length,
       })
       .select('id')
@@ -374,7 +384,12 @@ export async function generateAgiDeclaration(
             total_gross: run.total_gross,
             total_tax: run.total_tax,
             total_avgifter_basis: totals.totalAvgifterBasis,
-            total_avgifter: run.total_avgifter,
+            // Use the per-category sum that drives the XML rather than the
+        // run-level denormalised total. Both should agree, but a
+        // round-then-sum vs sum-then-round can produce öre drift; the
+        // agi_declarations row should align with what was actually
+        // serialised into the XML (which Skatteverket sees).
+        total_avgifter: totals.totalAvgifterAmount,
             employee_count: employeeData.length,
             is_correction: true,
             salary_run_id: run.id,
