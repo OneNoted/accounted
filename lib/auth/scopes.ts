@@ -128,6 +128,59 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',
   'GET /api/v1/companies/:companyId/reconciliation/bank/status': 'transactions:read',
 
+  // Phase 5 PR-3 — Reports + import async. Reports are read-only over
+  // existing lib/reports/* generators; imports are async over the Phase 4
+  // PR-2 operations substrate.
+  // JSON reports — all share `reports:read` (or `payroll:read` for the
+  // salary-scoped ones). kpi, audit-trail, periodisk-sammanstallning,
+  // ne-bilaga, and ink2 are deferred to a follow-up PR — kpi composes
+  // multiple lib generators rather than wrapping one; audit-trail lives in
+  // lib/core/audit/ rather than lib/reports/; ne-bilaga + ink2 + periodisk
+  // each have their own lib subdir structure that needs more care.
+  'GET /api/v1/companies/:companyId/reports/trial-balance': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/balance-sheet': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/income-statement': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/general-ledger': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/journal-register': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/vat-declaration': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/monthly-breakdown': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ar-ledger': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/supplier-ledger': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/continuity-check': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/salary-journal': 'payroll:read',
+  'GET /api/v1/companies/:companyId/reports/avgifter-basis': 'payroll:read',
+  'GET /api/v1/companies/:companyId/reports/vacation-liability': 'payroll:read',
+  // Binary report — SIE4 text/plain export. JSON variants of INK2 / NE-bilaga
+  // are deferred (see above).
+  'GET /api/v1/companies/:companyId/reports/sie-export': 'reports:read',
+  // Imports — async via the Phase 4 PR-2 operations substrate. Multipart
+  // uploads (the file is the request body).
+  'POST /api/v1/companies/:companyId/imports/sie': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/imports/bank': 'transactions:write',
+
+  // Phase 5 PR-1 — Payroll vertical (employees + salary-runs + lifecycle verbs).
+  // Reuses the pre-existing `payroll:read` / `payroll:write` scopes already
+  // defined for the MCP tool surface (gnubok_list_employees, gnubok_create_salary_run, ...).
+  // Employees (soft-delete via is_active — no archived_at column).
+  'GET /api/v1/companies/:companyId/employees': 'payroll:read',
+  'GET /api/v1/companies/:companyId/employees/:id': 'payroll:read',
+  'POST /api/v1/companies/:companyId/employees': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/employees/:id': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/employees/:id': 'payroll:write',
+  // Salary runs (state machine: draft → review → approved → paid → booked).
+  'GET /api/v1/companies/:companyId/salary-runs': 'payroll:read',
+  'GET /api/v1/companies/:companyId/salary-runs/:id': 'payroll:read',
+  'POST /api/v1/companies/:companyId/salary-runs': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/salary-runs/:id': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/salary-runs/:id': 'payroll:write',
+  // Salary-run lifecycle verbs — v1 :calculate collapses internal /calculate
+  // (math) + /review (state advance) so an agent has one verb per logical step.
+  'POST /api/v1/companies/:companyId/salary-runs/:id/calculate': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/approve': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/mark-paid': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/book': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi': 'payroll:write',
+
   // Webhooks (Phase 6 — placeholder so the catalogue is complete)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',
   'POST /api/v1/companies/:companyId/webhooks': 'webhooks:manage',

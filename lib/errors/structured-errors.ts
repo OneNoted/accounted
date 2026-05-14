@@ -1314,6 +1314,101 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'AGI-deklarationen kunde inte genereras.',
     message_en: 'Failed to generate AGI declaration.',
   },
+  // Phase 5 PR-1 — v1 REST surface error codes.
+  EMPLOYEE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den anställda kunde inte hittas.',
+    message_en: 'Employee not found.',
+  },
+  EMPLOYEE_DUPLICATE_PERSONNUMMER: {
+    httpStatus: 409,
+    message_sv: 'En anställd med samma personnummer finns redan.',
+    message_en: 'An employee with that personnummer already exists.',
+  },
+  SALARY_RUN_DUPLICATE_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'En lönekörning för perioden finns redan.',
+    message_en: 'A salary run for that period already exists.',
+  },
+  SALARY_RUN_PATCH_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Endast utkast (draft) kan uppdateras.',
+    message_en: 'Only draft salary runs can be patched.',
+  },
+  SALARY_RUN_DELETE_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Endast utkast (draft) kan raderas.',
+    message_en: 'Only draft salary runs can be deleted.',
+  },
+  SALARY_RUN_CALCULATE_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara i status draft för beräkning.',
+    message_en: 'Salary run must be in draft status to calculate.',
+  },
+  SALARY_RUN_APPROVE_NOT_REVIEW: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara i status review för godkännande.',
+    message_en: 'Salary run must be in review status to approve.',
+  },
+  SALARY_RUN_APPROVE_VALIDATION_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Valideringsfel — korrigera innan godkännande.',
+    message_en: 'Validation failed — fix issues before approving.',
+  },
+  SALARY_RUN_MARK_PAID_NOT_APPROVED: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara godkänd för att markeras som betald.',
+    message_en: 'Salary run must be approved before it can be marked paid.',
+  },
+  SALARY_RUN_BOOK_NOT_PAID: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara markerad som betald för bokföring.',
+    message_en: 'Salary run must be marked paid before booking.',
+  },
+  AGI_GENERATE_NOT_BOOKABLE: {
+    httpStatus: 400,
+    message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
+    message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
+  },
+  AGI_INCOMPLETE_DATA: {
+    httpStatus: 400,
+    message_sv: 'AGI-data ofullständig — kontrollera att företaget har organisationsnummer, kontaktnamn, telefon och e-post.',
+    message_en: 'AGI data is incomplete — verify the company has org number, contact name, phone, and email.',
+  },
+  COMPANY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företaget kunde inte hittas.',
+    message_en: 'Company not found.',
+  },
+  // Phase 5 PR-1 carry-over: distinct error code for the salary-run DELETE
+  // FK-null guard so an operator seeing this in logs knows a journal entry
+  // is at risk, not just a status race.
+  SALARY_RUN_DELETE_HAS_JOURNAL_ENTRY: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen är kopplad till en verifikation och kan inte raderas (BFL 5 kap räkenskapsinformation).',
+    message_en: 'Salary run is linked to a journal entry and cannot be deleted (BFL 5 kap räkenskapsinformation).',
+  },
+  // Phase 5 PR-3 — additional import error codes.
+  SIE_IMPORT_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Den här SIE-filen har redan importerats.',
+    message_en: 'This SIE file has already been imported.',
+  },
+  BANK_IMPORT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Bankfilsimporten misslyckades.',
+    message_en: 'Bank file import failed.',
+  },
+  BANK_FILE_FORMAT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Bankfilens format kunde inte identifieras.',
+    message_en: 'Bank file format could not be identified.',
+  },
+  BANK_IMPORT_DUPLICATE_OTHER_COMPANY: {
+    httpStatus: 409,
+    message_sv: 'Den här filen har redan importerats för ett annat företag av samma användare.',
+    message_en: 'This file has already been imported into another company by this user.',
+  },
 }
 
 const COMPANY: Record<string, StructuredErrorEntry> = {

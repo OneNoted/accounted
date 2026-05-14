@@ -256,7 +256,9 @@ export const enableBankingExtension: Extension = {
         })
         if (!rl.ok) return rl.response!
 
-        const { connection_id, days_back: rawDaysBack = 30 } = await request.json()
+        // Default 90 days: most callers (Sync Now button, post-activation gap fill)
+        // want a deep refresh, not a 30-day blip. Cron uses 7-day incrementals separately.
+        const { connection_id, days_back: rawDaysBack = 90 } = await request.json()
         const days_back = Math.min(Math.max(1, rawDaysBack), 365)
 
         const { data: connection, error: connectionError } = await supabase
@@ -453,6 +455,8 @@ export const enableBankingExtension: Extension = {
         const body = await request.json().catch(() => null)
         const connection_id = body?.connection_id
         const enabled_uids = body?.enabled_uids
+        const rawLookback = body?.initial_lookback_days
+        const account_mappings = body?.account_mappings
 
         if (typeof connection_id !== 'string' || !connection_id) {
           return NextResponse.json({ error: 'connection_id krävs' }, { status: 400 })
@@ -472,6 +476,49 @@ export const enableBankingExtension: Extension = {
             { status: 400 }
           )
         }
+
+        // account_mappings is optional. When present, it's an array of
+        // { uid, ledger_account } pairs that route per-account ingest to a
+        // specific BAS account (e.g. EUR account → 1932 instead of the default 1930).
+        // Restrict to BAS class 19 (kassa/bank). Accepting e.g. 3001 (revenue)
+        // or 2640 (input VAT) here would silently misroute every bank-side
+        // journal-entry leg into a revenue/VAT account, corrupting both the
+        // ledger and momsdeklaration. The chart-of-accounts existence check
+        // below is necessary but not sufficient — those accounts likely do
+        // exist in the chart, but they're the wrong class.
+        const BAS_ACCOUNT_PATTERN = /^19[0-9]{2}$/
+        type AccountMapping = { uid: string; ledger_account?: string | null }
+        let mappings: AccountMapping[] = []
+        if (account_mappings !== undefined) {
+          if (!Array.isArray(account_mappings)) {
+            return NextResponse.json(
+              { error: 'account_mappings måste vara en lista' },
+              { status: 400 }
+            )
+          }
+          for (const m of account_mappings) {
+            if (!m || typeof m !== 'object' || typeof m.uid !== 'string') {
+              return NextResponse.json(
+                { error: 'account_mappings: varje post kräver uid (sträng)' },
+                { status: 400 }
+              )
+            }
+            if (m.ledger_account != null && (typeof m.ledger_account !== 'string' || !BAS_ACCOUNT_PATTERN.test(m.ledger_account))) {
+              return NextResponse.json(
+                { error: 'account_mappings: ledger_account måste vara ett BAS-konto i klass 19 (1900–1999)' },
+                { status: 400 }
+              )
+            }
+          }
+          mappings = account_mappings as AccountMapping[]
+        }
+
+        // initial_lookback_days only applies on the pending_selection→active transition.
+        // Default 90 (PSD2 standard); clamp to [30, 365]. Ignored for selection edits.
+        const initialLookbackDays = (() => {
+          const n = typeof rawLookback === 'number' && Number.isFinite(rawLookback) ? rawLookback : 90
+          return Math.min(365, Math.max(30, Math.round(n)))
+        })()
 
         const { data: connection, error: connectionError } = await supabase
           .from('bank_connections')
@@ -501,11 +548,58 @@ export const enableBankingExtension: Extension = {
           )
         }
 
+        // Mirror the enabled_uids guard for account_mappings — without this,
+        // a typo'd UID in the mapping list is silently dropped (the entry
+        // never lands in the resulting accounts_data) while the response is
+        // still 200, leaving the client to believe the mapping was applied.
+        const unknownMappingUids = mappings.map(m => m.uid).filter(uid => !knownUids.has(uid))
+        if (unknownMappingUids.length > 0) {
+          return NextResponse.json(
+            { error: 'account_mappings innehåller okända konto-uid.', unknown_uids: unknownMappingUids },
+            { status: 400 }
+          )
+        }
+
+        // Verify any provided ledger_account values actually exist in the
+        // company's chart of accounts. Prevents users from typing arbitrary
+        // numbers via the API and breaking journal entry creation later.
+        const requestedLedgerAccounts = mappings
+          .map(m => m.ledger_account)
+          .filter((a): a is string => typeof a === 'string')
+        if (requestedLedgerAccounts.length > 0) {
+          const { data: chartRows } = await supabase
+            .from('chart_of_accounts')
+            .select('account_number')
+            .eq('company_id', companyId)
+            .in('account_number', requestedLedgerAccounts)
+          const validAccountNumbers = new Set((chartRows || []).map(r => r.account_number as string))
+          const invalid = requestedLedgerAccounts.filter(a => !validAccountNumbers.has(a))
+          if (invalid.length > 0) {
+            return NextResponse.json(
+              {
+                error: 'Ett eller flera bokföringskonton finns inte i kontoplanen.',
+                invalid_accounts: invalid,
+              },
+              { status: 400 }
+            )
+          }
+        }
+
         const enabledSet = new Set(enabled_uids)
-        const updatedAccounts: StoredAccount[] = existing.map(a => ({
-          ...a,
-          enabled: enabledSet.has(a.uid),
-        }))
+        const mappingsByUid = new Map(mappings.map(m => [m.uid, m]))
+        const updatedAccounts: StoredAccount[] = existing.map(a => {
+          const mapping = mappingsByUid.get(a.uid)
+          return {
+            ...a,
+            enabled: enabledSet.has(a.uid),
+            // Apply ledger_account from mapping when present. Explicit null clears it.
+            // Absent mapping leaves the existing ledger_account untouched (back-compat
+            // with selection-edit calls that don't include account_mappings).
+            ...(mapping
+              ? { ledger_account: mapping.ledger_account ?? undefined }
+              : {}),
+          }
+        })
 
         // State machine: only transition pending_selection → active. Once
         // active, the status field is omitted from the update so the same
@@ -568,10 +662,138 @@ export const enableBankingExtension: Extension = {
           })
         }
 
+        // Initial backfill on activation. Run inline so the user has data the
+        // moment they finish account selection — no 24h cron wait. Failures
+        // here don't fail the PATCH; the cron will retry on its next run
+        // (gated on initial_sync_completed_at IS NULL).
+        let initialSyncSummary: {
+          imported: number
+          duplicates: number
+          requested_from: string
+          returned_min_date: string | null
+          returned_max_date: string | null
+        } | null = null
+        let initialSyncError: string | null = null
+
+        if (connection.status === 'pending_selection') {
+          const accountsToSync = updatedAccounts.filter(a => a.enabled !== false)
+          const toDate = new Date().toISOString().split('T')[0]
+          const fromDate = new Date(Date.now() - initialLookbackDays * 24 * 60 * 60 * 1000)
+            .toISOString()
+            .split('T')[0]
+
+          log.info('[enable-banking] Starting inline initial backfill', {
+            connectionId: connection.id,
+            accountCount: accountsToSync.length,
+            lookbackDays: initialLookbackDays,
+            fromDate,
+            toDate,
+          })
+
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+          try {
+            const ingestFn = ctx?.services.ingestTransactions
+            const syncPromise = Promise.all(
+              accountsToSync.map(account => syncAccountTransactions(
+                supabase,
+                companyId,
+                user.id,
+                connection.id,
+                account,
+                fromDate,
+                toDate,
+                ingestFn,
+                { strategy: 'longest' }
+              ))
+            )
+            // If the timeout wins the race, the underlying Promise.all keeps
+            // running. Without a registered handler, a late rejection from the
+            // bank API would surface as an unhandledRejection — Node 22 (the
+            // self-hosted Docker runtime) terminates the process by default on
+            // those, taking the whole server down. The cron retries the
+            // backfill via initial_sync_completed_at IS NULL, so a no-op
+            // catch is the right policy here.
+            syncPromise.catch(() => {})
+
+            const TIMEOUT_MS = 60_000
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timeoutHandle = setTimeout(() => reject(new Error('initial_sync_timeout')), TIMEOUT_MS)
+            })
+            const results = await Promise.race([syncPromise, timeoutPromise])
+
+            const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
+            const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
+
+            // Min/max booking date across all synced accounts
+            const minDates = results.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
+            const maxDates = results.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
+            const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
+            const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
+
+            const completedAt = new Date().toISOString()
+            // Don't re-write accounts_data here — the first update already wrote it.
+            // Including it again races with any concurrent writer (e.g. cron firing in
+            // the sub-60s window) and would silently overwrite their changes.
+            const { error: metaUpdateError } = await supabase
+              .from('bank_connections')
+              .update({
+                last_synced_at: completedAt,
+                initial_sync_completed_at: completedAt,
+                initial_sync_requested_from: fromDate,
+                initial_sync_returned_min_date: returnedMin,
+                initial_sync_returned_max_date: returnedMax,
+                initial_sync_lookback_days: initialLookbackDays,
+              })
+              .eq('id', connection.id)
+
+            if (metaUpdateError) {
+              // The sync itself succeeded (transactions are ingested) but we
+              // couldn't persist that. Falsely reporting success would tell the
+              // client "imported N transactions" while the DB still has
+              // initial_sync_completed_at = NULL, causing the cron to re-run a
+              // 90-day backfill next morning. Surface this as initial_sync_error
+              // so the UI shows a "background sync needs retry" warning, and the
+              // cron's gate (initial_sync_completed_at IS NULL) will self-heal.
+              initialSyncError = `metadata_update_failed: ${metaUpdateError.message}`
+              log.error('[enable-banking] Failed to persist initial_sync metadata after backfill', {
+                connectionId: connection.id,
+                error: metaUpdateError.message,
+                userId: user.id,
+                companyId,
+              })
+            } else {
+              initialSyncSummary = {
+                imported: totalImported,
+                duplicates: totalDuplicates,
+                requested_from: fromDate,
+                returned_min_date: returnedMin,
+                returned_max_date: returnedMax,
+              }
+
+              log.info('[enable-banking] Inline initial backfill complete', {
+                connectionId: connection.id,
+                ...initialSyncSummary,
+              })
+            }
+          } catch (syncError) {
+            initialSyncError = syncError instanceof Error ? syncError.message : String(syncError)
+            log.error('[enable-banking] Inline initial backfill failed — cron will retry', {
+              connectionId: connection.id,
+              error: initialSyncError,
+              userId: user.id,
+              companyId,
+            })
+          } finally {
+            if (timeoutHandle) clearTimeout(timeoutHandle)
+          }
+        }
+
         return NextResponse.json({
           success: true,
           enabled_count: enabled_uids.length,
           total_count: existing.length,
+          ...(initialSyncSummary ? { initial_sync: initialSyncSummary } : {}),
+          ...(initialSyncError ? { initial_sync_error: initialSyncError } : {}),
         })
       },
     },

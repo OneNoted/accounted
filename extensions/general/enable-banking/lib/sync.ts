@@ -30,6 +30,10 @@ export interface SyncResult {
   imported: number
   duplicates: number
   errors: number
+  /** Earliest booking date the ASPSP returned. Undefined when no transactions came back. */
+  returnedMinBookingDate?: string
+  /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
+  returnedMaxBookingDate?: string
 }
 
 /**
@@ -112,6 +116,9 @@ export async function syncAccountTransactions(
   const ingestOptions: IngestOptions = {}
   if (syncOptions?.skipAutoCategorization) ingestOptions.skipAutoCategorization = true
   if (syncOptions?.rawInsertOnly) ingestOptions.rawInsertOnly = true
+  // Per-account ledger routing — the mapping engine consumes settlementAccount
+  // for the bank-side leg, falling back to '1930' when unset.
+  if (account.ledger_account) ingestOptions.settlementAccount = account.ledger_account
   const ingestResult = await ingest(supabase, companyId, userId, rawTransactions, ingestOptions)
 
   console.log('[enable-banking] Ingest result', {
@@ -150,5 +157,7 @@ export async function syncAccountTransactions(
     imported: ingestResult.imported,
     duplicates: ingestResult.duplicates,
     errors: ingestResult.errors,
+    returnedMinBookingDate: minBookingDate,
+    returnedMaxBookingDate: maxBookingDate,
   }
 }

@@ -72,25 +72,9 @@ export async function PATCH(
     const newStart = body.period_start || period.period_start
     const newEnd = body.period_end || period.period_end
 
-    // Enskild firma must use calendar year per BFL 3 kap.
-    const { data: companyRow } = await supabase
-      .from('companies')
-      .select('entity_type')
-      .eq('id', companyId)
-      .single()
-
-    if (companyRow?.entity_type === 'enskild_firma') {
-      const s = parseDateParts(newStart)
-      const e = parseDateParts(newEnd)
-      if (s.month !== 1 || s.day !== 1 || e.month !== 12 || e.day !== 31) {
-        return NextResponse.json(
-          { error: 'Enskild firma måste använda kalenderår (1 januari – 31 december) enligt BFL 3 kap.' },
-          { status: 400 }
-        )
-      }
-    }
-
-    // First period for this company may start on any day (BFL 3 kap.)
+    // First period for this company may start on any day (BFL 3 kap.).
+    // EF's first period may also extend to 31 dec next year (förlängt
+    // räkenskapsår, max 18 months) when the company started after 1 juli.
     const { count: earlierCount } = await supabase
       .from('fiscal_periods')
       .select('id', { count: 'exact', head: true })
@@ -100,7 +84,34 @@ export async function PATCH(
 
     const isFirstPeriod = !earlierCount || earlierCount === 0
 
-    // Validate period duration (max 18 months per BFL 3 kap.)
+    // Enskild firma must end on 31 december (BFL 3 kap.). Subsequent periods
+    // must also start on 1 januari. The first period may start any day.
+    const { data: companyRow } = await supabase
+      .from('companies')
+      .select('entity_type')
+      .eq('id', companyId)
+      .single()
+
+    if (companyRow?.entity_type === 'enskild_firma') {
+      const e = parseDateParts(newEnd)
+      if (e.month !== 12 || e.day !== 31) {
+        return NextResponse.json(
+          { error: 'Enskild firma måste ha slutdatum 31 december enligt BFL 3 kap.' },
+          { status: 400 }
+        )
+      }
+      if (!isFirstPeriod) {
+        const s = parseDateParts(newStart)
+        if (s.month !== 1 || s.day !== 1) {
+          return NextResponse.json(
+            { error: 'Enskild firma måste använda kalenderår (1 januari – 31 december) enligt BFL 3 kap.' },
+            { status: 400 }
+          )
+        }
+      }
+    }
+
+    // Validate period duration (max 18 months for first period, 12 for subsequent, per BFL 3 kap.)
     const durationError = validatePeriodDuration(newStart, newEnd, { isFirstPeriod })
     if (durationError) {
       return NextResponse.json({ error: durationError }, { status: 400 })
