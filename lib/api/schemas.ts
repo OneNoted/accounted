@@ -834,6 +834,41 @@ export const UpdateEmployeeSchema = EmployeeSchemaBase.partial().superRefine((da
       path: ['hourly_rate'],
     })
   }
+
+  // Växa-stöd schema-level consistency check. The schema can only see what
+  // the PATCH body carries; the route layer is responsible for merged-
+  // state validation (i.e. an existing employee with vaxa_stod_start
+  // already set can have vaxa_stod_eligible flipped on without also
+  // sending start in the body). What the schema CAN enforce:
+  //   - If the body enables vaxa_stod AND clears vaxa_stod_start explicitly
+  //     (sending null), reject — that would orphan the eligibility flag.
+  //   - If the body sets vaxa_stod_eligible=true AND vaxa_stod_start is
+  //     present in the body but invalid relative to vaxa_stod_end, reject.
+  // The first case isn't currently expressible via .partial() (null != absent),
+  // so the practical schema-level check is the second one. The route
+  // layer will add a merged-state check when needed.
+  if (
+    data.vaxa_stod_eligible === true &&
+    'vaxa_stod_start' in data &&
+    !data.vaxa_stod_start
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat',
+      path: ['vaxa_stod_start'],
+    })
+  }
+  if (
+    data.vaxa_stod_start &&
+    data.vaxa_stod_end &&
+    data.vaxa_stod_end < data.vaxa_stod_start
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Växa-stödets slutdatum måste vara efter startdatumet',
+      path: ['vaxa_stod_end'],
+    })
+  }
 })
 
 export const EmployeeBenefitTypeSchema = z.enum(['bike', 'car', 'meals', 'housing', 'wellness', 'other'])

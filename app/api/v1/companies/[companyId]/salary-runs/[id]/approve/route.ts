@@ -112,6 +112,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         'calculation_breakdown, employee:employees(first_name, last_name, clearing_number, bank_account_number, email)',
       )
       .eq('salary_run_id', salaryRunId)
+      // Defense-in-depth: every query carries the company_id filter per
+      // CLAUDE.md, even when salary_run_id already constrains to the
+      // company via FK + RLS.
+      .eq('company_id', ctx.companyId!)
     if (empErr) {
       return v1ErrorResponse(empErr, ctx.log, { requestId: ctx.requestId })
     }

@@ -148,7 +148,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    const xmlFilename = `AGI_${result.orgNumber}_${result.periodYear}${String(result.periodMonth).padStart(2, '0')}.xml`
+    // OWASP V1.2.5 — sanitise the filename. The orgNumber comes from
+    // company_settings (user-editable) so it can in theory carry stray
+    // characters. The period digits are server-generated but we strip
+    // anything non-numeric defensively. The resulting filename is safe
+    // to put in a future Content-Disposition header by any caller
+    // forwarding the response, and prevents path-traversal characters
+    // from reaching agent file-write code that uses xml_filename
+    // verbatim.
+    const safeOrg = result.orgNumber.replace(/[^0-9A-Za-z-]/g, '')
+    const safePeriod = `${result.periodYear}${String(result.periodMonth).padStart(2, '0')}`.replace(
+      /[^0-9]/g,
+      '',
+    )
+    const xmlFilename = `AGI_${safeOrg}_${safePeriod}.xml`
 
     return ok(
       {

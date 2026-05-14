@@ -110,10 +110,15 @@ export async function runSalaryCalculation(
   const config = await loadPayrollConfig(supabase, paymentYear)
 
   // 3. Load roster — `salary_run_employees` joined with employees + line items.
+  // Defense-in-depth: filter by company_id too even though salary_run_id is a
+  // foreign key. RLS already constrains the table per-company, but per
+  // CLAUDE.md every query carries the company_id filter explicitly so a
+  // future RLS lapse can't surface cross-tenant rows.
   const { data: runEmployees, error: empError } = await supabase
     .from('salary_run_employees')
     .select('*, employee:employees(*), line_items:salary_line_items(*)')
     .eq('salary_run_id', id)
+    .eq('company_id', companyId)
 
   if (empError || !runEmployees || runEmployees.length === 0) {
     return { ok: false, code: 'SALARY_RUN_NO_EMPLOYEES' }
@@ -582,6 +587,12 @@ export async function runSalaryCalculation(
       calculation_params: serializePayrollConfig(config),
     })
     .eq('id', id)
+    // Defense-in-depth: scope the write to the company explicitly. The
+    // first SELECT confirmed `company_id = companyId` for this id, but the
+    // CLAUDE.md rule is that every write carries the filter so the
+    // intent is explicit at the SQL layer even if upstream code is later
+    // refactored.
+    .eq('company_id', companyId)
     .select()
     .single()
 

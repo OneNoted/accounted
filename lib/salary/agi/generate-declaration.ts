@@ -276,14 +276,17 @@ export async function generateAgiDeclaration(
     avgifterByCategory,
   }
 
-  // 6. Existing AGI determines correction status.
+  // 6. Existing AGI determines correction status. Use `.maybeSingle()`
+  // because the lookup must tolerate the no-row case without throwing —
+  // that's the FIRST-time generation path. `.single()` would surface a
+  // PGRST116 row-not-found error and abort what should be a clean insert.
   const { data: existingAgi } = await supabase
     .from('agi_declarations')
     .select('id')
     .eq('company_id', companyId)
     .eq('period_year', run.period_year)
     .eq('period_month', run.period_month)
-    .single()
+    .maybeSingle()
 
   const isCorrection = !!existingAgi
 
