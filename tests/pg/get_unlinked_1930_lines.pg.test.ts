@@ -17,7 +17,7 @@ async function insertPostedJournalEntry(params: {
   companyId: string
   fiscalPeriodId: string
   entryDate: string
-  sourceType: 'opening_balance' | 'manual' | 'bank_import' | 'import'
+  sourceType: 'opening_balance' | 'manual' | 'bank_transaction' | 'import'
   voucherNumber: number
   amount?: number
 }): Promise<string> {
@@ -78,7 +78,7 @@ describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
     const bankEntryId = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-03-15',
-      sourceType: 'bank_import',
+      sourceType: 'bank_transaction',
       voucherNumber: 2,
       amount: 1500,
     })
@@ -115,13 +115,13 @@ describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-02-01',
-      sourceType: 'bank_import',
+      sourceType: 'bank_transaction',
       voucherNumber: 10,
     })
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-08-01',
-      sourceType: 'bank_import',
+      sourceType: 'bank_transaction',
       voucherNumber: 11,
     })
 
@@ -145,11 +145,11 @@ describe('get_unlinked_1930_lines RPC — opening_balance exclusion', () => {
 
     await insertPostedJournalEntry({
       userId: userA, companyId: companyA, fiscalPeriodId: fpA,
-      entryDate: '2026-03-01', sourceType: 'bank_import', voucherNumber: 1,
+      entryDate: '2026-03-01', sourceType: 'bank_transaction', voucherNumber: 1,
     })
     await insertPostedJournalEntry({
       userId: userB, companyId: companyB, fiscalPeriodId: fpB,
-      entryDate: '2026-03-01', sourceType: 'bank_import', voucherNumber: 1,
+      entryDate: '2026-03-01', sourceType: 'bank_transaction', voucherNumber: 1,
     })
 
     const { rows: rowsA } = await getPool().query(
