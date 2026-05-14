@@ -91,21 +91,21 @@ function buildPrefillLines(
   const lines: FormLine[] = [
     {
       account_number: '',
-      debit_amount: net.toFixed(2),
+      debit_amount: String(net),
       credit_amount: '',
     },
   ]
   if (vatRounded > 0) {
     lines.push({
       account_number: '2641',
-      debit_amount: vatRounded.toFixed(2),
+      debit_amount: String(vatRounded),
       credit_amount: '',
     })
   }
   lines.push({
     account_number: '1930',
     debit_amount: '',
-    credit_amount: totalRounded.toFixed(2),
+    credit_amount: String(totalRounded),
   })
   return lines
 }
@@ -157,6 +157,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     setLines(buildPrefillLines(item))
     setLinkToTransaction(!!item.matched_transaction_id)
     setSelectedTransactionId(item.matched_transaction_id)
+    const supplier = item.extracted_data?.supplier?.name?.trim() || ''
+    const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
+    setDescription([supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg')
+    setNotes('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 

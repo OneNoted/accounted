@@ -1394,6 +1394,7 @@ export const invoiceInboxExtension: Extension = {
               category: 'uncategorized',
             })
             .eq('id', transaction.id)
+            .eq('company_id', ctx.companyId)
           if (txUpdateError) {
             console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
           }
