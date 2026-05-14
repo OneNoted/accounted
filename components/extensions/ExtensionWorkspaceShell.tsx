@@ -13,7 +13,7 @@ export default function ExtensionWorkspaceShell({
   const Icon = resolveIcon(definition.icon)
 
   return (
-    <div>
+    <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
       {/* Header */}
       <div className="flex items-start gap-4 mb-8">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 flex-shrink-0">
