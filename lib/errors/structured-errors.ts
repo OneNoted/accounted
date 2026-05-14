@@ -1404,6 +1404,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bankfilens format kunde inte identifieras.',
     message_en: 'Bank file format could not be identified.',
   },
+  BANK_IMPORT_DUPLICATE_OTHER_COMPANY: {
+    httpStatus: 409,
+    message_sv: 'Den här filen har redan importerats för ett annat företag av samma användare.',
+    message_en: 'This file has already been imported into another company by this user.',
+  },
 }
 
 const COMPANY: Record<string, StructuredErrorEntry> = {

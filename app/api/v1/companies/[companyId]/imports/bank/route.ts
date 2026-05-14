@@ -163,9 +163,48 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     )
 
     try {
+      // Cross-company collision pre-check. The `bank_file_imports` unique
+      // constraint is `(user_id, file_hash)` — set when the table was
+      // designed for the single-tenant single-company-per-user world. If
+      // the same user is a member of two companies and uploads the same
+      // file to both, a naive upsert with onConflict='user_id,file_hash'
+      // would silently overwrite the first company's row with the second
+      // company_id. Pre-check for that case and surface a structured
+      // error so an agent sees the explicit conflict instead of a
+      // silently-stolen row.
+      //
+      // A migration to widen the unique constraint to (user_id, file_hash,
+      // company_id) is the proper fix; that's an engine-PR concern.
+      const { data: existingImport } = await ctx.supabase
+        .from('bank_file_imports')
+        .select('id, company_id, filename, imported_at, status')
+        .eq('user_id', ctx.userId)
+        .eq('file_hash', fileHash)
+        .maybeSingle()
+      if (existingImport && (existingImport as { company_id: string }).company_id !== ctx.companyId) {
+        await failOperation(
+          ctx.supabase,
+          {
+            id: op.id,
+            error: {
+              code: 'BANK_IMPORT_DUPLICATE_OTHER_COMPANY',
+              message: 'This file has already been imported into another company by this user.',
+            },
+          },
+          ctx.log,
+        )
+        return v1ErrorResponseFromCode('BANK_IMPORT_DUPLICATE_OTHER_COMPANY', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            existing_company_id: (existingImport as { company_id: string }).company_id,
+            existing_import_id: (existingImport as { id: string }).id,
+          },
+        })
+      }
+
       // Record the import row so the dashboard's "bank file imports" tab
       // shows v1 imports too. `upsert` on (user_id, file_hash) gives
-      // duplicate-rerun protection.
+      // duplicate-rerun protection for the same-company case.
       await ctx.supabase
         .from('bank_file_imports')
         .upsert(

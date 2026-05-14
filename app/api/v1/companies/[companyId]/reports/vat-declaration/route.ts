@@ -24,7 +24,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/vat-declaration',
   summary: 'Swedish VAT declaration (momsdeklaration) for a period.',
   description:
-    'Computes momsdeklaration rutor for the given period_type / year / period. The result includes ruta 05 (taxable sales), 10-12 (output VAT 25/12/6%), 30-32 (reverse-charge VAT), 39-40 (EU services / export), 48 (input VAT), and 49 (moms att betala/återfå — the bottom line). Mapping rules match SKV 4700.',
+    'Computes momsdeklaration rutor for the given period_type / year / period. The result includes ruta 05 (domestic taxable sales), 10-12 (output VAT 25/12/6%), 20-24 (EU acquisitions of goods + reverse-charge on imported services), 30-32 (reverse-charge output VAT on imported services), 35-36 (export + EU services), 39-40 (EU services / export legacy rutor), 48 (input VAT), 50 (import goods), 60-62 (calculated output VAT on imports 25/12/6%), and 49 (moms att betala/återfå — the bottom line). Mapping rules match SKV 4700.',
   useWhen:
     'Submitting momsdeklaration to Skatteverket, reconciling VAT balances at month/quarter end, or building a VAT-payable dashboard.',
   doNotUseFor:
@@ -58,12 +58,33 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'reports.vat-declaration',
   async (request, ctx) => {
     const url = new URL(request.url)
-    const FiltersSchema = z.object({
-      period_type: VatPeriodTypeEnum,
-      year: z.coerce.number().int().min(2000).max(2100),
-      period: z.coerce.number().int().min(1).max(12),
-      accounting_method: AccountingMethodEnum.optional(),
-    })
+    const FiltersSchema = z
+      .object({
+        period_type: VatPeriodTypeEnum,
+        year: z.coerce.number().int().min(2000).max(2100),
+        period: z.coerce.number().int().min(1).max(12),
+        accounting_method: AccountingMethodEnum.optional(),
+      })
+      // Cross-field bounds: monthly accepts 1-12, quarterly 1-4, yearly only 1.
+      // Without this guard a caller could pass period_type=quarterly + period=7
+      // and silently get a nonsensical declaration that they might submit to
+      // Skatteverket.
+      .superRefine((data, ctx) => {
+        if (data.period_type === 'quarterly' && (data.period < 1 || data.period > 4)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['period'],
+            message: 'For quarterly period_type, period must be 1-4.',
+          })
+        }
+        if (data.period_type === 'yearly' && data.period !== 1) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['period'],
+            message: 'For yearly period_type, period must be 1.',
+          })
+        }
+      })
     const filters = FiltersSchema.safeParse({
       period_type: url.searchParams.get('period_type'),
       year: url.searchParams.get('year'),

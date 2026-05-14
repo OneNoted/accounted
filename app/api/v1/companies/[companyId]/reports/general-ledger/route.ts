@@ -11,6 +11,7 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { loadPeriodFromQuery, safeGenerate } from '@/lib/api/v1/report-period'
+import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 
 const GeneralLedgerResponse = z.unknown()
@@ -51,6 +52,24 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const url = new URL(request.url)
     const accountFrom = url.searchParams.get('account_from') || undefined
     const accountTo = url.searchParams.get('account_to') || undefined
+
+    // BAS account numbers are 4 digits today but extensible to 5 / 6 in
+    // sub-account schemes (kostställen). Pattern allows 3–8 to leave room
+    // without accepting arbitrary strings. OWASP V2.2 — bound the values
+    // before they reach the report generator's downstream queries.
+    const accountRe = /^\d{3,8}$/
+    if (accountFrom && !accountRe.test(accountFrom)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'account_from', message: 'Expected 3-8 digit account number.' },
+      })
+    }
+    if (accountTo && !accountRe.test(accountTo)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'account_to', message: 'Expected 3-8 digit account number.' },
+      })
+    }
 
     const period = await loadPeriodFromQuery(request, {
       supabase: ctx.supabase,

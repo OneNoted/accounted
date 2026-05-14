@@ -1,9 +1,12 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/continuity-check
  *
- * BFNAR 2013:2 + 5 kap 7 § continuity check: verifies that the period's
- * opening balances match the previous period's closing balances per
- * account. A pre-flight check before period-close.
+ * IB/UB continuity check — verifies that the period's opening balances
+ * match the previous period's closing balances per account. The legal
+ * basis is the general löpande bokföring obligation in BFL 5 kap +
+ * BFNAR 2013:2 systemdokumentation/behandlingshistorik, AND the SIE4
+ * spec's core invariant that #IB(year N) must equal #UB(year N-1).
+ * (Not BFL 5 kap 7 § — that section covers rättelse, a separate rule.)
  */
 
 import { z } from 'zod'
@@ -17,9 +20,9 @@ registerEndpoint({
   operation: 'reports.continuity-check',
   method: 'GET',
   path: '/api/v1/companies/:companyId/reports/continuity-check',
-  summary: 'BFL continuity check — opening balances match prior closing.',
+  summary: 'IB/UB continuity check — opening balances match prior closing.',
   description:
-    'Validates that the target period\'s opening balances (IB) equal the prior period\'s closing balances (UB) per BFL 5 kap 7 §. Returns per-account discrepancies so an operator can rectify them before period close.',
+    'Validates that the target period\'s opening balances (IB) equal the prior period\'s closing balances (UB). The requirement derives from BFL 5 kap (löpande bokföring), BFNAR 2013:2 (systemdokumentation/behandlingshistorik), and the SIE4 spec\'s core invariant that #IB(year N) must equal #UB(year N-1). Returns per-account discrepancies so an operator can rectify them before period close.',
   useWhen:
     'Before locking or closing a period, or as part of an automated year-end readiness gate. Any discrepancy is a hard data-integrity issue.',
   doNotUseFor:

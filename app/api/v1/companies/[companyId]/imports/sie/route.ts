@@ -128,6 +128,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // behavior. The schema is permissive — agents can omit and get sane
     // defaults.
     const optionsRaw = formData.get('options')
+    let parsedOptions: unknown = {}
+    if (typeof optionsRaw === 'string') {
+      try {
+        parsedOptions = JSON.parse(optionsRaw)
+      } catch (err) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'options',
+            message: `options must be a valid JSON string: ${err instanceof Error ? err.message : 'parse error'}`,
+          },
+        })
+      }
+    }
     const optionsParse = z
       .object({
         createFiscalPeriod: z.boolean().optional().default(true),
@@ -135,7 +149,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         importTransactions: z.boolean().optional().default(true),
         voucherSeries: z.string().min(1).max(2).optional().default('A'),
       })
-      .safeParse(typeof optionsRaw === 'string' ? JSON.parse(optionsRaw) : {})
+      .safeParse(parsedOptions)
     if (!optionsParse.success) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -156,6 +170,27 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const encoding = detectEncoding(buffer)
     const content = decodeBuffer(buffer, encoding)
     const fileHash = await calculateFileHash(content)
+
+    // OWASP V5.2: cheap content-shape check before letting the SIE parser
+    // chew on arbitrary bytes. A valid SIE4 file's first 4 KiB contains at
+    // least one of #FLAGGA / #PROGRAM / #FORMAT / #SIETYP — these are
+    // mandatory header records. An HTML / executable / JSON payload that
+    // got past the multipart filter will lack all of them and we can
+    // reject without invoking parseSIEFile.
+    const headerSlice = content.slice(0, 4096)
+    if (
+      !headerSlice.includes('#FLAGGA') &&
+      !headerSlice.includes('#PROGRAM') &&
+      !headerSlice.includes('#FORMAT') &&
+      !headerSlice.includes('#SIETYP')
+    ) {
+      return v1ErrorResponseFromCode('SIE_PARSE_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: 'File does not appear to be SIE4 — no #FLAGGA / #PROGRAM / #FORMAT / #SIETYP header record found in the first 4 KiB.',
+        },
+      })
+    }
 
     let parsed: Awaited<ReturnType<typeof parseSIEFile>>
     try {
