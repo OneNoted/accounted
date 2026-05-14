@@ -4,6 +4,7 @@ import { Hedvig_Letters_Serif } from "next/font/google";
 import Script from "next/script";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/theme-provider";
+import { RecaptHideWidget } from "@/components/RecaptHideWidget";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
 import "./globals.css";
@@ -83,6 +84,7 @@ export default function RootLayout({
         >
           {children}
           <Toaster />
+          <RecaptHideWidget />
         </ThemeProvider>
         <Script src="/sw-register.js" strategy="afterInteractive" />
       </body>
