@@ -207,6 +207,23 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       expect(res.status).toBe(200)
     })
 
+    // Locks in the implicit "EF subsequent period is always exactly 12 months"
+    // rule. The start-must-be-1-jan + end-must-be-31-dec guards together force
+    // a 12-month span; this test catches a future refactor that loosens either.
+    it('rejects EF subsequent period when slutdatum is not 31 december', async () => {
+      buildMockSupabase({
+        period: { id: 'p2', period_start: '2026-01-01', period_end: '2026-12-31', locked_at: null, is_closed: false },
+        earlierPeriodCount: 1,
+      })
+      const res = await PATCH(
+        patchRequest({ period_start: '2026-01-01', period_end: '2027-01-31' }),
+        createMockRouteParams({ id: 'p2' }),
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/31 december/)
+    })
+
     // Defense-in-depth: the EF end-date guard runs before validatePeriodDuration.
     // A 24-month first period (2020-01-01 → 2021-12-31) ends on 31 dec, so the EF
     // guard passes — duration validation must catch it as BFL 3 kap. caps the
