@@ -4,7 +4,7 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
-import { fetchMultipleRates } from '@/lib/currency/riksbanken'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
@@ -121,7 +121,9 @@ export async function ingestTransactions(
   // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
   // invoices and exchange rates — they are not used.
   let unpaidSupplierInvoices: SupplierInvoice[] = []
-  let exchangeRates = new Map<Currency, ExchangeRate>()
+  // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
+  // rate that was valid on its own transaction date, not the import date.
+  const exchangeRatesByDate = new Map<string, ExchangeRate>()
 
   if (!options?.rawInsertOnly) {
   // Pre-fetch unpaid supplier invoices for expense matching (non-critical)
@@ -140,19 +142,38 @@ export async function ingestTransactions(
   }
   }
 
-  // Pre-fetch exchange rates for non-SEK currencies (non-critical)
+  // Pre-fetch exchange rates for each unique (currency, date) pair in the
+  // batch. Riksbanken publishes a per-day rate; using one batched fetch with
+  // no date stamps every row at today's rate, which is wrong for historical
+  // imports (issue #442). fetchExchangeRate already falls back to the last
+  // 7 days when the requested day is a weekend/holiday.
   if (!options?.rawInsertOnly) {
-    try {
-      const uniqueCurrencies = [...new Set(
-        rawTransactions
-          .map(t => t.currency)
-          .filter((c): c is Currency => c != null && c !== 'SEK')
-      )]
-      if (uniqueCurrencies.length > 0) {
-        exchangeRates = await fetchMultipleRates(uniqueCurrencies)
+    const uniquePairs = new Map<string, { currency: Currency; date: string }>()
+    for (const t of rawTransactions) {
+      if (t.currency && t.currency !== 'SEK' && t.date) {
+        const key = `${t.currency}|${t.date}`
+        if (!uniquePairs.has(key)) {
+          uniquePairs.set(key, { currency: t.currency as Currency, date: t.date })
+        }
       }
-    } catch {
-      // Non-critical — amount_sek fields will stay null
+    }
+
+    if (uniquePairs.size > 0) {
+      const pairs = Array.from(uniquePairs.entries())
+      const settled = await Promise.allSettled(
+        pairs.map(([, { currency, date }]) =>
+          fetchExchangeRate(currency, new Date(date))
+        )
+      )
+      for (let i = 0; i < pairs.length; i++) {
+        const [key] = pairs[i]
+        const outcome = settled[i]
+        if (outcome.status === 'fulfilled' && outcome.value) {
+          exchangeRatesByDate.set(key, outcome.value)
+        }
+        // Failures leave the key unset — that transaction will store
+        // null amount_sek/exchange_rate, same as before.
+      }
     }
   }
 
@@ -205,7 +226,7 @@ export async function ingestTransactions(
 
     // 2. Insert new transaction (with SEK conversion for foreign currencies)
     const rateInfo = raw.currency && raw.currency !== 'SEK'
-      ? exchangeRates.get(raw.currency as Currency)
+      ? exchangeRatesByDate.get(`${raw.currency}|${raw.date}`)
       : undefined
     const amountSek = rateInfo
       ? Math.round(raw.amount * rateInfo.rate * 100) / 100
