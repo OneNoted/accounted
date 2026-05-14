@@ -52,7 +52,12 @@ AS $$
   WHERE jel.account_number = '1930'
     AND je.company_id = p_company_id
     AND je.status = 'posted'
-    AND je.source_type <> 'opening_balance'
+    -- IS DISTINCT FROM is NULL-safe. Today journal_entries.source_type is
+    -- NOT NULL, so the only behavioural difference vs `<>` is defensive: if the
+    -- NOT NULL constraint is ever relaxed, `<>` would silently drop NULL rows
+    -- (NULL <> 'x' evaluates to NULL, not TRUE), making them invisible to
+    -- reconciliation. IS DISTINCT FROM treats NULL as a distinct value.
+    AND je.source_type IS DISTINCT FROM 'opening_balance'
     AND (p_date_from IS NULL OR je.entry_date >= p_date_from)
     AND (p_date_to IS NULL OR je.entry_date <= p_date_to)
     AND NOT EXISTS (
