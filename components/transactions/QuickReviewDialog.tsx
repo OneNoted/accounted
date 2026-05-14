@@ -279,7 +279,6 @@ export default function QuickReviewDialog({
         <JournalEntryPreview
           amount={transaction.amount}
           amountSek={sekAmount}
-          currency={transaction.currency}
           {...(isCounterpartyTemplate
             ? { linePattern: counterpartyLinePattern ?? undefined }
             : templateId && template

@@ -15,7 +15,6 @@ interface PreviewLine {
 
 interface JournalEntryPreviewProps {
   amount: number
-  currency?: string
   /**
    * SEK-equivalent of `amount` for foreign-currency transactions. When set,
    * all line calculations and the displayed totals use this value — the

@@ -171,8 +171,11 @@ export async function ingestTransactions(
         if (outcome.status === 'fulfilled' && outcome.value) {
           exchangeRatesByDate.set(key, outcome.value)
         }
-        // Failures leave the key unset — that transaction will store
-        // null amount_sek/exchange_rate, same as before.
+        // Network failures resolve inside fetchExchangeRate to getFallbackRate()
+        // (non-null, today's date), so they still populate the key. The key
+        // only stays unset when the API returns an empty observation array
+        // or the promise rejects outright — in that case amount_sek and
+        // exchange_rate remain null on the inserted transaction.
       }
     }
   }
