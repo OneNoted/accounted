@@ -128,6 +128,29 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/reconciliation/bank/run': 'transactions:write',
   'GET /api/v1/companies/:companyId/reconciliation/bank/status': 'transactions:read',
 
+  // Phase 5 PR-1 — Payroll vertical (employees + salary-runs + lifecycle verbs).
+  // Reuses the pre-existing `payroll:read` / `payroll:write` scopes already
+  // defined for the MCP tool surface (gnubok_list_employees, gnubok_create_salary_run, ...).
+  // Employees (soft-delete via is_active — no archived_at column).
+  'GET /api/v1/companies/:companyId/employees': 'payroll:read',
+  'GET /api/v1/companies/:companyId/employees/:id': 'payroll:read',
+  'POST /api/v1/companies/:companyId/employees': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/employees/:id': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/employees/:id': 'payroll:write',
+  // Salary runs (state machine: draft → review → approved → paid → booked).
+  'GET /api/v1/companies/:companyId/salary-runs': 'payroll:read',
+  'GET /api/v1/companies/:companyId/salary-runs/:id': 'payroll:read',
+  'POST /api/v1/companies/:companyId/salary-runs': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/salary-runs/:id': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/salary-runs/:id': 'payroll:write',
+  // Salary-run lifecycle verbs — v1 :calculate collapses internal /calculate
+  // (math) + /review (state advance) so an agent has one verb per logical step.
+  'POST /api/v1/companies/:companyId/salary-runs/:id/calculate': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/approve': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/mark-paid': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/book': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi': 'payroll:write',
+
   // Webhooks (Phase 6 — placeholder so the catalogue is complete)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',
   'POST /api/v1/companies/:companyId/webhooks': 'webhooks:manage',

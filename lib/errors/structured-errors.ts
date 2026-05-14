@@ -1314,6 +1314,62 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'AGI-deklarationen kunde inte genereras.',
     message_en: 'Failed to generate AGI declaration.',
   },
+  // Phase 5 PR-1 — v1 REST surface error codes.
+  EMPLOYEE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den anställda kunde inte hittas.',
+    message_en: 'Employee not found.',
+  },
+  EMPLOYEE_DUPLICATE_PERSONNUMMER: {
+    httpStatus: 409,
+    message_sv: 'En anställd med samma personnummer finns redan.',
+    message_en: 'An employee with that personnummer already exists.',
+  },
+  SALARY_RUN_DUPLICATE_PERIOD: {
+    httpStatus: 409,
+    message_sv: 'En lönekörning för perioden finns redan.',
+    message_en: 'A salary run for that period already exists.',
+  },
+  SALARY_RUN_PATCH_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Endast utkast (draft) kan uppdateras.',
+    message_en: 'Only draft salary runs can be patched.',
+  },
+  SALARY_RUN_DELETE_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Endast utkast (draft) kan raderas.',
+    message_en: 'Only draft salary runs can be deleted.',
+  },
+  SALARY_RUN_CALCULATE_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara i status draft för beräkning.',
+    message_en: 'Salary run must be in draft status to calculate.',
+  },
+  SALARY_RUN_APPROVE_NOT_REVIEW: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara i status review för godkännande.',
+    message_en: 'Salary run must be in review status to approve.',
+  },
+  SALARY_RUN_APPROVE_VALIDATION_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Valideringsfel — korrigera innan godkännande.',
+    message_en: 'Validation failed — fix issues before approving.',
+  },
+  SALARY_RUN_MARK_PAID_NOT_APPROVED: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara godkänd för att markeras som betald.',
+    message_en: 'Salary run must be approved before it can be marked paid.',
+  },
+  SALARY_RUN_BOOK_NOT_PAID: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara markerad som betald för bokföring.',
+    message_en: 'Salary run must be marked paid before booking.',
+  },
+  AGI_GENERATE_NOT_BOOKABLE: {
+    httpStatus: 400,
+    message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',
+    message_en: 'AGI can only be generated for salary runs in review, approved, paid, booked, or corrected status.',
+  },
 }
 
 const COMPANY: Record<string, StructuredErrorEntry> = {

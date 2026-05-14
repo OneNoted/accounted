@@ -81,4 +81,13 @@ import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/approve/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/mark-paid/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/credit/route'
 
+// Phase 5 PR-1 — Payroll registers: employees + salary-runs CRUD.
+// Lifecycle verbs (calculate / approve / mark-paid / book / generate-agi)
+// ship in Phase 5 PR-2 after the internal /calculate orchestration is
+// extracted into a shared lib/salary/run-calculation.ts helper.
+import '@/app/api/v1/companies/[companyId]/employees/route'
+import '@/app/api/v1/companies/[companyId]/employees/[id]/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/route'
+
 export {}
