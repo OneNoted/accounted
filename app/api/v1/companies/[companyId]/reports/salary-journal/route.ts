@@ -27,6 +27,7 @@ registerEndpoint({
   pitfalls: [
     '`year` is required (integer 2020-2100).',
     'Only `booked` salary runs are included — `draft`/`review`/`approved`/`paid` runs are excluded as they aren\'t legally final.',
+    '`paid`-but-unbooked runs are EXCLUDED. This means the report reconciles cleanly against BAS 7xxx (the ledger), but an AGI-vs-ledger cross-check will show a gap until the run is booked. The AGI is filed at `approved`/`paid` (Phase 5 PR-2 allows it from `review`), so reconciling AGI against this report requires waiting until every paid run is also booked.',
     'month_from/month_to are 1–12 inclusive.',
   ],
   example: {

@@ -47,11 +47,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const url = new URL(request.url)
     const asOfDate = url.searchParams.get('as_of_date') || undefined
-    if (asOfDate && !/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'as_of_date', message: 'Expected YYYY-MM-DD.' },
-      })
+    if (asOfDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate)) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'as_of_date', message: 'Expected YYYY-MM-DD.' },
+        })
+      }
+      // Calendar validity — regex alone accepts 2026-13-45.
+      const probe = new Date(`${asOfDate}T00:00:00Z`)
+      if (Number.isNaN(probe.getTime()) || probe.toISOString().slice(0, 10) !== asOfDate) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'as_of_date', message: 'Not a valid calendar date.' },
+        })
+      }
     }
 
     const gen = await safeGenerate(

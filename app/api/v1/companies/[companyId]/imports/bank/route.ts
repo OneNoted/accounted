@@ -53,16 +53,17 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/imports/bank',
   summary: 'Import a bank-file (CSV / XML / CAMT053).',
   description:
-    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table, and emits `transaction.synced` events. Returns operation_id for polling.',
+    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries — see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
   useWhen:
     'Importing a bank statement export for a period. Common with PSD2 bank connections that don\'t auto-sync, or for legacy bank accounts.',
   doNotUseFor:
     'SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).',
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
-    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format.',
+    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, generic_csv, camt053.',
     'Duplicate detection is by external_id (composed from date + amount + counterparty); a re-import of the same file with the same flag set typically deduplicates rather than creating doubles.',
-    'The operation is async — poll /operations/{id} for the final transaction count.',
+    'BFL 5 kap 1 § note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The bookkeeping obligation isn\'t discharged until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), which posts the journal entry. A successful import here means the data is ingested — not booked.',
+    'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
   ],
   example: {
     response: {
@@ -116,7 +117,41 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const url = new URL(request.url)
-    const formatOverride = url.searchParams.get('format') as BankFileFormatId | null
+    // Validate `format` against the canonical BankFileFormatId enum BEFORE
+    // letting it reach parseBankFile / detectFileFormat. A raw cast would
+    // pass any string through and rely on the parser to surface
+    // BANK_FILE_FORMAT_UNKNOWN — better to fail with VALIDATION_ERROR up
+    // front so an attacker-supplied value never reaches the format module
+    // (V2.2 / PI1.1 hardening).
+    const formatParam = url.searchParams.get('format')
+    const BankFormatEnum = z.enum([
+      'nordea',
+      'nordea_business',
+      'seb',
+      'swedbank',
+      'handelsbanken',
+      'lansforsakringar',
+      'ica_banken',
+      'skandia',
+      'lunar',
+      'generic_csv',
+      'camt053',
+    ])
+    let formatOverride: BankFileFormatId | null = null
+    if (formatParam) {
+      const parsed = BankFormatEnum.safeParse(formatParam)
+      if (!parsed.success) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'format',
+            message:
+              'Unknown bank file format. Accepted: ' + BankFormatEnum.options.join(', '),
+          },
+        })
+      }
+      formatOverride = parsed.data
+    }
 
     // Decode the file. Bank files are typically Windows-1252 or UTF-8; we
     // try UTF-8 first and fall back if invalid replacement chars appear.
@@ -182,6 +217,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         .eq('file_hash', fileHash)
         .maybeSingle()
       if (existingImport && (existingImport as { company_id: string }).company_id !== ctx.companyId) {
+        // Log the cross-tenant collision details server-side for operator
+        // investigation (CC7.2 — audit trail), but do NOT echo the other
+        // company's id or the other import's id back to the caller. Doing
+        // so would be a cross-tenant enumeration vector (V8.2.1 / CC6.1).
+        // The caller sees a fixed error code + a generic message; the
+        // server log carries enough context to debug.
+        ctx.log.warn('bank import: cross-company file-hash collision', {
+          fileHash,
+          attemptedCompanyId: ctx.companyId,
+          existingCompanyId: (existingImport as { company_id: string }).company_id,
+          existingImportId: (existingImport as { id: string }).id,
+        })
         await failOperation(
           ctx.supabase,
           {
@@ -195,10 +242,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         )
         return v1ErrorResponseFromCode('BANK_IMPORT_DUPLICATE_OTHER_COMPANY', ctx.log, {
           requestId: ctx.requestId,
-          details: {
-            existing_company_id: (existingImport as { company_id: string }).company_id,
-            existing_import_id: (existingImport as { id: string }).id,
-          },
+          // Deliberately empty details — see comment above.
         })
       }
 
