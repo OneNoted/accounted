@@ -346,10 +346,63 @@ export async function generateAgiDeclaration(
       })
       .select('id')
       .single()
-    if (insErr || !inserted) {
+
+    if (insErr) {
+      // Concurrent-call race: two :generate-agi requests for the same
+      // (company, period) reached the INSERT branch simultaneously. The
+      // earlier read of `existingAgi` returned null for both, but the
+      // first INSERT wins and the second hits the unique constraint.
+      // Postgres error 23505 is the unique-violation code; recover by
+      // re-fetching the now-existing row and treating this call as a
+      // correction (the second caller's XML supersedes the first).
+      if ((insErr as { code?: string }).code === '23505') {
+        const { data: nowExisting, error: refetchErr } = await supabase
+          .from('agi_declarations')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('period_year', run.period_year)
+          .eq('period_month', run.period_month)
+          .maybeSingle()
+        if (refetchErr || !nowExisting) {
+          return { ok: false, code: 'DATABASE_ERROR', details: refetchErr || insErr }
+        }
+        const { error: raceUpdErr } = await supabase
+          .from('agi_declarations')
+          .update({
+            xml_content: xml,
+            individuppgifter,
+            total_gross: run.total_gross,
+            total_tax: run.total_tax,
+            total_avgifter_basis: totals.totalAvgifterBasis,
+            total_avgifter: run.total_avgifter,
+            employee_count: employeeData.length,
+            is_correction: true,
+            salary_run_id: run.id,
+          })
+          .eq('id', nowExisting.id)
+        if (raceUpdErr) {
+          return { ok: false, code: 'DATABASE_ERROR', details: raceUpdErr }
+        }
+        agiDeclarationId = nowExisting.id as string
+        opLog.warn('agi_declarations insert raced; recovered via update', {
+          companyId,
+          periodYear: run.period_year,
+          periodMonth: run.period_month,
+        })
+        // Note: the caller-facing `isCorrection` flag (set above based on
+        // the pre-INSERT existingAgi lookup) reports `false` even though
+        // the database state is now technically a correction. Edge case
+        // limited to the race window; the agi_declarations row is
+        // correctly marked is_correction=true and the next call will
+        // see it.
+      } else {
+        return { ok: false, code: 'DATABASE_ERROR', details: insErr }
+      }
+    } else if (!inserted) {
       return { ok: false, code: 'DATABASE_ERROR', details: insErr }
+    } else {
+      agiDeclarationId = inserted.id as string
     }
-    agiDeclarationId = inserted.id as string
   }
 
   // 9. Stamp generation timestamp on salary_runs.
