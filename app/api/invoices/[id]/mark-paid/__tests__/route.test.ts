@@ -123,7 +123,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
 
     // Fetch invoice
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: no candidates
+    // Duplicate-payment guard: merchant_name ILIKE — no candidates
+    enqueue({ data: [], error: null })
+    // Duplicate-payment guard: description ILIKE — no candidates
     enqueue({ data: [], error: null })
     // Fetch company settings (now before update due to journal-first ordering)
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
@@ -167,7 +169,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: no candidates
+    // Duplicate-payment guard: merchant_name ILIKE — no candidates
+    enqueue({ data: [], error: null })
+    // Duplicate-payment guard: description ILIKE — no candidates
     enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)
@@ -320,7 +324,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: one likely-matching unlinked positive tx
+    // Duplicate-payment guard: merchant_name ILIKE returns the match
     enqueue({
       data: [
         {
@@ -334,6 +338,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
+    // description ILIKE — no additional match (dedup keeps merchant_name result)
+    enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -436,6 +442,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
+    // description ILIKE — no additional match
+    enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -482,6 +490,8 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       ],
       error: null,
     })
+    // description ILIKE — no additional matches
+    enqueue({ data: [], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -506,7 +516,9 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     })
 
     enqueue({ data: invoice, error: null })
-    // Duplicate-payment guard: no candidates
+    // Duplicate-payment guard: merchant_name ILIKE — no candidates
+    enqueue({ data: [], error: null })
+    // Duplicate-payment guard: description ILIKE — no candidates
     enqueue({ data: [], error: null })
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     // Update invoice status (CAS guard: returns matched row)

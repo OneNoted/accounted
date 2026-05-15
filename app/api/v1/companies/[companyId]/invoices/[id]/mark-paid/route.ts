@@ -300,6 +300,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ctx.log.warn('duplicate-payment guard bypassed', {
         reason: 'force=true',
         invoiceId,
+        userId: ctx.userId,
+        paymentAmount,
       })
     }
 

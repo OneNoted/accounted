@@ -392,11 +392,17 @@ export const POST = withRouteContext(
       }
       customerIds = Array.from(collected)
 
+      // Date window anchored on `due_date`, NOT `invoice_date`. Customer
+      // payments arrive close to (or after) the due date; for an invoice
+      // with 60–90 day terms, anchoring on invoice_date would push the
+      // expected payment outside a ±60-day window and the guard would miss
+      // genuine matches. due_date is the better proxy for "around when the
+      // payment is expected."
       const txDateMs = new Date(transaction.date).getTime()
-      const invoiceDateLow = new Date(txDateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
+      const dueDateLow = new Date(txDateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
         .toISOString()
         .split('T')[0]
-      const invoiceDateHigh = new Date(txDateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
+      const dueDateHigh = new Date(txDateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
         .toISOString()
         .split('T')[0]
 
@@ -404,6 +410,7 @@ export const POST = withRouteContext(
         id: string
         invoice_number: string | null
         invoice_date: string
+        due_date: string | null
         remaining_amount: number | null
         total: number
         currency: string
@@ -415,16 +422,16 @@ export const POST = withRouteContext(
         const { data: byCustomer } = await supabase
           .from('invoices')
           .select(
-            'id, invoice_number, invoice_date, remaining_amount, total, currency, customer:customers(name)',
+            'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, customer:customers(name)',
           )
           .eq('company_id', companyId)
           .in('customer_id', customerIds)
           .in('status', ['sent', 'overdue', 'partially_paid'])
           .gte('remaining_amount', windowLow)
           .lte('remaining_amount', windowHigh)
-          .gte('invoice_date', invoiceDateLow)
-          .lte('invoice_date', invoiceDateHigh)
-          .order('invoice_date', { ascending: false })
+          .gte('due_date', dueDateLow)
+          .lte('due_date', dueDateHigh)
+          .order('due_date', { ascending: false })
           .limit(5)
         for (const row of (byCustomer ?? []) as unknown as CandidateRow[]) {
           openInvoiceCandidates.push(row)
@@ -441,15 +448,15 @@ export const POST = withRouteContext(
         const { data: byRef } = await supabase
           .from('invoices')
           .select(
-            'id, invoice_number, invoice_date, remaining_amount, total, currency, customer:customers(name)',
+            'id, invoice_number, invoice_date, due_date, remaining_amount, total, currency, customer:customers(name)',
           )
           .eq('company_id', companyId)
           .in('status', ['sent', 'overdue', 'partially_paid'])
           .gte('remaining_amount', windowLow)
           .lte('remaining_amount', windowHigh)
-          .gte('invoice_date', invoiceDateLow)
-          .lte('invoice_date', invoiceDateHigh)
-          .order('invoice_date', { ascending: false })
+          .gte('due_date', dueDateLow)
+          .lte('due_date', dueDateHigh)
+          .order('due_date', { ascending: false })
           .limit(20)
         for (const row of (byRef ?? []) as unknown as CandidateRow[]) {
           if (normalizeOcrReference(row.invoice_number) === normalizedTxRef) {

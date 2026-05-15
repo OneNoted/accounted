@@ -39,6 +39,15 @@ interface CustomerInvoice {
   customer_name: string | null | undefined
 }
 
+type Row = {
+  id: string
+  date: string
+  amount: number
+  description: string | null
+  merchant_name: string | null
+  reference: string | null
+}
+
 /**
  * Scan unlinked positive (inbound) business bank transactions that could be
  * the payment for this customer invoice. Used by the mark-paid duplicate
@@ -50,6 +59,14 @@ interface CustomerInvoice {
  *    inbound payment by payer name without populating merchant_name)
  *  - per-candidate scoring with OCR (invoice_number normalized) as the
  *    strongest signal
+ *
+ * The merchant_name and description searches are issued as two separate
+ * parameterised `.ilike()` queries and deduplicated by id. We deliberately
+ * avoid `.or('merchant_name.ilike.%X%,description.ilike.%X%')` because that
+ * interpolates the customer name into PostgREST's filter-DSL string, where
+ * `escapeLikePattern` only neutralises the LIKE wildcards (`%_\\`) and not
+ * the DSL chars (`,`, `.`, `(`, `)`). A name like `Acme,fake.eq.true` would
+ * otherwise inject a synthetic filter clause.
  */
 export async function findDuplicatePaymentCandidatesForInvoice(
   supabase: SupabaseClient,
@@ -73,25 +90,37 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
     .toISOString()
     .split('T')[0]
-  const escaped = escapeLikePattern(customerName)
+  const pattern = `%${escapeLikePattern(customerName)}%`
 
-  const { data } = await supabase
-    .from('transactions')
-    .select('id, date, amount, description, merchant_name, reference')
-    .eq('company_id', companyId)
-    .eq('is_business', true)
-    .is('invoice_id', null)
-    .is('supplier_invoice_id', null)
-    .gt('amount', 0)
-    .gte('amount', windowLow)
-    .lte('amount', windowHigh)
-    .gte('date', dateLow)
-    .lte('date', dateHigh)
-    .or(`merchant_name.ilike.%${escaped}%,description.ilike.%${escaped}%`)
-    .order('date', { ascending: false })
-    .limit(5)
+  const base = () =>
+    supabase
+      .from('transactions')
+      .select('id, date, amount, description, merchant_name, reference')
+      .eq('company_id', companyId)
+      .eq('is_business', true)
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .gt('amount', 0)
+      .gte('amount', windowLow)
+      .lte('amount', windowHigh)
+      .gte('date', dateLow)
+      .lte('date', dateHigh)
 
-  if (!data || data.length === 0) return []
+  const [byMerchantRes, byDescriptionRes] = await Promise.all([
+    base().ilike('merchant_name', pattern).order('date', { ascending: false }).limit(5),
+    base().ilike('description', pattern).order('date', { ascending: false }).limit(5),
+  ])
+
+  const merged = new Map<string, Row>()
+  for (const row of (byMerchantRes.data ?? []) as Row[]) merged.set(row.id, row)
+  for (const row of (byDescriptionRes.data ?? []) as Row[]) {
+    if (!merged.has(row.id)) merged.set(row.id, row)
+  }
+  const data = Array.from(merged.values())
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+    .slice(0, 5)
+
+  if (data.length === 0) return []
 
   const invoiceOcr = normalizeOcrReference(invoice.invoice_number)
   const searchTerms = customerName
@@ -99,16 +128,7 @@ export async function findDuplicatePaymentCandidatesForInvoice(
     .split(/\s+/)
     .filter((term) => term.length > 2)
 
-  type Row = {
-    id: string
-    date: string
-    amount: number
-    description: string | null
-    merchant_name: string | null
-    reference: string | null
-  }
-
-  const candidates: DuplicatePaymentCandidate[] = (data as Row[]).map((row) => {
+  const candidates: DuplicatePaymentCandidate[] = data.map((row) => {
     const reason = scoreCandidate({
       row,
       invoiceOcr,

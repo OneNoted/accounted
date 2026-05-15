@@ -119,6 +119,8 @@ export const POST = withRouteContext(
       opLog.warn('duplicate-payment guard bypassed', {
         reason: 'force=true',
         invoiceId: id,
+        userId: user.id,
+        paymentAmount,
       })
     }
 
