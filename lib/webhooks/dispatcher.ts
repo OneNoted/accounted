@@ -23,7 +23,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signPayload } from './signing'
-import { validateWebhookUrl } from './url-guard'
+import { pinnedHttpsFetch, type PinnedFetchResult } from './pinned-fetch'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('webhooks/dispatcher')
@@ -80,12 +80,12 @@ export async function dispatchDueDeliveries(args: {
   batchSize?: number
   /** Override for tests. */
   now?: Date
-  /** Override for tests; injected fetch implementation. */
-  fetchImpl?: typeof fetch
+  /** Override for tests; injected pinned-fetch implementation. */
+  pinnedFetchImpl?: typeof pinnedHttpsFetch
 }): Promise<DispatchSummary> {
   const batchSize = args.batchSize ?? 50
   const now = args.now ?? new Date()
-  const fetchImpl = args.fetchImpl ?? fetch
+  const pinnedFetchImpl = args.pinnedFetchImpl ?? pinnedHttpsFetch
 
   const summary: DispatchSummary = { picked: 0, delivered: 0, failed: 0, dead: 0 }
 
@@ -138,7 +138,7 @@ export async function dispatchDueDeliveries(args: {
     const outcome = await attemptDelivery({
       delivery,
       webhook,
-      fetchImpl,
+      pinnedFetchImpl,
       now,
     })
 
@@ -404,10 +404,10 @@ type AttemptOutcome = DeliveredOutcome | FailedOutcome | DeadOutcome
 async function attemptDelivery(args: {
   delivery: DueDelivery
   webhook: WebhookForDelivery
-  fetchImpl: typeof fetch
+  pinnedFetchImpl: typeof pinnedHttpsFetch
   now: Date
 }): Promise<AttemptOutcome> {
-  const { delivery, webhook, fetchImpl, now } = args
+  const { delivery, webhook, pinnedFetchImpl, now } = args
   const attempts = delivery.attempts + 1
   const requestId = `whdel_${delivery.id}`
 
@@ -420,135 +420,109 @@ async function attemptDelivery(args: {
     previous_attributes: delivery.previous_attributes,
   })
 
-  // Re-validate the URL at dispatch time as defense in depth — DNS records
-  // can change between webhook creation and dispatch (DNS rebinding,
-  // hijack, A-record swap to internal IP), so the create-time check alone
-  // is insufficient. A failure here marks the delivery dead with a
-  // distinct reason so the operator can investigate without thinking it's
-  // a transient receiver issue.
-  const urlCheck = await validateWebhookUrl(webhook.webhook_url)
-  if (!urlCheck.ok) {
-    return {
-      kind: 'dead',
-      reason: `url_unsafe:${urlCheck.reason}`,
-      disableWebhook: true,
-      attempts,
-      responseStatus: null,
-      responseBody: null,
-      responseHeaders: null,
-      error: urlCheck.detail,
-    }
-  }
+  const { header } = signPayload({
+    body,
+    secret: webhook.secret,
+    timestamp: Math.floor(now.getTime() / 1000),
+  })
 
-  const { header } = signPayload({ body, secret: webhook.secret, timestamp: Math.floor(now.getTime() / 1000) })
+  // pinnedHttpsFetch performs DNS validation AND opens the socket against
+  // the validated IP in a single call. The previous shape (separate
+  // validateWebhookUrl + fetch calls) left a DNS-rebinding window between
+  // the two — closed here. SNI + Host header continue to carry the
+  // original hostname so receiver-side TLS + vhost routing still work.
+  const result = await pinnedFetchImpl(webhook.webhook_url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Gnubok-Signature': header,
+      'X-Gnubok-Event': delivery.event_type,
+      'X-Gnubok-Delivery': delivery.id,
+      'X-Gnubok-Api-Version': delivery.api_version,
+      'X-Request-Id': requestId,
+      'User-Agent': 'gnubok-webhook/1',
+    },
+    body,
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    maxResponseBytes: MAX_RESPONSE_BODY_BYTES,
+  })
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-
-  let response: Response
-  try {
-    response = await fetchImpl(webhook.webhook_url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Gnubok-Signature': header,
-        'X-Gnubok-Event': delivery.event_type,
-        'X-Gnubok-Delivery': delivery.id,
-        'X-Gnubok-Api-Version': delivery.api_version,
-        'X-Request-Id': requestId,
-        'User-Agent': 'gnubok-webhook/1',
-      },
-      body,
-      signal: controller.signal,
-      // Reject 3xx responses entirely. Following a redirect would let a
-      // receiver bounce the dispatcher to a private/internal address
-      // AFTER the SSRF guard (which validated the original webhook_url's
-      // hostname) has cleared. Receivers that legitimately move endpoints
-      // should ask integrators to update the webhook URL.
-      redirect: 'error',
-    })
-  } catch (err) {
-    clearTimeout(timeout)
-    const message = err instanceof Error ? err.message : String(err)
-
-    // Distinguish redirect-rejection errors from generic transport
-    // failures. With redirect: 'error' the runtime fetch throws when the
-    // receiver returns 3xx — that's an SSRF-bypass attempt (or a
-    // misconfigured receiver), not a transient failure. Treating it as
-    // 'failed' would burn 8 retry attempts over ~72h before going dead.
-    // Mirror the HTTP 410 treatment: terminal + auto-disable so the
-    // operator surfaces the misbehaving receiver immediately.
-    //
-    // Node's undici (the runtime fetch) raises 'unexpected redirect'
-    // / 'redirect mode is set to error' messages; check both shapes
-    // since the exact wording has changed across Node versions.
-    const isRedirectError = /redirect/i.test(message)
-    if (isRedirectError) {
+  switch (result.kind) {
+    case 'unsafe_url':
       return {
         kind: 'dead',
-        reason: 'redirect_blocked',
+        reason: `url_unsafe:${result.reason}`,
         disableWebhook: true,
         attempts,
         responseStatus: null,
         responseBody: null,
         responseHeaders: null,
-        error: message.length > 500 ? `${message.slice(0, 497)}...` : message,
+        error: result.detail,
+      }
+    case 'redirect_blocked':
+      return {
+        kind: 'dead',
+        reason: 'redirect_blocked',
+        disableWebhook: true,
+        attempts,
+        responseStatus: result.status,
+        responseBody: null,
+        responseHeaders: null,
+        error: truncateError(result.detail),
+      }
+    case 'timeout':
+    case 'transport_error':
+      return {
+        kind: 'failed',
+        attempts,
+        responseStatus: null,
+        responseBody: null,
+        responseHeaders: null,
+        error: truncateError(result.detail),
+      }
+    case 'ok': {
+      const responseHeaders = filterResponseHeaders(result.headers)
+      const responseBody = isSafeContentType(result.headers['content-type'] ?? '')
+        ? result.body
+        : null
+
+      // HTTP 410 — receiver explicitly asks us to stop. Auto-disable.
+      if (result.status === 410) {
+        return {
+          kind: 'dead',
+          reason: 'http_410_gone',
+          disableWebhook: true,
+          attempts,
+          responseStatus: 410,
+          responseBody,
+          responseHeaders,
+        }
+      }
+
+      if (result.status >= 200 && result.status < 300) {
+        return {
+          kind: 'delivered',
+          attempts,
+          responseStatus: result.status,
+          responseBody,
+          responseHeaders,
+        }
+      }
+
+      return {
+        kind: 'failed',
+        attempts,
+        responseStatus: result.status,
+        responseBody,
+        responseHeaders,
+        error: `HTTP ${result.status}`,
       }
     }
-
-    return {
-      kind: 'failed',
-      attempts,
-      responseStatus: null,
-      responseBody: null,
-      responseHeaders: null,
-      error: message.length > 500 ? `${message.slice(0, 497)}...` : message,
-    }
   }
+}
 
-  // Keep the abort timeout armed across the body read — a slow body
-  // stream can stall the entire dispatch batch otherwise. Clear only
-  // after readBoundedText returns (or aborts).
-  let responseBody: string | null
-  try {
-    responseBody = await readBoundedText(response)
-  } finally {
-    clearTimeout(timeout)
-  }
-  const responseHeaders = headersToObject(response.headers)
-
-  // HTTP 410 — receiver explicitly asks us to stop. Auto-disable the
-  // webhook + mark this delivery dead.
-  if (response.status === 410) {
-    return {
-      kind: 'dead',
-      reason: 'http_410_gone',
-      disableWebhook: true,
-      attempts,
-      responseStatus: 410,
-      responseBody,
-      responseHeaders,
-    }
-  }
-
-  if (response.status >= 200 && response.status < 300) {
-    return {
-      kind: 'delivered',
-      attempts,
-      responseStatus: response.status,
-      responseBody,
-      responseHeaders,
-    }
-  }
-
-  return {
-    kind: 'failed',
-    attempts,
-    responseStatus: response.status,
-    responseBody,
-    responseHeaders,
-    error: `HTTP ${response.status}`,
-  }
+function truncateError(message: string): string {
+  return message.length > 500 ? `${message.slice(0, 497)}...` : message
 }
 
 // Content-Type prefixes for which we persist response_body verbatim. Other
@@ -558,21 +532,9 @@ async function attemptDelivery(args: {
 // when the operator can see the response_status and response_headers.
 const SAFE_BODY_CONTENT_TYPE_PREFIXES = ['text/plain', 'application/json']
 
-async function readBoundedText(response: Response): Promise<string | null> {
-  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-  const isSafe = SAFE_BODY_CONTENT_TYPE_PREFIXES.some((p) => contentType.startsWith(p))
-  if (!isSafe) {
-    // Drain the body so the connection can be reused, but discard the bytes.
-    try { await response.text() } catch { /* ignore */ }
-    return null
-  }
-  try {
-    const text = await response.text()
-    if (text.length <= MAX_RESPONSE_BODY_BYTES) return text
-    return text.slice(0, MAX_RESPONSE_BODY_BYTES)
-  } catch {
-    return null
-  }
+function isSafeContentType(contentType: string): boolean {
+  const lower = contentType.toLowerCase()
+  return SAFE_BODY_CONTENT_TYPE_PREFIXES.some((p) => lower.startsWith(p))
 }
 
 // Allowlist for response_headers persistence. Receiver-side headers like
@@ -592,13 +554,13 @@ const SAFE_RESPONSE_HEADERS = new Set([
   'cf-ray',
 ])
 
-function headersToObject(headers: Headers): Record<string, string> {
+function filterResponseHeaders(headers: Record<string, string>): Record<string, string> {
   const obj: Record<string, string> = {}
-  headers.forEach((v, k) => {
+  for (const [k, v] of Object.entries(headers)) {
     if (SAFE_RESPONSE_HEADERS.has(k.toLowerCase())) {
       obj[k] = v
     }
-  })
+  }
   return obj
 }
 
