@@ -81,7 +81,12 @@ export function registerWebhookHandler(): void {
       // companyId — the only field we structurally need here.
       const companyId = (payload as { companyId?: string }).companyId
       if (!companyId) {
-        log.warn('event missing companyId — skipping webhook fanout', { eventType })
+        // Surface as an error: every CoreEvent payload variant types
+        // companyId as required, so a missing value indicates an emit-site
+        // bug that silently breaks webhook delivery for that event. Logging
+        // at error level ensures it shows up in monitoring rather than
+        // disappearing into routine warn-noise.
+        log.error('event missing companyId — webhook fanout skipped', new Error('missing companyId'), { eventType })
         return
       }
 

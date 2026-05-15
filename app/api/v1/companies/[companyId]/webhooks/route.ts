@@ -18,6 +18,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { generateWebhookSecret } from '@/lib/webhooks/signing'
+import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
 
 const WEBHOOK_EVENT_TYPES = z.enum([
@@ -49,7 +50,16 @@ const WEBHOOK_EVENT_TYPES = z.enum([
 
 const CreateWebhookSchema = z.object({
   event_type: WEBHOOK_EVENT_TYPES,
-  webhook_url: z.string().url().max(2048),
+  // Schema-level guard rejects non-https before the SSRF DNS check runs.
+  // The full safety check (private/loopback/link-local/metadata IP rejection)
+  // happens at handler time via validateWebhookUrl() because it needs DNS.
+  webhook_url: z
+    .string()
+    .url()
+    .max(2048)
+    .refine((u) => u.startsWith('https://'), {
+      message: 'webhook_url must use https://',
+    }),
   name: z.string().min(1).max(120),
   description: z.string().max(500).optional(),
 })
@@ -229,6 +239,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+
+    // SSRF guard: resolve hostname, reject private/loopback/link-local/CGNAT/
+    // metadata addresses. Runs BEFORE the secret is generated and BEFORE
+    // dry-run preview so a caller can't probe internal hostnames via repeated
+    // dry-run calls. Re-checked at dispatch time as defense in depth.
+    const urlCheck = await validateWebhookUrl(body.webhook_url)
+    if (!urlCheck.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'webhook_url', reason: urlCheck.reason, message: urlCheck.detail },
+      })
+    }
 
     if (ctx.dryRun) {
       return dryRunPreview(

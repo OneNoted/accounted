@@ -23,6 +23,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signPayload } from './signing'
+import { validateWebhookUrl } from './url-guard'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('webhooks/dispatcher')
@@ -55,6 +56,7 @@ interface DueDelivery {
 
 interface WebhookForDelivery {
   id: string
+  company_id: string
   webhook_url: string
   secret: string
 }
@@ -87,6 +89,16 @@ export async function dispatchDueDeliveries(args: {
 
   const summary: DispatchSummary = { picked: 0, delivered: 0, failed: 0, dead: 0 }
 
+  // Recover stuck in_flight rows: a previous tick that was killed mid-flight
+  // (Vercel function timeout, hard crash, manual termination) leaves rows
+  // marked in_flight forever otherwise. Sweep them back to 'failed' so the
+  // retry loop picks them up at next_attempt_at.
+  //
+  // Threshold = 2× REQUEST_TIMEOUT_MS. A live attempt takes at most
+  // REQUEST_TIMEOUT_MS plus the body read; doubling that gives an
+  // unambiguous "this is stuck, not in-flight" boundary.
+  await recoverStuckInFlight(args.supabase, now)
+
   const due = await claimDueDeliveries(args.supabase, batchSize, now)
   summary.picked = due.length
   if (due.length === 0) return summary
@@ -99,9 +111,27 @@ export async function dispatchDueDeliveries(args: {
     const webhook = webhookMap.get(delivery.webhook_id)
     if (!webhook) {
       // The webhook was deleted between enqueue and dispatch. Mark dead;
-      // there's no receiver to deliver to and CASCADE will eventually
-      // remove the delivery row anyway.
+      // there's no receiver to deliver to. After the 20260515180000
+      // retention migration the webhook_deliveries.webhook_id FK is
+      // ON DELETE SET NULL, so the row stays in the audit trail under
+      // status='dead'.
       await markDead(args.supabase, delivery.id, 'webhook_deleted')
+      summary.dead++
+      continue
+    }
+
+    // Defense-in-depth tenancy check: the webhook the delivery row points
+    // at MUST belong to the same company as the delivery row. Mismatch
+    // indicates a poisoned row — refuse to dispatch (which would sign with
+    // the wrong tenant's secret and POST to the wrong receiver).
+    if (webhook.company_id !== delivery.company_id) {
+      log.error('cross-tenant delivery refused', new Error('company_id mismatch'), {
+        deliveryId: delivery.id,
+        deliveryCompanyId: delivery.company_id,
+        webhookId: webhook.id,
+        webhookCompanyId: webhook.company_id,
+      })
+      await markDead(args.supabase, delivery.id, 'cross_tenant_mismatch')
       summary.dead++
       continue
     }
@@ -143,6 +173,34 @@ export async function dispatchDueDeliveries(args: {
 // ──────────────────────────────────────────────────────────────────────
 // DB ops
 // ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Mark in_flight rows whose updated_at is older than the stuck-threshold
+ * back to 'failed' with next_attempt_at = now so they re-enter the
+ * dispatch queue. Best-effort — a write failure here is logged but
+ * doesn't block the rest of the cycle.
+ */
+async function recoverStuckInFlight(supabase: SupabaseClient, now: Date): Promise<void> {
+  const stuckBefore = new Date(now.getTime() - 2 * REQUEST_TIMEOUT_MS)
+  const { data, error } = await supabase
+    .from('webhook_deliveries')
+    .update({
+      status: 'failed',
+      next_attempt_at: now.toISOString(),
+      error: 'recovered_from_in_flight_timeout',
+    })
+    .eq('status', 'in_flight')
+    .lt('updated_at', stuckBefore.toISOString())
+    .select('id')
+
+  if (error) {
+    log.warn('stuck in_flight recovery failed', { code: error.code })
+    return
+  }
+  if (data && data.length > 0) {
+    log.warn('recovered stuck in_flight rows', { count: data.length })
+  }
+}
 
 async function claimDueDeliveries(
   supabase: SupabaseClient,
@@ -210,9 +268,15 @@ async function loadWebhooksByIds(
   supabase: SupabaseClient,
   ids: string[],
 ): Promise<Map<string, WebhookForDelivery>> {
+  // Include company_id so the dispatch loop can assert that the delivery
+  // row's company_id matches the webhook's — defense in depth against a
+  // poisoned delivery row pointing at another tenant's webhook
+  // (compromised service-role path, faulty INSERT in a future code path,
+  // etc.). The DB trigger added in 20260515190000 enforces the same
+  // invariant at INSERT time; this is the application-layer mirror.
   const { data, error } = await supabase
     .from('webhooks')
-    .select('id, webhook_url, secret')
+    .select('id, company_id, webhook_url, secret')
     .in('id', ids)
 
   if (error || !data) {
@@ -358,6 +422,26 @@ async function attemptDelivery(args: {
     previous_attributes: delivery.previous_attributes,
   })
 
+  // Re-validate the URL at dispatch time as defense in depth — DNS records
+  // can change between webhook creation and dispatch (DNS rebinding,
+  // hijack, A-record swap to internal IP), so the create-time check alone
+  // is insufficient. A failure here marks the delivery dead with a
+  // distinct reason so the operator can investigate without thinking it's
+  // a transient receiver issue.
+  const urlCheck = await validateWebhookUrl(webhook.webhook_url)
+  if (!urlCheck.ok) {
+    return {
+      kind: 'dead',
+      reason: `url_unsafe:${urlCheck.reason}`,
+      disableWebhook: true,
+      attempts,
+      responseStatus: null,
+      responseBody: null,
+      responseHeaders: null,
+      error: urlCheck.detail,
+    }
+  }
+
   const { header } = signPayload({ body, secret: webhook.secret, timestamp: Math.floor(now.getTime() / 1000) })
 
   const controller = new AbortController()
@@ -437,7 +521,21 @@ async function attemptDelivery(args: {
   }
 }
 
+// Content-Type prefixes for which we persist response_body verbatim. Other
+// types (text/html error pages, application/octet-stream, ...) get dropped
+// because they routinely echo PII back from receiver-side error renderers
+// (Art.32(1)(b), A.8.12). A null body is just as useful for debugging
+// when the operator can see the response_status and response_headers.
+const SAFE_BODY_CONTENT_TYPE_PREFIXES = ['text/plain', 'application/json']
+
 async function readBoundedText(response: Response): Promise<string | null> {
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+  const isSafe = SAFE_BODY_CONTENT_TYPE_PREFIXES.some((p) => contentType.startsWith(p))
+  if (!isSafe) {
+    // Drain the body so the connection can be reused, but discard the bytes.
+    try { await response.text() } catch { /* ignore */ }
+    return null
+  }
   try {
     const text = await response.text()
     if (text.length <= MAX_RESPONSE_BODY_BYTES) return text
@@ -447,10 +545,25 @@ async function readBoundedText(response: Response): Promise<string | null> {
   }
 }
 
+// Allowlist for response_headers persistence. Receiver-side headers like
+// Set-Cookie, Authorization, WWW-Authenticate, internal tracing, and
+// vendor x-* headers can carry credentials or sensitive identifiers; we
+// don't need them for delivery diagnostics. (CC7.2 / Art.32(1)(b))
+const SAFE_RESPONSE_HEADERS = new Set([
+  'content-type',
+  'content-length',
+  'date',
+  'server',
+  'x-request-id',
+  'cf-ray',
+])
+
 function headersToObject(headers: Headers): Record<string, string> {
   const obj: Record<string, string> = {}
   headers.forEach((v, k) => {
-    obj[k] = v
+    if (SAFE_RESPONSE_HEADERS.has(k.toLowerCase())) {
+      obj[k] = v
+    }
   })
   return obj
 }

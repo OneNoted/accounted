@@ -22,6 +22,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 
 const WEBHOOK_DETAIL_COLUMNS =
   'id, name, description, event_type, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at, updated_at'
@@ -44,7 +45,12 @@ const PatchWebhookSchema = z
   .object({
     name: z.string().min(1).max(120).optional(),
     description: z.string().max(500).nullable().optional(),
-    webhook_url: z.string().url().max(2048).optional(),
+    webhook_url: z
+      .string()
+      .url()
+      .max(2048)
+      .refine((u) => u.startsWith('https://'), { message: 'webhook_url must use https://' })
+      .optional(),
     active: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required.' })
@@ -177,6 +183,18 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
     const body = parsed.data
+
+    // SSRF guard on webhook_url change — same DNS/IP-class validation as
+    // POST /webhooks. Skip when webhook_url isn't being changed.
+    if (body.webhook_url !== undefined) {
+      const urlCheck = await validateWebhookUrl(body.webhook_url)
+      if (!urlCheck.ok) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'webhook_url', reason: urlCheck.reason, message: urlCheck.detail },
+        })
+      }
+    }
 
     // Re-enable clears disabled_at/disabled_reason (legitimate operator
     // action after fixing the receiver). Manual disable sets them.
