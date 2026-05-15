@@ -43,6 +43,10 @@
     {
       "path": "/api/extensions/skatteverket/agi/kvittenser/cron",
       "schedule": "0 */2 * * *"
+    },
+    {
+      "path": "/api/webhooks/dispatch/cron",
+      "schedule": "* * * * *"
     }
   ]
 }

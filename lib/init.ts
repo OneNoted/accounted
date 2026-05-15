@@ -3,6 +3,7 @@ import { setContextFactory } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
 import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
+import { registerWebhookHandler } from '@/lib/webhooks/handler'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('init')
@@ -64,6 +65,7 @@ export function ensureInitialized(): void {
   setContextFactory(createExtensionContext)
   registerSupplierInvoiceHandler()
   registerEventLogHandler()
+  registerWebhookHandler()
   loadExtensions()
 
   initialized = true

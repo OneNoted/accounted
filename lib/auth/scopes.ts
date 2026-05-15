@@ -181,12 +181,15 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/salary-runs/:id/book': 'payroll:write',
   'POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi': 'payroll:write',
 
-  // Webhooks (Phase 6 — placeholder so the catalogue is complete)
+  // Webhooks (Phase 6 PR-1)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',
   'POST /api/v1/companies/:companyId/webhooks': 'webhooks:manage',
   'GET /api/v1/companies/:companyId/webhooks/:id': 'webhooks:manage',
   'PATCH /api/v1/companies/:companyId/webhooks/:id': 'webhooks:manage',
   'DELETE /api/v1/companies/:companyId/webhooks/:id': 'webhooks:manage',
+  'POST /api/v1/companies/:companyId/webhooks/:id/test': 'webhooks:manage',
+  'GET /api/v1/companies/:companyId/webhooks/:id/deliveries': 'webhooks:manage',
+  'POST /api/v1/webhook-deliveries/:id/retry': 'webhooks:manage',
 }
 
 interface CompiledRoute {
