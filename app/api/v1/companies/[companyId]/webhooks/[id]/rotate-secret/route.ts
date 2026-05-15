@@ -74,40 +74,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
   async (_request, ctx, params) => {
     const { id } = await params.params
 
-    // Confirm the webhook exists for this tenant before generating the new
-    // secret. Without this, a caller could probe webhook existence by
-    // observing whether the secret-generation succeeded.
-    const { data: existing, error: lookupErr } = await ctx.supabase
-      .from('webhooks')
-      .select('id, name')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', id)
-      .maybeSingle()
-
-    if (lookupErr) return v1ErrorResponse(lookupErr, ctx.log, { requestId: ctx.requestId })
-    if (!existing) return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-
     const newSecret = `whsec_${generateWebhookSecret()}`
     const rotatedAt = new Date().toISOString()
 
-    // .select('id').maybeSingle() forces PostgREST to return the row count
-    // so we can detect a 0-row update — closes the TOCTOU window between
-    // the existence check above and this UPDATE. A concurrent DELETE (or
-    // a race against another rotate-secret call) would otherwise return
-    // updateErr=null with no row touched, and we'd hand the caller a
-    // freshly-generated secret that no webhook in the database matches.
+    // Single atomic UPDATE … RETURNING name. The preflight existence-check
+    // SELECT is unnecessary because PostgREST's .select(...).maybeSingle()
+    // on the UPDATE returns null when no row matched — which is the same
+    // signal (existence) the SELECT gave us, but in one round trip and
+    // without the TOCTOU window a separate SELECT introduces.
+    //
+    // RETURNING `name` so the audit_log description carries a human
+    // identifier without a second read.
     const { data: updatedRow, error: updateErr } = await ctx.supabase
       .from('webhooks')
       .update({ secret: newSecret })
       .eq('company_id', ctx.companyId!)
       .eq('id', id)
-      .select('id')
+      .select('id, name')
       .maybeSingle()
 
     if (updateErr) return v1ErrorResponse(updateErr, ctx.log, { requestId: ctx.requestId })
     if (!updatedRow) {
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
+    const w = updatedRow as { id: string; name: string }
 
     // Audit log entry — V16 security event. Records the rotation with
     // actor attribution but NEVER the secret value itself (signing
@@ -121,7 +111,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       table_name: 'webhooks',
       record_id: id,
       actor_id: ctx.apiKeyId ?? null,
-      description: `Webhook secret rotated: "${(existing as { name: string }).name}"`,
+      description: `Webhook secret rotated: "${w.name}"`,
       new_state: { event: 'secret_rotated', rotated_at: rotatedAt },
     })
     if (auditErr) {
@@ -131,9 +121,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Cache-Control: no-store prevents any intermediary (CDN, proxy,
+    // load-balancer access log, API gateway, browser cache) from
+    // persisting the response body. The HMAC secret is sensitive
+    // credential material returned exactly once — landing it in an
+    // intermediary log store with a different retention policy than
+    // intended would defeat the rotation's purpose (Art.25 / CC6.1).
     return ok(
       { id, secret: newSecret, rotated_at: rotatedAt },
-      { requestId: ctx.requestId },
+      {
+        requestId: ctx.requestId,
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+          Pragma: 'no-cache',
+        },
+      },
     )
   },
   { requireIdempotencyKey: true },

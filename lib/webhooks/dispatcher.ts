@@ -373,59 +373,48 @@ async function disableWebhook(
   }
 
   // V16 security event log. Auto-disable is a privileged action taken by
-  // the dispatcher (not a human caller), so actor_id is null and user_id
-  // falls back to the webhook owner so the row remains visible under
-  // their per-user RLS read policy. The reason discriminates between the
-  // three auto-disable paths (http_410_gone / redirect_blocked /
-  // url_unsafe:<class>) so SIEM tooling can alert on systematic patterns.
-  if (prior) {
-    const p = prior as {
-      user_id: string | null
-      company_id: string | null
-      name: string
-      active: boolean
-      disabled_at: string | null
-      disabled_reason: string | null
-    }
-    // Skip the audit write when user_id is null (legacy rows from before
-    // the multi-tenant refactor made it nullable). The audit_log.user_id
-    // column is itself nullable post-refactor but every code-side write
-    // supplies it, so emitting NULL here would create a silently-skipped
-    // entry. Instead surface a structured warning so SIEM tooling sees
-    // the gap (CC7.2 / V16.1.1 / A.8.15).
-    if (p.user_id) {
-      const { error: auditErr } = await supabase.from('audit_log').insert({
-        user_id: p.user_id,
-        company_id: p.company_id,
-        action: 'SECURITY_EVENT',
-        table_name: 'webhooks',
-        record_id: webhookId,
-        actor_id: null,
-        description: `Webhook auto-disabled by dispatcher: ${reason} (was "${p.name}")`,
-        old_state: { active: p.active, disabled_at: p.disabled_at, disabled_reason: p.disabled_reason },
-        new_state: { active: false, disabled_reason: reason, disabled_at: new Date().toISOString() },
-      })
-      if (auditErr) {
-        log.warn('audit_log insert failed for webhook auto-disable', {
-          webhookId,
-          reason,
-          code: auditErr.code,
-        })
-      }
-    } else {
-      log.warn('webhook auto-disable: audit_log entry skipped (legacy row has null user_id)', {
-        webhookId,
-        reason,
-      })
-    }
-  } else {
-    // Prior snapshot read failed or row was deleted between read and
-    // UPDATE; the disable still succeeded so the SECURITY_EVENT must
-    // still surface in monitoring. We can't write an audit row without
-    // user_id, so emit a structured log line tagged for SIEM.
-    log.warn('webhook auto-disabled but audit_log entry skipped (no prior snapshot)', {
+  // the dispatcher (not a human caller), so actor_id is null. The
+  // audit_log entry is written UNCONDITIONALLY — even when prior is null
+  // or prior.user_id is null — because the SECURITY_EVENT must produce
+  // a durable record (A.8.15 / V16.1.1 / CC7.2). The audit_log.user_id
+  // column is nullable post-multi-tenant-refactor (20260330130000), so
+  // a system-initiated event can legitimately write user_id=NULL. Such
+  // rows are invisible under the user-scoped SELECT policy but remain
+  // queryable under service-role review, which is appropriate for
+  // system-initiated events.
+  //
+  // The reason discriminates between the three auto-disable paths
+  // (http_410_gone / redirect_blocked / url_unsafe:<class>) so SIEM
+  // tooling can alert on systematic patterns.
+  const p = prior as {
+    user_id: string | null
+    company_id: string | null
+    name: string
+    active: boolean
+    disabled_at: string | null
+    disabled_reason: string | null
+  } | null
+
+  const { error: auditErr } = await supabase.from('audit_log').insert({
+    user_id: p?.user_id ?? null,
+    company_id: p?.company_id ?? null,
+    action: 'SECURITY_EVENT',
+    table_name: 'webhooks',
+    record_id: webhookId,
+    actor_id: null,
+    description: p
+      ? `Webhook auto-disabled by dispatcher: ${reason} (was "${p.name}")`
+      : `Webhook auto-disabled by dispatcher: ${reason} (prior snapshot unavailable)`,
+    old_state: p
+      ? { active: p.active, disabled_at: p.disabled_at, disabled_reason: p.disabled_reason }
+      : null,
+    new_state: { active: false, disabled_reason: reason, disabled_at: new Date().toISOString() },
+  })
+  if (auditErr) {
+    log.warn('audit_log insert failed for webhook auto-disable', {
       webhookId,
       reason,
+      code: auditErr.code,
     })
   }
 }

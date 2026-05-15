@@ -307,33 +307,29 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
   async (_request, ctx, params) => {
     const { id } = await params.params
 
-    // Capture the webhook before deletion so the audit_log entry can
-    // record a meaningful old_state snapshot (the row is gone immediately
-    // after the DELETE returns).
-    const { data: prior } = await ctx.supabase
-      .from('webhooks')
-      .select('name, event_type, webhook_url, active')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', id)
-      .maybeSingle()
-
-    const { error } = await ctx.supabase
+    // Atomic delete + returning. One round trip captures both the
+    // deletion-confirmation row count and the deleted row's prior state
+    // for the audit_log entry — eliminates the pre-read TOCTOU window
+    // a separate SELECT introduced (V8.2.1). Idempotent DELETE: a 0-row
+    // delete (already-deleted webhook) still returns 204 because the
+    // resource is gone, which is the desired end state.
+    const { data: deleted, error } = await ctx.supabase
       .from('webhooks')
       .delete()
       .eq('company_id', ctx.companyId!)
       .eq('id', id)
+      .select('name, event_type, webhook_url, active')
+      .maybeSingle()
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
 
     // V16 audit log — webhook lifecycle event. Records the deletion
-    // UNCONDITIONALLY: the prior SELECT may have failed transiently and
-    // returned null, but a successful DELETE must still produce one
-    // audit row. The old_state degrades to null when the snapshot is
-    // unavailable; the row_id + actor_id are always present, which is
-    // the minimum CC6.3 attribution contract. The webhook_deliveries.
-    // webhook_id FK is ON DELETE SET NULL so the delivery audit trail
-    // survives; this entry closes the loop on the configuration side.
-    const p = prior as { name: string; event_type: string; webhook_url: string; active: boolean } | null
+    // UNCONDITIONALLY. When `deleted` is null (no row matched —
+    // idempotent re-delete or cross-tenant id), the audit row still
+    // captures the attempt: record_id + actor_id + action + timestamp
+    // is the minimum CC6.3 attribution contract; old_state degrades
+    // to null.
+    const p = deleted as { name: string; event_type: string; webhook_url: string; active: boolean } | null
     const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,
@@ -343,7 +339,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       actor_id: ctx.apiKeyId ?? null,
       description: p
         ? `Webhook deleted: "${p.name}" (${p.event_type})`
-        : `Webhook deleted: id=${id} (prior snapshot unavailable)`,
+        : `Webhook delete attempted on missing id=${id} (idempotent or cross-tenant)`,
       old_state: p,
     })
     if (auditErr) {

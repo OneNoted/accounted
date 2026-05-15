@@ -43,10 +43,11 @@ Response (abbreviated):
     },
     "reconciliation": {
       "gl_balance_2611": 31075.00,
-      "gl_balance_2621": 720.00,
-      "gl_balance_2631": 180.00,
+      "gl_balance_2614":     0.00,
+      "gl_balance_2621":   720.00,
+      "gl_balance_2631":   180.00,
       "gl_balance_2641": 12347.00,
-      "gl_balance_2645": 0.00,
+      "gl_balance_2645":     0.00,
       "rutor_match_gl": true
     },
     "warnings": []
@@ -62,6 +63,7 @@ Ruta 49 = (utgående moms 10+11+12 + utländsk omv. 30+31+32 + utländsk försä
 The \`reconciliation\` block compares the rutor against the actual general-ledger balances on the moms accounts:
 
 - \`2611\` — Utgående moms 25% (matches ruta 10)
+- \`2614\` — Utgående moms vid omvänd skattskyldighet (matches ruta 30 / reverse-charge output)
 - \`2621\` — Utgående moms 12% (matches ruta 11)
 - \`2631\` — Utgående moms 6% (matches ruta 12)
 - \`2641\` — Ingående moms (matches ruta 48)
@@ -73,7 +75,7 @@ The \`reconciliation\` block compares the rutor against the actual general-ledge
 
 **Important compliance moment in April 2026.** The VAT rate on livsmedel (groceries) drops from 12% → 6% effective 2026-04-01 under the regeringens vårproposition 2025. The decisive date under ML (2023:200) 1 kap 3 § is the *tidpunkt för skattskyldighetens inträde* — for goods this is the **supply date** (delivery), not the invoice date.
 
-- **Always pass \`delivery_date\` explicitly when it differs from \`invoice_date\`.** The engine routes the booking by supply date: food delivered ≥ 2026-04-01 books to \`2631\` (6%), food delivered before that books to \`2621\` (12%), regardless of when the invoice was issued.
+- **Always pass \`delivery_date\` explicitly when it differs from \`invoice_date\`.** The engine routes the booking by supply date: food delivered ≥ 2026-04-01 books to \`2631\` (6%), food delivered before that books to \`2621\` (12%), regardless of when the invoice was issued. For continuous or subscription food supplies (e.g. a weekly grocery box), the trigger point is the date when each individual delivery's skattskyldighet inträder — confirm against ML 1 kap 3 § rather than assuming the rule equals a single delivery date.
 - The classic edge case: food delivered in March, invoiced in April. Without an explicit \`delivery_date\` the engine falls back to \`invoice_date\` and would mis-book at 6%. **Set \`delivery_date\` for every food-line item in March-April 2026 invoices** — the cost of explicit data is zero; the cost of a mis-booked verifikation is a manual rectification + a momsdeklaration adjustment.
 - When \`delivery_date\` is omitted, the engine uses \`invoice_date\` as the fallback supply date. This is the correct behaviour for services (where delivery and invoice are typically simultaneous) but explicitly wrong for goods that straddle the cutover.
 
@@ -125,7 +127,7 @@ Imports from outside EU (\`vat_treatment: 'import'\`) book through a customs-cle
 
 ## Common pitfalls
 
-- **Decimals vs hela kronor.** The API returns rutor as decimal numbers (öre preserved). Skatteverket Mina Sidor accepts only hela kronor; the rounding rule per SFL 22 kap 1 § is \`Math.round\` (half-up). Round when transcribing, not in storage.
+- **Decimals vs hela kronor — truncate öre, do not round.** The API returns rutor as decimal numbers (öre preserved). Skatteverket Mina Sidor and SRU filings accept only hela kronor; the rule per SFL 22 kap 1 § is **truncation** (drop öre), NOT half-up rounding. Use \`Math.floor\` for positive amounts when transcribing. Truncate at the rendering / submission boundary, not in storage.
 - **Don't compute mid-month.** The figures are only meaningful for a complete month; calling \`?period=2026-04\` mid-April returns the partial state. The endpoint doesn't refuse partial periods, so this is on the integrator.
 - **Mixed-rate invoices.** A single invoice with both 25% and 12% items lands on both \`2611\` and \`2621\`. The declaration handles this correctly because the per-line VAT rate is preserved in the engine; integrations that flatten to a single header rate will mis-declare.
 - **Reverse-charge invoices in the wrong ruta.** A B2B sale to an EU customer with a missing/unvalidated VAT number does NOT qualify for reverse charge — those go to ruta 05 with normal 25% moms. Validate via \`POST /vat/validate\` (VIES) before issuing the invoice.
