@@ -388,10 +388,13 @@ async function disableWebhook(
       disabled_reason: string | null
     }
     // Skip the audit write when user_id is null (legacy rows from before
-    // the multi-tenant refactor made it nullable); the audit_log.user_id
-    // column is NOT NULL by virtue of every other write supplying it.
+    // the multi-tenant refactor made it nullable). The audit_log.user_id
+    // column is itself nullable post-refactor but every code-side write
+    // supplies it, so emitting NULL here would create a silently-skipped
+    // entry. Instead surface a structured warning so SIEM tooling sees
+    // the gap (CC7.2 / V16.1.1 / A.8.15).
     if (p.user_id) {
-      await supabase.from('audit_log').insert({
+      const { error: auditErr } = await supabase.from('audit_log').insert({
         user_id: p.user_id,
         company_id: p.company_id,
         action: 'SECURITY_EVENT',
@@ -402,7 +405,28 @@ async function disableWebhook(
         old_state: { active: p.active, disabled_at: p.disabled_at, disabled_reason: p.disabled_reason },
         new_state: { active: false, disabled_reason: reason, disabled_at: new Date().toISOString() },
       })
+      if (auditErr) {
+        log.warn('audit_log insert failed for webhook auto-disable', {
+          webhookId,
+          reason,
+          code: auditErr.code,
+        })
+      }
+    } else {
+      log.warn('webhook auto-disable: audit_log entry skipped (legacy row has null user_id)', {
+        webhookId,
+        reason,
+      })
     }
+  } else {
+    // Prior snapshot read failed or row was deleted between read and
+    // UPDATE; the disable still succeeded so the SECURITY_EVENT must
+    // still surface in monitoring. We can't write an audit row without
+    // user_id, so emit a structured log line tagged for SIEM.
+    log.warn('webhook auto-disabled but audit_log entry skipped (no prior snapshot)', {
+      webhookId,
+      reason,
+    })
   }
 }
 

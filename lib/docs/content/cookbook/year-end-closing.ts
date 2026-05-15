@@ -10,7 +10,7 @@ This is the operational companion to the [Fiscal-periods reference](/docs/api/re
 - All transactions for the year posted (no drafts).
 - All VAT declarations for the year filed (12 monthly, 4 quarterly, or 1 annual — see the [VAT cookbook](/docs/api/cookbook/file-vat-declaration)).
 - All AGI declarations filed and kontrolluppgift (KU) generated.
-- The bookslut date — usually 31 december for calendar-year companies (kalenderår), or the last day of the räkenskapsår for off-calendar (brutet räkenskapsår).
+- The bokslut date — usually 31 december for calendar-year companies (kalenderår), or the last day of the räkenskapsår for off-calendar (brutet räkenskapsår).
 
 ## 1. Pre-flight: continuity check (IB/UB per BFL 5 kap)
 
@@ -196,7 +196,7 @@ The one exception: the VAT declaration cadence is monthly/kvartalsvis/årlig reg
 ## Common pitfalls
 
 - **Don't year-end before the last month's moms is declared.** The year-end procedure expects every moms-account balance to reconcile. A pending declaration leaves dangling balances on 2611-2641.
-- **Periodiseringsfond reserve cap.** AB can set aside max 25% of skattepliktigt resultat. The engine enforces this — \`to_periodiseringsfond\` exceeding the cap returns \`VALIDATION_ERROR\` with the maximum allowed value in details.
+- **Periodiseringsfond reserve cap.** Per IL 30 kap 5 §, AB can set aside max 25% of the **taxable profit BEFORE the periodiseringsfond deduction itself** (and after schablonintäkt on outstanding prior-year funds is added back to taxable income). The engine computes the cap base internally — pass \`to_periodiseringsfond\` as the desired set-aside amount and the engine returns \`VALIDATION_ERROR\` with the maximum allowed value if it exceeds the cap. Note: under BFL/BFNAR 2016:10 kap 13 (materiellt samband for AB), periodiseringsfond is BOOKED as an obeskattad reserv on accounts 2110–2139, not just declared on INK2 — the engine posts the booking automatically as part of the year-end procedure.
 - **Don't unlock a period after the AB's annual report is filed.** The signed annual report is a public document at Bolagsverket; unlocking and changing the books afterwards creates a discrepancy with the filed report (which is itself an audit finding). Use storno (\`POST /journal-entries/{id}/reverse\`) to correct in the current open period instead.
 - **Year-end is async.** The operation can take minutes; don't block your request loop on it. Subscribe to \`operation.completed\` or poll \`GET /operations/{id}\` with reasonable backoff (every 5–10s).
 - **The closing-period confirmation phrase is locale-sensitive.** It must match exactly. If you localise the prompt to Swedish ("stäng period 2025 oåterkalleligt"), document the exact string your UI requires — the API requires the English version above.

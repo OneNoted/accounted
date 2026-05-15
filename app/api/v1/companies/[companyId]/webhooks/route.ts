@@ -325,9 +325,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // V16 audit log — webhook lifecycle event. Records creation + actor
     // attribution. new_state captures the row WITHOUT the secret (signing
-    // material must not land in the audit trail).
+    // material must not land in the audit trail). A failed audit write
+    // is logged structurally so SIEM tooling can alert on the gap
+    // (CC7.2) — we don't roll back the create on audit failure because
+    // the webhook itself is already persisted.
     const created_row = data as Record<string, unknown> & { id: string }
-    await ctx.supabase.from('audit_log').insert({
+    const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,
       action: 'INSERT',
@@ -343,6 +346,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         active: true,
       },
     })
+    if (auditErr) {
+      ctx.log.warn('audit_log insert failed for webhook create', {
+        webhookId: created_row.id,
+        code: auditErr.code,
+      })
+    }
 
     // Secret returned exactly once. Caller must persist it on the receiver
     // side — gnubok will not surface it on any subsequent endpoint.

@@ -235,11 +235,19 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     if (!data) return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
 
-    // V16 audit log — webhook lifecycle event. Record the diff. When
-    // active flips from true → false the row captures the auto-disable
-    // ground truth; reviewers can reconstruct exactly when and by whom.
+    // V16 audit log — webhook lifecycle event. Record the diff.
+    //
+    // new_state is populated from the DB-confirmed returned row (`data`)
+    // through an explicit field allowlist — NOT from the spread
+    // `update` object. Two reasons: (a) the post-UPDATE state is the
+    // ground truth, and a future column-level CHECK/trigger that
+    // rejects a field would leave the request-body-derived shape
+    // misleadingly out of sync (A.8.11 / V16.1.1); (b) the allowlist
+    // foreclosures any future widening of PatchWebhookSchema that
+    // accidentally pulls a sensitive field into the audit trail.
     const changedFields = Object.keys(body)
-    await ctx.supabase.from('audit_log').insert({
+    const d = data as Record<string, unknown>
+    const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,
       action: 'UPDATE',
@@ -248,8 +256,18 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       actor_id: ctx.apiKeyId ?? null,
       description: `Webhook updated: ${changedFields.join(', ')}`,
       old_state: prior ?? null,
-      new_state: { ...update, id },
+      new_state: {
+        name: d.name,
+        description: d.description,
+        webhook_url: d.webhook_url,
+        active: d.active,
+        disabled_at: d.disabled_at,
+        disabled_reason: d.disabled_reason,
+      },
     })
+    if (auditErr) {
+      ctx.log.warn('audit_log insert failed for webhook update', { webhookId: id, code: auditErr.code })
+    }
 
     return ok(data, { requestId: ctx.requestId })
   },
@@ -307,22 +325,29 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
 
-    // V16 audit log — webhook lifecycle event. Records the deletion with
-    // a snapshot of what was deleted. The webhook_deliveries.webhook_id
-    // FK is ON DELETE SET NULL so the delivery audit trail survives; this
-    // entry closes the loop on the configuration side.
-    if (prior) {
-      const p = prior as { name: string; event_type: string; webhook_url: string; active: boolean }
-      await ctx.supabase.from('audit_log').insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId,
-        action: 'DELETE',
-        table_name: 'webhooks',
-        record_id: id,
-        actor_id: ctx.apiKeyId ?? null,
-        description: `Webhook deleted: "${p.name}" (${p.event_type})`,
-        old_state: p,
-      })
+    // V16 audit log — webhook lifecycle event. Records the deletion
+    // UNCONDITIONALLY: the prior SELECT may have failed transiently and
+    // returned null, but a successful DELETE must still produce one
+    // audit row. The old_state degrades to null when the snapshot is
+    // unavailable; the row_id + actor_id are always present, which is
+    // the minimum CC6.3 attribution contract. The webhook_deliveries.
+    // webhook_id FK is ON DELETE SET NULL so the delivery audit trail
+    // survives; this entry closes the loop on the configuration side.
+    const p = prior as { name: string; event_type: string; webhook_url: string; active: boolean } | null
+    const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
+      user_id: ctx.userId,
+      company_id: ctx.companyId,
+      action: 'DELETE',
+      table_name: 'webhooks',
+      record_id: id,
+      actor_id: ctx.apiKeyId ?? null,
+      description: p
+        ? `Webhook deleted: "${p.name}" (${p.event_type})`
+        : `Webhook deleted: id=${id} (prior snapshot unavailable)`,
+      old_state: p,
+    })
+    if (auditErr) {
+      ctx.log.warn('audit_log insert failed for webhook delete', { webhookId: id, code: auditErr.code })
     }
 
     return noContent({ requestId: ctx.requestId })

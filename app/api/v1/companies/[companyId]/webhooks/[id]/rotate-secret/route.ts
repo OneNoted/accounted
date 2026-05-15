@@ -90,19 +90,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const newSecret = `whsec_${generateWebhookSecret()}`
     const rotatedAt = new Date().toISOString()
 
-    const { error: updateErr } = await ctx.supabase
+    // .select('id').maybeSingle() forces PostgREST to return the row count
+    // so we can detect a 0-row update — closes the TOCTOU window between
+    // the existence check above and this UPDATE. A concurrent DELETE (or
+    // a race against another rotate-secret call) would otherwise return
+    // updateErr=null with no row touched, and we'd hand the caller a
+    // freshly-generated secret that no webhook in the database matches.
+    const { data: updatedRow, error: updateErr } = await ctx.supabase
       .from('webhooks')
       .update({ secret: newSecret })
       .eq('company_id', ctx.companyId!)
       .eq('id', id)
+      .select('id')
+      .maybeSingle()
 
     if (updateErr) return v1ErrorResponse(updateErr, ctx.log, { requestId: ctx.requestId })
+    if (!updatedRow) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+    }
 
     // Audit log entry — V16 security event. Records the rotation with
     // actor attribution but NEVER the secret value itself (signing
     // material must not land in the audit trail). new_state carries the
-    // event metadata; the secret is omitted by design.
-    await ctx.supabase.from('audit_log').insert({
+    // event metadata; the secret is omitted by design. CC7.2 — surface
+    // a structured warning when the audit write fails so SIEM can alert.
+    const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,
       action: 'SECURITY_EVENT',
@@ -112,6 +124,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       description: `Webhook secret rotated: "${(existing as { name: string }).name}"`,
       new_state: { event: 'secret_rotated', rotated_at: rotatedAt },
     })
+    if (auditErr) {
+      ctx.log.warn('audit_log insert failed for webhook rotate-secret', {
+        webhookId: id,
+        code: auditErr.code,
+      })
+    }
 
     return ok(
       { id, secret: newSecret, rotated_at: rotatedAt },

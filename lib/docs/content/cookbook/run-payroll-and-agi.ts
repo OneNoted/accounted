@@ -52,7 +52,7 @@ Totals are null until you calculate.
 
 ## 2. Calculate (math + draft → review)
 
-\`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026, age-reduced for under-25 / over-66), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
+\`POST /salary-runs/{id}/calculate\` runs the full Swedish tax engine: skattetabell lookup per employee, sociala avgifter at the current rate (31.42% for 2026), age-adjusted reductions per Prop. 2025/26:66 (the youth-reduction band is **18–22 years old at the start of 2026** — i.e. employees **born 2003–2007** for the 2026 income year, NOT a blanket "under-25"; the elder reduction applies at **67+ from 2026**, not 66+), förmånsbeskattning, semesterlöneskuld, OB-tillägg, traktamente.
 
 \`\`\`bash
 curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/calculate" \\
@@ -125,9 +125,11 @@ This step records the payment event but does NOT post the journal entry yet — 
 
 \`POST /salary-runs/{id}/book\` is the engine-touching step. It generates 2–4 verifikationer atomically (the count depends on whether OB/övertid/traktamente have separate journals):
 
-- Verifikation A: Bruttolön debit → 7010 (or per-employee subkonto), credit → 2710 (preliminärskatt) + 2731 (sociala avgifter på lön) + 1930 (utbetalning)
-- Verifikation B: Arbetsgivaravgifter debit → 7510, credit → 2731 (offsetting the 2731 leg from A) + 2615 (sociala avgifter Skatteverket)
-- Optional: separate verifikationer for förmånsbeskattning (2731), traktamente (7321), löneväxling (1058 factor on 7390)
+- Verifikation A: Bruttolön debit → 7010 (or per-employee subkonto), credit → 2710 (preliminärskatt) + 1930 (utbetalning)
+- Verifikation B: Arbetsgivaravgifter debit → 7510 (lagstadgade sociala avgifter), credit → 2731 (Avräkning sociala avgifter — payable to Skatteverket, cleared when arbetsgivardeklaration is paid)
+- Optional: separate verifikationer for förmånsbeskattning (förmånsvärde → 7385 cost + 2731 avräkning), traktamente (7321 inrikes / 7322 utrikes), löneväxling (1.058 factor on 7390)
+
+The 2731 series is the **employer-contributions-payable** liability per BAS 2026 — not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.
 
 \`\`\`bash
 curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/book" \\

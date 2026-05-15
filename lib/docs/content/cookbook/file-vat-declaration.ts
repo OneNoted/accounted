@@ -28,7 +28,7 @@ Response (abbreviated):
     "company": { "org_number": "556677-8899", "vat_registration_no": "SE556677889901" },
     "rutor": {
       "05": { "label": "Momspliktig försäljning",                  "amount":  124300.00 },
-      "06": { "label": "Övrig försäljning (ej skattepliktig)",     "amount":       0.00 },
+      "06": { "label": "Momspliktig försäljning som inte ingår i ruta 05", "amount":   0.00 },
       "07": { "label": "Momspliktig inköp omv. skattskyldighet",   "amount":       0.00 },
       "10": { "label": "Utgående moms 25% (på ruta 05)",           "amount":   31075.00 },
       "11": { "label": "Utgående moms 12%",                         "amount":     720.00 },
@@ -71,11 +71,11 @@ The \`reconciliation\` block compares the rutor against the actual general-ledge
 
 ## 3. The 2026-04-01 livsmedel rate change
 
-**Important compliance moment in April 2026.** The VAT rate on livsmedel (groceries) drops from 12% → 6% effective 2026-04-01 under the regeringens vårproposition 2025. The API handles the transition automatically:
+**Important compliance moment in April 2026.** The VAT rate on livsmedel (groceries) drops from 12% → 6% effective 2026-04-01 under the regeringens vårproposition 2025. The decisive date under ML (2023:200) 1 kap 3 § is the *tidpunkt för skattskyldighetens inträde* — for goods this is the **supply date** (delivery), not the invoice date.
 
-- Invoices and supplier invoices created with \`invoice_date >= 2026-04-01\` and \`category = 'expense_food'\` (or equivalent BAS 4xxx food categories) book to \`2631\` (6%) instead of \`2621\` (12%).
-- Invoices with \`invoice_date < 2026-04-01\` continue to book at 12% per the supply date rule (ML 1 kap 3 §).
-- A transaction that **straddles** the date — e.g. food delivered in March, invoiced in April — books per the supply date, not the invoice date. Pass \`delivery_date\` explicitly when the supply date differs from \`invoice_date\` to get the correct treatment.
+- **Always pass \`delivery_date\` explicitly when it differs from \`invoice_date\`.** The engine routes the booking by supply date: food delivered ≥ 2026-04-01 books to \`2631\` (6%), food delivered before that books to \`2621\` (12%), regardless of when the invoice was issued.
+- The classic edge case: food delivered in March, invoiced in April. Without an explicit \`delivery_date\` the engine falls back to \`invoice_date\` and would mis-book at 6%. **Set \`delivery_date\` for every food-line item in March-April 2026 invoices** — the cost of explicit data is zero; the cost of a mis-booked verifikation is a manual rectification + a momsdeklaration adjustment.
+- When \`delivery_date\` is omitted, the engine uses \`invoice_date\` as the fallback supply date. This is the correct behaviour for services (where delivery and invoice are typically simultaneous) but explicitly wrong for goods that straddle the cutover.
 
 The VAT declaration for April 2026 onwards will show split balances on rutor 11/12: pre-2026-04-01 food sales remain on ruta 11 (12%), post-cutover food sales appear on ruta 12 (6%). The reconciliation block surfaces both; warnings flag any post-cutover transaction still booked at 12%.
 
@@ -119,7 +119,7 @@ curl -X PATCH "https://gnubok.app/api/v1/companies/$COMPANY_ID/fiscal-periods/$P
 
 Sales of services to other EU businesses (\`vat_treatment: 'reverse_charge_eu'\`) appear on ruta 39 and bypass the output-moms accounts (no entry on 26xx). The customer accounts for moms in their own country.
 
-Purchases of services from other EU businesses (supplier_invoice with \`vat_treatment: 'reverse_charge_eu'\`) appear on ruta 31. The engine books both an output-moms entry on 2614 (calculated 25% reverse) AND an input-moms entry on 2645 — net zero impact on cash flow, full traceability on the declaration.
+Purchases of services from other EU businesses (supplier_invoice with \`vat_treatment: 'reverse_charge_eu'\`) appear on ruta 31. The engine books both an output-moms entry on 2614 (calculated 25% reverse) AND an input-moms entry on 2645 — net zero impact on cash flow when full avdragsrätt applies, full traceability on the declaration. **For blandad verksamhet (mixed-activity companies with partial avdragsrätt per HFD 2023 ref. 45),** the \`2645\` leg must be proportionally restricted before it reaches ruta 48 — set \`company_settings.vat_deduction_percent\` so the engine applies the correct restriction automatically; otherwise the input-moms reaches ruta 48 unrestricted and over-declares the deduction.
 
 Imports from outside EU (\`vat_treatment: 'import'\`) book through a customs-clearance flow — the customs invoice is what posts the moms, not the supplier invoice itself. Coverage of this is in the [Supplier invoices reference](/docs/api/reference/supplier-invoices).
 
