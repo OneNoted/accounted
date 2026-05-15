@@ -234,61 +234,26 @@ async function claimDueDeliveries(
   batchSize: number,
   now: Date,
 ): Promise<DueDelivery[]> {
-  // PostgREST cannot express FOR UPDATE SKIP LOCKED through the JS client.
-  // The cleaner long-term shape is a SQL claim function — tracked for a
-  // follow-up commit. Until then we SELECT candidate rows, then UPDATE
-  // with a CAS guard and `.select('id')` to learn which rows the UPDATE
-  // actually claimed. The dispatch loop runs ONLY against the intersection
-  // of (selected, claimed) — so an overlapping cron tick that picked up
-  // the same SELECT can never double-deliver: at most one tick wins the
-  // CAS update for any given row.
+  // Atomic FOR UPDATE SKIP LOCKED claim via the SQL function shipped in
+  // migration 20260515220000. PostgREST can't express SKIP LOCKED through
+  // the JS client, so the function form is the documented entry point —
+  // see the migration comment for the full rationale (one round trip,
+  // no CAS contention, rows locked by a concurrent tick are simply
+  // invisible to the second caller).
   //
-  // Per-minute Vercel cron has best-effort single-instance semantics, but
-  // the documented contract is "at-least-once" not "at-most-once" — under
-  // load (e.g. a 50-row batch with mostly slow receivers > 60s) the next
-  // tick can fire while this one is still running, so the CAS-then-
-  // intersect pattern is load-bearing, not defensive.
-  const { data, error } = await supabase
-    .from('webhook_deliveries')
-    .select('id, webhook_id, company_id, event_type, payload, previous_attributes, api_version, attempts')
-    .in('status', ['pending', 'failed'])
-    .lte('next_attempt_at', now.toISOString())
-    // Skip dangling rows (webhook deleted between enqueue and dispatch).
-    // The webhook_deliveries.webhook_id FK is ON DELETE SET NULL
-    // (migration 20260515170000) so terminal rows survive webhook deletion
-    // for BFNAR 2013:2 kap 8 § audit retention; non-terminal rows for a
-    // deleted webhook have no receiver to deliver to and stay dormant in
-    // the audit trail.
-    .not('webhook_id', 'is', null)
-    .order('next_attempt_at', { ascending: true })
-    .limit(batchSize)
+  // All filter semantics from the previous JS path are preserved inside
+  // the function: status IN ('pending','failed'), next_attempt_at <= now,
+  // webhook_id IS NOT NULL, ORDER BY next_attempt_at ASC, LIMIT batchSize.
+  const { data, error } = await supabase.rpc('claim_due_webhook_deliveries', {
+    p_batch_size: batchSize,
+    p_now: now.toISOString(),
+  })
 
-  if (error || !data) {
-    log.error('claim due deliveries failed', error as Error)
+  if (error) {
+    log.error('claim_due_webhook_deliveries rpc failed', error as Error)
     return []
   }
-  if (data.length === 0) return []
-
-  const candidates = data as DueDelivery[]
-  const candidateIds = candidates.map((d) => d.id)
-
-  const { data: claimed, error: updateErr } = await supabase
-    .from('webhook_deliveries')
-    .update({ status: 'in_flight' })
-    .in('id', candidateIds)
-    .in('status', ['pending', 'failed']) // CAS guard
-    .select('id')
-
-  if (updateErr) {
-    log.error('claim deliveries update failed', updateErr as Error)
-    return []
-  }
-
-  // Trust the UPDATE's returned set as authoritative — anything not in
-  // `claimed` was lost to a competing tick (or had its status flipped
-  // out from under us between SELECT and UPDATE).
-  const claimedIds = new Set(((claimed ?? []) as { id: string }[]).map((r) => r.id))
-  return candidates.filter((d) => claimedIds.has(d.id))
+  return (data ?? []) as DueDelivery[]
 }
 
 async function loadWebhooksByIds(
