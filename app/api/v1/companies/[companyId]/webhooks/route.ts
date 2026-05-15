@@ -323,9 +323,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 
+    // V16 audit log — webhook lifecycle event. Records creation + actor
+    // attribution. new_state captures the row WITHOUT the secret (signing
+    // material must not land in the audit trail).
+    const created_row = data as Record<string, unknown> & { id: string }
+    await ctx.supabase.from('audit_log').insert({
+      user_id: ctx.userId,
+      company_id: ctx.companyId,
+      action: 'INSERT',
+      table_name: 'webhooks',
+      record_id: created_row.id,
+      actor_id: ctx.apiKeyId ?? null,
+      description: `Webhook created: "${body.name}" → ${body.webhook_url} (${body.event_type})`,
+      new_state: {
+        name: body.name,
+        event_type: body.event_type,
+        webhook_url: body.webhook_url,
+        api_version_pinned: API_V1_VERSION,
+        active: true,
+      },
+    })
+
     // Secret returned exactly once. Caller must persist it on the receiver
     // side — gnubok will not surface it on any subsequent endpoint.
-    return created({ ...(data as Record<string, unknown>), secret }, { requestId: ctx.requestId })
+    return created({ ...created_row, secret }, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )
