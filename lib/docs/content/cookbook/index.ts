@@ -57,17 +57,17 @@ export const COOKBOOK: CookbookEntry[] = [
   },
   {
     slug: 'file-vat-declaration',
-    title: 'File a VAT declaration',
+    title: 'Compute and review a VAT declaration',
     markdown: null,
     referenceLink: { href: '/docs/api/reference/reports#get-reports-vat-declaration', label: 'VAT declaration report' },
-    description: 'Compute momsdeklaration rutor and submit to Skatteverket.',
+    description: 'Compute momsdeklaration rutor 05–62 and reconcile against the GL before manual submission to Skatteverket.',
   },
   {
     slug: 'run-payroll-and-agi',
-    title: 'Run payroll and file AGI',
+    title: 'Run payroll and generate the AGI XML',
     markdown: null,
     referenceLink: { href: '/docs/api/reference/salary-runs', label: 'Salary runs reference' },
-    description: 'Calculate, approve, mark paid, book, generate AGI XML.',
+    description: 'Calculate, approve, mark paid, book, generate the AGI XML for manual submission to Skatteverket Mina Sidor.',
   },
   {
     slug: 'year-end-closing',

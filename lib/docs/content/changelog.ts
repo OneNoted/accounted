@@ -38,7 +38,7 @@ The first stable release of the public REST API. Six phases of development cover
 ### Bookkeeping primitives + AP + compliance (Phase 4)
 
 - **Suppliers + supplier-invoices** vertical (mirror of Phase 2 invoices on the AP side).
-- **Journal entries** primitives: \`POST /journal-entries\` (draft+commit), \`/{id}/commit\`, \`/{id}/reverse\` (storno per BFL 5 kap 5 §), \`/{id}/correct\` (rättelse), \`/batch-create\`.
+- **Journal entries** primitives: \`POST /journal-entries\` (draft+commit), \`/{id}/commit\`, \`/{id}/reverse\` (storno) and \`/{id}/correct\` (rättelse) — both satisfy BFL 5 kap 5 § (storno is the canonical method of rättelse), \`/batch-create\`.
 - **Voucher gap explanations**: \`POST /voucher-gap-explanations\` per BFNAR 2013:2.
 - **Fiscal-periods async ops**: \`/lock\`, \`/close\`, \`/year-end\`, \`/opening-balances\`, \`/currency-revaluation\`. All return 202 with operation_id; poll at \`GET /api/v1/operations/{id}\`.
 - **Compliance check**: \`GET /compliance/check?type={year_end_readiness|voucher_gaps}\` — pre-flight findings before submission.
@@ -47,7 +47,7 @@ The first stable release of the public REST API. Six phases of development cover
 ### Payroll + reports + import (Phase 5)
 
 - **Employees**: full CRUD with personnummer masking on list/create per GDPR Art.5(1)(c). Soft-delete via \`is_active\`.
-- **Salary runs**: CRUD + lifecycle verbs \`/calculate\`, \`/approve\`, \`/mark-paid\`, \`/book\`, \`/generate-agi\`. State machine: draft → review → approved → paid → booked.
+- **Salary runs**: CRUD + lifecycle verbs \`/calculate\`, \`/approve\`, \`/mark-paid\`, \`/book\`, \`/generate-agi\`. State machine: draft → review → approved → paid → booked. \`/generate-agi\` produces and persists the arbetsgivardeklaration XML — the response carries it as \`data.xml\` for the integrator to upload to Skatteverket Mina Sidor (or via the optional \`skatteverket\` extension). gnubok does NOT auto-submit; the AGI deadline (12th / 17th of the following month) is the integrator's responsibility.
 - **JSON reports** (14): trial-balance, balance-sheet, income-statement, general-ledger, journal-register, vat-declaration, monthly-breakdown, ar-ledger, supplier-ledger, continuity-check, salary-journal, avgifter-basis, vacation-liability.
 - **Binary report**: \`GET /reports/sie-export\` (text/plain SIE4 file). Note: a SIE4 export alone does NOT satisfy BFL 7 kap archiving obligations — SIE captures account-level positions and verifikationer but lacks system documentation and behandlingshistorik. Treat SIE as a portability format (Fortnox/Visma/Bokio migration), not as a complete archive.
 - **Async imports**: \`POST /imports/sie\` (multipart, 50 MB), \`POST /imports/bank\` (multipart, 10 MB, auto-format detection across 11 bank formats). Both async via \`operations\` substrate.

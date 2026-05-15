@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server'
-import { findRecipe, buildPlaceholderMd } from '@/lib/docs/content/cookbook'
+import { findRecipe, buildPlaceholderMd, COOKBOOK_SLUGS } from '@/lib/docs/content/cookbook'
 import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
+
+// Pre-validate the slug against the closed allow-list before any lookup
+// runs. Defense-in-depth (V1.2.5): findRecipe is dictionary-based so the
+// raw value can't reach SQL or filesystem code paths, but if the lookup
+// is ever swapped (e.g. dynamic file load) the explicit allow-list
+// gate keeps the contract safe by construction.
+const SLUG_ALLOW = new Set<string>(COOKBOOK_SLUGS)
 
 // Next.js 16 does not extract the dynamic segment name from a directory
 // like `[slug].md/` — the literal `.md` suffix breaks the inference and
@@ -12,7 +19,9 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const match = url.pathname.match(/\/cookbook\/([^/]+)\.md$/)
   const slug = match?.[1]
-  if (!slug) return new NextResponse('Not found', { status: 404 })
+  if (!slug || !SLUG_ALLOW.has(slug)) {
+    return new NextResponse('Not found', { status: 404 })
+  }
 
   const entry = findRecipe(slug)
   if (!entry) return new NextResponse('Not found', { status: 404 })
