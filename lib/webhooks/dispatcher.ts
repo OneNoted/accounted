@@ -142,24 +142,41 @@ export async function dispatchDueDeliveries(args: {
       now,
     })
 
+    // Structured per-delivery outcome log. Keeps companyId / webhookId /
+    // deliveryId available in log aggregation for per-tenant audit-trail
+    // reconstruction without grepping through individual mark*-helper
+    // writes (V16 — security event correlation).
+    const logCtx = {
+      deliveryId: delivery.id,
+      webhookId: webhook.id,
+      companyId: delivery.company_id,
+      eventType: delivery.event_type,
+      attempt: delivery.attempts + 1,
+    }
+
     switch (outcome.kind) {
       case 'delivered':
         await markDelivered(args.supabase, delivery.id, outcome)
+        log.info('delivery succeeded', { ...logCtx, responseStatus: outcome.responseStatus })
         summary.delivered++
         break
       case 'dead':
         await markDead(args.supabase, delivery.id, outcome.reason, outcome)
+        log.warn('delivery dead', { ...logCtx, reason: outcome.reason, responseStatus: outcome.responseStatus })
         summary.dead++
         if (outcome.disableWebhook) {
           await disableWebhook(args.supabase, webhook.id, outcome.reason)
+          log.warn('webhook auto-disabled', { ...logCtx, reason: outcome.reason })
         }
         break
       case 'failed':
         if (delivery.attempts + 1 >= MAX_ATTEMPTS) {
           await markDead(args.supabase, delivery.id, 'attempts_exhausted', outcome)
+          log.warn('delivery dead — attempts exhausted', { ...logCtx, lastError: outcome.error })
           summary.dead++
         } else {
           await markFailedForRetry(args.supabase, delivery.id, delivery.attempts, outcome, now)
+          log.info('delivery failed — retry scheduled', { ...logCtx, error: outcome.error, responseStatus: outcome.responseStatus })
           summary.failed++
         }
         break
@@ -467,6 +484,12 @@ async function attemptDelivery(args: {
       },
       body,
       signal: controller.signal,
+      // Reject 3xx responses entirely. Following a redirect would let a
+      // receiver bounce the dispatcher to a private/internal address
+      // AFTER the SSRF guard (which validated the original webhook_url's
+      // hostname) has cleared. Receivers that legitimately move endpoints
+      // should ask integrators to update the webhook URL.
+      redirect: 'error',
     })
   } catch (err) {
     clearTimeout(timeout)

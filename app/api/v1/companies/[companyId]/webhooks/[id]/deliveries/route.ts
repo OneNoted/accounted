@@ -87,6 +87,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
+    // Defensive early return — the wrapper guarantees companyId for
+    // routes inside /companies/{companyId}/, but a missing value here
+    // would silently produce `WHERE company_id = NULL` (always-empty)
+    // rather than a hard auth failure. Surface the misconfiguration.
+    if (!ctx.companyId) {
+      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, { requestId: ctx.requestId })
+    }
+
     // Verify the webhook itself belongs to ctx.companyId before listing
     // its deliveries. The deliveries query already filters by
     // (company_id, webhook_id) so a cross-tenant id wouldn't return
@@ -97,7 +105,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       .from('webhooks')
       .select('id')
       .eq('id', webhookId)
-      .eq('company_id', ctx.companyId!)
+      .eq('company_id', ctx.companyId)
       .maybeSingle()
 
     if (ownershipErr) return v1ErrorResponse(ownershipErr, ctx.log, { requestId: ctx.requestId })
@@ -108,7 +116,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     let query = ctx.supabase
       .from('webhook_deliveries')
       .select(DELIVERY_COLUMNS)
-      .eq('company_id', ctx.companyId!)
+      .eq('company_id', ctx.companyId)
       .eq('webhook_id', webhookId)
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })

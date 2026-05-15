@@ -28,10 +28,18 @@
 --   HTTP 410 from receiver → auto-disable webhook + mark delivery `dead`.
 --
 -- Audit immutability: terminal-status delivery rows (delivered, dead) are
--- write-locked by trigger. Aligns with operations-table immutability that
--- BFNAR 2013:2 kap 8 § (behandlingshistorik) requires for any audit
--- substrate. The same pattern lives on `audit_log` and is queued for
--- `operations` (Phase 5 carry-over).
+-- write-locked by trigger. Two legal grounds layer here:
+--   - BFNAR 2013:2 kap 8 § (behandlingshistorik) requires audit-log
+--     integrity — once a row records the outcome of a system event it
+--     cannot be altered.
+--   - BFL 7 kap 1 § (räkenskapsinformation retention) requires that
+--     records related to bookkeeping operations are preserved for 7 years
+--     after the calendar year the räkenskapsår ended. Webhook deliveries
+--     for accounting events (journal_entry.committed, period.locked,
+--     salary_run.booked, agi.generated, ...) are räkenskapsinformation-
+--     adjacent and inherit that retention obligation.
+-- Same pattern lives on `audit_log` and is queued for `operations`
+-- (Phase 5 carry-over).
 
 -- ──────────────────────────────────────────────────────────────────────
 -- 1. webhooks — drop legacy unique, add new columns
@@ -97,11 +105,12 @@ CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
   -- worker query don't have to join.
   --
   -- webhook_id is nullable + ON DELETE SET NULL so a webhook DELETE
-  -- preserves the delivery audit trail (BFNAR 2013:2 kap 8 §
-  -- behandlingshistorik for accounting events: journal_entry.committed,
-  -- period.locked, salary_run.booked, agi.generated, ...). The
-  -- dispatcher filters webhook_id IS NOT NULL so dangling rows go
-  -- dormant in the audit trail rather than retrying against nothing.
+  -- preserves the delivery audit trail (BFL 7 kap 1 § retention +
+  -- BFNAR 2013:2 kap 8 § behandlingshistorik integrity for accounting
+  -- events: journal_entry.committed, period.locked, salary_run.booked,
+  -- agi.generated, ...). The dispatcher filters webhook_id IS NOT NULL
+  -- so dangling rows go dormant in the audit trail rather than retrying
+  -- against nothing.
   webhook_id          uuid REFERENCES public.webhooks(id) ON DELETE SET NULL,
   company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
 
@@ -160,7 +169,8 @@ CREATE INDEX idx_webhook_deliveries_company_created
 -- 3. Immutability trigger — terminal-status delivery rows are write-locked
 -- ──────────────────────────────────────────────────────────────────────
 --
--- BFNAR 2013:2 kap 8 § behandlingshistorik: an audit row that records the
+-- BFL 7 kap 1 § (retention) + BFNAR 2013:2 kap 8 § (behandlingshistorik):
+-- an audit row that records the
 -- outcome of a system event becomes immutable once finalised. For
 -- webhook deliveries the terminal states are `delivered` and `dead`.
 -- `failed` is NOT terminal (the dispatcher will mutate it back to
