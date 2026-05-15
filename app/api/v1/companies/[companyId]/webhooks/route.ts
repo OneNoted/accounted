@@ -355,7 +355,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Secret returned exactly once. Caller must persist it on the receiver
     // side — gnubok will not surface it on any subsequent endpoint.
-    return created({ ...created_row, secret }, { requestId: ctx.requestId })
+    // Cache-Control: no-store mirrors the rotate-secret response (A.8.12 /
+    // Art.25) so no intermediary (CDN / proxy / gateway log / browser
+    // cache) persists the secret beyond the direct response chain.
+    return created(
+      { ...created_row, secret },
+      {
+        requestId: ctx.requestId,
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+          Pragma: 'no-cache',
+        },
+      },
+    )
   },
   { requireIdempotencyKey: true },
 )

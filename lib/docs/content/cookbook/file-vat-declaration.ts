@@ -44,6 +44,7 @@ Response (abbreviated):
     "reconciliation": {
       "gl_balance_2611": 31075.00,
       "gl_balance_2614":     0.00,
+      "gl_balance_2615":     0.00,
       "gl_balance_2621":   720.00,
       "gl_balance_2631":   180.00,
       "gl_balance_2641": 12347.00,
@@ -64,6 +65,7 @@ The \`reconciliation\` block compares the rutor against the actual general-ledge
 
 - \`2611\` — Utgående moms 25% (matches ruta 10)
 - \`2614\` — Utgående moms vid omvänd skattskyldighet (matches ruta 30 / reverse-charge output)
+- \`2615\` — Utgående moms vid import (matches ruta 60)
 - \`2621\` — Utgående moms 12% (matches ruta 11)
 - \`2631\` — Utgående moms 6% (matches ruta 12)
 - \`2641\` — Ingående moms (matches ruta 48)
@@ -77,7 +79,7 @@ The \`reconciliation\` block compares the rutor against the actual general-ledge
 
 - **Always pass \`delivery_date\` explicitly when it differs from \`invoice_date\`.** The engine routes the booking by supply date: food delivered ≥ 2026-04-01 books to \`2631\` (6%), food delivered before that books to \`2621\` (12%), regardless of when the invoice was issued. For continuous or subscription food supplies (e.g. a weekly grocery box), the trigger point is the date when each individual delivery's skattskyldighet inträder — confirm against ML 1 kap 3 § rather than assuming the rule equals a single delivery date.
 - The classic edge case: food delivered in March, invoiced in April. Without an explicit \`delivery_date\` the engine falls back to \`invoice_date\` and would mis-book at 6%. **Set \`delivery_date\` for every food-line item in March-April 2026 invoices** — the cost of explicit data is zero; the cost of a mis-booked verifikation is a manual rectification + a momsdeklaration adjustment.
-- When \`delivery_date\` is omitted, the engine uses \`invoice_date\` as the fallback supply date. This is the correct behaviour for services (where delivery and invoice are typically simultaneous) but explicitly wrong for goods that straddle the cutover.
+- When \`delivery_date\` is omitted, the engine uses \`invoice_date\` as the fallback supply date. This is correct for **one-off** service supplies where delivery and invoice coincide; long-running service contracts (subscriptions, ongoing maintenance) have per-delprestation skattskyldighet under ML 1 kap 3 § and require an explicit \`delivery_date\` per billing cycle. Goods that straddle the cutover always need an explicit \`delivery_date\`.
 
 The VAT declaration for April 2026 onwards will show split balances on rutor 11/12: pre-2026-04-01 food sales remain on ruta 11 (12%), post-cutover food sales appear on ruta 12 (6%). The reconciliation block surfaces both; warnings flag any post-cutover transaction still booked at 12%.
 
