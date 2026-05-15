@@ -7,7 +7,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { ToastAction } from '@/components/ui/toast'
 import {
   Inbox,
   Upload,
@@ -27,17 +26,9 @@ import {
   X,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 
 type AccountingMethod = 'accrual' | 'cash'
@@ -152,7 +143,6 @@ function WorkspaceSkeleton() {
 
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
-  const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const [items, setItems] = useState<InboxItem[]>([])
@@ -182,7 +172,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isDeleting, setIsDeleting] = useState(false)
   const [isRotating, setIsRotating] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
-  const [attachOpen, setAttachOpen] = useState(false)
   const [bookDirectOpen, setBookDirectOpen] = useState(false)
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
@@ -817,7 +806,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               item={selected}
               accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
-              onAttach={() => setAttachOpen(true)}
               onBookDirect={() => setBookDirectOpen(true)}
               isDeleting={isDeleting}
               onRetryRequested={async () => {
@@ -850,29 +838,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     </div>
 
     {selected && (
-      <AttachToTransactionDialog
-        open={attachOpen}
-        onOpenChange={setAttachOpen}
-        item={selected}
-        onAttached={async (transactionId) => {
-          setAttachOpen(false)
-          await fetchItems()
-          toast({
-            title: 'Bilaga kopplad till transaktion',
-            description: 'Bokför direkt, eller fortsätt med inkorgen och bokför senare.',
-            action: (
-              <ToastAction
-                altText="Bokför nu"
-                onClick={() => router.push(`/transactions?highlight=${transactionId}`)}
-              >
-                Bokför nu
-              </ToastAction>
-            ),
-          })
-        }}
-      />
-    )}
-    {selected && (
       <BookDirectlyDialog
         open={bookDirectOpen}
         onOpenChange={setBookDirectOpen}
@@ -886,342 +851,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   )
 }
 
-// ── Attach-to-transaction dialog ─────────────────────────────
-
-interface PickerTransaction {
-  id: string
-  date: string
-  description: string
-  amount: number
-  currency: string
-}
-
-function AttachToTransactionDialog({
-  open,
-  onOpenChange,
-  item,
-  onAttached,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-  item: InboxItem
-  onAttached: (transactionId: string) => void | Promise<void>
-}) {
-  const { toast } = useToast()
-  const [transactions, setTransactions] = useState<PickerTransaction[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [attachingId, setAttachingId] = useState<string | null>(null)
-  const [isCreating, setIsCreating] = useState(false)
-  const [searchTerm, setSearchTerm] = useState('')
-
-  const targetAmount = pickAmount(item)
-  const targetCurrency = pickCurrency(item)
-
-  // Prefill for "create transaction from this document" — defaults to a
-  // negative amount because the typical inbox item is an expense receipt
-  // (money out). The user can flip the sign in the form if it's an income
-  // document.
-  const defaultDate =
-    item.extracted_data?.invoice?.invoiceDate ||
-    new Date().toISOString().slice(0, 10)
-  const defaultAmount = targetAmount != null ? -Math.abs(targetAmount) : 0
-  const defaultDescription = [
-    pickSupplierName(item),
-    item.extracted_data?.invoice?.invoiceNumber,
-  ]
-    .filter(Boolean)
-    .join(' · ') || 'Manuell transaktion'
-
-  const [formDate, setFormDate] = useState(defaultDate)
-  const [formAmount, setFormAmount] = useState<string>(
-    defaultAmount !== 0 ? String(defaultAmount) : ''
-  )
-  const [formDescription, setFormDescription] = useState(defaultDescription)
-
-  useEffect(() => {
-    setFormDate(defaultDate)
-    setFormAmount(defaultAmount !== 0 ? String(defaultAmount) : '')
-    setFormDescription(defaultDescription)
-    setSearchTerm('')
-    // Reset whenever a different inbox item opens the dialog.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id])
-
-  const filteredTransactions = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase()
-    if (term === '') return transactions
-    return transactions.filter((t) => (t.description || '').toLowerCase().includes(term))
-  }, [transactions, searchTerm])
-
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    setIsLoading(true)
-    ;(async () => {
-      try {
-        const res = await fetch('/api/transactions?unmatched=true')
-        const json = await res.json()
-        if (cancelled) return
-        const rows: PickerTransaction[] = (Array.isArray(json.data) ? json.data : [])
-          .map((t: PickerTransaction) => ({
-            id: t.id,
-            date: t.date,
-            description: t.description,
-            amount: t.amount,
-            currency: t.currency || 'SEK',
-          }))
-        setTransactions(rankByAmount(rows, targetAmount, targetCurrency))
-      } catch (err) {
-        console.error('[invoice-inbox/attach] fetch failed:', err)
-        toast({ title: 'Kunde inte ladda transaktioner', variant: 'destructive' })
-      } finally {
-        if (!cancelled) setIsLoading(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [open, targetAmount, targetCurrency, toast])
-
-  const handleAttach = async (tx: PickerTransaction) => {
-    if (!item.document_id) return
-    setAttachingId(tx.id)
-    try {
-      const res = await fetch(`/api/transactions/${tx.id}/attach-document`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ document_id: item.document_id }),
-      })
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}))
-        toast({ title: json.error || 'Kunde inte koppla bilaga', variant: 'destructive' })
-        return
-      }
-      await onAttached(tx.id)
-    } finally {
-      setAttachingId(null)
-    }
-  }
-
-  const handleCreateTransaction = async () => {
-    const amountNum = Number(formAmount)
-    if (!Number.isFinite(amountNum) || amountNum === 0) {
-      toast({ title: 'Ange ett belopp skilt från noll', variant: 'destructive' })
-      return
-    }
-    if (!formDate || !formDescription.trim()) {
-      toast({ title: 'Fyll i datum och beskrivning', variant: 'destructive' })
-      return
-    }
-    setIsCreating(true)
-    try {
-      const res = await fetch('/api/transactions/create-from-document', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          inbox_item_id: item.id,
-          amount: amountNum,
-          transaction_date: formDate,
-          description: formDescription.trim(),
-        }),
-      })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        toast({
-          title: json.error || 'Kunde inte skapa transaktion',
-          variant: 'destructive',
-        })
-        return
-      }
-      const newTxId = json?.data?.transaction_id as string | undefined
-      if (newTxId) {
-        await onAttached(newTxId)
-      } else {
-        // No id back — fall back to closing without the "Bokför nu" CTA.
-        toast({
-          title: 'Transaktion skapad',
-          description: 'Hittas under Transaktioner för kategorisering.',
-        })
-      }
-    } finally {
-      setIsCreating(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Koppla bilaga till transaktion</DialogTitle>
-          <DialogDescription>
-            {targetAmount != null
-              ? `Belopp på fakturan: ${formatCurrency(targetAmount, pickCurrency(item))}. Listan är sorterad efter beloppsmatch.`
-              : 'Välj en transaktion att koppla bilagan till.'}
-          </DialogDescription>
-        </DialogHeader>
-        {!isLoading && transactions.length > 0 && (
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              autoFocus
-              placeholder="Sök på beskrivning…"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-        )}
-        <div className="max-h-[60vh] overflow-y-auto -mx-6 px-6">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar transaktioner…
-            </div>
-          ) : transactions.length === 0 ? (
-            <div className="py-10">
-              <div className="text-center space-y-1.5 mb-6">
-                <p className="text-sm font-medium">Hittade ingen transaktion</p>
-                <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                  Skapa en manuell transaktion från underlaget och kategorisera
-                  den i transaktionsvyn efter att den är skapad.
-                </p>
-              </div>
-              <div className="max-w-sm mx-auto space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label
-                      htmlFor="manual-tx-date"
-                      className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
-                    >
-                      Datum
-                    </label>
-                    <Input
-                      id="manual-tx-date"
-                      type="date"
-                      value={formDate}
-                      onChange={(e) => setFormDate(e.target.value)}
-                      disabled={isCreating}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label
-                      htmlFor="manual-tx-amount"
-                      className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
-                    >
-                      Belopp
-                    </label>
-                    <Input
-                      id="manual-tx-amount"
-                      type="number"
-                      step="0.01"
-                      inputMode="decimal"
-                      value={formAmount}
-                      onChange={(e) => setFormAmount(e.target.value)}
-                      placeholder="-0.00"
-                      className="tabular-nums"
-                      disabled={isCreating}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <label
-                    htmlFor="manual-tx-description"
-                    className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
-                  >
-                    Beskrivning
-                  </label>
-                  <Input
-                    id="manual-tx-description"
-                    type="text"
-                    value={formDescription}
-                    onChange={(e) => setFormDescription(e.target.value)}
-                    disabled={isCreating}
-                  />
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Negativt belopp för utgift, positivt för inkomst.
-                </p>
-                <Button
-                  type="button"
-                  className="w-full"
-                  onClick={handleCreateTransaction}
-                  disabled={isCreating}
-                >
-                  {isCreating ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
-                      Skapar transaktion…
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-3.5 w-3.5 mr-2" />
-                      Skapa transaktion från underlag
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          ) : filteredTransactions.length === 0 ? (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              Inga transaktioner matchar &ldquo;{searchTerm}&rdquo;.
-            </p>
-          ) : (
-            <ul className="divide-y">
-              {filteredTransactions.map((tx) => (
-                <li key={tx.id}>
-                  <button
-                    type="button"
-                    className="w-full flex items-center justify-between gap-4 px-1 py-3 text-left hover:bg-accent/40 disabled:opacity-50"
-                    onClick={() => handleAttach(tx)}
-                    disabled={attachingId !== null}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">{tx.description}</p>
-                      <p className="text-xs text-muted-foreground">{tx.date}</p>
-                    </div>
-                    <span
-                      className={cn(
-                        'text-sm tabular-nums whitespace-nowrap',
-                        targetAmount != null
-                          && tx.currency === targetCurrency
-                          && Math.abs(Math.abs(tx.amount) - Math.abs(targetAmount)) < 0.01
-                          ? 'font-semibold'
-                          : '',
-                      )}
-                    >
-                      {formatCurrency(tx.amount, tx.currency)}
-                    </span>
-                    {attachingId === tx.id && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function rankByAmount(
-  rows: PickerTransaction[],
-  target: number | null,
-  targetCurrency: string,
-): PickerTransaction[] {
-  if (target == null) return rows
-  const t = Math.abs(target)
-  // Same-currency rows rank by amount distance. Cross-currency rows go to
-  // the bottom — comparing a EUR invoice's amount to a SEK transaction's
-  // amount numerically would be misleading and could cause a wrong attachment
-  // (which then becomes verifikation underlag, BFL 5 kap 6 §). The user can
-  // still manually pick a cross-currency match by scrolling down.
-  return [...rows].sort((a, b) => {
-    const aMatch = a.currency === targetCurrency
-    const bMatch = b.currency === targetCurrency
-    if (aMatch !== bMatch) return aMatch ? -1 : 1
-    if (!aMatch) return 0
-    const da = Math.abs(Math.abs(a.amount) - t)
-    const db = Math.abs(Math.abs(b.amount) - t)
-    return da - db
-  })
-}
 
 // ── List row ─────────────────────────────────────────────────
 
@@ -1610,7 +1239,6 @@ function FieldsRail({
   item,
   accountingMethod,
   onDelete,
-  onAttach,
   onBookDirect,
   isDeleting,
   onFieldsUpdated,
@@ -1619,7 +1247,6 @@ function FieldsRail({
   item: InboxItem
   accountingMethod: AccountingMethod
   onDelete: () => void
-  onAttach: () => void
   onBookDirect: () => void
   isDeleting: boolean
   onFieldsUpdated: (data: InvoiceExtractionResult) => void
@@ -1867,43 +1494,21 @@ function FieldsRail({
             >
               Bokför direkt
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={onAttach}
-              disabled={!item.document_id}
-              title={!item.document_id ? 'Ingen bilaga att koppla' : undefined}
-            >
-              <Link2 className="h-3.5 w-3.5 mr-1.5" />
-              Koppla till transaktion
-            </Button>
             <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
-              <Button variant="ghost" size="sm" className="w-full">
+              <Button variant="outline" size="sm" className="w-full">
                 Skapa leverantörsfaktura
               </Button>
             </Link>
           </>
         ) : (
           <>
-            <Button
-              variant="default"
-              size="sm"
-              className="w-full"
-              onClick={onAttach}
-              disabled={!item.document_id}
-              title={!item.document_id ? 'Ingen bilaga att koppla' : undefined}
-            >
-              <Link2 className="h-3.5 w-3.5 mr-1.5" />
-              Koppla till transaktion
-            </Button>
             <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
-              <Button variant="outline" size="sm" className="w-full">
+              <Button variant="default" size="sm" className="w-full">
                 Skapa leverantörsfaktura
               </Button>
             </Link>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               className="w-full"
               onClick={onBookDirect}

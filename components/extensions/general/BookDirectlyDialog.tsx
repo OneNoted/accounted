@@ -18,6 +18,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, AlertTriangle, Search, Check } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
+import {
+  useSubmitWithAccountActivation,
+  throwOnStructuredError,
+} from '@/lib/hooks/use-submit-with-account-activation'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { BASAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
@@ -297,39 +303,40 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
 
   const canSubmit = !isSubmitting && disabledReason === null
 
+  const postBooking = useCallback(async () => {
+    const payload = {
+      fiscal_period_id: periodId,
+      entry_date: entryDate,
+      description: description.trim(),
+      notes: notes.trim() || undefined,
+      lines: lines.map((l) => ({
+        account_number: l.account_number.trim(),
+        debit_amount: parseFloat(l.debit_amount) || 0,
+        credit_amount: parseFloat(l.credit_amount) || 0,
+      })),
+      transaction_id: selectedTransactionId ?? undefined,
+    }
+    const res = await fetch(
+      `/api/extensions/ext/invoice-inbox/items/${item.id}/book-direct`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    )
+    return (await throwOnStructuredError(res)) as {
+      data?: { journal_entry?: { voucher_series: string; voucher_number: number } }
+    }
+  }, [periodId, entryDate, description, notes, lines, selectedTransactionId, item.id])
+
+  const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
+    useSubmitWithAccountActivation(postBooking)
+
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return
     setIsSubmitting(true)
     try {
-      const payload = {
-        fiscal_period_id: periodId,
-        entry_date: entryDate,
-        description: description.trim(),
-        notes: notes.trim() || undefined,
-        lines: lines.map((l) => ({
-          account_number: l.account_number.trim(),
-          debit_amount: parseFloat(l.debit_amount) || 0,
-          credit_amount: parseFloat(l.credit_amount) || 0,
-        })),
-        transaction_id: selectedTransactionId ?? undefined,
-      }
-      const res = await fetch(
-        `/api/extensions/ext/invoice-inbox/items/${item.id}/book-direct`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      )
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte bokföra',
-          description: json.error || 'Försök igen.',
-          variant: 'destructive',
-        })
-        return
-      }
+      const json = await runSubmit()
       const voucher = json?.data?.journal_entry
       toast({
         title: 'Bokfört',
@@ -339,13 +346,24 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       })
       await onSuccess()
       onOpenChange(false)
+    } catch (err) {
+      if (err instanceof Error && err.message === 'cancelled') {
+        // User dismissed the activation dialog — no toast needed
+      } else {
+        const anyErr = err as { body?: unknown; status?: number }
+        toast({
+          title: 'Kunde inte bokföra',
+          description: getErrorMessage(anyErr.body ?? err, {
+            context: 'journal_entry',
+            statusCode: anyErr.status,
+          }),
+          variant: 'destructive',
+        })
+      }
     } finally {
       setIsSubmitting(false)
     }
-  }, [
-    canSubmit, periodId, entryDate, description, notes, lines,
-    selectedTransactionId, item.id, toast, onSuccess, onOpenChange,
-  ])
+  }, [canSubmit, runSubmit, toast, onSuccess, onOpenChange])
 
   const targetAmount = item.extracted_data?.totals?.total ?? null
   const targetCurrency = item.extracted_data?.invoice?.currency ?? 'SEK'
@@ -683,6 +701,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
           </div>
         </div>
       </DialogContent>
+      <ActivateAccountsDialog
+        open={activationDialog.open}
+        accountNumbers={activationDialog.accountNumbers}
+        onConfirm={confirmActivation}
+        onCancel={cancelActivation}
+      />
     </Dialog>
   )
 }
