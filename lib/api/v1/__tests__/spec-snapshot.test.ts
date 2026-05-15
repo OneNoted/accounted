@@ -63,6 +63,18 @@ describe('v1 spec snapshot', () => {
       expect(Array.isArray(ep.pitfalls), `${ctx}: pitfalls must be an array`).toBe(true)
       expect(ep.example, `${ctx}: missing example`).toBeTruthy()
       expect(ep.example.response, `${ctx}: example.response is required`).toBeTruthy()
+
+      // Defense-in-depth: every endpoint MUST explicitly declare its
+      // scope (or the literal sentinel `null` for genuinely public
+      // endpoints — e.g. /api/v1/health). `undefined` means the
+      // registerEndpoint call silently dropped the field, which would
+      // make the wrapper treat the route as unauthenticated. CC6.3 —
+      // surfacing the omission in CI prevents accidental public
+      // exposure of new endpoints.
+      expect(
+        ep.scope !== undefined,
+        `${ctx}: scope must be explicitly declared (use null for genuinely public endpoints)`,
+      ).toBe(true)
     }
   })
 })
