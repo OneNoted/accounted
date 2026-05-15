@@ -150,17 +150,31 @@ async function claimDueDeliveries(
   now: Date,
 ): Promise<DueDelivery[]> {
   // PostgREST cannot express FOR UPDATE SKIP LOCKED through the JS client.
-  // We rely on a SQL function `claim_due_webhook_deliveries(p_now, p_limit)`
-  // that the migration adds — TODO in next commit. For the skeleton we
-  // SELECT-then-UPDATE the rows to status='in_flight'; the partial-index
-  // narrowing keeps the candidate set tight, and the per-minute cron's
-  // single-instance guarantee on Vercel makes the race window negligible
-  // in practice. This will be tightened in PR review round 1.
+  // The cleaner long-term shape is a SQL claim function — tracked for a
+  // follow-up commit. Until then we SELECT candidate rows, then UPDATE
+  // with a CAS guard and `.select('id')` to learn which rows the UPDATE
+  // actually claimed. The dispatch loop runs ONLY against the intersection
+  // of (selected, claimed) — so an overlapping cron tick that picked up
+  // the same SELECT can never double-deliver: at most one tick wins the
+  // CAS update for any given row.
+  //
+  // Per-minute Vercel cron has best-effort single-instance semantics, but
+  // the documented contract is "at-least-once" not "at-most-once" — under
+  // load (e.g. a 50-row batch with mostly slow receivers > 60s) the next
+  // tick can fire while this one is still running, so the CAS-then-
+  // intersect pattern is load-bearing, not defensive.
   const { data, error } = await supabase
     .from('webhook_deliveries')
     .select('id, webhook_id, company_id, event_type, payload, previous_attributes, api_version, attempts')
     .in('status', ['pending', 'failed'])
     .lte('next_attempt_at', now.toISOString())
+    // Skip dangling rows (webhook deleted between enqueue and dispatch).
+    // The 20260515180000 retention migration changed the FK to ON DELETE
+    // SET NULL so terminal rows survive webhook deletion for BFNAR
+    // 2013:2 kap 8 § audit retention; non-terminal rows for a deleted
+    // webhook have no receiver to deliver to and stay dormant in the
+    // audit trail.
+    .not('webhook_id', 'is', null)
     .order('next_attempt_at', { ascending: true })
     .limit(batchSize)
 
@@ -170,19 +184,26 @@ async function claimDueDeliveries(
   }
   if (data.length === 0) return []
 
-  const ids = (data as DueDelivery[]).map((d) => d.id)
-  const { error: updateErr } = await supabase
+  const candidates = data as DueDelivery[]
+  const candidateIds = candidates.map((d) => d.id)
+
+  const { data: claimed, error: updateErr } = await supabase
     .from('webhook_deliveries')
     .update({ status: 'in_flight' })
-    .in('id', ids)
+    .in('id', candidateIds)
     .in('status', ['pending', 'failed']) // CAS guard
+    .select('id')
 
   if (updateErr) {
     log.error('claim deliveries update failed', updateErr as Error)
     return []
   }
 
-  return data as DueDelivery[]
+  // Trust the UPDATE's returned set as authoritative — anything not in
+  // `claimed` was lost to a competing tick (or had its status flipped
+  // out from under us between SELECT and UPDATE).
+  const claimedIds = new Set(((claimed ?? []) as { id: string }[]).map((r) => r.id))
+  return candidates.filter((d) => claimedIds.has(d.id))
 }
 
 async function loadWebhooksByIds(
@@ -370,9 +391,16 @@ async function attemptDelivery(args: {
       error: message.length > 500 ? `${message.slice(0, 497)}...` : message,
     }
   }
-  clearTimeout(timeout)
 
-  const responseBody = await readBoundedText(response)
+  // Keep the abort timeout armed across the body read — a slow body
+  // stream can stall the entire dispatch batch otherwise. Clear only
+  // after readBoundedText returns (or aborts).
+  let responseBody: string | null
+  try {
+    responseBody = await readBoundedText(response)
+  } finally {
+    clearTimeout(timeout)
+  }
   const responseHeaders = headersToObject(response.headers)
 
   // HTTP 410 — receiver explicitly asks us to stop. Auto-disable the

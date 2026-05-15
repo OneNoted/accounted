@@ -12,7 +12,7 @@
  */
 
 import { z } from 'zod'
-import { created, paginated } from '@/lib/api/v1/response'
+import { created, ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
@@ -138,7 +138,16 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 
-    return paginated(data ?? [], { requestId: ctx.requestId })
+    // Wrap as `{ webhooks: [...] }` to match the registered
+    // WebhooksListResponse schema and the inline example. Use `ok()`
+    // (not `paginated()`) — the registered schema is an OBJECT envelope,
+    // not a top-level list. `paginated()` wraps the value in
+    // `{ data, meta }` and would surface as `data: [...]` instead of the
+    // documented `data: { webhooks: [...] }`. Cursor pagination on this
+    // surface would require a fields-level array under the envelope —
+    // out of scope for the v1.0 contract since the webhook-count ceiling
+    // per company is bounded.
+    return ok({ webhooks: data ?? [] }, { requestId: ctx.requestId })
   },
 )
 

@@ -6,10 +6,14 @@
  *          event_type (immutable: would require re-pinning api_version).
  *          Cannot rotate the secret here (separate flow, deferred to
  *          Phase 6 follow-up).
- * DELETE — hard delete. CASCADE removes pending webhook_deliveries rows.
- *          Terminal-status delivery rows persist via the immutability
- *          trigger; CASCADE still drops them since the trigger only
- *          blocks UPDATE, not DELETE on the parent.
+ * DELETE — hard delete the webhook. After the 20260515180000 retention
+ *          migration the FK on webhook_deliveries.webhook_id is
+ *          ON DELETE SET NULL, so the delivery audit trail SURVIVES
+ *          webhook deletion (BFNAR 2013:2 kap 8 § behandlingshistorik —
+ *          accounting-event deliveries must be retained for 7 years).
+ *          Pending/failed deliveries become dormant (the dispatcher
+ *          skips webhook_id IS NULL rows); terminal rows stay queryable
+ *          via the (future) per-company audit-trail surface.
  */
 
 import { z } from 'zod'
@@ -217,11 +221,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks/:id',
   summary: 'Delete a webhook subscription.',
   description:
-    'Hard-deletes the webhook. Pending and in-flight deliveries are removed via CASCADE; terminal-status delivery rows (delivered, dead) are also removed.',
+    'Hard-deletes the webhook. The delivery audit trail SURVIVES — both terminal (delivered, dead) and non-terminal (pending, failed) delivery rows persist with webhook_id = NULL so the BFNAR 2013:2 kap 8 § behandlingshistorik (7-year retention) for accounting-event deliveries is preserved. Non-terminal rows go dormant (the dispatcher skips them).',
   useWhen: 'You no longer want this webhook to receive events.',
   doNotUseFor:
     'Temporarily pausing delivery — use PATCH with active=false instead so the configuration survives.',
-  pitfalls: ['CASCADE removes the delivery audit trail. Use PATCH active=false if you need to retain history.'],
+  pitfalls: ['Audit history survives DELETE; only the receiver subscription is removed. To suppress future events without retaining the registration use PATCH active=false.'],
   example: {
     response: {
       data: { deleted: true },

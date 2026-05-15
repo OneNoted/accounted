@@ -104,11 +104,17 @@ export function verifySignature(args: {
 
   // timingSafeEqual requires equal-length buffers — return false (not throw)
   // for length mismatch, the common case for a forged signature.
-  if (expected.length !== parsed.v1.length) return false
-  return crypto.timingSafeEqual(
-    Buffer.from(expected, 'hex'),
-    Buffer.from(parsed.v1, 'hex'),
-  )
+  //
+  // Compare buffer lengths AFTER decoding rather than hex-string lengths:
+  // `Buffer.from(v1, 'hex')` silently drops invalid hex bytes, so a v1 that
+  // is the right hex length (64 chars for SHA-256) but contains non-hex
+  // characters decodes to a SHORTER buffer than `expected`. Without this
+  // check the timingSafeEqual call throws RangeError instead of returning
+  // false, exposing a crash path to any caller passing a malformed header.
+  const expectedBuf = Buffer.from(expected, 'hex')
+  const actualBuf = Buffer.from(parsed.v1, 'hex')
+  if (expectedBuf.length !== actualBuf.length) return false
+  return crypto.timingSafeEqual(expectedBuf, actualBuf)
 }
 
 /**
@@ -117,8 +123,19 @@ export function verifySignature(args: {
  * webhook creation; we do not store the plaintext anywhere except the
  * `webhooks.secret` column (used for signing on every outbound delivery).
  *
- * Receivers use this same value verbatim when verifying signatures, so
- * we cannot hash-and-discard the way we do for API keys.
+ * **Documented Security Decision (OWASP V14.2 / ISO 27001:2022 A.8.24):**
+ * `webhooks.secret` is stored in plaintext rather than hashed. This is
+ * unavoidable for outbound HMAC signing — the signing operation needs the
+ * original byte sequence on every delivery, so a one-way hash would
+ * preclude signing. Stripe, GitHub, Slack, and Twilio all follow the same
+ * pattern for the same reason. Defense-in-depth comes from the
+ * service-role-only INSERT/UPDATE/DELETE on `webhooks` (no anon/auth
+ * write path), the column-level select projection on every read endpoint
+ * (the row never includes `secret` outside the create response), and
+ * Supabase encryption-at-rest. Re-evaluate if/when KMS-backed signing
+ * becomes available without per-call latency cost.
+ *
+ * Receivers use this same value verbatim when verifying signatures.
  */
 export function generateWebhookSecret(): string {
   return crypto.randomBytes(32).toString('hex')

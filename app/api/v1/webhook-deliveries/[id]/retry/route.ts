@@ -117,6 +117,35 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
       })
     }
 
+    // Re-verify that the parent webhook still exists, still belongs to the
+    // delivery's company, and is still active immediately before INSERT.
+    // Closes the TOCTOU window between the membership check above and the
+    // INSERT — without this a webhook deleted in between would have its
+    // retry land in webhook_deliveries with a now-dangling webhook_id, and
+    // a webhook re-registered to a different company in between would let
+    // the caller redeliver an event to a webhook they never created.
+    const { data: webhook, error: webhookErr } = await ctx.supabase
+      .from('webhooks')
+      .select('id, active, disabled_at')
+      .eq('id', o.webhook_id)
+      .eq('company_id', o.company_id)
+      .maybeSingle()
+
+    if (webhookErr) return v1ErrorResponse(webhookErr, ctx.log, { requestId: ctx.requestId })
+    if (!webhook) {
+      // The original webhook no longer exists or is no longer in this
+      // company. There's nothing to redeliver to. 404, not VALIDATION_ERROR
+      // — the resource the caller targeted is genuinely gone.
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+    }
+    const w = webhook as { id: string; active: boolean; disabled_at: string | null }
+    if (!w.active || w.disabled_at) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'webhook.active', message: 'Webhook is disabled — re-enable before retrying.' },
+      })
+    }
+
     const { data: replay, error: insertErr } = await ctx.supabase
       .from('webhook_deliveries')
       .insert({
