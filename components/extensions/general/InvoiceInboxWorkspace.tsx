@@ -98,15 +98,51 @@ function pickSupplierName(item: InboxItem): string | null {
 }
 
 // ── Skeleton ─────────────────────────────────────────────────
+// Mirrors the live layout (top bar + 3-pane card) so the transition from
+// the route-level loading.tsx to data-loaded content has no visible reflow.
+// Keep in sync with app/(dashboard)/e/[sector]/[slug]/loading.tsx.
 
 function WorkspaceSkeleton() {
   return (
-    <div className="space-y-4">
-      <Skeleton className="h-10 w-full" />
-      <div className="grid grid-cols-[280px_minmax(0,1fr)_320px] gap-4 h-[calc(100vh-12rem)]">
-        <Skeleton className="h-full" />
-        <Skeleton className="h-full" />
-        <Skeleton className="h-full" />
+    <div className="h-[calc(100vh-1px)] p-4 md:p-6">
+      <div className="h-full flex flex-col rounded-lg border bg-card overflow-hidden">
+        <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <Skeleton className="h-4 w-4 shrink-0" />
+            <Skeleton className="h-4 w-32 shrink-0" />
+            <Skeleton className="hidden md:block h-3 w-56" />
+          </div>
+          <Skeleton className="h-8 w-28 shrink-0" />
+        </header>
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
+          <aside className="border-r overflow-hidden bg-muted/20 pt-3">
+            <div className="px-3 pb-3 space-y-2 border-b">
+              <Skeleton className="h-8 w-full" />
+              <div className="flex flex-wrap gap-1">
+                <Skeleton className="h-5 w-10 rounded-full" />
+                <Skeleton className="h-5 w-24 rounded-full" />
+                <Skeleton className="h-5 w-20 rounded-full" />
+                <Skeleton className="h-5 w-8 rounded-full" />
+              </div>
+            </div>
+            <ul>
+              {Array.from({ length: 7 }).map((_, i) => (
+                <li key={i} className="border-b px-3 py-2 flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-3 w-3 shrink-0" />
+                    <Skeleton className="h-3.5 flex-1 max-w-[180px]" />
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-3 w-12" />
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </aside>
+          <main className="overflow-hidden bg-muted/10 hidden md:block" />
+          <aside className="border-l overflow-hidden hidden md:block" />
+        </div>
       </div>
     </div>
   )
@@ -122,10 +158,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [items, setItems] = useState<InboxItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  // Phone-only master-detail toggle. On screens <md the three panes don't
-  // fit side-by-side and stacking them produces a long vertical scroll, so
-  // we show the list xor the detail view, with a back button to return.
-  const [mobileView, setMobileView] = useState<'list' | 'detail'>('list')
   // List filter + search (client-side over the already-fetched items list).
   const [filter, setFilter] = useState<'all' | 'needs_action' | 'done' | 'error'>('all')
   const [searchTerm, setSearchTerm] = useState('')
@@ -272,7 +304,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     setSelected(null)
     setDocUrl(null)
     setDocMime(null)
-    setMobileView('detail')
+    // Intentionally no auto-scroll: in the vertical-stack layout (below xl)
+    // scrolling the preview into view pushes the list off-screen, and the
+    // user has no obvious way back to pick another item. The row-highlight
+    // + the preview content update are enough feedback that the tap took.
 
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`)
@@ -523,7 +558,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   return (
     <div
-      className="h-[calc(100vh-1px)] p-4 md:p-6"
+      className="min-h-[calc(100vh-1px)] xl:h-[calc(100vh-1px)] p-4 md:p-6"
       onDragOver={(e) => { e.preventDefault(); if (!isDragging) setIsDragging(true) }}
       onDragLeave={(e) => {
         // only clear when leaving the workspace itself, not children
@@ -531,7 +566,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }}
       onDrop={handleDrop}
     >
-    <div className="h-full flex flex-col rounded-lg border bg-card overflow-hidden shadow-sm">
+    <div className="xl:h-full flex flex-col rounded-lg border bg-card xl:overflow-hidden shadow-sm">
       {/* Top bar */}
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
@@ -611,16 +646,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
-      {/* Three-pane body. On phone (<md) we toggle between list and detail
-          via `mobileView`; at md+ all three panes show side-by-side. */}
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
-        {/* List */}
-        <aside
-          className={cn(
-            'border-r overflow-y-auto bg-muted/20 pt-3 md:block',
-            mobileView === 'detail' && 'hidden'
-          )}
-        >
+      {/* Three-section body. Below xl (iPad portrait/landscape + phone) the
+          sections stack vertically as a single scrollable feed. With the app
+          sidebar eating ~256px, even iPad landscape (1024–1180px viewport)
+          has only ~570px of workspace — too tight for 3 panes. At xl+ they
+          sit side-by-side as three panes. */}
+      <div className="xl:flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] xl:min-h-0 xl:overflow-hidden">
+        {/* List — flows naturally below xl; bounded with internal scroll at xl+ */}
+        <aside className="border-b xl:border-b-0 xl:border-r bg-muted/20 pt-3 xl:overflow-y-auto xl:block">
           {items.length > 0 && (
             <div className="px-3 pb-3 space-y-2 border-b">
               <div className="relative">
@@ -697,7 +730,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             // compact card on mobile only, quiet empty state on desktop.
             showOnboarding ? (
               <>
-                <div className="md:hidden">
+                <div className="xl:hidden">
                   <OnboardingCard
                     hasInboxAddress={hasInboxAddress}
                     hasAnyItem={hasAnyItem}
@@ -709,7 +742,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     compact
                   />
                 </div>
-                <div className="hidden md:block p-6 text-center text-sm text-muted-foreground">
+                <div className="hidden xl:block p-6 text-center text-sm text-muted-foreground">
                   <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
                   Inkorgen är tom.
                 </div>
@@ -743,22 +776,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
         {/* Document preview (hero) */}
         <main
-          className={cn(
-            'overflow-hidden bg-muted/10 relative md:block',
-            mobileView === 'list' && 'hidden'
-          )}
+          className="xl:overflow-hidden bg-muted/10 relative xl:block min-h-[55vh] xl:min-h-0"
         >
-          {/* Phone-only back-to-list button */}
-          {selected && (
-            <button
-              type="button"
-              onClick={() => setMobileView('list')}
-              className="md:hidden absolute top-2 left-2 z-10 flex items-center gap-1 rounded-md bg-background/90 backdrop-blur px-2 py-1 text-xs text-foreground border shadow-sm"
-            >
-              <ArrowRight className="h-3 w-3 rotate-180" />
-              Inkorg
-            </button>
-          )}
           {selected ? (
             <DocumentPreview docUrl={docUrl} docMime={docMime} isProcessing={!!selected.isPlaceholder} />
           ) : showOnboarding ? (
@@ -787,13 +806,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         </main>
 
-        {/* Fields rail. On phone, sits below the preview (same screen as detail);
-            on md+ it's the third pane. */}
+        {/* Fields rail. Below xl it stacks below the preview as part of the
+            single vertical feed (top border for separation). At xl+ it's the
+            third pane with a left border. */}
         <aside
-          className={cn(
-            'border-l overflow-y-auto pt-4 md:block',
-            mobileView === 'list' && 'hidden'
-          )}
+          className="border-t xl:border-t-0 xl:border-l xl:overflow-y-auto pt-4 xl:block pb-4"
         >
           {selected ? (
             <FieldsRail

@@ -434,13 +434,24 @@ function BalanceHero({
           </div>
           <div>
             <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Senast uppdaterad
+              Saldo per
             </p>
             <p className="font-medium tabular-nums">
               {new Date(data.senastUppdaterad).toLocaleString('sv-SE')}
             </p>
           </div>
         </div>
+
+        {saldo.lastSyncedAt && (
+          <p className="text-xs text-muted-foreground">
+            Senast synkad{' '}
+            <span className="tabular-nums">
+              {new Date(saldo.lastSyncedAt).toLocaleString('sv-SE')}
+            </span>
+            . Skatteverket uppdaterar saldot periodvis — datumet ovan ändras
+            inte varje gång du synkroniserar.
+          </p>
+        )}
 
         {data.informationstext.length > 0 && (
           <div className="rounded-md border bg-muted/30 p-3">

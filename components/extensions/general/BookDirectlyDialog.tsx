@@ -13,7 +13,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, AlertTriangle, Search, Check } from 'lucide-react'
@@ -139,8 +138,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   const [notes, setNotes] = useState<string>('')
   const [lines, setLines] = useState<FormLine[]>(() => buildPrefillLines(item))
 
-  // Transaction link state
-  const [linkToTransaction, setLinkToTransaction] = useState<boolean>(!!item.matched_transaction_id)
+  // Transaction picker — optional selection.
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(
     item.matched_transaction_id
   )
@@ -155,7 +153,6 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     if (!open) return
     setEntryDate(item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10))
     setLines(buildPrefillLines(item))
-    setLinkToTransaction(!!item.matched_transaction_id)
     setSelectedTransactionId(item.matched_transaction_id)
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''
     const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
@@ -168,10 +165,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // the prefilled amounts so foreign-currency invoices follow the SEK
   // figure on the actual bank movement.
   const selectedTransactionAmount = useMemo(() => {
-    if (!linkToTransaction || !selectedTransactionId) return null
+    if (!selectedTransactionId) return null
     const tx = transactions.find((t) => t.id === selectedTransactionId)
     return tx?.amount ?? null
-  }, [linkToTransaction, selectedTransactionId, transactions])
+  }, [selectedTransactionId, transactions])
 
   useEffect(() => {
     if (!open) return
@@ -227,9 +224,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     }
   }, [entryDate, periods, periodId])
 
-  // Fetch unmatched transactions when the link toggle turns on
+  // Fetch unmatched transactions whenever the dialog opens — the picker
+  // is always visible now (selection is optional).
   useEffect(() => {
-    if (!open || !linkToTransaction) return
+    if (!open) return
     let cancelled = false
     setIsLoadingTransactions(true)
     const targetAmount = item.extracted_data?.totals?.total ?? null
@@ -254,7 +252,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       }
     })()
     return () => { cancelled = true }
-  }, [open, linkToTransaction, item.extracted_data?.totals?.total])
+  }, [open, item.extracted_data?.totals?.total])
 
   const filteredTransactions = useMemo(() => {
     const term = txSearch.trim().toLowerCase()
@@ -294,9 +292,8 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     if (description.trim().length === 0) return 'Fyll i beskrivning'
     if (lines.some((l) => l.account_number.trim().length === 0)) return 'Alla rader behöver ett konto'
     if (!totals.balanced) return 'Debet och kredit måste vara lika'
-    if (linkToTransaction && !selectedTransactionId) return 'Välj en banktransaktion att koppla till'
     return null
-  }, [isSubmitting, entryDate, periodId, description, lines, totals.balanced, linkToTransaction, selectedTransactionId])
+  }, [isSubmitting, entryDate, periodId, description, lines, totals.balanced])
 
   const canSubmit = !isSubmitting && disabledReason === null
 
@@ -314,7 +311,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
           debit_amount: parseFloat(l.debit_amount) || 0,
           credit_amount: parseFloat(l.credit_amount) || 0,
         })),
-        transaction_id: linkToTransaction ? selectedTransactionId ?? undefined : undefined,
+        transaction_id: selectedTransactionId ?? undefined,
       }
       const res = await fetch(
         `/api/extensions/ext/invoice-inbox/items/${item.id}/book-direct`,
@@ -347,7 +344,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     }
   }, [
     canSubmit, periodId, entryDate, description, notes, lines,
-    linkToTransaction, selectedTransactionId, item.id, toast, onSuccess, onOpenChange,
+    selectedTransactionId, item.id, toast, onSuccess, onOpenChange,
   ])
 
   const targetAmount = item.extracted_data?.totals?.total ?? null
@@ -417,89 +414,90 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
             />
           </div>
 
-          {/* Transaction link toggle + picker */}
+          {/* Transaction picker — always shown, selection is optional. */}
           <div className="rounded-lg border p-4 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <Label htmlFor="bd-link-tx" className="text-sm">
-                  Koppla till banktransaktion
-                </Label>
-                <p className="text-xs text-muted-foreground">
-                  Slå på om dokumentet motsvarar en redan-bokad bankhändelse. Annars
-                  bokförs det som en fristående verifikation.
-                </p>
-              </div>
-              <Switch
-                id="bd-link-tx"
-                checked={linkToTransaction}
-                onCheckedChange={setLinkToTransaction}
-                disabled={isSubmitting}
-              />
+            <div className="space-y-0.5">
+              <Label className="text-sm">Koppla till banktransaktion (valfritt)</Label>
+              <p className="text-xs text-muted-foreground">
+                Välj en transaktion om dokumentet motsvarar en redan-bokad
+                bankhändelse — den bokas då samtidigt. Lämna tom för en
+                fristående verifikation.
+              </p>
             </div>
-            {linkToTransaction && (
-              <div className="space-y-2 pt-2 border-t">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Sök på beskrivning…"
-                    value={txSearch}
-                    onChange={(e) => setTxSearch(e.target.value)}
-                    className="pl-10"
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="max-h-56 overflow-y-auto rounded-md border">
-                  {isLoadingTransactions ? (
-                    <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…
-                    </div>
-                  ) : filteredTransactions.length === 0 ? (
-                    <p className="py-6 text-center text-sm text-muted-foreground">
-                      Inga okategoriserade transaktioner.
-                    </p>
-                  ) : (
-                    <ul className="divide-y">
-                      {filteredTransactions.slice(0, 30).map((tx) => {
-                        const isSelected = selectedTransactionId === tx.id
-                        return (
-                          <li key={tx.id}>
-                            <button
-                              type="button"
-                              className={cn(
-                                'w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors',
-                                isSelected
-                                  ? 'bg-primary/10 border-l-2 border-primary'
-                                  : 'border-l-2 border-transparent hover:bg-accent/40'
-                              )}
-                              onClick={() => setSelectedTransactionId(tx.id)}
-                              disabled={isSubmitting}
-                            >
-                              <span className="shrink-0 w-4 flex items-center justify-center">
-                                {isSelected ? (
-                                  <Check className="h-3.5 w-3.5 text-primary" />
-                                ) : null}
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate">{tx.description}</p>
-                                <p className="text-xs text-muted-foreground tabular-nums">{tx.date}</p>
-                              </div>
-                              <span
-                                className={cn(
-                                  'tabular-nums text-sm shrink-0',
-                                  tx.amount < 0 ? 'text-destructive' : 'text-foreground'
-                                )}
-                              >
-                                {formatCurrency(tx.amount, tx.currency || 'SEK')}
-                              </span>
-                            </button>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
-                </div>
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Sök på beskrivning…"
+                  value={txSearch}
+                  onChange={(e) => setTxSearch(e.target.value)}
+                  className="pl-10"
+                  disabled={isSubmitting}
+                />
               </div>
-            )}
+              <div className="max-h-56 overflow-y-auto rounded-md border">
+                {isLoadingTransactions ? (
+                  <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…
+                  </div>
+                ) : filteredTransactions.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-muted-foreground">
+                    Inga okategoriserade transaktioner.
+                  </p>
+                ) : (
+                  <ul className="divide-y">
+                    {filteredTransactions.slice(0, 30).map((tx) => {
+                      const isSelected = selectedTransactionId === tx.id
+                      return (
+                        <li key={tx.id}>
+                          <button
+                            type="button"
+                            className={cn(
+                              'w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors',
+                              isSelected
+                                ? 'bg-primary/10 border-l-2 border-primary'
+                                : 'border-l-2 border-transparent hover:bg-accent/40'
+                            )}
+                            onClick={() =>
+                              setSelectedTransactionId(isSelected ? null : tx.id)
+                            }
+                            disabled={isSubmitting}
+                          >
+                            <span className="shrink-0 w-4 flex items-center justify-center">
+                              {isSelected ? (
+                                <Check className="h-3.5 w-3.5 text-primary" />
+                              ) : null}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate">{tx.description}</p>
+                              <p className="text-xs text-muted-foreground tabular-nums">{tx.date}</p>
+                            </div>
+                            <span
+                              className={cn(
+                                'tabular-nums text-sm shrink-0',
+                                tx.amount < 0 ? 'text-destructive' : 'text-foreground'
+                              )}
+                            >
+                              {formatCurrency(tx.amount, tx.currency || 'SEK')}
+                            </span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
+              {selectedTransactionId && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground underline"
+                  onClick={() => setSelectedTransactionId(null)}
+                  disabled={isSubmitting}
+                >
+                  Rensa val
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Journal entry lines */}
