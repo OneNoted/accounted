@@ -18,7 +18,18 @@ const SLUG_ALLOW = new Set<string>(COOKBOOK_SLUGS)
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const match = url.pathname.match(/\/cookbook\/([^/]+)\.md$/)
-  const slug = match?.[1]
+  const raw = match?.[1]
+  // URL-decode before the allow-list check so a percent-encoded slug
+  // can't slip through the literal Set lookup. The allow-list is pure
+  // ASCII so any decoded value matching means the caller could have
+  // requested the canonical slug directly — no behaviour change for
+  // legitimate clients, defense-in-depth for adversarial ones.
+  let slug: string | undefined
+  try {
+    slug = raw ? decodeURIComponent(raw) : undefined
+  } catch {
+    return new NextResponse('Not found', { status: 404 })
+  }
   if (!slug || !SLUG_ALLOW.has(slug)) {
     return new NextResponse('Not found', { status: 404 })
   }

@@ -18,7 +18,16 @@ const SLUG_ALLOW = new Set<string>(RESOURCE_SLUGS)
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const match = url.pathname.match(/\/reference\/([^/]+)\.md$/)
-  const slug = match?.[1]
+  const raw = match?.[1]
+  // URL-decode before the allow-list check so a percent-encoded slug
+  // can't slip through the literal Set lookup. Same pattern as the
+  // cookbook .md route handler.
+  let slug: string | undefined
+  try {
+    slug = raw ? decodeURIComponent(raw) : undefined
+  } catch {
+    return new NextResponse('Not found', { status: 404 })
+  }
   if (!slug || !SLUG_ALLOW.has(slug)) {
     return new NextResponse('Not found', { status: 404 })
   }

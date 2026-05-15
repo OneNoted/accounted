@@ -148,7 +148,11 @@ curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_
 
 You created a customer, drafted an invoice with one mixed-VAT line item, posted the verifikation, sent the PDF, and recorded the payment. Five API calls; the engine handled BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering.
 
-The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate) — including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, supply date, and per-line VAT rate. The "Godkänd för F-skatt" note is included automatically when \`company_settings.has_f_skatt\` is set — confirm this on the company settings page before sending invoices in production. The summary fields in the JSON response (\`subtotal\`, \`vat_total\`, \`total\`) are convenience aggregates for the integration; the binding faktura content is the PDF itself.
+The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate) — including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate; one line per distinct rate on multi-rate invoices), the supplier's organisationsnummer, sequential invoice number, per-line VAT rate, and the supply date. **Pass \`delivery_date\` explicitly** when goods or services are delivered on a different date than the invoice date — ML 17 kap 24 § field 7 requires the supply date and the API does NOT default it to \`invoice_date\`; a faktura with no supply date is non-compliant.
+
+The "Godkänd för F-skatt" note is a **legal requirement** on every faktura issued by a company that holds F-skatt registration — for Peppol B2G invoices it's a FATAL Peppol BIS 3.0 validation failure (SE-R-005) when missing. The PDF includes it automatically when \`company_settings.has_f_skatt\` is true. **Verify \`has_f_skatt\` is set correctly on the company settings page before sending production invoices** — shipping invoices without the F-skatt note for a company that holds F-skatt makes them non-compliant under Swedish tax law.
+
+The summary fields in the JSON response (\`subtotal\`, \`vat_total\`, \`total\`) are convenience aggregates for the integration; the binding faktura content is the PDF itself.
 
 ## Next steps
 
