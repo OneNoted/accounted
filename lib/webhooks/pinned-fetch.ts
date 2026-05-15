@@ -139,6 +139,15 @@ export async function pinnedHttpsFetch(
       method: init.method,
       // SNI carries the original hostname so the receiver's TLS cert
       // (which is issued for the hostname, not the IP) validates.
+      //
+      // Cert-vs-hostname verification: Node's default checkServerIdentity
+      // matches the cert's SAN/CN against `servername` (or `host` when
+      // servername is unset). Because `servername` is set to the original
+      // hostname, the IP substitution above does NOT weaken the hostname-
+      // verification step — a forged endpoint at the pinned IP presenting
+      // a valid cert for a DIFFERENT hostname would fail the handshake.
+      // No explicit checkServerIdentity override is needed; relying on
+      // the default is the documented contract.
       servername: parsed.hostname,
       headers: {
         ...init.headers,
