@@ -24,6 +24,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { minimisePayload } from '@/lib/webhooks/handler'
+import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 
 registerEndpoint({
   operation: 'webhook_deliveries.retry',
@@ -127,7 +128,7 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     // the caller redeliver an event to a webhook they never created.
     const { data: webhook, error: webhookErr } = await ctx.supabase
       .from('webhooks')
-      .select('id, active, disabled_at')
+      .select('id, webhook_url, active, disabled_at')
       .eq('id', o.webhook_id)
       .eq('company_id', o.company_id)
       .maybeSingle()
@@ -139,11 +140,27 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
       // — the resource the caller targeted is genuinely gone.
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    const w = webhook as { id: string; active: boolean; disabled_at: string | null }
+    const w = webhook as { id: string; webhook_url: string; active: boolean; disabled_at: string | null }
     if (!w.active || w.disabled_at) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'webhook.active', message: 'Webhook is disabled — re-enable before retrying.' },
+      })
+    }
+
+    // Re-run the SSRF guard against the webhook's CURRENT url. The URL
+    // may have changed via PATCH between the original delivery and this
+    // retry call. The dispatch-time guard would catch a malicious URL
+    // eventually, but allowing the INSERT first means a poisoned row
+    // sits in the queue until the next cron tick. Validating here closes
+    // the window — the retry refuses up-front and the audit trail gets
+    // a clean VALIDATION_ERROR rather than a deferred dispatch-time
+    // 'dead' row with reason='url_unsafe'.
+    const urlCheck = await validateWebhookUrl(w.webhook_url)
+    if (!urlCheck.ok) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'webhook.webhook_url', reason: urlCheck.reason, message: urlCheck.detail },
       })
     }
 

@@ -252,9 +252,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (PAYROLL_SENSITIVE.test(body.event_type) && !hasScope(ctx.scopes, 'payroll:read')) {
       return v1ErrorResponseFromCode('INSUFFICIENT_SCOPE', ctx.log, {
         requestId: ctx.requestId,
+        // Art.5(1)(f): don't echo the API key's granted_scopes set back to
+        // the caller. The required_scope alone tells them what to add;
+        // surfacing the full grant leaks the key's capability surface
+        // both to the caller (acceptable) and to any log path that
+        // captures the error envelope (not acceptable).
         details: {
           required_scope: 'payroll:read',
-          granted_scopes: ctx.scopes,
           reason: `Subscribing to ${body.event_type} requires payroll:read in addition to webhooks:manage.`,
         },
       })

@@ -505,6 +505,32 @@ async function attemptDelivery(args: {
   } catch (err) {
     clearTimeout(timeout)
     const message = err instanceof Error ? err.message : String(err)
+
+    // Distinguish redirect-rejection errors from generic transport
+    // failures. With redirect: 'error' the runtime fetch throws when the
+    // receiver returns 3xx — that's an SSRF-bypass attempt (or a
+    // misconfigured receiver), not a transient failure. Treating it as
+    // 'failed' would burn 8 retry attempts over ~72h before going dead.
+    // Mirror the HTTP 410 treatment: terminal + auto-disable so the
+    // operator surfaces the misbehaving receiver immediately.
+    //
+    // Node's undici (the runtime fetch) raises 'unexpected redirect'
+    // / 'redirect mode is set to error' messages; check both shapes
+    // since the exact wording has changed across Node versions.
+    const isRedirectError = /redirect/i.test(message)
+    if (isRedirectError) {
+      return {
+        kind: 'dead',
+        reason: 'redirect_blocked',
+        disableWebhook: true,
+        attempts,
+        responseStatus: null,
+        responseBody: null,
+        responseHeaders: null,
+        error: message.length > 500 ? `${message.slice(0, 497)}...` : message,
+      }
+    }
+
     return {
       kind: 'failed',
       attempts,
