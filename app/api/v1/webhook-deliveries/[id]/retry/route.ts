@@ -23,6 +23,7 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { minimisePayload } from '@/lib/webhooks/handler'
 
 registerEndpoint({
   operation: 'webhook_deliveries.retry',
@@ -146,15 +147,27 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
       })
     }
 
+    // Re-run the data-minimisation projection on the original payload
+    // before re-enqueueing. If the original delivery predates a
+    // minimisePayload tightening (e.g. a future projection drops more
+    // fields), the retry must not silently re-deliver the unminimised
+    // shape. Idempotent on already-minimised payloads.
+    const minimised = minimisePayload(o.payload)
+
     const { data: replay, error: insertErr } = await ctx.supabase
       .from('webhook_deliveries')
       .insert({
         webhook_id: o.webhook_id,
         company_id: o.company_id,
         event_type: o.event_type,
-        payload: o.payload,
+        payload: minimised,
         previous_attributes: o.previous_attributes,
         api_version: o.api_version,
+        // Link the retry to the API request that triggered it. The
+        // original delivery's request_id is preserved on its own audit
+        // row; the retry gets a fresh correlation pointing at the
+        // :retry call.
+        request_id: ctx.requestId,
       })
       .select('id')
       .single()

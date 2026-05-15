@@ -198,6 +198,16 @@ export async function dispatchDueDeliveries(args: {
  */
 async function recoverStuckInFlight(supabase: SupabaseClient, now: Date): Promise<void> {
   const stuckBefore = new Date(now.getTime() - 2 * REQUEST_TIMEOUT_MS)
+  // The status='in_flight' filter alone is not sufficient — a row could
+  // race between this SELECT and the UPDATE and reach 'delivered' or
+  // 'dead' in the interim. Postgres applies the status filter to the
+  // CURRENT (post-race) state, so the row would slip through and the
+  // immutability trigger would raise check_violation, aborting the
+  // entire bulk UPDATE and leaving legitimately stuck rows unrecovered.
+  //
+  // Defense-in-depth: explicitly exclude terminal status values. The
+  // partial guard makes a successful sweep on a mixed batch safe even
+  // when one row terminalized mid-flight.
   const { data, error } = await supabase
     .from('webhook_deliveries')
     .update({
@@ -206,6 +216,7 @@ async function recoverStuckInFlight(supabase: SupabaseClient, now: Date): Promis
       error: 'recovered_from_in_flight_timeout',
     })
     .eq('status', 'in_flight')
+    .not('status', 'in', '(delivered,dead)')
     .lt('updated_at', stuckBefore.toISOString())
     .select('id')
 
@@ -577,11 +588,15 @@ async function readBoundedText(response: Response): Promise<string | null> {
 // Set-Cookie, Authorization, WWW-Authenticate, internal tracing, and
 // vendor x-* headers can carry credentials or sensitive identifiers; we
 // don't need them for delivery diagnostics. (CC7.2 / Art.32(1)(b))
+//
+// 'server' is deliberately NOT in the allowlist (A.8.12): it carries no
+// diagnostic value but routinely leaks receiver infrastructure version
+// strings (nginx/1.21.6, Apache/2.4.41, ...) into a multi-tenant audit
+// table.
 const SAFE_RESPONSE_HEADERS = new Set([
   'content-type',
   'content-length',
   'date',
-  'server',
   'x-request-id',
   'cf-ray',
 ])

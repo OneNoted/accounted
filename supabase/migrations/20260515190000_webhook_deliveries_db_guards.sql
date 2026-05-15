@@ -1,10 +1,10 @@
 -- Migration: webhook_deliveries_db_guards
 --
 -- Round-2 review on PR #496. Two DB-level invariants the application can
--- never bypass: (1) BFL 7 kap 1 § retention + BFNAR 2013:2 kap 8 §
--- audit-log integrity extend to DELETE on terminal rows; (2)
--- webhook_deliveries.company_id MUST match its parent webhooks.company_id
--- at INSERT time.
+-- never bypass: (1) audit-log integrity policy (all rows) + BFL 7 kap 1 §
+-- retention (accounting-event rows specifically) extend to DELETE on
+-- terminal rows; (2) webhook_deliveries.company_id MUST match its parent
+-- webhooks.company_id at INSERT time.
 --
 -- Both are belt-and-braces alongside existing application-layer guards:
 --   - Migration 20260515170000 declares the webhook_id FK with
@@ -40,7 +40,7 @@ AS $$
 BEGIN
   IF OLD.status IN ('delivered', 'dead') THEN
     RAISE EXCEPTION
-      'webhook_deliveries row in terminal status (%) cannot be deleted (BFL 7 kap 1 § retention)',
+      'webhook_deliveries row in terminal status (%) cannot be deleted (audit-log integrity policy; accounting-event rows additionally fall under BFL 7 kap 1 § retention)',
       OLD.status
       USING ERRCODE = 'check_violation';
   END IF;

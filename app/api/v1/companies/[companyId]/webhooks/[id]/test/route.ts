@@ -98,6 +98,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         event_type: 'webhook.test',
         payload,
         api_version: w.api_version_pinned,
+        // BFNAR 2013:2 kap 8 § behandlingshistorik: link the delivery row
+        // back to the originating API request for audit-trail correlation.
+        request_id: ctx.requestId,
       })
       .select('id')
       .single()

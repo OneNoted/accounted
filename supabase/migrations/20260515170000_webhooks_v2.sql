@@ -28,18 +28,26 @@
 --   HTTP 410 from receiver → auto-disable webhook + mark delivery `dead`.
 --
 -- Audit immutability: terminal-status delivery rows (delivered, dead) are
--- write-locked by trigger. Two legal grounds layer here:
---   - BFNAR 2013:2 kap 8 § (behandlingshistorik) requires audit-log
---     integrity — once a row records the outcome of a system event it
---     cannot be altered.
---   - BFL 7 kap 1 § (räkenskapsinformation retention) requires that
---     records related to bookkeeping operations are preserved for 7 years
---     after the calendar year the räkenskapsår ended. Webhook deliveries
---     for accounting events (journal_entry.committed, period.locked,
---     salary_run.booked, agi.generated, ...) are räkenskapsinformation-
---     adjacent and inherit that retention obligation.
--- Same pattern lives on `audit_log` and is queued for `operations`
--- (Phase 5 carry-over).
+-- write-locked by trigger. The legal basis varies by event type:
+--
+--   - For accounting-event deliveries (journal_entry.committed,
+--     journal_entry.reversed, journal_entry.corrected, period.locked,
+--     period.year_closed, salary_run.booked, agi.generated, invoice.paid,
+--     supplier_invoice.paid): immutability is required by BFL 7 kap 1 §
+--     (räkenskapsinformation retention, 7 years after the calendar year
+--     the räkenskapsår ended) AND BFNAR 2013:2 kap 8 § (behandlingshistorik
+--     integrity).
+--
+--   - For non-accounting deliveries (customer.created, document.uploaded,
+--     transaction.categorized, webhook.test): immutability is required by
+--     gnubok's operational audit-log integrity policy. BFL/BFNAR do NOT
+--     apply to these rows — the trigger applies the same lock as a
+--     uniform audit-trail policy, not as a statutory obligation.
+--
+-- The trigger does not differentiate by event type because per-row
+-- runtime classification adds no defensive value (the operational policy
+-- is the strict superset). Same pattern lives on `audit_log` and is
+-- queued for `operations` (Phase 5 carry-over).
 
 -- ──────────────────────────────────────────────────────────────────────
 -- 1. webhooks — drop legacy unique, add new columns
@@ -169,8 +177,8 @@ CREATE INDEX idx_webhook_deliveries_company_created
 -- 3. Immutability trigger — terminal-status delivery rows are write-locked
 -- ──────────────────────────────────────────────────────────────────────
 --
--- BFL 7 kap 1 § (retention) + BFNAR 2013:2 kap 8 § (behandlingshistorik):
--- an audit row that records the
+-- BFL 7 kap 1 § (retention, accounting-event rows) + BFNAR 2013:2 kap 8 §
+-- (behandlingshistorik integrity, all rows): an audit row that records the
 -- outcome of a system event becomes immutable once finalised. For
 -- webhook deliveries the terminal states are `delivered` and `dead`.
 -- `failed` is NOT terminal (the dispatcher will mutate it back to

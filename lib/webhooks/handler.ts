@@ -117,7 +117,7 @@ export function registerWebhookHandler(): void {
  * stripping personnummer fields from payroll payloads) lands in one
  * place rather than per-emit-site. GDPR Art.5(1)(c) data minimisation.
  */
-function minimisePayload(payload: Record<string, unknown>): Record<string, unknown> {
+export function minimisePayload(payload: Record<string, unknown>): Record<string, unknown> {
   const projected: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(payload)) {
     if (key === 'userId') continue
@@ -155,6 +155,16 @@ async function fanOutToWebhooks(args: {
   }
   if (!webhooks || webhooks.length === 0) return
 
+  // Synthesise a correlation id for the fanout batch. The event bus is
+  // async — by the time we reach here the originating route's request
+  // context is gone, so we can't recover the live request_id. A fresh
+  // 'whfan_<uuid>' keeps the BFNAR 2013:2 kap 8 § behandlingshistorik
+  // requirement satisfied (the column is never NULL on a fresh insert)
+  // and lets a per-fanout audit query group the rows that came from the
+  // same emission. Threading the originating request_id into the event
+  // payload itself is a future-direction improvement.
+  const fanoutId = `whfan_${crypto.randomUUID()}`
+
   const rows = webhooks.map((w) => ({
     webhook_id: (w as { id: string }).id,
     company_id: args.companyId,
@@ -164,6 +174,7 @@ async function fanOutToWebhooks(args: {
     // previous_attributes is null in Phase 6 PR-1; populated in a follow-up
     // when each route's emit() call captures the prior row.
     previous_attributes: null,
+    request_id: fanoutId,
   }))
 
   const { error: insertErr } = await supabase.from('webhook_deliveries').insert(rows)
