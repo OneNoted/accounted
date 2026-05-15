@@ -44,7 +44,9 @@ Response:
 }
 \`\`\`
 
-> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, the recovery path is to delete the webhook and create a new one (which generates a fresh secret); receivers must re-deploy with the new env var.
+> ⚠️ The \`secret\` field is returned only on creation. Subsequent GETs never include it. If you lose it, the recovery path is to delete the webhook and create a new one (which generates a fresh secret); receivers must re-deploy with the new value.
+
+**Store the secret in a secrets manager** (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault, Doppler, 1Password Connect, ...) rather than a plaintext \`.env\` file or a config commit. The secret is signing material — anyone who reads it can forge events that will pass your signature check. Treat it with the same care as a database password.
 
 ## 2. Implement signature verification
 
