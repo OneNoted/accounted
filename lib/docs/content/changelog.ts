@@ -49,7 +49,7 @@ The first stable release of the public REST API. Six phases of development cover
 - **Employees**: full CRUD with personnummer masking on list/create per GDPR Art.5(1)(c). Soft-delete via \`is_active\`.
 - **Salary runs**: CRUD + lifecycle verbs \`/calculate\`, \`/approve\`, \`/mark-paid\`, \`/book\`, \`/generate-agi\`. State machine: draft → review → approved → paid → booked.
 - **JSON reports** (14): trial-balance, balance-sheet, income-statement, general-ledger, journal-register, vat-declaration, monthly-breakdown, ar-ledger, supplier-ledger, continuity-check, salary-journal, avgifter-basis, vacation-liability.
-- **Binary report**: \`GET /reports/sie-export\` (text/plain SIE4 file).
+- **Binary report**: \`GET /reports/sie-export\` (text/plain SIE4 file). Note: a SIE4 export alone does NOT satisfy BFL 7 kap archiving obligations — SIE captures account-level positions and verifikationer but lacks system documentation and behandlingshistorik. Treat SIE as a portability format (Fortnox/Visma/Bokio migration), not as a complete archive.
 - **Async imports**: \`POST /imports/sie\` (multipart, 50 MB), \`POST /imports/bank\` (multipart, 10 MB, auto-format detection across 11 bank formats). Both async via \`operations\` substrate.
 
 ### Webhooks (Phase 6 PR-1) *— shipped 2026-05-15*
@@ -58,7 +58,7 @@ The first stable release of the public REST API. Six phases of development cover
 - **Delivery substrate**: per-minute Vercel cron at \`/api/webhooks/dispatch/cron\`. Exponential backoff \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~72h total). HTTP 410 from receiver auto-disables the webhook.
 - **Signature**: \`X-Gnubok-Signature: t=<unix>,v1=<hex-HMAC-SHA256>\`. Stripe-format. Sample receivers in [Node + Python](/docs/api/webhooks#verifying-signatures).
 - **SSRF protection**: webhook_url must be HTTPS; resolved IPs in private/loopback/link-local/CGNAT/cloud-metadata ranges are rejected at create AND dispatch time. \`redirect: 'error'\` on every outbound POST.
-- **Audit + retention**: terminal-state delivery rows for accounting events are immutable per BFNAR 2013:2 kap 8 § + retained 7 years per BFL 7 kap 1 §. Webhook DELETE preserves the delivery audit trail (\`ON DELETE SET NULL\` on \`webhook_id\`).
+- **Audit + retention**: webhook delivery rows are *behandlingshistorik* per BFNAR 2013:2 kap 8 § — immutable once terminal so the audit trail of what an integration was notified of stays intact. Delivery rows are NOT räkenskapsinformation themselves; BFL 7 kap retention applies to the underlying verifikation / faktura / AGI XML in its own table, not to the delivery envelope. gnubok also keeps accounting-event delivery rows for 7 years as an operational audit-trail policy. Webhook DELETE preserves the delivery audit trail (\`ON DELETE SET NULL\` on \`webhook_id\`).
 - **Verbs**: \`POST /webhooks/{id}/test\` enqueues a synthetic event; \`POST /webhook-deliveries/{id}/retry\` re-enqueues a dead/delivered delivery.
 
 ### Coming soon (Phase 6 PR-2 hardening)

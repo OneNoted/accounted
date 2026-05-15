@@ -148,6 +148,8 @@ curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/invoices/$INVOICE_
 
 You created a customer, drafted an invoice with one mixed-VAT line item, posted the verifikation, sent the PDF, and recorded the payment. Five API calls; the engine handled BAS account selection, voucher numbering, period-lock checks, audit-trail entries, and PDF rendering.
 
+The rendered PDF that the customer received contains every field required by ML 17 kap 24 § (the Swedish faktura mandate) — including \`beskattningsunderlag per skattesats\` (taxable amount per VAT rate), the supplier's organisationsnummer, the F-skatt note, sequential invoice number, supply date, and per-line VAT rate. The summary fields in the JSON response (\`subtotal\`, \`vat_total\`, \`total\`) are convenience aggregates for the integration; the binding faktura content is the PDF itself.
+
 ## Next steps
 
 - **[Subscribe to invoice events](/docs/api/cookbook/webhooks)** — get notified when invoices are paid via webhooks instead of polling.

@@ -165,6 +165,8 @@ function verifySignature(body, header, secret) {
 \`\`\`python
 import hmac
 import hashlib
+import json
+import os
 import time
 from flask import Flask, request, abort
 
@@ -231,5 +233,9 @@ Re-enable with [\`PATCH /webhooks/{webhookId}\`](/docs/api/reference/webhooks#pa
 
 ## Audit + retention
 
-Webhook delivery rows for accounting events (\`journal_entry.*\`, \`period.*\`, \`salary_run.booked\`, \`agi.generated\`, \`invoice.paid\`, \`supplier_invoice.paid\`) constitute *behandlingshistorik* under BFNAR 2013:2 kap 8 § and *räkenskapsinformation*-adjacent records under BFL 7 kap 1 § — they are retained for 7 years and are immutable once they reach a terminal state (\`delivered\` or \`dead\`). Deleting a webhook does not delete its delivery history; the FK is \`ON DELETE SET NULL\` so the audit trail survives.
+Webhook delivery rows are *behandlingshistorik* (a system-event log) per BFNAR 2013:2 kap 8 § — they are immutable once they reach a terminal state (\`delivered\` or \`dead\`) so the audit trail of who-was-notified-when stays intact. The underlying *räkenskapsinformation* (the verifikation, the faktura, the AGI XML itself) lives in its own table with its own BFL 7 kap retention — webhook delivery rows are NOT räkenskapsinformation and the 7-year retention applies to the underlying record, not to the delivery envelope.
+
+For accounting-event delivery rows (\`journal_entry.*\`, \`period.*\`, \`salary_run.booked\`, \`agi.generated\`, \`invoice.paid\`, \`supplier_invoice.paid\`), gnubok also keeps the delivery rows themselves for 7 years as an operational audit-trail policy — useful when reconstructing what an integration was notified of, but separate from any statutory archiving obligation. The integrator's own retention obligations attach to the underlying records you receive (and any local copies you persist), not to the delivery-row metadata.
+
+Deleting a webhook does not delete its delivery history; the FK is \`ON DELETE SET NULL\` so the audit trail survives.
 `

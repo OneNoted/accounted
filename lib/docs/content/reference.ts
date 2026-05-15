@@ -119,7 +119,18 @@ function renderEndpoint(ep: EndpointDefinition): string {
   return lines.join('\n')
 }
 
+// Module-level memoisation. The endpoint registry is populated once at
+// module load (via the side-effect import of load-routes) and is then
+// immutable for the process lifetime. The Markdown serialisation is
+// pure derivation — reusing a single result avoids repeated work on the
+// .md route handlers (which Next.js doesn't statically pre-render) AND
+// halves the cost on each generateMetadata + page render pair on the
+// HTML routes. (Greptile P2, round 1.)
+let cachedPages: BuiltResourcePage[] | null = null
+
 export function buildResourcePages(): BuiltResourcePage[] {
+  if (cachedPages) return cachedPages
+
   const all = listEndpoints()
   const byResource = new Map<string, EndpointDefinition[]>()
   for (const ep of all) {
@@ -129,7 +140,7 @@ export function buildResourcePages(): BuiltResourcePage[] {
     byResource.get(r.slug)!.push(ep)
   }
 
-  return RESOURCES.map((r) => {
+  const pages = RESOURCES.map((r) => {
     const endpoints = (byResource.get(r.slug) ?? []).sort((a, b) => {
       const m = METHOD_ORDER[a.method] - METHOD_ORDER[b.method]
       if (m !== 0) return m
@@ -168,6 +179,9 @@ export function buildResourcePages(): BuiltResourcePage[] {
       markdown: lines.join('\n'),
     }
   })
+
+  cachedPages = pages
+  return pages
 }
 
 export function buildReferenceOverviewMd(): string {
