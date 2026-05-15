@@ -111,6 +111,13 @@ export function SkatteverketConnectPanel() {
             Anslut till Skatteverket med BankID för att skicka momsdeklaration,
             arbetsgivardeklaration och hämta saldot på skattekontot.
           </p>
+          <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+            På Skatteverkets samtyckessida visas en av behörigheterna som{' '}
+            <span className="font-mono">skahmst (Rubrik saknas)</span> — det är
+            scope-namnet för skattekontots saldo och transaktioner (Skattekonto
+            HuvudMan STatus). Skatteverket har inte publicerat en svensk
+            beskrivning för den ännu. Det är ofarligt att godkänna.
+          </div>
           <Button onClick={startConnect} disabled={status?.disabled}>
             <ExternalLink className="mr-2 h-4 w-4" />
             Anslut med BankID
