@@ -214,6 +214,16 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       )
     }
 
+    // Capture prior state for the audit_log old_state field. One extra
+    // SELECT — cost is negligible for a manual webhook PATCH and the
+    // before/after pair is what makes the audit row reconstructible.
+    const { data: prior } = await ctx.supabase
+      .from('webhooks')
+      .select('name, description, webhook_url, active, disabled_at, disabled_reason')
+      .eq('company_id', ctx.companyId!)
+      .eq('id', id)
+      .maybeSingle()
+
     const { data, error } = await ctx.supabase
       .from('webhooks')
       .update(update)
@@ -224,6 +234,22 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     if (!data) return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+
+    // V16 audit log — webhook lifecycle event. Record the diff. When
+    // active flips from true → false the row captures the auto-disable
+    // ground truth; reviewers can reconstruct exactly when and by whom.
+    const changedFields = Object.keys(body)
+    await ctx.supabase.from('audit_log').insert({
+      user_id: ctx.userId,
+      company_id: ctx.companyId,
+      action: 'UPDATE',
+      table_name: 'webhooks',
+      record_id: id,
+      actor_id: ctx.apiKeyId ?? null,
+      description: `Webhook updated: ${changedFields.join(', ')}`,
+      old_state: prior ?? null,
+      new_state: { ...update, id },
+    })
 
     return ok(data, { requestId: ctx.requestId })
   },
@@ -262,6 +288,17 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
   'webhooks.delete',
   async (_request, ctx, params) => {
     const { id } = await params.params
+
+    // Capture the webhook before deletion so the audit_log entry can
+    // record a meaningful old_state snapshot (the row is gone immediately
+    // after the DELETE returns).
+    const { data: prior } = await ctx.supabase
+      .from('webhooks')
+      .select('name, event_type, webhook_url, active')
+      .eq('company_id', ctx.companyId!)
+      .eq('id', id)
+      .maybeSingle()
+
     const { error } = await ctx.supabase
       .from('webhooks')
       .delete()
@@ -269,6 +306,25 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       .eq('id', id)
 
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+
+    // V16 audit log — webhook lifecycle event. Records the deletion with
+    // a snapshot of what was deleted. The webhook_deliveries.webhook_id
+    // FK is ON DELETE SET NULL so the delivery audit trail survives; this
+    // entry closes the loop on the configuration side.
+    if (prior) {
+      const p = prior as { name: string; event_type: string; webhook_url: string; active: boolean }
+      await ctx.supabase.from('audit_log').insert({
+        user_id: ctx.userId,
+        company_id: ctx.companyId,
+        action: 'DELETE',
+        table_name: 'webhooks',
+        record_id: id,
+        actor_id: ctx.apiKeyId ?? null,
+        description: `Webhook deleted: "${p.name}" (${p.event_type})`,
+        old_state: p,
+      })
+    }
+
     return noContent({ requestId: ctx.requestId })
   },
 )

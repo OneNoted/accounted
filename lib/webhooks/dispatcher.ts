@@ -351,6 +351,14 @@ async function disableWebhook(
   webhookId: string,
   reason: string,
 ): Promise<void> {
+  // Snapshot before the disable so the audit entry can record the prior
+  // state. Service-role read; bypasses RLS.
+  const { data: prior } = await supabase
+    .from('webhooks')
+    .select('user_id, company_id, name, active, disabled_at, disabled_reason')
+    .eq('id', webhookId)
+    .maybeSingle()
+
   const { error } = await supabase
     .from('webhooks')
     .update({
@@ -359,7 +367,43 @@ async function disableWebhook(
       active: false,
     })
     .eq('id', webhookId)
-  if (error) log.warn('webhook auto-disable failed', { webhookId, code: error.code })
+  if (error) {
+    log.warn('webhook auto-disable failed', { webhookId, code: error.code })
+    return
+  }
+
+  // V16 security event log. Auto-disable is a privileged action taken by
+  // the dispatcher (not a human caller), so actor_id is null and user_id
+  // falls back to the webhook owner so the row remains visible under
+  // their per-user RLS read policy. The reason discriminates between the
+  // three auto-disable paths (http_410_gone / redirect_blocked /
+  // url_unsafe:<class>) so SIEM tooling can alert on systematic patterns.
+  if (prior) {
+    const p = prior as {
+      user_id: string | null
+      company_id: string | null
+      name: string
+      active: boolean
+      disabled_at: string | null
+      disabled_reason: string | null
+    }
+    // Skip the audit write when user_id is null (legacy rows from before
+    // the multi-tenant refactor made it nullable); the audit_log.user_id
+    // column is NOT NULL by virtue of every other write supplying it.
+    if (p.user_id) {
+      await supabase.from('audit_log').insert({
+        user_id: p.user_id,
+        company_id: p.company_id,
+        action: 'SECURITY_EVENT',
+        table_name: 'webhooks',
+        record_id: webhookId,
+        actor_id: null,
+        description: `Webhook auto-disabled by dispatcher: ${reason} (was "${p.name}")`,
+        old_state: { active: p.active, disabled_at: p.disabled_at, disabled_reason: p.disabled_reason },
+        new_state: { active: false, disabled_reason: reason, disabled_at: new Date().toISOString() },
+      })
+    }
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────
