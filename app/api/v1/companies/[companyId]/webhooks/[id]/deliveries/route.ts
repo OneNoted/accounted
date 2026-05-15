@@ -87,6 +87,24 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     const { limit, cursor } = parsePaginationParams(url)
     const decoded = decodeDefaultCursor(cursor)
 
+    // Verify the webhook itself belongs to ctx.companyId before listing
+    // its deliveries. The deliveries query already filters by
+    // (company_id, webhook_id) so a cross-tenant id wouldn't return
+    // anything — but emitting an explicit ownership check first surfaces
+    // a clean 404 (rather than a confusing empty list) and matches the
+    // pattern used for :retry and :test. Defense in depth alongside RLS.
+    const { data: webhookOwnership, error: ownershipErr } = await ctx.supabase
+      .from('webhooks')
+      .select('id')
+      .eq('id', webhookId)
+      .eq('company_id', ctx.companyId!)
+      .maybeSingle()
+
+    if (ownershipErr) return v1ErrorResponse(ownershipErr, ctx.log, { requestId: ctx.requestId })
+    if (!webhookOwnership) {
+      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+    }
+
     let query = ctx.supabase
       .from('webhook_deliveries')
       .select(DELIVERY_COLUMNS)
@@ -124,9 +142,5 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       requestId: ctx.requestId,
       nextCursor: nextCursor ?? undefined,
     })
-
-    // Reference v1ErrorResponseFromCode to reserve the import for follow-up
-    // commits that add filter validation (status, event_type filters).
-    void v1ErrorResponseFromCode
   },
 )

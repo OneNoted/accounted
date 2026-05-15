@@ -27,6 +27,7 @@ export type WebhookUrlValidationReason =
   | 'invalid_url'
   | 'non_https_scheme'
   | 'dns_lookup_failed'
+  | 'no_dns_records'
   | 'private_address'
   | 'loopback_address'
   | 'link_local_address'
@@ -42,19 +43,30 @@ export interface WebhookUrlValidationError {
 export interface WebhookUrlValidationOk {
   ok: true
   hostname: string
-  resolvedAddress: string
+  /** All A/AAAA records resolved at validation time. Every entry is publicly routable. */
+  resolvedAddresses: string[]
 }
 
 export type WebhookUrlValidationResult = WebhookUrlValidationOk | WebhookUrlValidationError
 
 /**
- * Validate that the URL is HTTPS and resolves to a publicly-routable
- * address. Returns a discriminated result rather than throwing so call
- * sites can surface a clean validation error envelope.
+ * Validate that the URL is HTTPS and that EVERY A/AAAA record for the
+ * hostname resolves to a publicly-routable address. Returns a
+ * discriminated result rather than throwing so call sites can surface a
+ * clean validation error envelope.
+ *
+ * Multi-record enumeration (vs single dns.lookup) closes a round-robin
+ * DNS bypass: a hostname with two A records [public, private] returns
+ * either non-deterministically per call. Single-lookup validation could
+ * return the public IP at create time and the private IP at dispatch
+ * time. Resolving ALL records and rejecting if ANY is unsafe forecloses
+ * that path. A separate DNS-rebinding window (between dispatch-time
+ * validation and the actual fetch) remains; closing that requires a
+ * custom HTTPS agent that pins the resolved IP — tracked for follow-up.
  */
 export async function validateWebhookUrl(
   rawUrl: string,
-  opts?: { lookup?: typeof dns.lookup },
+  opts?: { resolve4?: typeof dns.resolve4; resolve6?: typeof dns.resolve6 },
 ): Promise<WebhookUrlValidationResult> {
   let parsed: URL
   try {
@@ -71,29 +83,55 @@ export async function validateWebhookUrl(
     }
   }
 
-  const lookup = opts?.lookup ?? dns.lookup
-  let address: string
-  try {
-    const resolved = await lookup(parsed.hostname, { verbatim: true })
-    address = resolved.address
-  } catch (err) {
-    return {
-      ok: false,
-      reason: 'dns_lookup_failed',
-      detail: `DNS lookup failed for ${parsed.hostname}: ${err instanceof Error ? err.message : String(err)}`,
+  const resolve4 = opts?.resolve4 ?? dns.resolve4
+  const resolve6 = opts?.resolve6 ?? dns.resolve6
+
+  // Resolve A and AAAA in parallel. Each returns an array of address
+  // strings or throws ENODATA / ENOTFOUND when there are no records of
+  // that family. Treat a per-family ENODATA as "no records" rather than
+  // a hard failure — the other family may still resolve.
+  const [v4Result, v6Result] = await Promise.allSettled([
+    resolve4(parsed.hostname),
+    resolve6(parsed.hostname),
+  ])
+
+  const addresses: string[] = []
+  let hardFailure: Error | null = null
+  for (const r of [v4Result, v6Result]) {
+    if (r.status === 'fulfilled') {
+      addresses.push(...r.value)
+    } else {
+      const code = (r.reason as { code?: string } | null)?.code
+      // ENODATA / ENOTFOUND for one family is normal (e.g. v6-only or
+      // v4-only host). Other errors (server failure, timeout) propagate.
+      if (code !== 'ENODATA' && code !== 'ENOTFOUND') {
+        hardFailure = r.reason instanceof Error ? r.reason : new Error(String(r.reason))
+      }
     }
   }
 
-  const classification = classifyAddress(address)
-  if (classification !== 'public') {
+  if (addresses.length === 0) {
     return {
       ok: false,
-      reason: classification,
-      detail: `Resolved address ${address} for ${parsed.hostname} is not publicly routable (${classification}).`,
+      reason: hardFailure ? 'dns_lookup_failed' : 'no_dns_records',
+      detail: hardFailure
+        ? `DNS lookup failed for ${parsed.hostname}: ${hardFailure.message}`
+        : `No A/AAAA records for ${parsed.hostname}.`,
     }
   }
 
-  return { ok: true, hostname: parsed.hostname, resolvedAddress: address }
+  for (const address of addresses) {
+    const classification = classifyAddress(address)
+    if (classification !== 'public') {
+      return {
+        ok: false,
+        reason: classification,
+        detail: `Resolved address ${address} for ${parsed.hostname} is not publicly routable (${classification}).`,
+      }
+    }
+  }
+
+  return { ok: true, hostname: parsed.hostname, resolvedAddresses: addresses }
 }
 
 type AddressClass =

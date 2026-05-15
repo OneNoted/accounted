@@ -6,10 +6,11 @@
 -- webhooks.company_id at INSERT time.
 --
 -- Both are belt-and-braces alongside existing application-layer guards:
---   - Round-1 retention migration changed the FK to ON DELETE SET NULL.
---     But a privileged operator (or a future bug) could still issue a
---     direct DELETE on a delivery row. The new BEFORE DELETE trigger
---     forecloses that path for terminal rows.
+--   - Migration 20260515170000 declares the webhook_id FK with
+--     ON DELETE SET NULL so a webhook DELETE preserves the delivery
+--     audit trail. But a privileged operator (or a future bug) could
+--     still issue a direct DELETE on a delivery row. The new
+--     BEFORE DELETE trigger forecloses that path for terminal rows.
 --   - The dispatcher's loadWebhooksByIds + cross-tenant assertion already
 --     blocks dispatch when company_id mismatches at the application layer.
 --     The new BEFORE INSERT trigger blocks the mismatch from being

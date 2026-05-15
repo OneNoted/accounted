@@ -111,10 +111,9 @@ export async function dispatchDueDeliveries(args: {
     const webhook = webhookMap.get(delivery.webhook_id)
     if (!webhook) {
       // The webhook was deleted between enqueue and dispatch. Mark dead;
-      // there's no receiver to deliver to. After the 20260515180000
-      // retention migration the webhook_deliveries.webhook_id FK is
-      // ON DELETE SET NULL, so the row stays in the audit trail under
-      // status='dead'.
+      // there's no receiver to deliver to. The webhook_deliveries.webhook_id
+      // FK is ON DELETE SET NULL (migration 20260515170000), so the row
+      // stays in the audit trail under status='dead'.
       await markDead(args.supabase, delivery.id, 'webhook_deleted')
       summary.dead++
       continue
@@ -227,11 +226,11 @@ async function claimDueDeliveries(
     .in('status', ['pending', 'failed'])
     .lte('next_attempt_at', now.toISOString())
     // Skip dangling rows (webhook deleted between enqueue and dispatch).
-    // The 20260515180000 retention migration changed the FK to ON DELETE
-    // SET NULL so terminal rows survive webhook deletion for BFNAR
-    // 2013:2 kap 8 § audit retention; non-terminal rows for a deleted
-    // webhook have no receiver to deliver to and stay dormant in the
-    // audit trail.
+    // The webhook_deliveries.webhook_id FK is ON DELETE SET NULL
+    // (migration 20260515170000) so terminal rows survive webhook deletion
+    // for BFNAR 2013:2 kap 8 § audit retention; non-terminal rows for a
+    // deleted webhook have no receiver to deliver to and stay dormant in
+    // the audit trail.
     .not('webhook_id', 'is', null)
     .order('next_attempt_at', { ascending: true })
     .limit(batchSize)
@@ -338,11 +337,17 @@ async function markDead(
   reason: string,
   outcome?: AttemptOutcome,
 ): Promise<void> {
+  // delivered_at means "the receiver acknowledged the event". For dead
+  // rows (HTTP 410, attempts exhausted, webhook deleted, cross-tenant
+  // mismatch, unsafe URL) the receiver did NOT acknowledge — leaving
+  // delivered_at NULL keeps the audit semantics clean. An auditor
+  // querying `WHERE delivered_at IS NOT NULL` correctly sees only
+  // genuinely delivered rows. The terminal-state timestamp lives on
+  // `updated_at` (auto-stamped by the table's BEFORE UPDATE trigger).
   const { error } = await supabase
     .from('webhook_deliveries')
     .update({
       status: 'dead',
-      delivered_at: new Date().toISOString(),
       attempts: outcome && 'attempts' in outcome ? outcome.attempts : undefined,
       response_status: outcome && 'responseStatus' in outcome ? outcome.responseStatus : null,
       response_body: outcome && 'responseBody' in outcome ? outcome.responseBody : null,

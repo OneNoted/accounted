@@ -95,7 +95,14 @@ CREATE TABLE IF NOT EXISTS public.webhook_deliveries (
   -- Tenancy. company_id is denormalised onto the delivery row (also
   -- recoverable via webhook_id → webhooks.company_id) so RLS + the
   -- worker query don't have to join.
-  webhook_id          uuid NOT NULL REFERENCES public.webhooks(id) ON DELETE CASCADE,
+  --
+  -- webhook_id is nullable + ON DELETE SET NULL so a webhook DELETE
+  -- preserves the delivery audit trail (BFNAR 2013:2 kap 8 §
+  -- behandlingshistorik for accounting events: journal_entry.committed,
+  -- period.locked, salary_run.booked, agi.generated, ...). The
+  -- dispatcher filters webhook_id IS NOT NULL so dangling rows go
+  -- dormant in the audit trail rather than retrying against nothing.
+  webhook_id          uuid REFERENCES public.webhooks(id) ON DELETE SET NULL,
   company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
 
   -- Payload identity

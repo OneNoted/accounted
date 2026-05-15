@@ -6,14 +6,14 @@
  *          event_type (immutable: would require re-pinning api_version).
  *          Cannot rotate the secret here (separate flow, deferred to
  *          Phase 6 follow-up).
- * DELETE — hard delete the webhook. After the 20260515180000 retention
- *          migration the FK on webhook_deliveries.webhook_id is
- *          ON DELETE SET NULL, so the delivery audit trail SURVIVES
- *          webhook deletion (BFNAR 2013:2 kap 8 § behandlingshistorik —
- *          accounting-event deliveries must be retained for 7 years).
- *          Pending/failed deliveries become dormant (the dispatcher
- *          skips webhook_id IS NULL rows); terminal rows stay queryable
- *          via the (future) per-company audit-trail surface.
+ * DELETE — hard delete the webhook. The webhook_deliveries.webhook_id FK
+ *          is ON DELETE SET NULL (declared in migration 20260515170000),
+ *          so the delivery audit trail SURVIVES webhook deletion
+ *          (BFNAR 2013:2 kap 8 § behandlingshistorik — accounting-event
+ *          deliveries must be retained for 7 years). Pending/failed
+ *          deliveries become dormant (the dispatcher skips
+ *          webhook_id IS NULL rows); terminal rows stay queryable via
+ *          the (future) per-company audit-trail surface.
  */
 
 import { z } from 'zod'
