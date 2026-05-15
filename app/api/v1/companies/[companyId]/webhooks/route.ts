@@ -298,10 +298,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const secret = `whsec_${generateWebhookSecret()}`
 
+    // No user_id field on the webhooks table — the column never existed
+    // in the automation_webhooks predecessor (20260415000000_schema_sync.sql)
+    // and webhooks_v2 (20260515170000) didn't add it. Actor attribution
+    // lives on created_by_api_key_id instead (which leads back to the
+    // owning user via api_keys.user_id).
     const { data, error } = await ctx.supabase
       .from('webhooks')
       .insert({
-        user_id: ctx.userId,
         company_id: ctx.companyId!,
         name: body.name,
         description: body.description ?? null,

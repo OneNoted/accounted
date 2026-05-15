@@ -14,18 +14,21 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // closes that test debt.
 
 async function insertWebhook(params: {
+  // userId kept in the signature for parity with seedCompany's return — the
+  // webhooks table itself has no user_id column (see route comment in
+  // app/api/v1/companies/[companyId]/webhooks/route.ts).
   userId: string
   companyId: string
   eventType?: string
 }): Promise<string> {
+  void params.userId
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.webhooks
-       (id, user_id, company_id, name, event_type, webhook_url, secret, active)
-     VALUES ($1, $2, $3, 'pg-test', $4, 'https://example.com/hook', $5, true)`,
+       (id, company_id, name, event_type, webhook_url, secret, active)
+     VALUES ($1, $2, 'pg-test', $3, 'https://example.com/hook', $4, true)`,
     [
       id,
-      params.userId,
       params.companyId,
       params.eventType ?? 'invoice.paid',
       `whsec_${randomUUID().replace(/-/g, '')}`,

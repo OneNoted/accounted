@@ -8,19 +8,22 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // ──────────────────────────────────────────────────────────────────────
 
 async function insertWebhook(params: {
+  // userId kept in the signature for parity with seedCompany's return — the
+  // webhooks table itself has no user_id column (see route comment in
+  // app/api/v1/companies/[companyId]/webhooks/route.ts).
   userId: string
   companyId: string
   eventType?: string
   active?: boolean
 }): Promise<string> {
+  void params.userId
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.webhooks
-       (id, user_id, company_id, name, event_type, webhook_url, secret, active)
-     VALUES ($1, $2, $3, 'pg-test', $4, 'https://example.com/hook', $5, $6)`,
+       (id, company_id, name, event_type, webhook_url, secret, active)
+     VALUES ($1, $2, 'pg-test', $3, 'https://example.com/hook', $4, $5)`,
     [
       id,
-      params.userId,
       params.companyId,
       params.eventType ?? 'invoice.paid',
       `whsec_${randomUUID().replace(/-/g, '')}`,
@@ -166,6 +169,30 @@ describe('claim_due_webhook_deliveries.pg — atomic SKIP LOCKED claim', () => {
     const ids = rows.map((r) => r.id)
     expect(ids).not.toContain(deliveredId)
     expect(ids).not.toContain(deadId)
+  })
+
+  // The status filter `IN ('pending', 'failed')` is what prevents
+  // double-delivery once a tick has already claimed a row to in_flight.
+  // recoverStuckInFlight is the ONLY legitimate path back from in_flight
+  // (sweeps the row to 'failed' after the stuck-threshold), so the claim
+  // function must NEVER re-pick a row already marked in_flight.
+  it('skips rows already in in_flight status', async () => {
+    const { userId, companyId } = await seedCompany()
+    const webhookId = await insertWebhook({ userId, companyId })
+    const inFlightId = await insertDelivery({
+      webhookId,
+      companyId,
+      status: 'in_flight',
+    })
+
+    const { rows } = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.claim_due_webhook_deliveries($1, now())`,
+      [10],
+    )
+
+    expect(rows.map((r) => r.id)).not.toContain(inFlightId)
+    // Status must NOT have been re-flipped.
+    expect(await getDeliveryStatus(inFlightId)).toBe('in_flight')
   })
 
   it('respects the batch size', async () => {

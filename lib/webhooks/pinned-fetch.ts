@@ -212,10 +212,19 @@ export async function pinnedHttpsFetch(
         })
       }
 
-      res.on('end', finalize)
-      // When we destroyed the stream for size, `close` fires without
-      // `end`. Finalize once on whichever fires first.
-      res.on('close', finalize)
+      // Two completion paths to handle: 'end' (normal completion) and
+      // 'close' (when we destroyed the stream for size truncation, where
+      // 'end' does not fire). Node emits BOTH 'end' and 'close' on normal
+      // completions, so `once()` + a self-removing pair keeps finalize
+      // single-shot without relying on the outer `settled` guard to
+      // squash duplicate header reconstruction.
+      const finalizeOnce = () => {
+        res.removeListener('end', finalizeOnce)
+        res.removeListener('close', finalizeOnce)
+        finalize()
+      }
+      res.once('end', finalizeOnce)
+      res.once('close', finalizeOnce)
       res.on('error', (err) => {
         if (absoluteTimer) clearTimeout(absoluteTimer)
         settle({ kind: 'transport_error', detail: err.message, pinnedAddress })

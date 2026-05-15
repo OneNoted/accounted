@@ -198,16 +198,12 @@ export async function dispatchDueDeliveries(args: {
  */
 async function recoverStuckInFlight(supabase: SupabaseClient, now: Date): Promise<void> {
   const stuckBefore = new Date(now.getTime() - 2 * REQUEST_TIMEOUT_MS)
-  // The status='in_flight' filter alone is not sufficient — a row could
-  // race between this SELECT and the UPDATE and reach 'delivered' or
-  // 'dead' in the interim. Postgres applies the status filter to the
-  // CURRENT (post-race) state, so the row would slip through and the
-  // immutability trigger would raise check_violation, aborting the
-  // entire bulk UPDATE and leaving legitimately stuck rows unrecovered.
-  //
-  // Defense-in-depth: explicitly exclude terminal status values. The
-  // partial guard makes a successful sweep on a mixed batch safe even
-  // when one row terminalized mid-flight.
+  // Under READ COMMITTED (Postgres default), UPDATE re-evaluates the WHERE
+  // clause against each row's current value when it acquires the row lock.
+  // A row that raced from 'in_flight' to 'delivered'/'dead' between scan
+  // and lock will fail status='in_flight' on re-evaluation and be skipped
+  // entirely — the immutability trigger never fires, so a mid-flight
+  // terminal flip cannot abort the bulk update.
   const { data, error } = await supabase
     .from('webhook_deliveries')
     .update({
@@ -216,7 +212,6 @@ async function recoverStuckInFlight(supabase: SupabaseClient, now: Date): Promis
       error: 'recovered_from_in_flight_timeout',
     })
     .eq('status', 'in_flight')
-    .not('status', 'in', '(delivered,dead)')
     .lt('updated_at', stuckBefore.toISOString())
     .select('id')
 
