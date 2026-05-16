@@ -1,0 +1,310 @@
+import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { validateBody } from '@/lib/api/validate'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { calculateBolagsskatt } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
+import {
+  listExistingPeriodiseringsfonder,
+  proposeAvsattning,
+  proposeAteforing,
+} from '@/lib/bokslut/reserves/periodiseringsfond-service'
+import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
+import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import type { DispositionsProposal, ProposedDisposition } from '@/lib/bokslut/types'
+import type { JournalEntry } from '@/types'
+
+/**
+ * Default schablonintäkt rate on periodiseringsfond. Statslåneräntan
+ * 30 november föregående år + 1 procentenhet, lägst 0.5 %. For inkomstår 2025
+ * (SLR 2024-11-30 ≈ 2.0 %) → 3.0 %. Caller can override per request when the
+ * Riksbanken integration ships.
+ */
+const DEFAULT_SCHABLONINTAKT_RATE = 0.03
+
+// ============================================================
+// GET — return proposal snapshot with defaults
+// ============================================================
+export const GET = withRouteContext(
+  'period.bokslutsdispositioner_preview',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, companyId, log, requestId } = ctx
+    const opLog = log.child({ periodId: id })
+
+    try {
+      const { data: period, error: periodError } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_start, period_end')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .single()
+      if (periodError || !period) {
+        return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
+      }
+
+      const { data: settings } = await supabase
+        .from('company_settings')
+        .select('entity_type')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const entityType = (settings?.entity_type ??
+        'aktiebolag') as DispositionsProposal['entityType']
+
+      // EF doesn't book dispositioner — these are handled in NE/INK1. Return
+      // an empty proposal so the wizard can skip the step.
+      if (entityType !== 'aktiebolag') {
+        const incomeStatement = await generateIncomeStatement(supabase, companyId, id)
+        return NextResponse.json({
+          data: {
+            entityType,
+            fiscalPeriod: period,
+            netResultBefore: incomeStatement.net_result,
+            proposals: [],
+          } satisfies DispositionsProposal,
+        })
+      }
+
+      const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
+      const incomeStatement = await generateIncomeStatement(supabase, companyId, id)
+      const resultBeforeTax = incomeStatement.net_result
+
+      const proposals: ProposedDisposition[] = []
+
+      // 1. Periodiseringsfond återföring (mandatory for ≥6-year-old fonder)
+      const existingFonder = await listExistingPeriodiseringsfonder(
+        supabase,
+        companyId,
+        period.period_end,
+      )
+      const ateforing = proposeAteforing(existingFonder, {
+        schablonintaktRate: DEFAULT_SCHABLONINTAKT_RATE,
+      })
+      proposals.push(...ateforing.proposals)
+
+      // 2. Överavskrivningar — no default; user must enter desired amount
+      //    (Phase 3 will compute from asset register).
+
+      // 3. Periodiseringsfond avsättning — default to max (25 % of result
+      //    before tax adjusted for återföring/schablonintäkt).
+      const taxableBeforeAvsattning =
+        resultBeforeTax +
+        ateforing.proposals.reduce((sum, p) => sum + p.amount, 0) +
+        ateforing.schablonintaktAmount
+      const avsattning = proposeAvsattning({
+        skattemassigtResultatBeforeAvsattning: taxableBeforeAvsattning,
+        fiscalYear,
+      })
+      if (avsattning) proposals.push(avsattning)
+
+      // 4. Särskild löneskatt — auto-computed from posted pension costs
+      const slp = await calculateSarskildLoneskatt(supabase, companyId, id)
+      if (slp) proposals.push(slp)
+
+      // 5. Bolagsskatt — taxable result after p-fond avsättning + schablonintäkt
+      const bolagsskatt = await calculateBolagsskatt(supabase, companyId, id, {
+        manualAdjustments: {
+          schablonintaktPeriodiseringsfond: ateforing.schablonintaktAmount,
+        },
+      })
+      if (bolagsskatt) proposals.push(bolagsskatt)
+
+      return NextResponse.json({
+        data: {
+          entityType,
+          fiscalPeriod: period,
+          netResultBefore: resultBeforeTax,
+          proposals,
+        } satisfies DispositionsProposal,
+      })
+    } catch (err) {
+      opLog.error('bokslutsdispositioner preview failed', err as Error)
+      return errorResponse(err, opLog, { requestId })
+    }
+  },
+)
+
+// ============================================================
+// POST — commit a list of dispositions chosen by the user
+// ============================================================
+const ItemSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('bolagsskatt'),
+    manualAdjustments: z
+      .object({
+        nonDeductibleExpenses: z.number().optional(),
+        nonTaxableIncome: z.number().optional(),
+        schablonintaktPeriodiseringsfond: z.number().optional(),
+        other: z.number().optional(),
+      })
+      .optional(),
+  }),
+  z.object({
+    kind: z.literal('sarskild_loneskatt'),
+    manualAdjustment: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal('periodiseringsfond_avsattning'),
+    /** Optional override for the SLR-based schablonintäkt rate; defaults to
+     *  the server-side constant. Used both to compute the cap base and to
+     *  feed back into bolagsskatt's adjustment if present in the same batch. */
+    schablonintaktRate: z.number().optional(),
+    desiredAmount: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal('periodiseringsfond_ateforing'),
+    returns: z.record(z.string(), z.number()).default({}),
+    schablonintaktRate: z.number().default(DEFAULT_SCHABLONINTAKT_RATE),
+  }),
+  z.object({
+    kind: z.literal('overavskrivningar'),
+    additionalAmount: z.number(),
+  }),
+])
+
+const PostBodySchema = z.object({
+  items: z.array(ItemSchema).min(1),
+})
+
+export const POST = withRouteContext(
+  'period.bokslutsdispositioner_post',
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { user, supabase, companyId, log, requestId } = ctx
+    const opLog = log.child({ periodId: id })
+
+    const validation = await validateBody(request, PostBodySchema)
+    if (!validation.success) return validation.response
+
+    try {
+      const { data: period, error: periodError } = await supabase
+        .from('fiscal_periods')
+        .select('id, name, period_end, is_closed, locked_at, closing_entry_id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .single()
+      if (periodError || !period) {
+        return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
+      }
+      if (period.is_closed || period.closing_entry_id || period.locked_at) {
+        return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
+      }
+
+      const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
+      const created: { kind: string; entry: JournalEntry }[] = []
+
+      for (const item of validation.data.items) {
+        const proposal = await computeProposal(item, supabase, companyId, id, fiscalYear)
+        if (!proposal) continue
+
+        const entry = await createJournalEntry(supabase, companyId, user.id, {
+          fiscal_period_id: id,
+          entry_date: period.period_end,
+          description: `Bokslutsdisposition: ${proposal.label}`,
+          source_type: 'year_end',
+          voucher_series: 'A',
+          lines: proposal.lines,
+        })
+        created.push({ kind: item.kind, entry })
+      }
+
+      return NextResponse.json({ data: { created } })
+    } catch (err) {
+      opLog.error('bokslutsdispositioner post failed', err as Error)
+      return errorResponse(err, opLog, { requestId })
+    }
+  },
+  { requireWrite: true },
+)
+
+type PostItem = z.infer<typeof ItemSchema>
+
+async function computeProposal(
+  item: PostItem,
+  supabase: Parameters<typeof calculateBolagsskatt>[0],
+  companyId: string,
+  fiscalPeriodId: string,
+  fiscalYear: number,
+): Promise<ProposedDisposition | null> {
+  switch (item.kind) {
+    case 'bolagsskatt':
+      return calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
+        manualAdjustments: item.manualAdjustments,
+      })
+    case 'sarskild_loneskatt':
+      return calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId, {
+        manualAdjustment: item.manualAdjustment,
+      })
+    case 'periodiseringsfond_avsattning': {
+      // Re-derive the cap base from current state so the user can't sneak in
+      // a higher desiredAmount than 25 % of actual skattemässigt resultat.
+      const incomeStatement = await generateIncomeStatement(
+        supabase,
+        companyId,
+        fiscalPeriodId,
+      )
+      const { data: periodRow } = await supabase
+        .from('fiscal_periods')
+        .select('period_end')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+      const periodEnd = periodRow?.period_end ?? `${fiscalYear}-12-31`
+      const existing = await listExistingPeriodiseringsfonder(supabase, companyId, periodEnd)
+      const schablonintaktRate = item.schablonintaktRate ?? DEFAULT_SCHABLONINTAKT_RATE
+      const schablonintakt = existing.reduce(
+        (sum, f) => sum + f.balance * schablonintaktRate,
+        0,
+      )
+      const base = incomeStatement.net_result + Math.round(schablonintakt)
+      return proposeAvsattning({
+        skattemassigtResultatBeforeAvsattning: base,
+        desiredAmount: item.desiredAmount,
+        fiscalYear,
+      })
+    }
+    case 'periodiseringsfond_ateforing': {
+      // Recompute existing fonder server-side so the user can't return more
+      // than is on the books.
+      const { data: period } = await supabase
+        .from('fiscal_periods')
+        .select('period_end')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single()
+      if (!period) return null
+      const existing = await listExistingPeriodiseringsfonder(
+        supabase,
+        companyId,
+        period.period_end,
+      )
+      const result = proposeAteforing(existing, {
+        returns: item.returns,
+        schablonintaktRate: item.schablonintaktRate,
+      })
+      // Combine multiple cohort reversals into a single voucher with multiple
+      // lines so we don't blow up voucher numbering — but each fond is its own
+      // line pair already. Build a merged ProposedDisposition.
+      if (result.proposals.length === 0) return null
+      return mergeAteforingProposals(result.proposals)
+    }
+    case 'overavskrivningar':
+      return proposeOveravskrivningar({ additionalAmount: item.additionalAmount })
+  }
+}
+
+function mergeAteforingProposals(proposals: ProposedDisposition[]): ProposedDisposition {
+  const lines = proposals.flatMap((p) => p.lines)
+  const totalAmount = proposals.reduce((sum, p) => sum + p.amount, 0)
+  const warnings = proposals.flatMap((p) => p.warnings)
+  return {
+    kind: 'periodiseringsfond_ateforing',
+    label: 'Återföring periodiseringsfond',
+    description: proposals.map((p) => p.label).join(', '),
+    amount: totalAmount,
+    lines,
+    warnings,
+  }
+}
