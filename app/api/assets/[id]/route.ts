@@ -12,6 +12,11 @@ const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
   'declining_balance_20',
 ] as const
 
+// Engine only implements linear today — reject declining_balance methods on
+// both create and update until the engine grows them. The DB enum keeps the
+// other methods reserved for a future phase.
+const SUPPORTED_DEPRECIATION_METHODS: readonly DepreciationMethod[] = ['linear'] as const
+
 const UpdateAssetSchema = z.object({
   name: z.string().min(1).optional(),
   notes: z.string().nullable().optional(),
@@ -19,7 +24,15 @@ const UpdateAssetSchema = z.object({
   useful_life_months: z.number().int().positive().optional(),
   depreciation_method: z
     .enum(DEPRECIATION_METHODS as unknown as [DepreciationMethod, ...DepreciationMethod[]])
-    .optional(),
+    .optional()
+    .refine(
+      (m) => m === undefined || (SUPPORTED_DEPRECIATION_METHODS as readonly string[]).includes(m),
+      {
+        message:
+          'Only "linear" depreciation is supported by the engine today. ' +
+          'Declining-balance methods are reserved for a future phase.',
+      },
+    ),
   bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
   bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
   bas_expense_account: z.string().regex(/^\d{4}$/).optional(),

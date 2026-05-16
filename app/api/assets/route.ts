@@ -17,11 +17,17 @@ const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'other_tangible',
 ] as const
 
+// The DB enum keeps all three methods so future phases can add support
+// without a migration, but the engine only implements linear today. Reject
+// the unsupported methods at create to avoid silently producing wrong
+// (linear) numbers under a misleading method label.
 const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
   'linear',
   'declining_balance_30',
   'declining_balance_20',
 ] as const
+
+const SUPPORTED_DEPRECIATION_METHODS: readonly DepreciationMethod[] = ['linear'] as const
 
 const CreateAssetSchema = z
   .object({
@@ -35,7 +41,15 @@ const CreateAssetSchema = z
     useful_life_months: z.number().int().positive(),
     depreciation_method: z
       .enum(DEPRECIATION_METHODS as unknown as [DepreciationMethod, ...DepreciationMethod[]])
-      .optional(),
+      .optional()
+      .refine(
+        (m) => m === undefined || (SUPPORTED_DEPRECIATION_METHODS as readonly string[]).includes(m),
+        {
+          message:
+            'Only "linear" depreciation is supported by the engine today. ' +
+            'Declining-balance methods are reserved for a future phase.',
+        },
+      ),
     bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
     bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
     bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
@@ -80,6 +94,23 @@ function validateBasOverrides(
       code: z.ZodIssueCode.custom,
       path: ['bas_expense_account'],
       message: `Account must be in range ${ranges.expense[0]}–${ranges.expense[1]} for ${value.category}`,
+    })
+  }
+  // Anskaffningskonto and ackumulerade-avskrivningar-konto live in the same
+  // class range (e.g. 1010-1099 for immaterial, 1100-1199 for buildings), so
+  // a user could pick the same account for both. That would silently net
+  // acquisition cost against accumulated depreciation in one bucket and
+  // break the INK2R 720x mappings. Force them apart.
+  if (
+    value.bas_asset_account &&
+    value.bas_accumulated_account &&
+    value.bas_asset_account === value.bas_accumulated_account
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['bas_accumulated_account'],
+      message:
+        'Anskaffningskonto och ackumulerade-avskrivningar-konto måste vara olika konton.',
     })
   }
 }

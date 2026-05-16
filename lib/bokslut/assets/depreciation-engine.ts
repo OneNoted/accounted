@@ -37,10 +37,10 @@ export interface DepreciationProposal {
  * Compute planenlig avskrivning för en enskild tillgång under en given
  * fiscal period. Pro-rateras vid första och sista året.
  *
- * Stöder för närvarande bara linear method. declining_balance_* faller
- * tillbaka på linear med en varning — dessa kommer att hanteras explicit
- * i en kommande version när vi behöver dem (de är vanligare för
- * skattemässig avskrivning än planenlig).
+ * Only the linear method is implemented. The API rejects asset creation /
+ * updates with the other DB-enum values (declining_balance_*), so any asset
+ * that reaches here has method='linear'; treating the other branches as
+ * dead code is safe.
  */
 export function computeAnnualDepreciation(
   asset: Asset,

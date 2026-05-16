@@ -170,6 +170,15 @@ export async function updateAsset(
         `bas_expense_account ${input.bas_expense_account} is outside ${ranges.expense[0]}–${ranges.expense[1]} for ${existing.category}`,
       )
     }
+    // Anskaffning and ackumulerade-avskrivningar must be different accounts —
+    // see CreateAssetSchema validateBasOverrides for the rationale.
+    const finalAsset = input.bas_asset_account ?? existing.bas_asset_account
+    const finalAccumulated = input.bas_accumulated_account ?? existing.bas_accumulated_account
+    if (finalAsset === finalAccumulated) {
+      throw new Error(
+        'bas_asset_account and bas_accumulated_account must be different accounts',
+      )
+    }
   }
 
   const { data, error } = await supabase
