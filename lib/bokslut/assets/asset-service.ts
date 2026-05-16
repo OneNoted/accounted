@@ -252,6 +252,15 @@ export interface DisposalResult {
  * proceeds — callers must handle the VAT side separately (or use a manual
  * journal entry). UI surfacing disposal must warn the user. Adding a
  * vat_on_proceeds field is tracked as a follow-up.
+ *
+ * KNOWN LIMITATION (ML 9 kap 8–11 §§ — jämkning): when a building or
+ * markanläggning is disposed of within the 10-year jämkningsperiod after
+ * acquisition, previously deducted input VAT must be recalculated and may
+ * have to be partially repaid. This function does NOT compute or post any
+ * jämkning adjustment. UI surfacing disposal for category='building' or
+ * 'land_improvement' must check the 10-year window against acquisition_date
+ * and warn the user; the actual recalculation belongs in a future
+ * dedicated flow.
  */
 export async function disposeAsset(
   supabase: SupabaseClient,
@@ -303,11 +312,17 @@ export async function disposeAsset(
       line_description: `Avyttring: erhållet belopp ${asset.name}`,
     })
   }
-  // Disposal gain/loss accounts differ for immateriella tillgångar: BAS maps
-  // intangible disposal P&L to 3013 (vinst) / 7813 (förlust), tangible to
-  // 3973 / 7973. Mixing them yields an INK2R misclassification.
-  const gainAccount = asset.category === 'immaterial' ? '3013' : '3973'
-  const lossAccount = asset.category === 'immaterial' ? '7813' : '7973'
+  // Disposal gain/loss accounts vary by asset class — BAS 2026 splits them
+  // because INK2R routes each pair to a different field. Mixing them
+  // misclassifies in the tax declaration.
+  //   - immaterial            → 3013 (vinst) / 7813 (förlust)
+  //   - building / markanlägg → 3971 / 7971
+  //   - other tangible        → 3973 / 7973
+  const isBuilding = asset.category === 'building' || asset.category === 'land_improvement'
+  const gainAccount =
+    asset.category === 'immaterial' ? '3013' : isBuilding ? '3971' : '3973'
+  const lossAccount =
+    asset.category === 'immaterial' ? '7813' : isBuilding ? '7971' : '7973'
 
   if (gainOrLoss > 0.005) {
     lines.push({

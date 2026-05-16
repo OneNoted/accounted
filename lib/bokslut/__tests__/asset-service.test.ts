@@ -181,6 +181,70 @@ describe('disposeAsset — gain/loss account selection', () => {
     expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
   })
 
+  it('uses 3971 / 7971 for building disposal', async () => {
+    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
+    vi.mocked(createJournalEntry).mockClear()
+    const asset = makeAsset({
+      category: 'building',
+      acquisition_cost: 2_000_000,
+      bas_asset_account: '1110',
+      bas_accumulated_account: '1119',
+      bas_expense_account: '7821',
+    })
+    // NBV = 1_500_000, proceeds 2_000_000 → gain 500_000
+    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 500_000 }])
+
+    await disposeAsset(
+      supabase as unknown as Parameters<typeof disposeAsset>[0],
+      'co',
+      'u',
+      'asset-1',
+      {
+        disposed_at: '2025-06-30',
+        disposed_proceeds: 2_000_000,
+        fiscal_period_id: 'fp',
+      },
+    )
+
+    const call = vi.mocked(createJournalEntry).mock.calls[0]
+    const lines = (call![3] as { lines: { account_number: string }[] }).lines
+    // Buildings route to 3971/7971, not 3973/7973
+    expect(lines.find((l) => l.account_number === '3971')).toBeDefined()
+    expect(lines.find((l) => l.account_number === '3973')).toBeUndefined()
+  })
+
+  it('uses 3971 / 7971 for land_improvement disposal', async () => {
+    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
+    vi.mocked(createJournalEntry).mockClear()
+    const asset = makeAsset({
+      category: 'land_improvement',
+      acquisition_cost: 100_000,
+      bas_asset_account: '1150',
+      bas_accumulated_account: '1159',
+      bas_expense_account: '7824',
+    })
+    // NBV = 80_000, proceeds 40_000 → loss 40_000
+    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 20_000 }])
+
+    await disposeAsset(
+      supabase as unknown as Parameters<typeof disposeAsset>[0],
+      'co',
+      'u',
+      'asset-1',
+      {
+        disposed_at: '2025-06-30',
+        disposed_proceeds: 40_000,
+        fiscal_period_id: 'fp',
+      },
+    )
+
+    const call = vi.mocked(createJournalEntry).mock.calls[0]
+    const lines = (call![3] as { lines: { account_number: string }[] }).lines
+    // Markanläggning routes to 7971 like buildings
+    expect(lines.find((l) => l.account_number === '7971')).toBeDefined()
+    expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
+  })
+
   it('server-derives accumulated_depreciation — caller cannot inflate gain', async () => {
     const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
     vi.mocked(createJournalEntry).mockClear()

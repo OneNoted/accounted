@@ -17,12 +17,18 @@ import type { DispositionsProposal, ProposedDisposition } from '@/lib/bokslut/ty
 import type { JournalEntry } from '@/types'
 
 /**
- * Default schablonintäkt rate on periodiseringsfond. Statslåneräntan
- * 30 november föregående år + 1 procentenhet, lägst 0.5 %. For inkomstår 2025
- * (SLR 2024-11-30 ≈ 2.0 %) → 3.0 %. Caller can override per request when the
- * Riksbanken integration ships.
+ * Default schablonintäkt rate on periodiseringsfond (IL 30 kap 6a §).
+ * Statslåneräntan 30 november föregående år + 1 procentenhet, lägst 0.5 %.
+ *
+ *   - inkomstår 2025: SLR 2024-11-30 = 1.96 % → 2.96 % (rounded to 3 %)
+ *   - inkomstår 2026: SLR 2025-11-30 = 2.55 % → 3.55 %
+ *
+ * The default below is the FY2026 rate since that is the year customers are
+ * currently closing. Caller can override per request via `schablonintaktRate`
+ * in the POST body; a future Riksbanken integration will fetch the rate by
+ * the fiscal year automatically.
  */
-const DEFAULT_SCHABLONINTAKT_RATE = 0.03
+const DEFAULT_SCHABLONINTAKT_RATE = 0.0355
 
 /**
  * Canonical bokslut order. Each calculator re-reads the trial balance to
