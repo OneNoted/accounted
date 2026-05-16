@@ -5773,7 +5773,7 @@ export const tools: McpTool[] = [
         voucher_number: number
         voucher_series: string
         fiscal_period_id: string
-        fiscal_periods: { name?: string; is_closed?: boolean } | { name?: string; is_closed?: boolean }[] | null
+        fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
           debit_amount: number | string
@@ -5785,7 +5785,7 @@ export const tools: McpTool[] = [
         .from('journal_entries')
         .select(
           'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
-          'fiscal_periods!inner(name, is_closed), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
+          'fiscal_periods!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
         .eq('company_id', companyId)
@@ -5799,9 +5799,9 @@ export const tools: McpTool[] = [
       const periodInfo = Array.isArray(original.fiscal_periods)
         ? original.fiscal_periods[0]
         : original.fiscal_periods
-      if (periodInfo?.is_closed) {
+      if (periodInfo?.is_closed || periodInfo?.locked_at) {
         throw new Error(
-          `Fiscal period "${periodInfo.name ?? 'okänd'}" is closed. Unlock the period, or use omprövning for already-filed VAT.`
+          `Fiscal period "${periodInfo.name ?? 'okänd'}" is locked or closed. Unlock the period, or use omprövning for already-filed VAT.`
         )
       }
 
@@ -5879,8 +5879,12 @@ export const tools: McpTool[] = [
         throw new Error('reason must be 500 characters or fewer')
       }
 
-      // Pre-flight mirrors commitReverseEntry: posted + period not closed.
+      // Pre-flight mirrors commitReverseEntry: posted + period not closed/locked.
       // Failing fast gives a clearer Swedish error than waiting until commit-time.
+      // Both is_closed and locked_at are checked so the staging-time signal
+      // matches the commit-time gate; without locked_at, an agent could see
+      // staged:true with period_status:locked and only discover the rejection
+      // at commit time.
       type OriginalRow = {
         id: string
         status: string
@@ -5889,7 +5893,7 @@ export const tools: McpTool[] = [
         voucher_number: number
         voucher_series: string
         fiscal_period_id: string
-        fiscal_periods: { name?: string; is_closed?: boolean } | { name?: string; is_closed?: boolean }[] | null
+        fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
           debit_amount: number | string
@@ -5901,7 +5905,7 @@ export const tools: McpTool[] = [
         .from('journal_entries')
         .select(
           'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
-          'fiscal_periods!inner(name, is_closed), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
+          'fiscal_periods!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
         .eq('company_id', companyId)
@@ -5915,9 +5919,9 @@ export const tools: McpTool[] = [
       const periodInfo = Array.isArray(original.fiscal_periods)
         ? original.fiscal_periods[0]
         : original.fiscal_periods
-      if (periodInfo?.is_closed) {
+      if (periodInfo?.is_closed || periodInfo?.locked_at) {
         throw new Error(
-          `Fiscal period "${periodInfo.name ?? 'okänd'}" is closed. Unlock the period, or use omprövning for already-filed VAT.`
+          `Fiscal period "${periodInfo.name ?? 'okänd'}" is locked or closed. Unlock the period, or use omprövning for already-filed VAT.`
         )
       }
 
