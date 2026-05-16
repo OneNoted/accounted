@@ -1105,6 +1105,7 @@ export default function NewSupplierInvoicePage() {
                           render={({ field }) => (
                             <Input
                               placeholder="Beskrivning"
+                              ref={field.ref}
                               value={field.value ?? ''}
                               onChange={field.onChange}
                               onBlur={field.onBlur}
@@ -1194,6 +1195,7 @@ export default function NewSupplierInvoicePage() {
                       render={({ field }) => (
                         <Input
                           placeholder="Beskrivning"
+                          ref={field.ref}
                           value={field.value ?? ''}
                           onChange={field.onChange}
                           onBlur={field.onBlur}
