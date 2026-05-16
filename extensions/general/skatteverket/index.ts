@@ -17,6 +17,8 @@ import {
   agiGetKvittenser,
   agiLasPeriod,
   agiLasUppPeriod,
+  agiKontrolleraHU,
+  agiKontrolleraIU,
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
@@ -1245,6 +1247,68 @@ export const skatteverketExtension: Extension = {
             }
           }
 
+          return NextResponse.json({ data: result.data })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── AGI: Pre-flight kontrollera HU/IU ───────────────────────────
+    // Validate a single HU or IU as JSON without saving anything in
+    // Skatteverket. Lets the UI catch errors per HU/IU before the user
+    // submits a full XML underlag. Body: the HU or IU as JSON per the
+    // v1.7 spec §7 / §8 (property names like agRegistreradId,
+    // redovisningsPeriod, kontantErsattningUlagAG, …).
+    //
+    // Response shape (kontrollsvar):
+    //   { status: 'OK' | 'INFO' | 'ARENDE' | 'STOPP' | 'AVVISANDE',
+    //     fel: [{ status, felmeddelande }, …] }
+    {
+      method: 'POST',
+      path: '/agi/kontrollera/hu',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        try {
+          const hu = (await request.json()) as Record<string, unknown>
+          if (!hu || typeof hu !== 'object') {
+            return NextResponse.json({ error: 'Body must be a HU JSON object' }, { status: 400 })
+          }
+          const result = await agiKontrolleraHU(ctx.supabase, ctx.userId, hu)
+          if (!result.ok) {
+            return NextResponse.json(
+              { error: result.error, code: result.body?.kod },
+              { status: result.status },
+            )
+          }
+          return NextResponse.json({ data: result.data })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    {
+      method: 'POST',
+      path: '/agi/kontrollera/iu',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+        try {
+          const iu = (await request.json()) as Record<string, unknown>
+          if (!iu || typeof iu !== 'object') {
+            return NextResponse.json({ error: 'Body must be an IU JSON object' }, { status: 400 })
+          }
+          const result = await agiKontrolleraIU(ctx.supabase, ctx.userId, iu)
+          if (!result.ok) {
+            return NextResponse.json(
+              { error: result.error, code: result.body?.kod },
+              { status: result.status },
+            )
+          }
           return NextResponse.json({ data: result.data })
         } catch (err) {
           return handleSkvError(err)

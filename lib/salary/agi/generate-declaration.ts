@@ -26,6 +26,7 @@ import {
   generateAGIXml,
   buildIndividuppgifterSnapshot,
   AGIIncompleteDataError,
+  AGIPayloadTooLargeError,
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { eventBus } from '@/lib/events'
@@ -124,7 +125,7 @@ export async function generateAgiDeclaration(
   const { data: runEmployees } = await supabase
     .from('salary_run_employees')
     .select(
-      '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary), line_items:salary_line_items(*)',
+      '*, employee:employees(personnummer, specification_number, f_skatt_status, monthly_salary, vaxa_stod_eligible, employment_start, housing_benefit_type), line_items:salary_line_items(*)',
     )
     .eq('salary_run_id', salaryRunId)
 
@@ -153,12 +154,17 @@ export async function generateAgiDeclaration(
 
   const absenceByEmployee = new Map<
     string,
-    Array<{ date: string; type: 'vab' | 'parental'; hours: number }>
+    Array<{
+      date: string
+      type: 'vab' | 'parental'
+      hours: number
+      specifikationsnummer: number
+    }>
   >()
   if (employeeIds.length > 0) {
     const { data: absenceRows } = await supabase
       .from('salary_absence_days')
-      .select('employee_id, absence_date, absence_type, hours')
+      .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer')
       .eq('company_id', companyId)
       .in('absence_type', ['vab', 'parental'])
       .gte('absence_date', periodStart)
@@ -169,16 +175,29 @@ export async function generateAgiDeclaration(
       absence_date: string
       absence_type: 'vab' | 'parental'
       hours: number
+      franvaro_specifikationsnummer: number | null
     }>) {
+      // Row should always have a number for vab/parental (trigger assigns
+      // on insert + backfill migration covers existing data). Defensive
+      // fallback: skip rows missing the number rather than emit a bogus 0,
+      // which would collide with Skatteverket's unique key.
+      if (row.franvaro_specifikationsnummer == null) continue
       const list = absenceByEmployee.get(row.employee_id) ?? []
       list.push({
         date: row.absence_date,
         type: row.absence_type,
         hours: Number(row.hours ?? 8),
+        specifikationsnummer: row.franvaro_specifikationsnummer,
       })
       absenceByEmployee.set(row.employee_id, list)
     }
   }
+
+  // Cutoff for the Växa-stöd FK062/FK063 split: pre-2024-05-01 hires get the
+  // legacy "första anställda"-flag (FK062); 2024-05-01 and later get the
+  // utvidgat växa-stöd flag (FK063). Cutoff from Skatteverket spec (Prop.
+  // 2023/24:80, RAML revisionshistorik 1.19).
+  const VAXA_STOD_FK063_CUTOFF = '2024-05-01'
 
   const employeeData: AGIEmployeeData[] = (runEmployees as Array<Record<string, unknown>>).map(
     (sre) => {
@@ -186,27 +205,62 @@ export async function generateAgiDeclaration(
         personnummer: string
         specification_number: number
         f_skatt_status: string
+        vaxa_stod_eligible?: boolean
+        employment_start?: string
+        housing_benefit_type?: 'smahus' | 'ej_smahus' | null
       } | null
       const lineItems = (sre.line_items || []) as Array<Record<string, unknown>>
 
       const benefitCar = sumLineItemAmounts(lineItems, ['benefit_car'])
-      const benefitMeals = sumLineItemAmounts(lineItems, ['benefit_meals'])
       const benefitHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
-      const benefitOther = sumLineItemAmounts(lineItems, ['benefit_wellness', 'benefit_other'])
+      // FK012 SkatteplOvrigaFormanerUlagAG is the catch-all amount for
+      // taxable benefits that don't have their own dedicated FK code (car
+      // gets FK013, fuel FK018). Housing has a KRYSS flag at FK041/FK043
+      // but the krona-amount rolls into FK012 — fold it in here. Meals,
+      // bike, and wellness also aggregate here.
+      const benefitOther = sumLineItemAmounts(lineItems, [
+        'benefit_meals',
+        'benefit_bike',
+        'benefit_wellness',
+        'benefit_other',
+      ]) + benefitHousing
+
+      // Default housing type: if the employee got a housing benefit line
+      // item but no housing_benefit_type is set, treat as 'ej_smahus' (the
+      // more common case). NULL with no benefit line item → no flag emitted.
+      let housingBenefit: 'smahus' | 'ej_smahus' | undefined
+      if (benefitHousing > 0) {
+        housingBenefit = emp?.housing_benefit_type ?? 'ej_smahus'
+      }
+
       const absenceEvents = absenceByEmployee.get(sre.employee_id as string)
 
+      let vaxaStod: 'forsta_anstalld' | 'vaxa_stod' | undefined
+      if (emp?.vaxa_stod_eligible) {
+        vaxaStod =
+          emp.employment_start && emp.employment_start < VAXA_STOD_FK063_CUTOFF
+            ? 'forsta_anstalld'
+            : 'vaxa_stod'
+      }
+
+      const isFSkatt = emp?.f_skatt_status === 'f_skatt'
       return {
         personnummer: emp?.personnummer || '',
         specificationNumber: emp?.specification_number || 0,
+        removed: Boolean(sre.removed_from_agi),
         grossSalary: sre.gross_salary as number,
         taxWithheld: sre.tax_withheld as number,
         avgifterBasis: sre.avgifter_basis as number,
-        fSkattPayment:
-          emp?.f_skatt_status === 'f_skatt' ? (sre.gross_salary as number) : undefined,
+        fSkattPayment: isFSkatt ? (sre.gross_salary as number) : undefined,
+        // F-skatt payees: cash goes to FK131 and benefits to the ej-UlagSA
+        // variants (FK132/FK133/FK134/FK137/FK138). Regular employees get
+        // FK011 + FK012/FK013/FK018/FK041/FK043.
+        benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
         benefitCar: benefitCar > 0 ? benefitCar : undefined,
-        benefitHousing: benefitHousing > 0 ? benefitHousing : undefined,
-        benefitMeals: benefitMeals > 0 ? benefitMeals : undefined,
+        housingBenefit,
         benefitOther: benefitOther > 0 ? benefitOther : undefined,
+        benefitsAdjusted: Boolean(sre.benefits_adjusted),
+        vaxaStod,
         sickDays: (sre.sick_days as number) > 0 ? (sre.sick_days as number) : undefined,
         vabDays: (sre.vab_days as number) > 0 ? (sre.vab_days as number) : undefined,
         parentalDays:
@@ -217,8 +271,14 @@ export async function generateAgiDeclaration(
   )
 
   // 5. Build totals: avgifter by category (with rate-heuristic fallback for legacy runs).
+  // Removed-from-AGI rows (FK205 borttag) are tombstones — they must not
+  // contribute to FK497/FK487/FK499 because the prior submission's amounts
+  // remain on file at Skatteverket; the borttag just removes the IU itself.
+  const activeEmployees = (runEmployees as Array<Record<string, unknown>>).filter(
+    (sre) => !sre.removed_from_agi,
+  )
   const avgifterByCategory: AGITotals['avgifterByCategory'] = {}
-  for (const sre of runEmployees as Array<Record<string, unknown>>) {
+  for (const sre of activeEmployees) {
     const dbCategory = sre.avgifter_category as string | null
     const category = dbCategory
       ? dbCategory === 'reduced_65plus'
@@ -251,7 +311,7 @@ export async function generateAgiDeclaration(
   }
   const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.8
   let totalSjuklonekostnad = 0
-  for (const sre of runEmployees as Array<Record<string, unknown>>) {
+  for (const sre of activeEmployees) {
     const monthly =
       ((sre.employee as { monthly_salary?: number } | null)?.monthly_salary as number) ?? 0
     if (!monthly) continue
@@ -265,10 +325,17 @@ export async function generateAgiDeclaration(
     }
   }
 
+  // FK497 SummaSkatteavdr must equal the sum of FK001 on active IUs (not
+  // run.total_tax, which includes removed rows). Same for FK487.
+  const totalTax = activeEmployees.reduce(
+    (sum, sre) => sum + ((sre.tax_withheld as number) || 0),
+    0,
+  )
+
   const totals: AGITotals = {
-    totalTax: run.total_tax,
-    totalAvgifterBasis: (runEmployees as Array<{ avgifter_basis: number }>).reduce(
-      (s, e) => s + e.avgifter_basis,
+    totalTax: Math.round(totalTax * 100) / 100,
+    totalAvgifterBasis: activeEmployees.reduce(
+      (s, e) => s + ((e.avgifter_basis as number) || 0),
       0,
     ),
     totalAvgifterAmount: Math.round(totalAvgifterAmount * 100) / 100,
@@ -300,6 +367,18 @@ export async function generateAgiDeclaration(
         ok: false,
         code: 'AGI_INCOMPLETE_DATA',
         details: { missing_fields: err.missingFields, message: err.message },
+      }
+    }
+    if (err instanceof AGIPayloadTooLargeError) {
+      return {
+        ok: false,
+        code: 'AGI_PAYLOAD_TOO_LARGE',
+        details: {
+          message: err.message,
+          size_bytes: err.sizeBytes,
+          limit_bytes: err.limitBytes,
+        },
+        status: 413,
       }
     }
     throw err
