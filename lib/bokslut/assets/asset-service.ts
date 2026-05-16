@@ -137,6 +137,41 @@ export async function updateAsset(
   assetId: string,
   input: UpdateAssetInput,
 ): Promise<Asset> {
+  // Defense-in-depth: when callers remap BAS accounts, refuse anything
+  // outside the legitimate range for the existing asset's category — keeps
+  // INK2R mappings + the depreciation engine's category-driven defaults in
+  // sync with what users actually pick.
+  if (
+    input.bas_asset_account ||
+    input.bas_accumulated_account ||
+    input.bas_expense_account
+  ) {
+    const existing = await getAsset(supabase, companyId, assetId)
+    if (!existing) throw new Error('Asset not found')
+    const ranges = BAS_RANGES_BY_CATEGORY[existing.category]
+    if (input.bas_asset_account && !inBasRange(input.bas_asset_account, ranges.asset)) {
+      throw new Error(
+        `bas_asset_account ${input.bas_asset_account} is outside ${ranges.asset[0]}–${ranges.asset[1]} for ${existing.category}`,
+      )
+    }
+    if (
+      input.bas_accumulated_account &&
+      !inBasRange(input.bas_accumulated_account, ranges.accumulated)
+    ) {
+      throw new Error(
+        `bas_accumulated_account ${input.bas_accumulated_account} is outside ${ranges.accumulated[0]}–${ranges.accumulated[1]} for ${existing.category}`,
+      )
+    }
+    if (
+      input.bas_expense_account &&
+      !inBasRange(input.bas_expense_account, ranges.expense)
+    ) {
+      throw new Error(
+        `bas_expense_account ${input.bas_expense_account} is outside ${ranges.expense[0]}–${ranges.expense[1]} for ${existing.category}`,
+      )
+    }
+  }
+
   const { data, error } = await supabase
     .from('assets')
     .update(input)
@@ -148,6 +183,24 @@ export async function updateAsset(
     throw new Error(`Failed to update asset: ${error?.message ?? 'unknown'}`)
   }
   return data as Asset
+}
+
+const BAS_RANGES_BY_CATEGORY: Record<
+  AssetCategory,
+  { asset: [string, string]; accumulated: [string, string]; expense: [string, string] }
+> = {
+  immaterial:      { asset: ['1010', '1099'], accumulated: ['1010', '1099'], expense: ['7810', '7819'] },
+  building:        { asset: ['1100', '1199'], accumulated: ['1100', '1199'], expense: ['7820', '7829'] },
+  land_improvement:{ asset: ['1150', '1159'], accumulated: ['1150', '1159'], expense: ['7820', '7829'] },
+  machinery:       { asset: ['1210', '1219'], accumulated: ['1210', '1219'], expense: ['7830', '7839'] },
+  equipment:       { asset: ['1220', '1229'], accumulated: ['1220', '1229'], expense: ['7830', '7839'] },
+  vehicle:         { asset: ['1240', '1249'], accumulated: ['1240', '1249'], expense: ['7830', '7839'] },
+  computer:        { asset: ['1250', '1259'], accumulated: ['1250', '1259'], expense: ['7830', '7839'] },
+  other_tangible:  { asset: ['1280', '1299'], accumulated: ['1280', '1299'], expense: ['7830', '7839'] },
+}
+
+function inBasRange(account: string, range: [string, string]): boolean {
+  return account >= range[0] && account <= range[1]
 }
 
 export interface DisposeAssetInput {
@@ -183,10 +236,18 @@ export interface DisposalResult {
  *     account)
  *   - Credit acquisition cost (to zero out the asset's anskaffning account)
  *   - Debit proceeds account (bank / receivable) for sale price
- *   - Debit 7973 (loss on sale) OR Credit 3973 (gain on sale) for the diff
+ *   - Debit 78xx (loss on sale) OR Credit 30xx (gain on sale) — accounts
+ *     branch on category (3013/7813 for immaterial, 3973/7973 for tangible).
  *
  * After posting, marks the asset row with disposed_at / disposed_proceeds.
  * The DB trigger then prevents further edits to financial fields.
+ *
+ * KNOWN LIMITATION (ML 3 kap 3 § / 7 kap 3 §): the sale of an
+ * anläggningstillgång that had right-to-deduct VAT on acquisition is in
+ * principle 25 % momspliktig. This function does NOT post output VAT on the
+ * proceeds — callers must handle the VAT side separately (or use a manual
+ * journal entry). UI surfacing disposal must warn the user. Adding a
+ * vat_on_proceeds field is tracked as a follow-up.
  */
 export async function disposeAsset(
   supabase: SupabaseClient,
@@ -232,16 +293,22 @@ export async function disposeAsset(
       line_description: `Avyttring: erhållet belopp ${asset.name}`,
     })
   }
+  // Disposal gain/loss accounts differ for immateriella tillgångar: BAS maps
+  // intangible disposal P&L to 3013 (vinst) / 7813 (förlust), tangible to
+  // 3973 / 7973. Mixing them yields an INK2R misclassification.
+  const gainAccount = asset.category === 'immaterial' ? '3013' : '3973'
+  const lossAccount = asset.category === 'immaterial' ? '7813' : '7973'
+
   if (gainOrLoss > 0.005) {
     lines.push({
-      account_number: '3973',
+      account_number: gainAccount,
       debit_amount: 0,
       credit_amount: gainOrLoss,
       line_description: `Vinst vid avyttring av ${asset.name}`,
     })
   } else if (gainOrLoss < -0.005) {
     lines.push({
-      account_number: '7973',
+      account_number: lossAccount,
       debit_amount: Math.abs(gainOrLoss),
       credit_amount: 0,
       line_description: `Förlust vid avyttring av ${asset.name}`,

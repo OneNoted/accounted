@@ -28,13 +28,16 @@ interface CreateAssetDialogProps {
   onCreated: () => void
 }
 
+// Defaults are K2-redovisning (BFNAR 2016:10) schablon, NOT skattemässig
+// avskrivning. Building / markanläggning values are conservative — IL 19/20
+// kap may allow longer (50 yr) or shorter (10 yr) depending on byggnadstyp.
 const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: number }[] = [
   { value: 'computer', label: 'Dator / IT-utrustning', defaultYears: 3 },
   { value: 'equipment', label: 'Inventarier', defaultYears: 5 },
   { value: 'machinery', label: 'Maskiner', defaultYears: 10 },
   { value: 'vehicle', label: 'Fordon', defaultYears: 5 },
   { value: 'building', label: 'Byggnad', defaultYears: 25 },
-  { value: 'land_improvement', label: 'Markanläggning', defaultYears: 20 },
+  { value: 'land_improvement', label: 'Markanläggning', defaultYears: 10 },
   { value: 'immaterial', label: 'Immateriell tillgång', defaultYears: 5 },
   { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
 ]
@@ -165,8 +168,15 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               className="tabular-nums"
             />
             <p className="text-xs text-muted-foreground">
-              Schablon enligt K2: datorer 3 år, inventarier 5 år, byggnader 25 år.
+              K2-schablon för redovisning: datorer 3 år, inventarier 5 år, byggnader 25 år.
+              För skattemässig avskrivning kan annan livslängd gälla (IL 18–20 kap).
             </p>
+          </div>
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            <strong className="text-foreground">Tips:</strong> Anskaffningen måste redan vara
+            bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440) — registret bokför inte
+            själva köpet. Det här registret styr enbart de planenliga avskrivningarna under
+            bokslutet.
           </div>
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">

@@ -219,6 +219,13 @@ export const POST = withRouteContext(
         (a, b) => DISPOSITION_ORDER[a.kind] - DISPOSITION_ORDER[b.kind],
       )
 
+      // KNOWN LIMITATION (SOC 2 PI1.3): the loop is not wrapped in a database
+      // transaction — each item posts its own journal entry via the engine.
+      // A failure midway leaves earlier items committed and later ones not.
+      // Recovery: the UI can re-POST omitting already-committed kinds; each
+      // calculator re-derives from the current trial balance so the next run
+      // produces correct amounts on top of what's already there. A future
+      // RPC-level wrapper (Phase 5+) will make this atomic.
       for (const item of sortedItems) {
         const proposal = await computeProposal(item, supabase, companyId, id, fiscalYear)
         if (!proposal) continue
