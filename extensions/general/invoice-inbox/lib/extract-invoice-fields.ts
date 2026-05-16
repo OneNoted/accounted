@@ -10,6 +10,7 @@
 // parse falls back to an empty result so the inbox row still lands and
 // the user can fill the fields in manually.
 
+import { createHash } from 'node:crypto'
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import { z } from 'zod'
 import type { InvoiceExtractionResult } from '@/types'
@@ -220,7 +221,7 @@ export async function extractInvoiceFields(
 
   if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
     log.warn('AWS Bedrock credentials missing — returning empty extraction', {
-      fileName: input.fileName,
+      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
     })
     return { data: emptyResult(), rawText: null }
   }
@@ -263,8 +264,13 @@ export async function extractInvoiceFields(
         }
       | undefined
     if (usage) {
+      // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf")
+      // — log a short hash so the operator can correlate without exposing PII
+      // to the log destination (GDPR Art. 5(1)(f)).
+      const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
       log.info('ai_extraction_usage', {
-        fileName: input.fileName,
+        file_name_hash: fileNameHash,
+        mime_type: input.mimeType,
         input_tokens: usage.input_tokens ?? null,
         output_tokens: usage.output_tokens ?? null,
         cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
@@ -283,7 +289,7 @@ export async function extractInvoiceFields(
     }
   } catch (err) {
     log.warn('AI extraction failed', {
-      fileName: input.fileName,
+      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
       mimeType: input.mimeType,
       error: err instanceof Error ? err.message : String(err),
       hasRawText: rawText != null,

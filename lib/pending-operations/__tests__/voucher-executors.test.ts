@@ -592,4 +592,35 @@ describe('commitPendingOperation: reverse_entry', () => {
     expect(result.http_status).toBe(400)
     expect(reverseEntry).not.toHaveBeenCalled()
   })
+
+  it('returns 409 when the entry_date is covered by the company-wide lock', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'je-original',
+        status: 'posted',
+        entry_date: '2025-12-15',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { is_closed: false },
+      },
+      error: null,
+    }) // pre-flight fetch — per-period OK
+    // resolvePeriodStatusForDate: company_settings says 2025-12-31 lock_through.
+    enqueue({ data: { bookkeeping_locked_through: '2025-12-31' }, error: null })
+    enqueue({ data: { id: 'fp-1' }, error: null }) // covering period lookup
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-original' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/låst|omprövning/i)
+    expect(reverseEntry).not.toHaveBeenCalled()
+  })
 })

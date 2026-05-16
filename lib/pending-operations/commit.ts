@@ -29,7 +29,7 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
-import { closePeriod, lockPeriod, unlockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { closePeriod, lockPeriod, unlockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
   executeYearEndClosing,
   generateOpeningBalances,
@@ -1715,9 +1715,14 @@ async function commitCorrectEntry(
   // Falling into correctEntry without this returns a less helpful DB error and
   // half-creates the storno before rolling back; surfacing the Swedish message
   // here matches the period_locked UX everywhere else in the app.
+  //
+  // Period lock check is two-layer (matches the DB triggers): per-period
+  // (is_closed / locked_at) AND company-wide (bookkeeping_locked_through).
+  // The staging tool uses resolvePeriodStatusForDate; we reuse it here so the
+  // commit-time gate matches the staging-time signal.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, fiscal_period_id, fiscal_periods!inner(is_closed)')
+    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed)')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -1734,6 +1739,13 @@ async function commitCorrectEntry(
   const period = original.fiscal_periods as { is_closed?: boolean } | { is_closed?: boolean }[] | null
   const periodClosed = Array.isArray(period) ? period[0]?.is_closed : period?.is_closed
   if (periodClosed) {
+    return {
+      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
+      status: 409,
+    }
+  }
+  const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
+  if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
     return {
       error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
       status: 409,
@@ -1777,10 +1789,12 @@ async function commitReverseEntry(
   }
 
   // Pre-flight matches commitCorrectEntry: posted + period not closed. Surfaces
-  // Swedish messages before reverseEntry() throws less helpful errors.
+  // Swedish messages before reverseEntry() throws less helpful errors. Period
+  // lock check is two-layer (per-period + company-wide bookkeeping_locked_through)
+  // via resolvePeriodStatusForDate, matching the staging-time signal.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, fiscal_period_id, fiscal_periods!inner(is_closed)')
+    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed)')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -1797,6 +1811,13 @@ async function commitReverseEntry(
   const period = original.fiscal_periods as { is_closed?: boolean } | { is_closed?: boolean }[] | null
   const periodClosed = Array.isArray(period) ? period[0]?.is_closed : period?.is_closed
   if (periodClosed) {
+    return {
+      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
+      status: 409,
+    }
+  }
+  const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
+  if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
     return {
       error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
       status: 409,

@@ -14,7 +14,7 @@ export const companyCurrentResource: McpResource = {
   name: 'Active Company',
   description: 'Per-company working memory: identity, active fiscal period, lock dates, entity counts, voucher series state, recent activity, approaching Swedish filing deadlines. Read this first when starting work on a company.',
   mimeType: 'application/json',
-  read: async ({ supabase, companyId, userId }) => {
+  read: async ({ supabase, companyId }) => {
     const today = new Date().toISOString().slice(0, 10)
 
     const [
@@ -94,11 +94,14 @@ export const companyCurrentResource: McpResource = {
         .eq('company_id', companyId)
         .is('journal_entry_id', null),
 
-      // Voucher-series state across open fiscal periods.
+      // Voucher-series state across open fiscal periods. Scoped by company_id —
+      // the table also carries user_id, but a multi-company user would otherwise
+      // pull series belonging to their other tenants into this company's context
+      // (cross-tenant leak flagged by PR #505 review).
       supabase
         .from('voucher_sequences')
         .select('voucher_series, last_number, fiscal_period_id, fiscal_periods!inner(name, period_start, period_end)')
-        .eq('user_id', userId)
+        .eq('company_id', companyId)
         .order('voucher_series', { ascending: true }),
 
       // Recency signals — when did each surface last move?
@@ -129,10 +132,15 @@ export const companyCurrentResource: McpResource = {
         .limit(1)
         .maybeSingle(),
 
+      // Scoped by company_id — the table also carries user_id (legacy single-tenant
+      // design), but RLS + multi-tenant refactor added company_id and the column is
+      // indexed. Multi-company users would otherwise see deadlines from all their
+      // companies mixed into one company's context (cross-tenant leak flagged by
+      // PR #505 review).
       supabase
         .from('deadlines')
         .select('id, title, due_date, deadline_type, priority, status')
-        .eq('user_id', userId)
+        .eq('company_id', companyId)
         .eq('is_completed', false)
         .gte('due_date', today)
         .order('due_date', { ascending: true })

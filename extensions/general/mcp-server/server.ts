@@ -207,7 +207,7 @@ async function stagePendingOperation(
       risk_level: riskLevel,
       actor,
       message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.`,
-      preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
+      preview: previewData,
       ...(periodStatus ? { period_status: periodStatus } : {}),
       ...(next ? { next } : {}),
     }
@@ -5837,13 +5837,13 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reverse_journal_entry',
-    description: 'Stage a pure makulering (storno) of a posted verifikation — counter-entry nullifies the original, no replacement. Use for entries that should never have existed (duplicate, ghost, test). If the affärshändelse occurred but was booked wrong, use gnubok_correct_entry. HIGH risk.',
+    description: 'Stage a storno: counter-entry inverts debits/credits; original stays visible per BFL 5 kap. Use only when the affärshändelse should never have been booked (duplicate, ghost, cancelled credit invoice). If it occurred but was booked wrong, use gnubok_correct_entry. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         entry_id: { type: 'string', description: 'UUID of the posted journal entry to reverse' },
-        reversal_date: { type: 'string', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
+        reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
         reason: { type: 'string', description: 'Optional human-readable reason — shown in pending_operations review. Not stored on the storno itself.' },
       },
       required: ['entry_id'],
@@ -5857,6 +5857,12 @@ export const tools: McpTool[] = [
 
       if (!entryId) {
         throw new Error('entry_id is required')
+      }
+      // Belt-and-braces runtime check: inputSchema declares the pattern, but the
+      // MCP dispatcher does not always enforce it — validate again here so a
+      // malformed date never reaches the pending_operations payload.
+      if (reversalDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(reversalDate)) {
+        throw new Error('reversal_date must be ISO yyyy-MM-dd')
       }
 
       // Pre-flight mirrors commitReverseEntry: posted + period not closed.
