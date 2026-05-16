@@ -189,11 +189,19 @@ async function stagePendingOperation(
   // Resolve period_status once, in parallel with downstream IO when possible.
   // Failure is non-fatal: the DB triggers are authoritative, so a missing
   // envelope just degrades the agent's preview UX rather than blocking a write.
+  // We log the failure so a systematic outage (e.g. missing company_settings row,
+  // dropped query) is observable in audit logs rather than silently degraded.
   let periodStatus: PeriodStatusForDate | undefined
   if (options.dateForPeriodCheck) {
     try {
       periodStatus = await resolvePeriodStatusForDate(supabase, companyId, options.dateForPeriodCheck)
-    } catch {
+    } catch (err) {
+      console.warn('[mcp] resolvePeriodStatusForDate failed:', {
+        operationType,
+        companyId,
+        dateForPeriodCheck: options.dateForPeriodCheck,
+        error: err instanceof Error ? err.message : String(err),
+      })
       periodStatus = undefined
     }
   }
@@ -5844,7 +5852,7 @@ export const tools: McpTool[] = [
       properties: {
         entry_id: { type: 'string', description: 'UUID of the posted journal entry to reverse' },
         reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
-        reason: { type: 'string', description: 'Optional human-readable reason — shown in pending_operations review. Not stored on the storno itself.' },
+        reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason — shown in pending_operations review. Not stored on the storno itself. Max 500 chars.' },
       },
       required: ['entry_id'],
     },
@@ -5863,6 +5871,9 @@ export const tools: McpTool[] = [
       // malformed date never reaches the pending_operations payload.
       if (reversalDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(reversalDate)) {
         throw new Error('reversal_date must be ISO yyyy-MM-dd')
+      }
+      if (reason !== undefined && reason.length > 500) {
+        throw new Error('reason must be 500 characters or fewer')
       }
 
       // Pre-flight mirrors commitReverseEntry: posted + period not closed.

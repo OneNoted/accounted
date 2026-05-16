@@ -1722,7 +1722,7 @@ async function commitCorrectEntry(
   // commit-time gate matches the staging-time signal.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed)')
+    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed, locked_at)')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -1736,9 +1736,9 @@ async function commitCorrectEntry(
       status: 409,
     }
   }
-  const period = original.fiscal_periods as { is_closed?: boolean } | { is_closed?: boolean }[] | null
-  const periodClosed = Array.isArray(period) ? period[0]?.is_closed : period?.is_closed
-  if (periodClosed) {
+  const period = original.fiscal_periods as { is_closed?: boolean; locked_at?: string | null } | { is_closed?: boolean; locked_at?: string | null }[] | null
+  const periodRow = Array.isArray(period) ? period[0] : period
+  if (periodRow?.is_closed || periodRow?.locked_at) {
     return {
       error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
       status: 409,
@@ -1794,7 +1794,7 @@ async function commitReverseEntry(
   // via resolvePeriodStatusForDate, matching the staging-time signal.
   const { data: original, error: origErr } = await supabase
     .from('journal_entries')
-    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed)')
+    .select('id, status, entry_date, fiscal_period_id, fiscal_periods!inner(is_closed, locked_at)')
     .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -1808,9 +1808,9 @@ async function commitReverseEntry(
       status: 409,
     }
   }
-  const period = original.fiscal_periods as { is_closed?: boolean } | { is_closed?: boolean }[] | null
-  const periodClosed = Array.isArray(period) ? period[0]?.is_closed : period?.is_closed
-  if (periodClosed) {
+  const period = original.fiscal_periods as { is_closed?: boolean; locked_at?: string | null } | { is_closed?: boolean; locked_at?: string | null }[] | null
+  const periodRow = Array.isArray(period) ? period[0] : period
+  if (periodRow?.is_closed || periodRow?.locked_at) {
     return {
       error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
       status: 409,
