@@ -8,11 +8,6 @@ import { createLogger } from '@/lib/logger'
  * POST /api/sandbox/seed
  * Seeds demo data for an anonymous sandbox user.
  * Only callable by anonymous users (is_anonymous === true).
- *
- * Defense-in-depth: also requires SANDBOX_ENABLED=true. The anonymous-user
- * check is the primary control; the env guard exists so that if anonymous
- * sign-in is ever turned on accidentally in a production environment, this
- * destructive seed endpoint stays inert until an operator explicitly opts in.
  */
 export async function POST() {
   // Per-request logger so seed-failure entries are correlatable in the SIEM.
@@ -20,13 +15,6 @@ export async function POST() {
   // the sandbox seed runs *before* a company exists for the user.
   const requestId = `req_${crypto.randomUUID()}`
   const log = createLogger('sandbox:seed', { requestId })
-
-  if (process.env.SANDBOX_ENABLED !== 'true') {
-    return NextResponse.json(
-      { error: 'Sandbox is not enabled in this environment', requestId },
-      { status: 403 },
-    )
-  }
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
