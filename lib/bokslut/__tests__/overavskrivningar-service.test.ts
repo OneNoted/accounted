@@ -93,4 +93,30 @@ describe('proposeOveravskrivningar', () => {
     expect(result!.lines[0].debit_amount).toBe(1_235)
     expect(result!.lines[1].credit_amount).toBe(1_235)
   })
+
+  it('uses building accounts 8852/2152 when category=building', () => {
+    const result = proposeOveravskrivningar({
+      additionalAmount: 50_000,
+      category: 'building',
+    })
+    expect(result!.lines[0].account_number).toBe('8852')
+    expect(result!.lines[1].account_number).toBe('2152')
+    expect(result!.label).toContain('byggnader')
+  })
+
+  it('uses immaterial accounts 8851/2151 when category=immaterial', () => {
+    const result = proposeOveravskrivningar({
+      additionalAmount: 30_000,
+      category: 'immaterial',
+    })
+    expect(result!.lines[0].account_number).toBe('8851')
+    expect(result!.lines[1].account_number).toBe('2151')
+    expect(result!.label).toContain('immateriella')
+  })
+
+  it('defaults to maskiner & inventarier (8853/2153) when no category given', () => {
+    const result = proposeOveravskrivningar({ additionalAmount: 20_000 })
+    expect(result!.lines[0].account_number).toBe('8853')
+    expect(result!.lines[1].account_number).toBe('2153')
+  })
 })

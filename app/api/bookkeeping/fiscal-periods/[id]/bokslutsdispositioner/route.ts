@@ -177,6 +177,11 @@ const ItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('overavskrivningar'),
     additionalAmount: z.number(),
+    /** Asset category for BAS account selection — defaults to maskiner &
+     *  inventarier (8853/2153), the dominant K2 case. */
+    category: z
+      .enum(['machinery_equipment', 'building', 'immaterial', 'group'])
+      .optional(),
   }),
 ])
 
@@ -322,7 +327,10 @@ async function computeProposal(
       return mergeAteforingProposals(result.proposals)
     }
     case 'overavskrivningar':
-      return proposeOveravskrivningar({ additionalAmount: item.additionalAmount })
+      return proposeOveravskrivningar({
+        additionalAmount: item.additionalAmount,
+        category: item.category,
+      })
   }
 }
 

@@ -224,11 +224,6 @@ export interface DisposeAssetInput {
    *  disposed_at — we don't auto-derive to keep the period-lock check at
    *  the route layer. */
   fiscal_period_id: string
-  /** Accumulated depreciation booked against this asset's accumulated
-   *  account as of disposed_at. Caller computes this from the trial balance
-   *  or depreciation_schedules — we don't recompute here because the asset
-   *  service shouldn't reach into journal data. */
-  accumulated_depreciation: number
 }
 
 export interface DisposalResult {
@@ -271,8 +266,14 @@ export async function disposeAsset(
     throw new Error('Asset is already disposed')
   }
 
+  // Derive accumulated depreciation server-side from posted
+  // depreciation_schedules so a malicious or buggy caller cannot inflate the
+  // book-value calculation. Limitation: manual avskrivningsverifikationer
+  // posted outside the engine aren't captured here. Phase 5+ can replace
+  // this with a trial-balance scan on bas_accumulated_account.
+  const accumulated = await sumPostedDepreciation(supabase, companyId, assetId)
+
   const acquisitionCost = Number(asset.acquisition_cost)
-  const accumulated = Number(input.accumulated_depreciation)
   const proceeds = Number(input.disposed_proceeds)
   const netBookValue = acquisitionCost - accumulated
   const gainOrLoss = Math.round((proceeds - netBookValue) * 100) / 100
@@ -356,4 +357,32 @@ export async function disposeAsset(
     disposal_entry: disposalEntry,
     gain_or_loss: gainOrLoss,
   }
+}
+
+/**
+ * Sum every posted depreciation_schedules row for an asset to get accumulated
+ * depreciation as of "now". Used by disposeAsset so the caller cannot
+ * influence the book-value calculation.
+ */
+async function sumPostedDepreciation(
+  supabase: SupabaseClient,
+  companyId: string,
+  assetId: string,
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('depreciation_schedules')
+    .select('planned_depreciation')
+    .eq('company_id', companyId)
+    .eq('asset_id', assetId)
+    .not('journal_entry_id', 'is', null)
+
+  if (error) {
+    throw new Error(`Failed to sum depreciation for asset ${assetId}: ${error.message}`)
+  }
+
+  type Row = { planned_depreciation: number | string }
+  return ((data ?? []) as Row[]).reduce(
+    (sum, row) => sum + (Number(row.planned_depreciation) || 0),
+    0,
+  )
 }

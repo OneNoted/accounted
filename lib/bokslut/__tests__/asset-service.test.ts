@@ -71,16 +71,32 @@ describe('disposeAsset — gain/loss account selection', () => {
     }
   }
 
-  function makeSupabaseForDispose(asset: Asset) {
-    // Two from() calls happen inside disposeAsset: getAsset (single) and the
-    // update (returning the disposed row). The captured lines from the
-    // engine mock are what we assert on.
+  function makeSupabaseForDispose(asset: Asset, schedules: Array<{ planned_depreciation: number }>) {
+    // Three from() calls happen inside disposeAsset:
+    //   1. getAsset (.maybeSingle on 'assets')
+    //   2. sumPostedDepreciation (.then on 'depreciation_schedules' — server-derived
+    //      accumulated_depreciation; replaces the previously client-supplied value)
+    //   3. update (.single on 'assets', returning the disposed row)
     const builders = {
       getBuilder: {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue({ data: asset, error: null }),
       },
+      schedulesBuilder: (() => {
+        const b: Record<string, unknown> = {
+          select: vi.fn(),
+          eq: vi.fn(),
+          not: vi.fn(),
+          then: undefined,
+        }
+        ;(b.select as ReturnType<typeof vi.fn>).mockReturnValue(b)
+        ;(b.eq as ReturnType<typeof vi.fn>).mockReturnValue(b)
+        ;(b.not as ReturnType<typeof vi.fn>).mockReturnValue(b)
+        b.then = (resolve: (v: { data: unknown; error: unknown }) => void) =>
+          resolve({ data: schedules, error: null })
+        return b as { select: ReturnType<typeof vi.fn>; eq: ReturnType<typeof vi.fn>; not: ReturnType<typeof vi.fn> }
+      })(),
       updateBuilder: {
         update: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
@@ -93,8 +109,9 @@ describe('disposeAsset — gain/loss account selection', () => {
     }
     let calls = 0
     const supabase = {
-      from: vi.fn(() => {
+      from: vi.fn((table: string) => {
         calls++
+        if (table === 'depreciation_schedules') return builders.schedulesBuilder
         return calls === 1 ? builders.getBuilder : builders.updateBuilder
       }),
     }
@@ -105,7 +122,11 @@ describe('disposeAsset — gain/loss account selection', () => {
     const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
     vi.mocked(createJournalEntry).mockClear()
     const asset = makeAsset({ category: 'equipment' })
-    const { supabase } = makeSupabaseForDispose(asset)
+    // Two prior posted schedules summing to 40_000 → NBV = 60_000, proceeds 80_000 → gain 20_000
+    const { supabase } = makeSupabaseForDispose(asset, [
+      { planned_depreciation: 20_000 },
+      { planned_depreciation: 20_000 },
+    ])
 
     await disposeAsset(
       supabase as unknown as Parameters<typeof disposeAsset>[0],
@@ -116,13 +137,15 @@ describe('disposeAsset — gain/loss account selection', () => {
         disposed_at: '2025-06-30',
         disposed_proceeds: 80_000,
         fiscal_period_id: 'fp',
-        accumulated_depreciation: 40_000, // NBV = 60_000, proceeds 80_000 → gain 20_000
       },
     )
 
     const call = vi.mocked(createJournalEntry).mock.calls[0]
     expect(call).toBeDefined()
-    const lines = (call![3] as { lines: { account_number: string }[] }).lines
+    const lines = (call![3] as { lines: { account_number: string; debit_amount: number; credit_amount: number }[] }).lines
+    // Server-derived accumulated debits 1229
+    expect(lines.find((l) => l.account_number === '1229')?.debit_amount).toBe(40_000)
+    // Gain goes to 3973 (tangible), not 3013
     expect(lines.find((l) => l.account_number === '3973')).toBeDefined()
     expect(lines.find((l) => l.account_number === '3013')).toBeUndefined()
   })
@@ -136,7 +159,8 @@ describe('disposeAsset — gain/loss account selection', () => {
       bas_accumulated_account: '1019',
       bas_expense_account: '7810',
     })
-    const { supabase } = makeSupabaseForDispose(asset)
+    // NBV = 50_000, proceeds 10_000 → loss 40_000
+    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 50_000 }])
 
     await disposeAsset(
       supabase as unknown as Parameters<typeof disposeAsset>[0],
@@ -147,14 +171,43 @@ describe('disposeAsset — gain/loss account selection', () => {
         disposed_at: '2025-06-30',
         disposed_proceeds: 10_000,
         fiscal_period_id: 'fp',
-        accumulated_depreciation: 50_000, // NBV = 50_000, proceeds 10_000 → loss 40_000
       },
     )
 
     const call = vi.mocked(createJournalEntry).mock.calls[0]
     expect(call).toBeDefined()
-    const lines = (call![3] as { lines: { account_number: string }[] }).lines
+    const lines = (call![3] as { lines: { account_number: string; debit_amount: number }[] }).lines
     expect(lines.find((l) => l.account_number === '7813')).toBeDefined()
     expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
+  })
+
+  it('server-derives accumulated_depreciation — caller cannot inflate gain', async () => {
+    const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
+    vi.mocked(createJournalEntry).mockClear()
+    const asset = makeAsset({ category: 'equipment', acquisition_cost: 100_000 })
+    // Real accumulated = 30_000 from one posted schedule. A malicious client
+    // could previously pass accumulated_depreciation: 100_000 to fake a fully
+    // depreciated asset and pocket a 50_000 phantom gain on proceeds. With
+    // server derivation, the lines reflect the actual 30_000.
+    const { supabase } = makeSupabaseForDispose(asset, [{ planned_depreciation: 30_000 }])
+
+    await disposeAsset(
+      supabase as unknown as Parameters<typeof disposeAsset>[0],
+      'co',
+      'u',
+      'asset-1',
+      {
+        disposed_at: '2025-06-30',
+        disposed_proceeds: 50_000,
+        fiscal_period_id: 'fp',
+      },
+    )
+
+    const call = vi.mocked(createJournalEntry).mock.calls[0]
+    const lines = (call![3] as { lines: { account_number: string; debit_amount: number; credit_amount: number }[] }).lines
+    // accumulated debit must be 30_000 (server-derived), not anything else
+    expect(lines.find((l) => l.account_number === '1229')?.debit_amount).toBe(30_000)
+    // NBV = 100_000 − 30_000 = 70_000, proceeds 50_000 → loss 20_000 to 7973
+    expect(lines.find((l) => l.account_number === '7973')?.debit_amount).toBe(20_000)
   })
 })

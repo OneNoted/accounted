@@ -10,7 +10,9 @@ const DisposeAssetSchema = z.object({
   disposed_proceeds: z.number().nonnegative(),
   proceeds_account: z.string().regex(/^\d{4}$/).optional(),
   fiscal_period_id: z.string().uuid(),
-  accumulated_depreciation: z.number().nonnegative(),
+  // accumulated_depreciation is intentionally NOT accepted from the client —
+  // disposeAsset sums depreciation_schedules server-side so callers cannot
+  // inflate the book-value calculation.
 })
 
 export const POST = withRouteContext(
