@@ -6,6 +6,7 @@ import {
   hasScope,
   TOOL_SCOPE_MAP,
 } from '@/lib/auth/api-keys'
+import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
@@ -115,6 +116,8 @@ interface McpTool {
 
 // ── Shared constants ─────────────────────────────────────────
 
+const log = createLogger('mcp-server')
+
 const VALID_CATEGORIES = [
   'income_services', 'income_products', 'income_other',
   'expense_equipment', 'expense_software', 'expense_travel', 'expense_office',
@@ -196,7 +199,7 @@ async function stagePendingOperation(
     try {
       periodStatus = await resolvePeriodStatusForDate(supabase, companyId, options.dateForPeriodCheck)
     } catch (err) {
-      console.warn('[mcp] resolvePeriodStatusForDate failed:', {
+      log.warn('resolvePeriodStatusForDate failed', {
         operationType,
         companyId,
         dateForPeriodCheck: options.dateForPeriodCheck,
@@ -5845,7 +5848,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reverse_journal_entry',
-    description: 'Stage a storno: counter-entry inverts debits/credits; original stays visible per BFL 5 kap. Use only when the affärshändelse should never have been booked (duplicate, ghost, cancelled credit invoice). If it occurred but was booked wrong, use gnubok_correct_entry. HIGH risk.',
+    description: 'Stage a storno: inverts debits/credits; original stays visible per BFL 5 kap. Use only when the affärshändelse should never have been booked (duplicate, ghost, test). If booked wrong, use gnubok_correct_entry; for refunds, gnubok_credit_invoice. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
