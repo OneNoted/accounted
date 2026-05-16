@@ -16,6 +16,7 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
     ...actual,
     createJournalEntry: vi.fn(),
     findFiscalPeriod: vi.fn(),
+    reverseEntry: vi.fn(),
   }
 })
 
@@ -30,7 +31,7 @@ vi.mock('@/lib/core/bookkeeping/storno-service', async () => {
 })
 
 import { commitPendingOperation } from '../commit'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -421,5 +422,174 @@ describe('commitPendingOperation: correct_entry', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(correctEntry).not.toHaveBeenCalled()
+  })
+})
+
+// ─── reverse_entry ──────────────────────────────────────────────────
+
+describe('commitPendingOperation: reverse_entry', () => {
+  it('happy path: posts storno for a posted entry in an open period', async () => {
+    vi.mocked(reverseEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-storno', voucher_number: 99, voucher_series: 'A' })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'je-original',
+        status: 'posted',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { is_closed: false },
+      },
+      error: null,
+    }) // executor's pre-flight fetch
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-original' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      original_entry_id: 'je-original',
+      reversal_entry_id: 'je-storno',
+      reversal_voucher_number: 99,
+      reversal_voucher_series: 'A',
+    })
+    expect(reverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-original',
+      undefined
+    )
+  })
+
+  it('forwards reversal_date when provided', async () => {
+    vi.mocked(reverseEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-storno', voucher_number: 100 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'je-original',
+        status: 'posted',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { is_closed: false },
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-original', reversal_date: '2026-05-20' },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(reverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-original',
+      '2026-05-20'
+    )
+  })
+
+  it('returns 404 when the original entry does not exist', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null }) // pre-flight finds no row
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-missing' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.auto_rejected).toBe(true)
+    expect(result.http_status).toBe(404)
+    expect(reverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when the original entry is not posted', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: {
+        id: 'je-draft',
+        status: 'draft',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { is_closed: false },
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-draft' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/bokförda verifikationer kan makuleras/)
+    expect(reverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when the period is closed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: {
+        id: 'je-original',
+        status: 'posted',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { is_closed: true },
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-original' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/omprövning/i)
+    expect(reverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when entry_id is missing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null })
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: {},
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(reverseEntry).not.toHaveBeenCalled()
   })
 })

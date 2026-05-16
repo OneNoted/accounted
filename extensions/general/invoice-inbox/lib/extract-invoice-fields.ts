@@ -233,10 +233,16 @@ export async function extractInvoiceFields(
 
   let rawText: string | null = null
   try {
+    // SYSTEM_PROMPT is byte-stable per deploy and ~3.5 KB — marking it as
+    // ephemeral lets Bedrock reuse the prompt-cache on rapid sequential
+    // extractions (e.g. a user uploading a stack of receipts within minutes).
+    // Bedrock supports `{ type: 'ephemeral' }` with the default short TTL;
+    // the 1h TTL from the agent-native API plan (item 10) requires the direct
+    // Anthropic API rather than Bedrock and is out of scope here.
     const resp = await client.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      system: SYSTEM_PROMPT,
+      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: buildContent(input) }],
     })
 
@@ -244,6 +250,27 @@ export async function extractInvoiceFields(
       .flatMap((b) => (b.type === 'text' ? [b.text] : []))
       .join('')
       .trim()
+
+    // Observability for the prompt-cache hit ratio. The agent-native plan
+    // targets cache_read_input_tokens / total_input_tokens ≥ 0.85 in steady
+    // state; logging here makes that measurable without a separate dashboard.
+    const usage = resp.usage as
+      | {
+          input_tokens?: number
+          output_tokens?: number
+          cache_creation_input_tokens?: number
+          cache_read_input_tokens?: number
+        }
+      | undefined
+    if (usage) {
+      log.info('ai_extraction_usage', {
+        fileName: input.fileName,
+        input_tokens: usage.input_tokens ?? null,
+        output_tokens: usage.output_tokens ?? null,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
+        cache_read_input_tokens: usage.cache_read_input_tokens ?? null,
+      })
+    }
 
     const parsed = JSON.parse(rawText)
     const validated = ExtractionSchema.parse(parsed)

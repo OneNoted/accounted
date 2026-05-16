@@ -1763,6 +1763,62 @@ async function commitCorrectEntry(
   }
 }
 
+async function commitReverseEntry(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const entryId = params.entry_id as string
+  const reversalDate = typeof params.reversal_date === 'string' ? params.reversal_date : undefined
+
+  if (!entryId) {
+    return { error: 'entry_id is required', status: 400 }
+  }
+
+  // Pre-flight matches commitCorrectEntry: posted + period not closed. Surfaces
+  // Swedish messages before reverseEntry() throws less helpful errors.
+  const { data: original, error: origErr } = await supabase
+    .from('journal_entries')
+    .select('id, status, fiscal_period_id, fiscal_periods!inner(is_closed)')
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (origErr || !original) {
+    return { error: 'Verifikationen hittades inte.', status: 404 }
+  }
+  if (original.status !== 'posted') {
+    return {
+      error: `Endast bokförda verifikationer kan makuleras. Aktuell status: ${original.status}.`,
+      status: 409,
+    }
+  }
+  const period = original.fiscal_periods as { is_closed?: boolean } | { is_closed?: boolean }[] | null
+  const periodClosed = Array.isArray(period) ? period[0]?.is_closed : period?.is_closed
+  if (periodClosed) {
+    return {
+      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
+      status: 409,
+    }
+  }
+
+  try {
+    const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate)
+    return {
+      data: {
+        original_entry_id: entryId,
+        reversal_entry_id: reversal.id,
+        reversal_voucher_number: reversal.voucher_number,
+        reversal_voucher_series: reversal.voucher_series,
+      },
+    }
+  } catch (err) {
+    if (isBookkeepingError(err)) throw err
+    return { error: err instanceof Error ? err.message : 'Failed to reverse entry', status: 500 }
+  }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -1879,6 +1935,9 @@ export async function commitPendingOperation(
         break
       case 'correct_entry':
         result = await commitCorrectEntry(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'reverse_entry':
+        result = await commitReverseEntry(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {
