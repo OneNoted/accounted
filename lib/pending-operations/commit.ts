@@ -1744,11 +1744,22 @@ async function commitCorrectEntry(
       status: 409,
     }
   }
-  const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
-  if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
+  // resolvePeriodStatusForDate also covers the company-wide bookkeeping_locked_through
+  // gate. A DB blip here would otherwise propagate as a 500 with a raw Postgres
+  // message; wrap so the caller sees a clean Swedish 500 instead, consistent with
+  // the staging-side log-and-degrade behaviour in stagePendingOperation.
+  try {
+    const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
+    if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
+      return {
+        error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
+        status: 409,
+      }
+    }
+  } catch (err) {
     return {
-      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
-      status: 409,
+      error: `Kunde inte verifiera periodstatus: ${err instanceof Error ? err.message : 'okänt fel'}`,
+      status: 500,
     }
   }
 
@@ -1816,22 +1827,40 @@ async function commitReverseEntry(
       status: 409,
     }
   }
-  const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
-  if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
+  try {
+    const periodStatus = await resolvePeriodStatusForDate(supabase, companyId, original.entry_date)
+    if (periodStatus.status === 'locked' || periodStatus.status === 'closed') {
+      return {
+        error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
+        status: 409,
+      }
+    }
+  } catch (err) {
     return {
-      error: 'Räkenskapsperioden är låst. Öppna perioden eller använd omprövning för redan inlämnade momsdeklarationer.',
-      status: 409,
+      error: `Kunde inte verifiera periodstatus: ${err instanceof Error ? err.message : 'okänt fel'}`,
+      status: 500,
     }
   }
 
   try {
     const reversal = await reverseEntry(supabase, companyId, userId, entryId, reversalDate)
+    // Invariant per BFL 5 kap 5§: the storno must land in the same fiscal period
+    // as the original entry. reverseEntry() at lib/bookkeeping/engine.ts:492 uses
+    // original.fiscal_period_id, but assert it here so a future engine change that
+    // breaks this invariant fails fast instead of silently shifting period attribution.
+    if (reversal.fiscal_period_id !== original.fiscal_period_id) {
+      return {
+        error: `BFL invariant broken: storno period ${reversal.fiscal_period_id} differs from original ${original.fiscal_period_id}.`,
+        status: 500,
+      }
+    }
     return {
       data: {
         original_entry_id: entryId,
         reversal_entry_id: reversal.id,
         reversal_voucher_number: reversal.voucher_number,
         reversal_voucher_series: reversal.voucher_series,
+        fiscal_period_id: reversal.fiscal_period_id,
       },
     }
   } catch (err) {

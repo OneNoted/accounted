@@ -430,7 +430,7 @@ describe('commitPendingOperation: correct_entry', () => {
 describe('commitPendingOperation: reverse_entry', () => {
   it('happy path: posts storno for a posted entry in an open period', async () => {
     vi.mocked(reverseEntry).mockResolvedValueOnce(
-      makeJournalEntry({ id: 'je-storno', voucher_number: 99, voucher_series: 'A' })
+      makeJournalEntry({ id: 'je-storno', voucher_number: 99, voucher_series: 'A', fiscal_period_id: 'fp-1' })
     )
 
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -471,7 +471,7 @@ describe('commitPendingOperation: reverse_entry', () => {
 
   it('forwards reversal_date when provided', async () => {
     vi.mocked(reverseEntry).mockResolvedValueOnce(
-      makeJournalEntry({ id: 'je-storno', voucher_number: 100 })
+      makeJournalEntry({ id: 'je-storno', voucher_number: 100, fiscal_period_id: 'fp-1' })
     )
 
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -591,6 +591,40 @@ describe('commitPendingOperation: reverse_entry', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(reverseEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 with BFL invariant error if engine returns a storno in a different period', async () => {
+    // Engine guarantee per BFL 5 kap 5§: storno lands in original.fiscal_period_id
+    // (lib/bookkeeping/engine.ts:492). The executor asserts this so a future engine
+    // change that breaks the invariant fails fast.
+    vi.mocked(reverseEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-storno', voucher_number: 99, fiscal_period_id: 'fp-WRONG' })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({
+      data: {
+        id: 'je-original',
+        status: 'posted',
+        entry_date: '2026-05-15',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { is_closed: false },
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'reverse_entry',
+      params: { entry_id: 'je-original' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(500)
+    expect(result.error).toMatch(/BFL invariant broken/i)
   })
 
   it('returns 409 when the entry_date is covered by the company-wide lock', async () => {

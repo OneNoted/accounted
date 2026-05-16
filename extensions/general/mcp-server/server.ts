@@ -5933,6 +5933,19 @@ export const tools: McpTool[] = [
         line_description: `Reversal: ${l.line_description ?? ''}`,
       }))
 
+      // If the original touches output/input VAT accounts (2610–2670), a storno
+      // is correct ONLY if the moms period covering entry_date has not yet been
+      // filed with Skatteverket. For filed periods the legal path is an
+      // omprövning (rättelse-omprövning per ML 2023:200, SFL 22 kap). gnubok
+      // doesn't track per-VAT-period filing status today, so we surface a
+      // soft warning rather than block — the human approver decides.
+      const vatAccounts = originalLines
+        .map((l) => l.account_number)
+        .filter((acc) => /^26[1-7]\d$/.test(acc))
+      const vatWarning = vatAccounts.length > 0
+        ? `Original innehåller momskonton (${[...new Set(vatAccounts)].join(', ')}). Om momsperioden är inlämnad till Skatteverket krävs omprövning (ML 2023:200) — storno räcker inte. Bekräfta att perioden inte är inlämnad innan godkännande.`
+        : null
+
       return stagePendingOperation(supabase, companyId, userId, 'reverse_entry',
         `Makulering: V${original.voucher_series}${original.voucher_number} — ${original.description}`,
         {
@@ -5959,6 +5972,7 @@ export const tools: McpTool[] = [
             lines: reversedPreviewLines,
           },
           reason: reason ?? null,
+          ...(vatWarning ? { warnings: [vatWarning] } : {}),
           will: 'post a storno that mirrors the original with debits and credits swapped, link via reverses_id, and leave the original visible (BFL 5 kap, makulering)',
         },
         actor,
