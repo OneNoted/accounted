@@ -2340,6 +2340,7 @@ export interface DepreciationSchedule {
   journal_entry_id: string | null
   posted_at: string | null
   created_at: string
+  updated_at: string
 }
 
 // ============================================================

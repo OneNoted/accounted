@@ -123,4 +123,25 @@ describe('computeAnnualDepreciation', () => {
     const result = computeAnnualDepreciation(asset, FULL_YEAR)
     expect(result.amount).toBe(10_000)
   })
+
+  it('end-of-month acquisition does not overflow life end (Jan 31 + N months)', () => {
+    // Acquired 2025-01-31, 12-month life. Life ends 2026-01-30 (Jan 31 + 12mo
+    // clamped to last day of Jan = Jan 31 the following year, exclusive →
+    // Jan 30 inclusive). For fiscal year 2026 only Jan 1-30 = 30 days of
+    // life remain. Without the clamp, life would overflow to Feb 3 (Jan 31
+    // + 12mo via setUTCMonth) and over-depreciate.
+    const asset = makeAsset({
+      acquisition_date: '2025-01-31',
+      acquisition_cost: 12_000,
+      useful_life_months: 12,
+    })
+    const result = computeAnnualDepreciation(asset, {
+      period_start: '2026-01-01',
+      period_end: '2026-12-31',
+    })
+    // 30 days out of 365 of a 12_000 annual = ~986. The buggy version would
+    // have computed ~1_117 (34 days) — the gap detects the regression.
+    expect(result.amount).toBeGreaterThan(950)
+    expect(result.amount).toBeLessThan(1_020)
+  })
 })

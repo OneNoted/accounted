@@ -24,6 +24,22 @@ import type { JournalEntry } from '@/types'
  */
 const DEFAULT_SCHABLONINTAKT_RATE = 0.03
 
+/**
+ * Canonical bokslut order. Each calculator re-reads the trial balance to
+ * derive its base, so earlier items must post before later items see their
+ * effect: återföring → överavskrivningar → avsättning → SLP → bolagsskatt.
+ * The POST handler enforces this order regardless of how the client sends
+ * its items array, so the avsättning 25 % cap can never be evaluated
+ * against a stale (pre-återföring) net result.
+ */
+const DISPOSITION_ORDER: Record<string, number> = {
+  periodiseringsfond_ateforing: 0,
+  overavskrivningar: 1,
+  periodiseringsfond_avsattning: 2,
+  sarskild_loneskatt: 3,
+  bolagsskatt: 4,
+}
+
 // ============================================================
 // GET — return proposal snapshot with defaults
 // ============================================================
@@ -195,7 +211,15 @@ export const POST = withRouteContext(
       const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
       const created: { kind: string; entry: JournalEntry }[] = []
 
-      for (const item of validation.data.items) {
+      // Process items in canonical bokslut order regardless of client array
+      // ordering — each computation pulls the current income statement, so
+      // återföring must post before avsättning sees its cap base; över-
+      // avskrivningar must post before bolagsskatt; SLP and bolagsskatt last.
+      const sortedItems = [...validation.data.items].sort(
+        (a, b) => DISPOSITION_ORDER[a.kind] - DISPOSITION_ORDER[b.kind],
+      )
+
+      for (const item of sortedItems) {
         const proposal = await computeProposal(item, supabase, companyId, id, fiscalYear)
         if (!proposal) continue
 

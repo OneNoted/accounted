@@ -99,7 +99,7 @@ export async function proposeAnnualPostings(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<DepreciationProposal> {
-  const [periodResult, assets, schedulesResult] = await Promise.all([
+  const [periodResult, assets, currentSchedulesResult, priorSchedulesResult] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end')
@@ -107,11 +107,20 @@ export async function proposeAnnualPostings(
       .eq('company_id', companyId)
       .single(),
     listAssets(supabase, companyId),
+    // Schedules in the current period (proposal lookup / "already posted" badge)
     supabase
       .from('depreciation_schedules')
       .select('id, asset_id, journal_entry_id')
       .eq('company_id', companyId)
       .eq('fiscal_period_id', fiscalPeriodId),
+    // Prior posted schedules (excluding the current period) so we can compute
+    // the true accumulated depreciation per asset for net book value.
+    supabase
+      .from('depreciation_schedules')
+      .select('asset_id, planned_depreciation, journal_entry_id, fiscal_period_id')
+      .eq('company_id', companyId)
+      .neq('fiscal_period_id', fiscalPeriodId)
+      .not('journal_entry_id', 'is', null),
   ])
 
   if (periodResult.error || !periodResult.data) {
@@ -119,11 +128,25 @@ export async function proposeAnnualPostings(
   }
   const period = periodResult.data
   const existing = new Map<string, { id: string; journal_entry_id: string | null }>(
-    (schedulesResult.data ?? []).map((r: { id: string; asset_id: string; journal_entry_id: string | null }) => [
-      r.asset_id,
-      { id: r.id, journal_entry_id: r.journal_entry_id },
-    ]),
+    (currentSchedulesResult.data ?? []).map(
+      (r: { id: string; asset_id: string; journal_entry_id: string | null }) => [
+        r.asset_id,
+        { id: r.id, journal_entry_id: r.journal_entry_id },
+      ],
+    ),
   )
+
+  // Sum of all prior posted depreciation per asset. This is the accumulated
+  // depreciation on the books before this period — does not yet count this
+  // period's proposal or any unposted current-period draft.
+  const priorAccumulated = new Map<string, number>()
+  for (const row of (priorSchedulesResult.data ?? []) as Array<{
+    asset_id: string
+    planned_depreciation: number | string
+  }>) {
+    const v = Number(row.planned_depreciation) || 0
+    priorAccumulated.set(row.asset_id, (priorAccumulated.get(row.asset_id) ?? 0) + v)
+  }
 
   const items: AssetDepreciation[] = []
   for (const asset of assets) {
@@ -134,15 +157,14 @@ export async function proposeAnnualPostings(
     if (amount <= 0) continue
 
     const existingSchedule = existing.get(asset.id)
-    // Net book value = acquisition cost − all accumulated depreciation
-    // including this period. For the proposal we approximate accumulated as
-    // sum of past schedules + this proposal, since loading the trial balance
-    // for each asset is expensive. Phase 5 can improve this.
+    const accumulatedBefore = priorAccumulated.get(asset.id) ?? 0
+    const netBookValueAfter =
+      Math.round((Number(asset.acquisition_cost) - accumulatedBefore - amount) * 100) / 100
+
     items.push({
       asset,
       amount,
-      // netBookValueAfter is informational — caller can refine with TB data.
-      netBookValueAfter: Math.round((Number(asset.acquisition_cost) - amount) * 100) / 100,
+      netBookValueAfter,
       proRated,
       existingScheduleId: existingSchedule?.id,
       existingJournalEntryId: existingSchedule?.journal_entry_id ?? null,
@@ -257,9 +279,19 @@ function isoToDate(iso: string): Date {
 }
 
 function addMonths(date: Date, months: number): Date {
-  const result = new Date(date)
-  result.setUTCMonth(result.getUTCMonth() + months)
-  return result
+  // Clamp the day to the last valid day of the target month so end-of-month
+  // dates don't overflow forward (Jan 31 + 1 month → Feb 28, not Mar 3).
+  const targetMonth = date.getUTCMonth() + months
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(date.getUTCFullYear(), targetMonth + 1, 0),
+  ).getUTCDate()
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      targetMonth,
+      Math.min(date.getUTCDate(), lastDayOfTargetMonth),
+    ),
+  )
 }
 
 function addDays(date: Date, days: number): Date {

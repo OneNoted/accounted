@@ -129,15 +129,10 @@ export async function buildBokslutReadinessReport(
     })
   }
 
-  // Phase 2+ reminders. These will become live calculators when those phases
-  // ship; for now they're nudges so users do the manual postings themselves.
-  reminders.push({
-    code: 'depreciation_manual',
-    severity: 'info',
-    message:
-      'Planenliga avskrivningar bokas manuellt tills anläggningsregistret är på plats. Glöm inte 7831/7832/7833 mot motsvarande 12xx-konton.',
-  })
-
+  // Periodiseringar (accruals) are still manual — no wizard step ships in
+  // Phases 1-3. Depreciation, bolagsskatt and periodiseringsfond now have
+  // dedicated calculators (DepreciationPanel + DispositionsStep) so they're
+  // no longer surfaced as manual reminders.
   reminders.push({
     code: 'accruals_manual',
     severity: 'info',
@@ -145,20 +140,7 @@ export async function buildBokslutReadinessReport(
       'Periodiseringar (förutbetalda kostnader 17xx, upplupna kostnader 29xx) bokas manuellt. Tänk på att vända dem 1 januari nästa år.',
   })
 
-  if (entityType === 'aktiebolag') {
-    reminders.push({
-      code: 'bolagsskatt_manual',
-      severity: 'info',
-      message:
-        'Bolagsskatt 20,6 % på skattemässigt resultat bokas manuellt (debet 8910, kredit 2512) innan bokslutsentrén skapas.',
-    })
-    reminders.push({
-      code: 'periodiseringsfond_manual',
-      severity: 'info',
-      message:
-        'Periodiseringsfond (max 25 % av skattemässigt resultat) och eventuell återföring av äldre fond bokas manuellt via konto 2120–2127 och 8811/8819.',
-    })
-  } else if (entityType === 'enskild_firma') {
+  if (entityType === 'enskild_firma') {
     reminders.push({
       code: 'ef_skatt_via_ne',
       severity: 'info',

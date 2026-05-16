@@ -89,7 +89,7 @@ beforeEach(() => {
 })
 
 describe('buildBokslutReadinessReport', () => {
-  it('returns a ready report with AB reminders when validation passes', async () => {
+  it('returns a ready report with the accruals reminder for AB', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const supabase = makeSupabase({
@@ -102,15 +102,12 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.ready).toBe(true)
     expect(report.blockers).toEqual([])
     expect(report.entityType).toBe('aktiebolag')
-    expect(report.reminders.map((r) => r.code)).toEqual(
-      expect.arrayContaining([
-        'depreciation_manual',
-        'accruals_manual',
-        'bolagsskatt_manual',
-        'periodiseringsfond_manual',
-      ]),
-    )
-    // No EF-only reminders for AB
+    // Phase 3 handles depreciation + bolagsskatt + p-fond automatically — only
+    // the accruals reminder should remain (Phase 4 will replace it).
+    expect(report.reminders.map((r) => r.code)).toContain('accruals_manual')
+    expect(report.reminders.map((r) => r.code)).not.toContain('depreciation_manual')
+    expect(report.reminders.map((r) => r.code)).not.toContain('bolagsskatt_manual')
+    expect(report.reminders.map((r) => r.code)).not.toContain('periodiseringsfond_manual')
     expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
     expect(report.reconciliation?.is_reconciled).toBe(true)
   })
@@ -127,9 +124,6 @@ describe('buildBokslutReadinessReport', () => {
 
     expect(report.entityType).toBe('enskild_firma')
     expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeDefined()
-    // AB-specific reminders must not leak
-    expect(report.reminders.find((r) => r.code === 'bolagsskatt_manual')).toBeUndefined()
-    expect(report.reminders.find((r) => r.code === 'periodiseringsfond_manual')).toBeUndefined()
   })
 
   it('surfaces blockers from the underlying validation and stays not-ready', async () => {
@@ -204,7 +198,7 @@ describe('buildBokslutReadinessReport', () => {
     ).rejects.toThrow(/not found/i)
   })
 
-  it('defaults to aktiebolag reminders when company_settings is missing', async () => {
+  it('defaults to aktiebolag when company_settings is missing', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
     const supabase = makeSupabase({
@@ -215,6 +209,6 @@ describe('buildBokslutReadinessReport', () => {
     const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
 
     expect(report.entityType).toBe('aktiebolag')
-    expect(report.reminders.find((r) => r.code === 'bolagsskatt_manual')).toBeDefined()
+    expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
   })
 })
