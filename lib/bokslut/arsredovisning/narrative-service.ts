@@ -10,20 +10,29 @@ export interface NarrativeOverrides {
   agm_date: string | null
 }
 
+/**
+ * Shape returned from getNarrative / upsertNarrative. user_id and
+ * created_at are deliberately excluded from the API projection (see
+ * NARRATIVE_API_COLUMNS below).
+ */
 export interface NarrativeRow {
   id: string
-  user_id: string
   company_id: string
   fiscal_period_id: string
   description: string | null
   important_events: string | null
   resultatdisposition: string | null
   agm_date: string | null
-  created_at: string
   updated_at: string
 }
 
 const TABLE = 'arsredovisning_narratives'
+
+// Explicit projection — keeps user_id and other internal audit fields out
+// of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
+// only need the narrative content + last-updated timestamp.
+const NARRATIVE_API_COLUMNS =
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, agm_date, updated_at'
 
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
@@ -37,7 +46,7 @@ export async function getNarrative(
 ): Promise<NarrativeRow | null> {
   const { data, error } = await supabase
     .from(TABLE)
-    .select('*')
+    .select(NARRATIVE_API_COLUMNS)
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .maybeSingle()
@@ -71,7 +80,7 @@ export async function upsertNarrative(
   const { data, error } = await supabase
     .from(TABLE)
     .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
-    .select('*')
+    .select(NARRATIVE_API_COLUMNS)
     .single()
   if (error || !data) {
     throw new Error(`Failed to save narrative: ${error?.message ?? 'unknown'}`)

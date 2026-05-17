@@ -120,6 +120,26 @@ export async function buildArsredovisningData(
     warnings.push(
       'Datum för årsstämma saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan.',
     )
+  } else {
+    // ÅRL 8 kap 3 § + ÅRL 7 kap 10 §: AGM must be held after the räkenskapsår
+    // ends and within 6 months of period end (för privat AB). A date before
+    // period_end is logically impossible; after the deadline is a legally
+    // defective fastställelseintyg.
+    if (persistedAgmDate <= period.period_end) {
+      warnings.push(
+        `Datum för årsstämma (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}) — fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
+      )
+    } else {
+      const periodEndDate = new Date(`${period.period_end}T00:00:00Z`)
+      const deadline = new Date(periodEndDate)
+      deadline.setUTCMonth(deadline.getUTCMonth() + 6)
+      const deadlineIso = deadline.toISOString().slice(0, 10)
+      if (persistedAgmDate > deadlineIso) {
+        warnings.push(
+          `Datum för årsstämma (${persistedAgmDate}) är efter 6-månadersgränsen (${deadlineIso}). För privat AB ska årsstämman hållas inom 6 månader från räkenskapsårets slut (ÅRL 7 kap 10 §).`,
+        )
+      }
+    }
   }
 
   return {
@@ -272,9 +292,13 @@ async function buildK2Noter(
   })
 
   // Note: aktiekapital. K2 punkt 18.x requires AB to disclose share-capital
-  // structure. Read from company_settings when present; emit a placeholder
-  // when missing so the user knows to fill it in.
-  if (isAbK2) {
+  // structure. Read from company_settings when present; surface a warning
+  // when missing so the user knows to fill it in. We also surface the
+  // warning when entityType is 'unknown' since the company may in fact be
+  // an AB the user just hasn't configured yet — staying silent would let
+  // them download an incomplete K2 ÅR without realising.
+  const maybeAb = isAbK2 || entityType === 'unknown'
+  if (maybeAb) {
     const { data: settings } = await supabase
       .from('company_settings')
       .select('aktiekapital, antal_aktier, kvotvarde')

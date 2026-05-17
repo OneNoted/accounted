@@ -291,16 +291,25 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         AGM's resolution on resultatdisposition. Without this page the
         document cannot be filed as-is — Bolagsverket rejects submissions
         that lack the intyg.
+
+        Signer label is "Styrelseledamot (närvarande vid stämman)" per
+        ÅRL 8:3 → 6:6-7 §§ — a VD who is not also a styrelseledamot cannot
+        sign the fastställelseintyg. Conflating the two roles ("VD") would
+        render the certificate defective.
+
+        Body refers to the AGM's RESOLUTION (stämmobeslut), not the board's
+        proposal — the board proposes in förvaltningsberättelsen but the
+        AGM votes, and it is the vote that must be certified.
       */}
       <Page size="A4" style={styles.page}>
         <PageChrome data={data} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
-          Undertecknad styrelseledamot intygar härmed att resultaträkningen och
-          balansräkningen har fastställts på årsstämma den{' '}
-          {data.forvaltningsberattelse.agm_date ?? '____________________'} och
-          att stämman beslutat att disponera resultatet enligt styrelsens
-          förslag.
+          Undertecknad styrelseledamot, närvarande vid årsstämman, intygar härmed
+          att resultaträkningen och balansräkningen har fastställts på årsstämma
+          den {data.forvaltningsberattelse.agm_date ?? '____________________'} och
+          att årsstämman beslutade om disposition av bolagets resultat i enlighet
+          med vad som anges nedan.
         </Text>
         <Text style={styles.paragraph}>
           Jag intygar också att årsredovisningen ger en rättvisande bild av
@@ -308,7 +317,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
           en rättvisande översikt över utvecklingen av företagets verksamhet,
           ställning och resultat.
         </Text>
-        <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
+        <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>
           {data.forvaltningsberattelse.resultatdisposition}
         </Text>
@@ -316,7 +325,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
           <View style={styles.signatureSlot}>
             <Text> </Text>
           </View>
-          <Text style={{ width: 200 }}>Styrelseledamot / VD</Text>
+          <Text style={{ width: 240 }}>Styrelseledamot (närvarande vid stämman)</Text>
         </View>
         <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
           {data.company.city ? `${data.company.city}, ` : ''}

@@ -14,8 +14,21 @@ const PostSchema = z.object({
   description: z.string().max(4000).nullable().optional(),
   important_events: z.string().max(4000).nullable().optional(),
   resultatdisposition: z.string().max(2000).nullable().optional(),
-  // ISO YYYY-MM-DD per the DATE column; null clears it.
-  agm_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  // ISO YYYY-MM-DD per the DATE column; null clears it. Validate as a
+  // real calendar date (not just regex) so '2024-13-99' returns 400 from
+  // the API instead of bubbling up as a Postgres 500.
+  agm_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine(
+      (s) => {
+        const d = new Date(`${s}T00:00:00Z`)
+        return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+      },
+      { message: 'Invalid calendar date' },
+    )
+    .nullable()
+    .optional(),
 })
 
 export const GET = withRouteContext(
