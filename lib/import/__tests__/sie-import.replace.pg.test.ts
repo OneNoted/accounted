@@ -10,7 +10,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 //     is marked 'replaced' or 'failed'.
 //  2. The replace_sie_import RPC cancels journal entries with
 //     source_type='import' while leaving user-created entries
-//     (source_type='manual', 'transaction', etc.) intact.
+//     (source_type='manual', 'bank_transaction', etc.) intact.
 
 async function insertSIEImport(params: {
   companyId: string
@@ -51,7 +51,7 @@ async function insertPostedEntry(params: {
   userId: string
   companyId: string
   fiscalPeriodId: string
-  sourceType: 'import' | 'manual' | 'transaction'
+  sourceType: 'import' | 'manual' | 'bank_transaction'
   voucherNumber: number
   entryDate?: string
 }): Promise<string> {
@@ -134,7 +134,7 @@ describe('sie_imports: partial unique index + replace flow', () => {
     expect(newId).toBeTruthy()
   })
 
-  it('replace_sie_import cancels source_type=import entries and leaves manual/transaction entries posted', async () => {
+  it('replace_sie_import cancels source_type=import entries and leaves manual/bank_transaction entries posted', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
 
     const obEntry = await insertPostedEntry({
@@ -169,7 +169,7 @@ describe('sie_imports: partial unique index + replace flow', () => {
       userId,
       companyId,
       fiscalPeriodId,
-      sourceType: 'transaction',
+      sourceType: 'bank_transaction',
       voucherNumber: 5,
     })
 

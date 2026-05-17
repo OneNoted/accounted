@@ -193,33 +193,39 @@ export async function replaceSIEImport(
 /**
  * Clean up orphan in-flight import records for a given file hash.
  *
- * Targets rows in status='pending' or 'mapped' — these are intermediate
- * states left behind when a prior import crashed before reaching
- * finalizeImportRecord. They hold the slot in the partial unique index
- * `sie_imports_company_id_file_hash_active_idx`, so a retry would fail
- * with a constraint violation.
+ * Targets rows in status='pending' — left behind when a prior import
+ * crashed (or short-circuited at checkDuplicatePeriodImport) before
+ * reaching finalizeImportRecord. They hold the slot in the partial
+ * unique index `sie_imports_company_id_file_hash_active_idx`, so a
+ * retry would fail with a constraint violation.
  *
- * The previous implementation only deleted records older than one hour
- * as a safety net against concurrent in-flight imports for the same hash.
- * In practice SIE imports are interactive, single-flight per company —
- * there is no background worker to step on — so the gate just made
- * legitimate retries fail. We now clean unconditionally.
+ * Five-minute age gate protects an in-flight import in another tab/
+ * session: createPendingImportRecord → ... → finalizeImportRecord can
+ * take tens of seconds for large SIE files. Without the gate, a
+ * concurrent retry of the same file would delete the live pending row
+ * mid-flight and the original session's finalize would silently no-op.
+ * Five minutes is long enough for any normal interactive import yet
+ * short enough that legitimate retries after a crash succeed.
  *
- * 'failed' and 'replaced' rows are allowed by the partial index (they're
- * excluded from the predicate), so we leave them in place for the audit
- * trail.
+ * The 'mapped' status is defined in the type but never written by any
+ * code path, so we don't include it. 'failed' and 'replaced' rows are
+ * allowed by the partial index (excluded from its predicate), so they
+ * stay in place for the audit trail.
  */
 async function cleanupStaleImportRecords(
   supabase: SupabaseClient,
   companyId: string,
   fileHash: string
 ): Promise<void> {
+  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+
   await supabase
     .from('sie_imports')
     .delete()
     .eq('company_id', companyId)
     .eq('file_hash', fileHash)
-    .in('status', ['pending', 'mapped'])
+    .eq('status', 'pending')
+    .lt('created_at', fiveMinutesAgo)
 }
 
 /**
