@@ -10,10 +10,11 @@ import {
 
 // Roles are constrained to the underskrifter set ÅRL allows — keeps the API
 // from accepting arbitrary "Administrator" / "CEO" strings that the UI
-// dropdown doesn't expose.
+// dropdown doesn't expose. Name capped at 200 chars per GDPR data-min
+// (Art.25.2) — Swedish names are well under that; bound is a defense.
 const CreateSchema = z.object({
   role: z.enum(['Styrelseledamot', 'Styrelseordförande', 'VD', 'Verkställande direktör']),
-  signer_name: z.string().min(1),
+  signer_name: z.string().min(1).max(200),
 })
 
 export const GET = withRouteContext(

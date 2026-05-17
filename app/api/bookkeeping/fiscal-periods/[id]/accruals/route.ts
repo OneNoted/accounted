@@ -83,8 +83,23 @@ export const POST = withRouteContext(
       }
 
       const created: { kind: string; entry: JournalEntry; reverses_on: string }[] = []
+      const skipped: { kind: string; existing_entry_id: string; reason: string }[] = []
 
       for (const item of validation.data.items) {
+        // Idempotency: refuse to post a duplicate accrual of the same kind for
+        // the same period. Without this, re-running the wizard (or a retried
+        // request after a flaky network) would create duplicate entries that
+        // distort both the balance sheet and the trial balance.
+        const existingId = await findExistingAccrualEntry(supabase, companyId, id, item)
+        if (existingId) {
+          skipped.push({
+            kind: item.kind,
+            existing_entry_id: existingId,
+            reason: 'already_posted',
+          })
+          continue
+        }
+
         let proposal: AccrualProposal | null = null
         switch (item.kind) {
           case 'vacation_liability_change':
@@ -143,10 +158,60 @@ export const POST = withRouteContext(
         created.push({ kind: item.kind, entry, reverses_on: proposal.reverses_on })
       }
 
-      return NextResponse.json({ data: { created } })
+      return NextResponse.json({ data: { created, skipped } })
     } catch (err) {
       return errorResponse(err, log, { requestId })
     }
   },
   { requireWrite: true },
 )
+
+type PostItem = z.infer<typeof PostItemSchema>
+
+/**
+ * Find a previously-posted accrual journal entry for the same kind in the
+ * same period — used by the POST handler to enforce idempotency. Matches
+ * on the description prefix that each calculator emits (see
+ * accrual-detector.ts and the POST handler's description construction).
+ *
+ * For manual prepaid/accrued the dedup key includes the user-supplied
+ * description, so different items with different descriptions don't collide.
+ */
+async function findExistingAccrualEntry(
+  supabase: Awaited<ReturnType<typeof import('@/lib/supabase/server')['createClient']>>,
+  companyId: string,
+  fiscalPeriodId: string,
+  item: PostItem,
+): Promise<string | null> {
+  let pattern: string
+  switch (item.kind) {
+    case 'vacation_liability_change':
+      pattern = '%semesterlöneskuld%'
+      break
+    case 'audit_fee': {
+      const account = item.liability_account ?? '2992'
+      pattern = account === '2991' ? '%arvode för bokslut%' : '%arvode för revision%'
+      break
+    }
+    case 'manual_prepaid_expense':
+      pattern = `Periodisering: Förutbetald kostnad: ${escapeLike(item.description)}%`
+      break
+    case 'manual_accrued_expense':
+      pattern = `Periodisering: Upplupen kostnad: ${escapeLike(item.description)}%`
+      break
+  }
+
+  const { data } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('status', 'posted')
+    .ilike('description', pattern)
+    .limit(1)
+  return (data?.[0]?.id as string | undefined) ?? null
+}
+
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`)
+}

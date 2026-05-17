@@ -152,8 +152,12 @@ async function buildFlerarsoversikt(
       const eqLiab = tb.rows
         .filter((r) => r.account_class === 2)
         .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
+      // Soliditet: eget kapital uses 20xx ONLY. 21xx (periodiseringsfonder,
+      // överavskrivningar) are obeskattade reserver — partially deferred tax,
+      // not equity. K2 / ÅRL splits them out. Including 21xx here would
+      // inflate soliditet for any AB that posts dispositions.
       const equity = tb.rows
-        .filter((r) => r.account_number.startsWith('20') || r.account_number.startsWith('21'))
+        .filter((r) => r.account_number.startsWith('20'))
         .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
       const soliditet =
         totalAssets > 0 ? Math.round((equity / totalAssets) * 1000) / 10 : null
@@ -294,12 +298,67 @@ function flattenIncomeStatement(is: {
     amount: is.total_revenue - is.total_expenses,
     is_total: true,
   })
-  for (const s of is.financial_sections) {
+
+  // Split financial sections so the RR follows the K2 / ÅRL 3:2 structure:
+  // financial items (80–87) → "Resultat efter finansiella poster" →
+  // bokslutsdispositioner (88) → "Resultat före skatt" → skatt (89) →
+  // "Årets resultat". Without the dispositioner + skatt rows the document
+  // is non-compliant for any AB that posted bolagsskatt or
+  // periodiseringsfond, and the RR doesn't reconcile to BS 2099.
+  const finItems = is.financial_sections.filter(
+    (s) => !/bokslutsdisposition|skatter och årets resultat/i.test(s.title),
+  )
+  const dispositionsSections = is.financial_sections.filter((s) =>
+    /bokslutsdisposition/i.test(s.title),
+  )
+  const skattSections = is.financial_sections.filter((s) =>
+    /skatter och årets resultat/i.test(s.title),
+  )
+  for (const s of finItems) {
     for (const r of s.rows) {
       lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
     }
   }
-  lines.push({ label: 'Resultat före skatt', amount: is.net_result, is_total: true })
+  const finSubtotal = finItems.reduce((sum, s) => sum + s.subtotal, 0)
+  const resAfterFinancial = is.total_revenue - is.total_expenses + finSubtotal
+  lines.push({
+    label: 'Resultat efter finansiella poster',
+    amount: Math.round(resAfterFinancial * 100) / 100,
+    is_total: true,
+  })
+
+  if (dispositionsSections.length > 0) {
+    for (const s of dispositionsSections) {
+      for (const r of s.rows) {
+        lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
+      }
+    }
+    const dispositionsSubtotal = dispositionsSections.reduce((sum, s) => sum + s.subtotal, 0)
+    lines.push({
+      label: 'Resultat före skatt',
+      amount: Math.round((resAfterFinancial + dispositionsSubtotal) * 100) / 100,
+      is_total: true,
+    })
+  } else {
+    // No dispositioner posted — keep the simpler "Resultat före skatt" row
+    // immediately after the finansnetto totals so the RR still has the
+    // pre-tax subtotal expected by ÅRL.
+    lines.push({
+      label: 'Resultat före skatt',
+      amount: Math.round(resAfterFinancial * 100) / 100,
+      is_total: true,
+    })
+  }
+
+  if (skattSections.length > 0) {
+    for (const s of skattSections) {
+      for (const r of s.rows) {
+        lines.push({ label: `${r.account_number} ${r.account_name}`, amount: r.amount })
+      }
+    }
+  }
+
+  lines.push({ label: 'Årets resultat', amount: is.net_result, is_total: true })
   return lines
 }
 

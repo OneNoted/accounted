@@ -75,9 +75,12 @@ export function calculateRantefordelning(
     return {
       kind: 'rantefordelning_positive',
       label: 'Positiv räntefördelning (frivillig)',
-      description: `${(positiveRate * 100).toFixed(2)} % på kapitalunderlag ${input.kapitalunderlag.toLocaleString('sv-SE')} kr. Flyttar avkastning till inkomst av kapital (30 % skatt).`,
+      description: `${(positiveRate * 100).toFixed(2)} % på kapitalunderlag ${input.kapitalunderlag.toLocaleString('sv-SE')} kr. Avdrag i NE R30; motsvarande belopp redovisas som inkomst av kapital på Inkomstdeklaration 1 (T4).`,
       amount: computation.positiveAmount,
-      ne_ruta: 'R30 / INK1 kapital',
+      // NE-bilagan har bara fältet R30 — INK1 är ett separat formulär. Tidigare
+      // sammanslagningen 'R30 / INK1 kapital' fick användare att leta efter ett
+      // ruta-namn som inte finns på NE.
+      ne_ruta: 'R30 (avdrag i näringsverksamhet)',
       computation: computation as unknown as Record<string, unknown>,
       warnings: [],
     }
@@ -86,9 +89,9 @@ export function calculateRantefordelning(
   return {
     kind: 'rantefordelning_negative',
     label: 'Negativ räntefördelning (obligatorisk)',
-    description: `${(negativeRate * 100).toFixed(2)} % på kapitalunderskott. Höjer skattepliktigt resultat eftersom näringsverksamheten lånat av privata medel.`,
+    description: `${(negativeRate * 100).toFixed(2)} % på kapitalunderskott. Tillägg till resultat i näringsverksamhet eftersom verksamheten lånat av privata medel.`,
     amount: computation.negativeAmount,
-    ne_ruta: 'R30',
+    ne_ruta: 'R30 (tillägg till resultat)',
     computation: computation as unknown as Record<string, unknown>,
     warnings: [
       'Negativ räntefördelning är obligatorisk när kapitalunderlaget är mer negativt än -500 000 kr.',

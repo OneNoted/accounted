@@ -6077,6 +6077,20 @@ export const tools: McpTool[] = [
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
       const assetIds = Array.isArray(args.asset_ids) ? (args.asset_ids as string[]) : undefined
 
+      // Mirror the HTTP route's `requireWrite: true` guard so a viewer-role
+      // member can't post depreciation through the MCP surface. RLS would
+      // reject the underlying INSERTs anyway, but failing fast here
+      // produces a much cleaner error than the cascaded RLS rejection.
+      const { data: membership } = await supabase
+        .from('company_members')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', userId)
+        .maybeSingle()
+      if (!membership || membership.role === 'viewer') {
+        throw new Error('Write permission required')
+      }
+
       const { data: period } = await supabase
         .from('fiscal_periods')
         .select('id, name, period_end, is_closed, locked_at, closing_entry_id')

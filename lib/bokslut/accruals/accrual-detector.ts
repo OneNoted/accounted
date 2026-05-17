@@ -148,15 +148,20 @@ export function proposeAuditFee(input: AuditFeeInput): AccrualProposal | null {
   if (amount <= 0) return null
   const liabilityAccount = input.liabilityAccount ?? '2992'
   const isBokslut = liabilityAccount === '2991'
+  // BAS 2026: 6420 = "Revisionsarvode" (lagstadgad revision specifically).
+  // Bokslutskostnader for a non-revisionspliktigt bolag belong on 6590
+  // (övriga externa tjänster) — Skatteverket may query a 6420 debit
+  // without a corresponding revisor i bolaget.
+  const expenseAccount = isBokslut ? '6590' : '6420'
 
   return {
     kind: 'audit_fee',
     label: isBokslut ? 'Beräknat arvode för bokslut' : 'Beräknat arvode för revision',
-    description: `Debet 6420, kredit ${liabilityAccount}. Vänds vid faktura nästa år.`,
+    description: `Debet ${expenseAccount}, kredit ${liabilityAccount}. Vänds vid faktura nästa år.`,
     amount,
     lines: [
       {
-        account_number: '6420',
+        account_number: expenseAccount,
         debit_amount: amount,
         credit_amount: 0,
         line_description: isBokslut ? 'Beräknat bokslutarvode' : 'Beräknat revisionsarvode',
