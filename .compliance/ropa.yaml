@@ -1,0 +1,127 @@
+# Record of Processing Activities (GDPR Art. 30)
+#
+# Each entry documents one processing activity. Field shape follows EDPB
+# Guidelines 9/2022 §3 (controller-side RoPA): purposes, lawful basis,
+# data subject + data category, recipients, transfer mechanism, retention,
+# security measures. Add an entry whenever a new flow ships that touches
+# personal data — onboarding, integrations, support, or regulator filings.
+
+processing_activities:
+
+  - id: agi.submit
+    name: AGI inlämning till Skatteverket
+    purpose: >-
+      Lämna in lagstadgad arbetsgivardeklaration på individnivå (AGI) till
+      Skatteverket varje månad (Skatteförfarandelagen 26 kap.). Innefattar
+      huvuduppgift (HU) och individuppgifter (IU) per anställd.
+    lawful_basis: art_6_1_c   # legal obligation
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na   # software supplier; Skatteverket is recipient, not processor
+    data_subjects:
+      - employee
+    data_categories:
+      - user.government_id          # personnummer
+      - user.name
+      - user.financial.employment   # gross salary, tax withheld, benefits
+      - user.financial.tax          # avgifter, sjuklönekostnad
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Sweden-to-Sweden processor-to-public-authority flow. Adequacy decision
+        not applicable; no third-country transfer.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap   # BFL 7 kap. — räkenskapsinformation
+      stored_in:
+        - agi_declarations.xml_content
+        - agi_declarations.individuppgifter
+        - skatteverket_api_audit_log
+    security_measures:
+      - encryption_at_rest_supabase
+      - rls_company_scoped
+      - tls_1_3_to_skatteverket
+      - bankid_signing_required_for_filing
+      - immutable_audit_log
+      - personnummer_at_rest_encryption
+
+  - id: agi.kontrollera.preflight
+    name: AGI pre-flight kontrollera (HU/IU)
+    purpose: >-
+      Skicka enskild HU eller IU som JSON till Skatteverkets kontrollera-
+      ändpunkt (v1.7 §7/§8) för dry-run-validering av felmeddelanden och
+      STOPP-/AVVISANDE-status innan ett fullständigt underlag laddas upp.
+      Skatteverket lagrar inget från denna kontroll; svaret driver vår UI
+      som låter användaren rätta felaktigheter i lönekörningen lokalt.
+    lawful_basis: art_6_1_c   # legal obligation (ancillary to AGI filing)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - employee
+    data_categories:
+      - user.government_id          # personnummer (BetalningsmottagarId)
+      - user.financial.employment   # gross salary, tax withheld, benefits
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      # Skatteverket retains nothing for kontrollera calls. Our outbound
+      # audit row in skatteverket_api_audit_log records who-called-what-when
+      # but NOT the payload body, minimising at-rest footprint.
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - skatteverket_api_audit_log
+    security_measures:
+      - strict_zod_allow_list_input_validation
+      - request_size_cap_64kb
+      - rbac_company_member_role_check
+      - rls_company_scoped
+      - tls_1_3_to_skatteverket
+      - immutable_audit_log
+      - no_payload_body_persisted
+
+  - id: moms.declaration
+    name: Momsdeklaration till Skatteverket
+    purpose: >-
+      Lämna in lagstadgad momsdeklaration (utkast, lås och signering) till
+      Skatteverkets momsdeklaration-API (Mervärdesskattelagen 17 kap. 24 §).
+    lawful_basis: art_6_1_c
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.government_id          # orgnummer (juridiska personer) eller pnr
+      - user.financial.tax          # rutor 05–62
+    recipients:
+      - name: Skatteverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow; no third-country transfer.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap
+      stored_in:
+        - extension_data (utkast metadata)
+        - skatteverket_api_audit_log
+    security_measures:
+      - rls_company_scoped
+      - tls_1_3_to_skatteverket
+      - bankid_signing_required_for_filing
+      - immutable_audit_log

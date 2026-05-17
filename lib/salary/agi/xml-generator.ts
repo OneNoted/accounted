@@ -107,6 +107,14 @@ export interface AGIEmployeeData {
   benefitCar?: number         // FK013 SkatteplBilformanUlagAG (amount, BELOPP7)
   benefitFuel?: number        // FK018 DrivmVidBilformanUlagAG (amount, BELOPP7)
   /**
+   * FK015 KostformanUlagAG (amount, BELOPP10). Kostförmån has its own
+   * dedicated field in the AGI spec with a PBB-linked schablon value —
+   * Skatteverket cross-checks the reported amount against the schablon.
+   * Aggregating meals into FK012 (övriga förmåner) triggers automated
+   * discrepancy notices. Always emit FK015 separately when > 0.
+   */
+  benefitMeals?: number
+  /**
    * Housing benefit indicator. FK041 (smahus) and FK043 (ej_smahus) are
    * boolean KRYSS flags in the XSD — they just signal that this kind of
    * benefit was given. The AMOUNT must be folded into benefitOther
@@ -116,9 +124,9 @@ export interface AGIEmployeeData {
   housingBenefit?: 'smahus' | 'ej_smahus'
   /**
    * FK012 SkatteplOvrigaFormanerUlagAG (amount, BELOPP10). Catch-all for
-   * taxable benefits that don't have their own dedicated FK code —
-   * meals, bike, wellness, "other", AND the full krona-amount for housing
-   * (since FK041/FK043 carry only the flag).
+   * taxable benefits without their own dedicated FK code — bike, wellness,
+   * "other", AND the full krona-amount for housing (since FK041/FK043
+   * carry only the flag). Meals go in benefitMeals (FK015), NOT here.
    */
   benefitOther?: number
   /**
@@ -242,17 +250,35 @@ export class AGIPayloadTooLargeError extends Error {
   }
 }
 
+/**
+ * Resolve the Skatteverket environment from a dedicated env var. Default
+ * to the stricter 'test' bucket when unset/unrecognised — a missing or
+ * misconfigured value must never silently raise the size ceiling.
+ *
+ * Documented in deployment runbook; substring-matching the API URL is
+ * forbidden (a misconfigured URL containing 'api.test.skatteverket.se'
+ * would otherwise lower the limit on a production tenant — the inverse
+ * was equally bad).
+ */
+function resolveSkatteverketEnv(): 'test' | 'production' {
+  const raw = process.env.SKATTEVERKET_ENV?.trim().toLowerCase()
+  if (raw === 'production' || raw === 'prod') return 'production'
+  if (raw === 'test') return 'test'
+  if (raw && raw !== '') {
+    // Unrecognised value — fail closed to test. Logged once so deployments
+    // catch typos in CI rather than at audit time.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `SKATTEVERKET_ENV='${raw}' is not 'test' | 'production'; defaulting to 'test' (stricter limits).`,
+    )
+  }
+  return 'test'
+}
+
 function assertPayloadSize(xml: string): void {
-  // Byte length, not character length — SKV counts the UTF-8 encoded body.
   const bytes = Buffer.byteLength(xml, 'utf8')
-  // Pick the stricter limit when we can't tell which environment we'll
-  // post to. Generation does not know the destination, and a test-env
-  // submission cannot exceed 100 MB even if the prod tenant would allow
-  // 300 MB. Configurable via env if a self-hosted deployment ever needs
-  // the bigger limit applied here.
-  const envLimit = process.env.SKATTEVERKET_API_BASE_URL?.includes('api.test.skatteverket.se')
-    ? AGI_TEST_MAX_BYTES
-    : AGI_PROD_MAX_BYTES
+  const env = resolveSkatteverketEnv()
+  const envLimit = env === 'production' ? AGI_PROD_MAX_BYTES : AGI_TEST_MAX_BYTES
   if (bytes > envLimit) {
     const mb = (bytes / (1024 * 1024)).toFixed(1)
     const limitMb = Math.floor(envLimit / (1024 * 1024))
@@ -403,6 +429,19 @@ export function generateAGIXml(
 
   // ── Blankett: Individuppgift (one per employee) ──────────────
   for (const emp of employees) {
+    // FK570 must be ≥ 1 (HELTAL, min 1 per spec). A 0 here would produce a
+    // STOPP-level rejection at Skatteverket; fail fast with a clearer
+    // Swedish message pointing at the missing column rather than letting
+    // bogus XML reach SKV.
+    if (!Number.isInteger(emp.specificationNumber) || emp.specificationNumber < 1) {
+      throw new AGIIncompleteDataError(
+        `Anställd saknar giltigt specifikationsnummer (FK570). ` +
+          'Specifikationsnumret måste vara ett heltal ≥ 1 och stabilt över korrigeringar. ' +
+          'Kontrollera fältet specification_number på den anställdes profil.',
+        ['specifikationsnummer'],
+      )
+    }
+
     let pnr: string
     try {
       pnr = decryptPersonnummer(emp.personnummer)
@@ -469,6 +508,16 @@ export function generateAGIXml(
       const code = exclSA ? '134' : '018'
       const elem = exclSA ? 'DrivmVidBilformanEjUlagSA' : 'DrivmVidBilformanUlagAG'
       lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitFuel)}</gem:${elem}>`)
+    }
+
+    // Kostförmån AMOUNT: FK015 (UlagAG) or FK139 (ej UlagSA). Has its own
+    // field because Skatteverket cross-checks the krona-belopp against the
+    // PBB-anchored schablon — folding it into FK012 triggers discrepancy
+    // notices. Always emit separately when > 0.
+    if (emp.benefitMeals && emp.benefitMeals > 0) {
+      const code = exclSA ? '139' : '015'
+      const elem = exclSA ? 'KostformanEjUlagSA' : 'KostformanUlagAG'
+      lines.push(`        <gem:${elem} faltkod="${code}">${formatAmount(emp.benefitMeals)}</gem:${elem}>`)
     }
 
     // Housing benefit FLAGS (KRYSS, no amount on this element). The
@@ -587,10 +636,16 @@ export function generateAGIXml(
 
 /**
  * Build individuppgifter snapshot for storage in agi_declarations.individuppgifter
- * (jsonb). Used as an audit reference for corrections — the FK570
- * (specificationNumber) must remain stable across re-submissions for the same
- * (employee, period). Keys are semantic, not Skatteverket FK codes — the
- * authoritative source for what was filed is the xml_content column.
+ * (jsonb). Sole purpose: stabilise FK570 (specifikationsnummer) across
+ * corrections by recording the (personnummer → specificationNumber) binding
+ * along with the headline totals that drive a re-issue decision.
+ *
+ * GDPR Art.25 (data minimisation): xml_content is the authoritative record
+ * of what was filed. Storing the full per-benefit breakdown here would
+ * duplicate sensitive financial detail with no incremental audit value, so
+ * detailed benefit fields (car/fuel/housing/meals/other/fSkatt) are
+ * deliberately omitted from the snapshot. Reconstruct them from
+ * xml_content when needed.
  */
 export function buildIndividuppgifterSnapshot(
   employees: AGIEmployeeData[]
@@ -609,14 +664,7 @@ export function buildIndividuppgifterSnapshot(
       grossSalary: emp.grossSalary,
       taxWithheld: emp.taxWithheld,
       avgifterBasis: emp.avgifterBasis,
-      benefitCar: emp.benefitCar ?? 0,
-      benefitFuel: emp.benefitFuel ?? 0,
-      housingBenefit: emp.housingBenefit ?? null,
-      benefitOther: emp.benefitOther ?? 0,
-      fSkattPayment: emp.fSkattPayment ?? 0,
-      sickDays: emp.sickDays ?? 0,
-      vabDays: emp.vabDays ?? 0,
-      parentalDays: emp.parentalDays ?? 0,
+      removed: emp.removed ?? false,
     }
   })
 }
