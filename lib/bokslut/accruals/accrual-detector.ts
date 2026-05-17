@@ -20,10 +20,20 @@ function nextDayIso(closingDate: string): string {
 /**
  * Propose an adjustment of semesterlöneskuld (vacation pay liability).
  *
- * The change-in-liability journal entry mirrors the rule in
- * `lib/reports/vacation-liability.ts` and BFNAR 2016:10 ch.16:
- *   - delta on 2920 (accrued vacation) = closing - opening
- *   - 31.42% sociala avgifter on the delta hit 2940
+ * Two correctness rules drive this entry (per BFNAR 2016:10 ch.16 and the
+ * vacation-liability report):
+ *
+ *   1. The delta is anchored against the **current closing balance** of
+ *      2920 (after any mid-year partial accruals / reversals), not the
+ *      opening balance. Anchoring on opening would over- or understate the
+ *      adjustment by the sum of in-period movements.
+ *
+ *   2. Semesterlöneskuld is a balance-sheet carry-forward (2920 / 2940
+ *      persist until the vacation is actually paid). The bokslut delta is
+ *      a normal posting that does NOT reverse on Jan 1 — reversing would
+ *      zero the liability on day 1 of the new year, which is a known
+ *      Swedish bookkeeping error. Hence `reverses_on` is empty for this
+ *      proposal; the wizard / UI suppresses the reversal badge accordingly.
  *
  * Returns null when delta is zero (no entry to propose).
  */
@@ -45,13 +55,14 @@ export async function proposeVacationLiabilityChange(
 
   // Current closing balance (what 2920 should be at year-end)
   const targetLiability = Math.round(report.totals.accruedAmount)
-  // Existing opening balance on 2920 (what's already on the books)
+  // Anchor on the CURRENT closing balance, not opening — captures any
+  // mid-year accruals / reversals that have already touched 2920.
   const row2920 = tb.rows.find((r) => r.account_number === '2920')
-  const openingLiability = row2920
-    ? Math.round((row2920.opening_credit - row2920.opening_debit) * 100) / 100
+  const currentLiability = row2920
+    ? Math.round((row2920.closing_credit - row2920.closing_debit) * 100) / 100
     : 0
 
-  const deltaLiability = targetLiability - openingLiability
+  const deltaLiability = targetLiability - currentLiability
   if (Math.abs(deltaLiability) < 1) {
     return null
   }
@@ -99,13 +110,15 @@ export async function proposeVacationLiabilityChange(
       ? `Ökning av semesterlöneskuld (${Math.abs(deltaInt)} kr + avgifter)`
       : `Minskning av semesterlöneskuld (${Math.abs(deltaInt)} kr + avgifter)`,
     description:
-      'Mellanvärde-justering av 2920 mot 7090 plus 31,42 % sociala avgifter på 2940 mot 7519.',
+      'Justering av 2920 mot 7090 plus 31,42 % sociala avgifter på 2940 mot 7519. Saldot på 2920 rullas vidare till nästa år (ingen vändning).',
     amount: totalAmount,
     lines,
-    reverses_on: nextDayIso(options.closingDate),
+    // Empty string = no reversal. UI / commit handler treats this differently
+    // from the periodisering case (which has a real reverses_on date).
+    reverses_on: '',
     warnings: [],
     computation: {
-      opening_2920: openingLiability,
+      current_2920: currentLiability,
       closing_target: targetLiability,
       delta: deltaInt,
       avgifter_rate: AVGIFTER_RATE_ON_ACCRUED,

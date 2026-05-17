@@ -124,10 +124,17 @@ export const POST = withRouteContext(
         // bookkeepers (and a future cron) can spot the periodisering. The
         // accrual_reversals cron is follow-up infra — once it lands, the
         // entry's source_type or a metadata column can drive the auto-flip.
+        //
+        // Vacation-liability adjustments deliberately have empty reverses_on
+        // since 2920 carries forward — emit a different description in that
+        // case so future readers don't expect a Jan 1 reversal.
+        const description = proposal.reverses_on
+          ? `Periodisering: ${proposal.label} (vänds ${proposal.reverses_on})`
+          : `Bokslutsjustering: ${proposal.label}`
         const entry = await createJournalEntry(supabase, companyId, user.id, {
           fiscal_period_id: id,
           entry_date: period.period_end,
-          description: `Periodisering: ${proposal.label} (vänds ${proposal.reverses_on})`,
+          description,
           source_type: 'manual',
           voucher_series: 'A',
           lines: proposal.lines,

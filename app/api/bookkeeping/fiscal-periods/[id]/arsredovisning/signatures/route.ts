@@ -8,8 +8,11 @@ import {
   listSignatureRequests,
 } from '@/lib/bokslut/arsredovisning/signature-service'
 
+// Roles are constrained to the underskrifter set ÅRL allows — keeps the API
+// from accepting arbitrary "Administrator" / "CEO" strings that the UI
+// dropdown doesn't expose.
 const CreateSchema = z.object({
-  role: z.string().min(1),
+  role: z.enum(['Styrelseledamot', 'Styrelseordförande', 'VD', 'Verkställande direktör']),
   signer_name: z.string().min(1),
 })
 
@@ -35,6 +38,19 @@ export const POST = withRouteContext(
     const validation = await validateBody(request, CreateSchema)
     if (!validation.success) return validation.response
     try {
+      // Defense-in-depth: confirm the fiscal period belongs to the
+      // authenticated company before writing. RLS would catch a cross-tenant
+      // insert anyway, but rejecting at the route layer gives a cleaner
+      // 404 + avoids the noisy RLS error in the structured-error envelope.
+      const { data: period } = await supabase
+        .from('fiscal_periods')
+        .select('id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!period) {
+        return NextResponse.json({ error: { code: 'PERIOD_NOT_FOUND' } }, { status: 404 })
+      }
       const data = await createSignatureRequest(supabase, companyId, user.id, id, validation.data)
       return NextResponse.json({ data })
     } catch (err) {

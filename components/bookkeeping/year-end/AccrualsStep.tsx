@@ -201,9 +201,15 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
               <div className="flex-1">
                 <CardTitle className="text-base">{vacation.label}</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">{vacation.description}</p>
-                <Badge variant="outline" className="mt-2">
-                  Vänds {vacation.reverses_on}
-                </Badge>
+                {vacation.reverses_on ? (
+                  <Badge variant="outline" className="mt-2">
+                    Vänds {vacation.reverses_on}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="mt-2">
+                    Rullas vidare (ingen vändning)
+                  </Badge>
+                )}
               </div>
               <p className="font-display text-2xl tabular-nums shrink-0">
                 {formatCurrency(vacation.amount)}

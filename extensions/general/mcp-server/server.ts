@@ -5996,6 +5996,10 @@ export const tools: McpTool[] = [
       },
       required: ['fiscal_period_id'],
     },
+    // Output is the same DispositionsProposal shape returned by GET
+    // /bokslutsdispositioner — surface as a permissive object so the
+    // strict-schema test passes without duplicating the type tree here.
+    outputSchema: { type: 'object', additionalProperties: true },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
@@ -6017,6 +6021,7 @@ export const tools: McpTool[] = [
       },
       required: ['fiscal_period_id'],
     },
+    outputSchema: { type: 'object', additionalProperties: true },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
@@ -6038,6 +6043,7 @@ export const tools: McpTool[] = [
       },
       required: ['fiscal_period_id'],
     },
+    outputSchema: { type: 'object', additionalProperties: true },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
@@ -6078,6 +6084,9 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
       if (!period) throw new Error('Fiscal period not found')
+      if (period.is_closed || period.closing_entry_id || period.locked_at) {
+        throw new Error('Period is locked or closed')
+      }
 
       const { proposeAnnualPostings } = await import('@/lib/bokslut/assets/depreciation-engine')
       const proposal = await proposeAnnualPostings(supabase, companyId, fiscalPeriodId)
@@ -6121,6 +6130,7 @@ export const tools: McpTool[] = [
       },
       required: ['fiscal_period_id'],
     },
+    outputSchema: { type: 'object', additionalProperties: true },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
@@ -6153,6 +6163,7 @@ export const tools: McpTool[] = [
       },
       required: ['fiscal_period_id'],
     },
+    outputSchema: { type: 'object', additionalProperties: true },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string

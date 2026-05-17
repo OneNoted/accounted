@@ -144,7 +144,22 @@ export default function ArsredovisningPage() {
     )
   }
 
-  const pdfUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf`
+  // Carry the narrative edits into the PDF URL so the download reflects
+  // exactly what the user typed. A future enhancement will persist
+  // overrides server-side; URL params get us through the merge while
+  // keeping the "click to download" UX.
+  const pdfUrl = (() => {
+    const qs = new URLSearchParams()
+    if (description !== data.forvaltningsberattelse.description) qs.set('description', description)
+    if (importantEvents !== data.forvaltningsberattelse.important_events) {
+      qs.set('events', importantEvents)
+    }
+    if (resultatdisposition !== data.forvaltningsberattelse.resultatdisposition) {
+      qs.set('disposition', resultatdisposition)
+    }
+    const query = qs.toString()
+    return `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf${query ? '?' + query : ''}`
+  })()
 
   return (
     <div className="space-y-8">
@@ -330,10 +345,11 @@ export default function ArsredovisningPage() {
             </Button>
           </div>
           <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground">
-            <strong>Notis om digital inlämning:</strong> från räkenskapsår som börjar
-            efter 31 december 2025 ska årsredovisning för aktiebolag lämnas in digitalt
-            (iXBRL) hos Bolagsverket. Gnubok stödjer för närvarande endast PDF-utkast;
-            iXBRL-generering är planerad till en kommande version.
+            <strong>Notis om digital inlämning:</strong> Bolagsverket har föreslagit att
+            digital inlämning (iXBRL) av årsredovisning för aktiebolag ska bli
+            obligatorisk — beslut och ikraftträdande är ännu inte fastställda. Idag är
+            PDF-inlämning fortfarande godkänd. Gnubok stödjer för närvarande endast
+            PDF-utkast; iXBRL-generering är planerad till en kommande version.
           </div>
         </CardContent>
       </Card>
