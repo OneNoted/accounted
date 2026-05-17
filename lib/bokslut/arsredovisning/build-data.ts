@@ -4,6 +4,7 @@ import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { getNarrative } from './narrative-service'
 import type {
   ArsredovisningData,
   EgenKapitalRow,
@@ -33,7 +34,7 @@ export async function buildArsredovisningData(
   fiscalPeriodId: string,
   overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
 ): Promise<ArsredovisningData> {
-  const [periodResult, settingsResult, periodList, incomeStatement, balanceSheet] = await Promise.all([
+  const [periodResult, settingsResult, periodList, incomeStatement, balanceSheet, narrative] = await Promise.all([
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end, previous_period_id, closing_entry_id')
@@ -42,7 +43,7 @@ export async function buildArsredovisningData(
       .single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, address')
+      .select('company_name, org_number, address, entity_type')
       .eq('company_id', companyId)
       .maybeSingle(),
     fetchAllRows(({ from, to }) =>
@@ -55,6 +56,11 @@ export async function buildArsredovisningData(
     ),
     generateIncomeStatement(supabase, companyId, fiscalPeriodId),
     generateBalanceSheet(supabase, companyId, fiscalPeriodId),
+    // Load persisted narrative overrides — replaces the URL-query-param
+    // carry from earlier phases. Caller-supplied overrides (passed in via
+    // the second arg) still win, so the API can layer per-request edits on
+    // top of the saved baseline if needed.
+    getNarrative(supabase, companyId, fiscalPeriodId).catch(() => null),
   ])
 
   if (periodResult.error || !periodResult.data) {
@@ -64,11 +70,17 @@ export async function buildArsredovisningData(
   const settings = settingsResult.data
   const companyName = settings?.company_name ?? 'Bolaget'
   const orgNumber = settings?.org_number ?? ''
+  const entityType = (settings as { entity_type?: string } | null)?.entity_type ?? 'aktiebolag'
 
   type AddressShape = { city?: string | null; postal_city?: string | null } | null
   const addressUnknown = (settings as { address?: AddressShape } | null)?.address ?? null
-  const sate =
+  const city =
     (addressUnknown && (addressUnknown.city ?? addressUnknown.postal_city)) || null
+
+  // Merge precedence: caller overrides → persisted narrative → boilerplate
+  const persistedDescription = narrative?.description ?? undefined
+  const persistedEvents = narrative?.important_events ?? undefined
+  const persistedRd = narrative?.resultatdisposition ?? undefined
 
   const flerarsoversikt = await buildFlerarsoversikt(
     supabase,
@@ -79,7 +91,7 @@ export async function buildArsredovisningData(
 
   const egen_kapital_changes = buildEquityChanges(balanceSheet.equity_liability_sections)
 
-  const noter = await buildK2Noter(supabase, companyId)
+  const noter = await buildK2Noter(supabase, companyId, entityType)
 
   const resultatrakning = flattenIncomeStatement(incomeStatement)
   const balansrakning = flattenBalanceSheet(balanceSheet)
@@ -88,7 +100,7 @@ export async function buildArsredovisningData(
     company: {
       name: companyName,
       org_number: orgNumber,
-      sate,
+      city,
     },
     fiscal_period: {
       id: period.id,
@@ -99,15 +111,18 @@ export async function buildArsredovisningData(
     forvaltningsberattelse: {
       description:
         overrides.description ??
+        persistedDescription ??
         `${companyName} bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.`,
       important_events:
         overrides.important_events ??
+        persistedEvents ??
         'Inga väsentliga händelser utöver löpande verksamhet har inträffat under räkenskapsåret.',
       kontrollbalans_required: overrides.kontrollbalans_required ?? false,
       flerarsoversikt,
       egen_kapital_changes,
       resultatdisposition:
         overrides.resultatdisposition ??
+        persistedRd ??
         'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
     },
     resultatrakning,
@@ -156,6 +171,12 @@ async function buildFlerarsoversikt(
       // överavskrivningar) are obeskattade reserver — partially deferred tax,
       // not equity. K2 / ÅRL splits them out. Including 21xx here would
       // inflate soliditet for any AB that posts dispositions.
+      //
+      // K3 NOTE: K3 (BFNAR 2012:1) requires the 79,4% equity portion of
+      // obeskattade reserver to be folded into eget kapital and the 20,6%
+      // latent skatteskuld to be split out separately. When K3 support
+      // lands this filter must branch on the company's framework — for now
+      // we treat every entity as K2 / consistent-with-K2.
       const equity = tb.rows
         .filter((r) => r.account_number.startsWith('20'))
         .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
@@ -205,14 +226,55 @@ function buildEquityChanges(sections: BalanceSheetSection[]): EgenKapitalRow[] {
 async function buildK2Noter(
   supabase: SupabaseClient,
   companyId: string,
+  entityType: string,
 ): Promise<NoteEntry[]> {
   const notes: NoteEntry[] = []
+  // Note 1: framework. Only claim K2 explicitly when we know the company is
+  // an AB and using K2 — otherwise emit a generic principles note so the
+  // ÅR doesn't falsely assert a framework the company isn't on.
+  // K3 election isn't yet tracked separately; we treat any non-AB as not-K2.
+  const isAbK2 = entityType === 'aktiebolag'
   notes.push({
     number: 1,
     title: 'Redovisnings- och värderingsprinciper',
-    body:
-      'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).',
+    body: isAbK2
+      ? 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd BFNAR 2016:10 Årsredovisning i mindre företag (K2).'
+      : 'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen och Bokföringsnämndens allmänna råd.',
   })
+
+  // Note: aktiekapital. K2 punkt 18.x requires AB to disclose share-capital
+  // structure. Read from company_settings when present; emit a placeholder
+  // when missing so the user knows to fill it in.
+  if (isAbK2) {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('aktiekapital, antal_aktier, kvotvarde')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    type AktiekapitalShape = { aktiekapital?: number | null; antal_aktier?: number | null; kvotvarde?: number | null }
+    const ak = settings as AktiekapitalShape | null
+    const aktiekapital = ak?.aktiekapital ?? null
+    const antalAktier = ak?.antal_aktier ?? null
+    const kvotvarde = ak?.kvotvarde ?? null
+    if (aktiekapital || antalAktier) {
+      const parts: string[] = []
+      if (aktiekapital) parts.push(`Aktiekapital: ${aktiekapital.toLocaleString('sv-SE')} kr.`)
+      if (antalAktier) parts.push(`Antal aktier: ${antalAktier.toLocaleString('sv-SE')}.`)
+      if (kvotvarde) parts.push(`Kvotvärde per aktie: ${kvotvarde.toLocaleString('sv-SE')} kr.`)
+      notes.push({
+        number: notes.length + 1,
+        title: 'Aktiekapital',
+        body: parts.join(' '),
+      })
+    } else {
+      notes.push({
+        number: notes.length + 1,
+        title: 'Aktiekapital',
+        body:
+          'Uppgifter om aktiekapital saknas i företagets inställningar. Komplettera under Inställningar → Företag innan inlämning till Bolagsverket.',
+      })
+    }
+  }
 
   // Avskrivningstider — derive from asset register
   const assets = await listAssets(supabase, companyId)

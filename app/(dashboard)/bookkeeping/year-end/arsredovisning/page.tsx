@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { PageHeader } from '@/components/ui/page-header'
-import { ArrowLeft, FileDown, Plus, ExternalLink } from 'lucide-react'
+import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
@@ -26,10 +26,17 @@ export default function ArsredovisningPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Editable narrative fields
+  // Editable narrative fields — persisted to arsredovisning_narratives so
+  // the PDF always reflects the latest saved version and a refresh / new
+  // user picks up the same content.
   const [description, setDescription] = useState('')
   const [importantEvents, setImportantEvents] = useState('')
   const [resultatdisposition, setResultatdisposition] = useState('')
+  const [savedDescription, setSavedDescription] = useState('')
+  const [savedImportantEvents, setSavedImportantEvents] = useState('')
+  const [savedResultatdisposition, setSavedResultatdisposition] = useState('')
+  const [savingNarrative, setSavingNarrative] = useState(false)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
 
   // Add-signer form
   const [signerName, setSignerName] = useState('')
@@ -52,9 +59,16 @@ export default function ArsredovisningPage() {
         }
         const d = arBody.data as ArsredovisningData
         setData(d)
+        // buildArsredovisningData merges persisted narrative + boilerplate,
+        // so the values here are whatever the user will see in the PDF
+        // unless they edit. Track both "current draft" and "last saved" so
+        // we can disable Spara when there's nothing pending.
         setDescription(d.forvaltningsberattelse.description)
         setImportantEvents(d.forvaltningsberattelse.important_events)
         setResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
+        setSavedDescription(d.forvaltningsberattelse.description)
+        setSavedImportantEvents(d.forvaltningsberattelse.important_events)
+        setSavedResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
         setSignatures((sigBody.data ?? []) as SignatureRequest[])
       })
       .catch(() => {
@@ -67,6 +81,87 @@ export default function ArsredovisningPage() {
       cancelled = true
     }
   }, [periodId])
+
+  const hasUnsavedNarrative =
+    description !== savedDescription ||
+    importantEvents !== savedImportantEvents ||
+    resultatdisposition !== savedResultatdisposition
+
+  const handleSaveNarrative = useCallback(async () => {
+    if (!periodId) return
+    setSavingNarrative(true)
+    try {
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/narrative`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            description,
+            important_events: importantEvents,
+            resultatdisposition,
+          }),
+        },
+      )
+      const body = await res.json()
+      if (!res.ok) {
+        toast({
+          title: 'Kunde inte spara texten',
+          description: body?.error?.message ?? '',
+          variant: 'destructive',
+        })
+        return
+      }
+      setSavedDescription(description)
+      setSavedImportantEvents(importantEvents)
+      setSavedResultatdisposition(resultatdisposition)
+      setSavedAt(Date.now())
+    } catch (err) {
+      toast({
+        title: 'Kunde inte spara texten',
+        description: err instanceof Error ? err.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingNarrative(false)
+    }
+  }, [periodId, description, importantEvents, resultatdisposition, toast])
+
+  const handleMarkSigned = useCallback(
+    async (signatureId: string) => {
+      if (!periodId) return
+      try {
+        const res = await fetch(
+          `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/${signatureId}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'signed' }),
+          },
+        )
+        const body = await res.json()
+        if (!res.ok) {
+          toast({
+            title: 'Kunde inte markera som signerad',
+            description: body?.error?.message ?? '',
+            variant: 'destructive',
+          })
+          return
+        }
+        setSignatures((prev) =>
+          prev.map((s) => (s.id === signatureId ? (body.data as SignatureRequest) : s)),
+        )
+        toast({ title: 'Underskrift registrerad' })
+      } catch (err) {
+        toast({
+          title: 'Kunde inte markera som signerad',
+          description: err instanceof Error ? err.message : 'Okänt fel',
+          variant: 'destructive',
+        })
+      }
+    },
+    [periodId, toast],
+  )
 
   const handleAddSigner = useCallback(async () => {
     if (!periodId || !signerName.trim()) return
@@ -144,22 +239,9 @@ export default function ArsredovisningPage() {
     )
   }
 
-  // Carry the narrative edits into the PDF URL so the download reflects
-  // exactly what the user typed. A future enhancement will persist
-  // overrides server-side; URL params get us through the merge while
-  // keeping the "click to download" UX.
-  const pdfUrl = (() => {
-    const qs = new URLSearchParams()
-    if (description !== data.forvaltningsberattelse.description) qs.set('description', description)
-    if (importantEvents !== data.forvaltningsberattelse.important_events) {
-      qs.set('events', importantEvents)
-    }
-    if (resultatdisposition !== data.forvaltningsberattelse.resultatdisposition) {
-      qs.set('disposition', resultatdisposition)
-    }
-    const query = qs.toString()
-    return `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf${query ? '?' + query : ''}`
-  })()
+  // PDF route reads persisted narrative from the new arsredovisning_narratives
+  // table. The save button below writes overrides; the URL stays clean.
+  const pdfUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf`
 
   return (
     <div className="space-y-8">
@@ -210,6 +292,33 @@ export default function ArsredovisningPage() {
               onChange={(e) => setResultatdisposition(e.target.value)}
               rows={3}
             />
+          </div>
+          <div className="flex items-center justify-between pt-2">
+            <div className="text-xs text-muted-foreground">
+              {hasUnsavedNarrative ? (
+                <span>Ändringar sparas inte automatiskt.</span>
+              ) : savedAt ? (
+                <span className="inline-flex items-center gap-1 text-success">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Sparat
+                </span>
+              ) : (
+                <span>Alla ändringar är sparade.</span>
+              )}
+            </div>
+            <Button
+              onClick={handleSaveNarrative}
+              disabled={savingNarrative || !hasUnsavedNarrative}
+            >
+              {savingNarrative ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
+                </>
+              ) : (
+                <>
+                  <Save className="mr-2 h-4 w-4" /> Spara texten
+                </>
+              )}
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -274,13 +383,24 @@ export default function ArsredovisningPage() {
                 <p className="text-sm font-medium">{sig.signer_name}</p>
                 <p className="text-xs text-muted-foreground">{sig.role}</p>
               </div>
-              {sig.status === 'signed' ? (
-                <Badge variant="success">Signerad</Badge>
-              ) : sig.status === 'declined' ? (
-                <Badge variant="destructive">Avböjd</Badge>
-              ) : (
-                <Badge variant="outline">Väntar på underskrift</Badge>
-              )}
+              <div className="flex items-center gap-2">
+                {sig.status === 'signed' ? (
+                  <Badge variant="success">Signerad</Badge>
+                ) : sig.status === 'declined' ? (
+                  <Badge variant="destructive">Avböjd</Badge>
+                ) : (
+                  <>
+                    <Badge variant="outline">Väntar på underskrift</Badge>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleMarkSigned(sig.id)}
+                    >
+                      Markera som signerad
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           ))}
           <div className="flex flex-wrap gap-2 items-end pt-2">

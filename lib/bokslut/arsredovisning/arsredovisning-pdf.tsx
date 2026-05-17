@@ -138,8 +138,8 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
           </Text>
           <Text style={styles.paragraph}>{data.company.name}</Text>
           <Text style={styles.paragraph}>Organisationsnummer: {data.company.org_number}</Text>
-          {data.company.sate && (
-            <Text style={styles.paragraph}>Säte: {data.company.sate}</Text>
+          {data.company.city && (
+            <Text style={styles.paragraph}>Säte: {data.company.city}</Text>
           )}
         </View>
       </Page>
@@ -265,7 +265,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <PageChrome data={data} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
         <Text style={styles.paragraph}>
-          {data.company.sate ? `${data.company.sate}, ` : ''}
+          {data.company.city ? `${data.company.city}, ` : ''}
           {data.fiscal_period.period_end}
         </Text>
         {(data.signatures.length > 0
@@ -282,6 +282,45 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
             <Text style={{ width: 120 }}>{sig.role}</Text>
           </View>
         ))}
+      </Page>
+
+      {/*
+        Fastställelseintyg — required by ÅRL 8 kap 3 § for Bolagsverket
+        filing. The intyg confirms that the income statement and balance
+        sheet have been adopted at the AGM (årsstämma) and reports the
+        AGM's resolution on resultatdisposition. Without this page the
+        document cannot be filed as-is — Bolagsverket rejects submissions
+        that lack the intyg.
+      */}
+      <Page size="A4" style={styles.page}>
+        <PageChrome data={data} pageLabel="Fastställelseintyg" />
+        <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
+        <Text style={styles.paragraph}>
+          Undertecknad styrelseledamot intygar härmed att resultaträkningen och
+          balansräkningen har fastställts på årsstämma den ____________________
+          och att stämman beslutat att disponera resultatet enligt styrelsens
+          förslag.
+        </Text>
+        <Text style={styles.paragraph}>
+          Jag intygar också att årsredovisningen ger en rättvisande bild av
+          företagets ställning och resultat samt att förvaltningsberättelsen ger
+          en rättvisande översikt över utvecklingen av företagets verksamhet,
+          ställning och resultat.
+        </Text>
+        <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
+        <Text style={styles.paragraph}>
+          {data.forvaltningsberattelse.resultatdisposition}
+        </Text>
+        <View style={styles.signatureLine}>
+          <View style={styles.signatureSlot}>
+            <Text> </Text>
+          </View>
+          <Text style={{ width: 200 }}>Styrelseledamot / VD</Text>
+        </View>
+        <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
+          {data.company.city ? `${data.company.city}, ` : ''}
+          datum: ____________________
+        </Text>
       </Page>
     </Document>
   )

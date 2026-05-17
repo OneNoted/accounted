@@ -49,7 +49,9 @@ export interface ArsredovisningData {
   company: {
     name: string
     org_number: string
-    sate: string | null
+    /** Företagets säte (Bolagsverket-registered registered office city).
+     *  Used in the underskrifter "Stad, datum" line and the fastställelseintyg. */
+    city: string | null
   }
   fiscal_period: {
     id: string
