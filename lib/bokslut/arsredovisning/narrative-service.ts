@@ -4,6 +4,10 @@ export interface NarrativeOverrides {
   description: string | null
   important_events: string | null
   resultatdisposition: string | null
+  /** ISO date of the AGM (årsstämma) where the årsredovisning was adopted.
+   *  Populates the fastställelseintyg date blank — without it the PDF
+   *  cannot be filed at Bolagsverket without manual pen-and-ink edit. */
+  agm_date: string | null
 }
 
 export interface NarrativeRow {
@@ -14,6 +18,7 @@ export interface NarrativeRow {
   description: string | null
   important_events: string | null
   resultatdisposition: string | null
+  agm_date: string | null
   created_at: string
   updated_at: string
 }
@@ -41,10 +46,11 @@ export async function getNarrative(
 }
 
 /**
- * Upsert narrative overrides for a fiscal period. The UNIQUE (fiscal_period_id)
- * constraint on the table makes the onConflict path resolve to an UPDATE,
- * so repeated saves from auto-save / blur handlers cleanly replace prior
- * content instead of stacking rows.
+ * Upsert narrative overrides for a fiscal period. Composite UNIQUE constraint
+ * (company_id, fiscal_period_id) — see migration
+ * 20260517160000_narrative_agm_date_and_composite_unique.sql — makes the
+ * onConflict path resolve to an UPDATE within the same tenant, so repeated
+ * saves cleanly replace prior content instead of stacking rows.
  */
 export async function upsertNarrative(
   supabase: SupabaseClient,
@@ -60,10 +66,11 @@ export async function upsertNarrative(
     description: input.description ?? null,
     important_events: input.important_events ?? null,
     resultatdisposition: input.resultatdisposition ?? null,
+    agm_date: input.agm_date ?? null,
   }
   const { data, error } = await supabase
     .from(TABLE)
-    .upsert(payload, { onConflict: 'fiscal_period_id' })
+    .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
     .select('*')
     .single()
   if (error || !data) {

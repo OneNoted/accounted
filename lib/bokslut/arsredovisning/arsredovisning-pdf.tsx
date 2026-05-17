@@ -297,8 +297,9 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         <Text style={styles.paragraph}>
           Undertecknad styrelseledamot intygar härmed att resultaträkningen och
-          balansräkningen har fastställts på årsstämma den ____________________
-          och att stämman beslutat att disponera resultatet enligt styrelsens
+          balansräkningen har fastställts på årsstämma den{' '}
+          {data.forvaltningsberattelse.agm_date ?? '____________________'} och
+          att stämman beslutat att disponera resultatet enligt styrelsens
           förslag.
         </Text>
         <Text style={styles.paragraph}>
@@ -319,7 +320,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         </View>
         <Text style={[styles.paragraph, { marginTop: 30, fontSize: 9, color: '#666' }]}>
           {data.company.city ? `${data.company.city}, ` : ''}
-          datum: ____________________
+          datum: {data.forvaltningsberattelse.agm_date ?? '____________________'}
         </Text>
       </Page>
     </Document>

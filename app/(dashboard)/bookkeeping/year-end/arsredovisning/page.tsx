@@ -35,6 +35,8 @@ export default function ArsredovisningPage() {
   const [savedDescription, setSavedDescription] = useState('')
   const [savedImportantEvents, setSavedImportantEvents] = useState('')
   const [savedResultatdisposition, setSavedResultatdisposition] = useState('')
+  const [agmDate, setAgmDate] = useState('')
+  const [savedAgmDate, setSavedAgmDate] = useState('')
   const [savingNarrative, setSavingNarrative] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
 
@@ -66,9 +68,11 @@ export default function ArsredovisningPage() {
         setDescription(d.forvaltningsberattelse.description)
         setImportantEvents(d.forvaltningsberattelse.important_events)
         setResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
+        setAgmDate(d.forvaltningsberattelse.agm_date ?? '')
         setSavedDescription(d.forvaltningsberattelse.description)
         setSavedImportantEvents(d.forvaltningsberattelse.important_events)
         setSavedResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
+        setSavedAgmDate(d.forvaltningsberattelse.agm_date ?? '')
         setSignatures((sigBody.data ?? []) as SignatureRequest[])
       })
       .catch(() => {
@@ -85,7 +89,8 @@ export default function ArsredovisningPage() {
   const hasUnsavedNarrative =
     description !== savedDescription ||
     importantEvents !== savedImportantEvents ||
-    resultatdisposition !== savedResultatdisposition
+    resultatdisposition !== savedResultatdisposition ||
+    agmDate !== savedAgmDate
 
   const handleSaveNarrative = useCallback(async () => {
     if (!periodId) return
@@ -100,6 +105,7 @@ export default function ArsredovisningPage() {
             description,
             important_events: importantEvents,
             resultatdisposition,
+            agm_date: agmDate || null,
           }),
         },
       )
@@ -115,6 +121,7 @@ export default function ArsredovisningPage() {
       setSavedDescription(description)
       setSavedImportantEvents(importantEvents)
       setSavedResultatdisposition(resultatdisposition)
+      setSavedAgmDate(agmDate)
       setSavedAt(Date.now())
     } catch (err) {
       toast({
@@ -125,7 +132,7 @@ export default function ArsredovisningPage() {
     } finally {
       setSavingNarrative(false)
     }
-  }, [periodId, description, importantEvents, resultatdisposition, toast])
+  }, [periodId, description, importantEvents, resultatdisposition, agmDate, toast])
 
   const handleMarkSigned = useCallback(
     async (signatureId: string) => {
@@ -292,6 +299,20 @@ export default function ArsredovisningPage() {
               onChange={(e) => setResultatdisposition(e.target.value)}
               rows={3}
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
+            <Input
+              id="ar-agm-date"
+              type="date"
+              value={agmDate}
+              onChange={(e) => setAgmDate(e.target.value)}
+              className="max-w-[220px]"
+            />
+            <p className="text-xs text-muted-foreground">
+              Datum då årsstämman fastställde årsredovisningen — fyller i datumraden på
+              fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
+            </p>
           </div>
           <div className="flex items-center justify-between pt-2">
             <div className="text-xs text-muted-foreground">
@@ -464,6 +485,16 @@ export default function ArsredovisningPage() {
               </Link>
             </Button>
           </div>
+          {data.warnings.length > 0 && (
+            <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground space-y-1">
+              <p className="font-medium">Innan inlämning till Bolagsverket:</p>
+              <ul className="list-disc pl-5 space-y-1">
+                {data.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground">
             <strong>Notis om digital inlämning:</strong> Bolagsverket har föreslagit att
             digital inlämning (iXBRL) av årsredovisning för aktiebolag ska bli

@@ -14,6 +14,8 @@ const PostSchema = z.object({
   description: z.string().max(4000).nullable().optional(),
   important_events: z.string().max(4000).nullable().optional(),
   resultatdisposition: z.string().max(2000).nullable().optional(),
+  // ISO YYYY-MM-DD per the DATE column; null clears it.
+  agm_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 })
 
 export const GET = withRouteContext(
@@ -22,6 +24,18 @@ export const GET = withRouteContext(
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
     try {
+      // Mirror the POST handler's period-ownership pre-check so a valid
+      // JWT for company A can't probe / enumerate company B's period IDs
+      // through this endpoint.
+      const { data: period } = await supabase
+        .from('fiscal_periods')
+        .select('id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (!period) {
+        return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
+      }
       const data = await getNarrative(supabase, companyId, id)
       return NextResponse.json({ data })
     } catch (err) {
@@ -40,15 +54,19 @@ export const POST = withRouteContext(
     try {
       // Verify the fiscal period belongs to the authenticated company before
       // writing — defense-in-depth alongside RLS, gives a cleaner 404 than
-      // the RLS rejection envelope.
+      // the RLS rejection envelope. Also refuse mutations on locked/closed
+      // periods (BFL 5 kap 5 § — räkenskapsinformation immutability).
       const { data: period } = await supabase
         .from('fiscal_periods')
-        .select('id')
+        .select('id, is_closed, locked_at, closing_entry_id')
         .eq('id', id)
         .eq('company_id', companyId)
         .maybeSingle()
       if (!period) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
+      }
+      if (period.is_closed || period.locked_at || period.closing_entry_id) {
+        return errorResponseFromCode('PERIOD_LOCKED', log, { requestId })
       }
       const data = await upsertNarrative(supabase, companyId, user.id, id, validation.data)
       return NextResponse.json({ data })

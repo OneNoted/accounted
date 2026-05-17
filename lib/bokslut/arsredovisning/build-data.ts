@@ -70,7 +70,11 @@ export async function buildArsredovisningData(
   const settings = settingsResult.data
   const companyName = settings?.company_name ?? 'Bolaget'
   const orgNumber = settings?.org_number ?? ''
-  const entityType = (settings as { entity_type?: string } | null)?.entity_type ?? 'aktiebolag'
+  // Default to 'unknown' (not 'aktiebolag') when entity_type isn't set —
+  // otherwise the K2 guard in buildK2Noter would claim K2 for every
+  // unconfigured company, which is exactly the false-assertion the guard
+  // was added to prevent.
+  const entityType = (settings as { entity_type?: string } | null)?.entity_type ?? 'unknown'
 
   type AddressShape = { city?: string | null; postal_city?: string | null } | null
   const addressUnknown = (settings as { address?: AddressShape } | null)?.address ?? null
@@ -81,6 +85,7 @@ export async function buildArsredovisningData(
   const persistedDescription = narrative?.description ?? undefined
   const persistedEvents = narrative?.important_events ?? undefined
   const persistedRd = narrative?.resultatdisposition ?? undefined
+  const persistedAgmDate = narrative?.agm_date ?? null
 
   const flerarsoversikt = await buildFlerarsoversikt(
     supabase,
@@ -91,10 +96,31 @@ export async function buildArsredovisningData(
 
   const egen_kapital_changes = buildEquityChanges(balanceSheet.equity_liability_sections)
 
-  const noter = await buildK2Noter(supabase, companyId, entityType)
+  const { notes: noter, warnings: noterWarnings } = await buildK2Noter(
+    supabase,
+    companyId,
+    entityType,
+  )
 
   const resultatrakning = flattenIncomeStatement(incomeStatement)
   const balansrakning = flattenBalanceSheet(balanceSheet)
+
+  const warnings: string[] = [...noterWarnings]
+  if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
+    warnings.push(
+      'Den här årsredovisningen genereras med K2-mallen (BFNAR 2016:10) som standard. För K3- eller annan företagsform kan strukturen behöva justeras manuellt innan inlämning.',
+    )
+  }
+  if (entityType === 'unknown') {
+    warnings.push(
+      'Företagsform saknas i inställningarna — fyll i Inställningar → Företag för att få rätt redovisningsprinciper i not 1.',
+    )
+  }
+  if (!persistedAgmDate) {
+    warnings.push(
+      'Datum för årsstämma saknas. Fastställelseintyget i PDF:en lämnas tomt på datumraden tills det fylls i nedan.',
+    )
+  }
 
   return {
     company: {
@@ -124,8 +150,10 @@ export async function buildArsredovisningData(
         overrides.resultatdisposition ??
         persistedRd ??
         'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
+      agm_date: persistedAgmDate,
     },
     resultatrakning,
+    warnings,
     balansrakning,
     noter,
     signatures: [], // populated by signature-flow service in a later phase step
@@ -227,8 +255,9 @@ async function buildK2Noter(
   supabase: SupabaseClient,
   companyId: string,
   entityType: string,
-): Promise<NoteEntry[]> {
+): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
   const notes: NoteEntry[] = []
+  const warnings: string[] = []
   // Note 1: framework. Only claim K2 explicitly when we know the company is
   // an AB and using K2 — otherwise emit a generic principles note so the
   // ÅR doesn't falsely assert a framework the company isn't on.
@@ -267,12 +296,15 @@ async function buildK2Noter(
         body: parts.join(' '),
       })
     } else {
-      notes.push({
-        number: notes.length + 1,
-        title: 'Aktiekapital',
-        body:
-          'Uppgifter om aktiekapital saknas i företagets inställningar. Komplettera under Inställningar → Företag innan inlämning till Bolagsverket.',
-      })
+      // Don't write a "saknas — komplettera" placeholder into the PDF body —
+      // that text would land in the Bolagsverket-filed document as a user-
+      // facing error string and the filing would be K2-non-compliant
+      // (BFNAR 2016:10 punkt 5.4 / ÅRL 5 kap 14 § require the actual
+      // registered amount). Omit the note entirely and surface a warning so
+      // the UI can flag this pre-download.
+      warnings.push(
+        'Aktiekapitalnoten saknas eftersom uppgifter om aktiekapital inte finns i Inställningar → Företag. K2 / ÅRL kräver att noten innehåller registrerat belopp innan inlämning till Bolagsverket.',
+      )
     }
   }
 
@@ -331,7 +363,7 @@ async function buildK2Noter(
     body: 'Inga.',
   })
 
-  return notes
+  return { notes, warnings }
 }
 
 function flattenIncomeStatement(is: {
