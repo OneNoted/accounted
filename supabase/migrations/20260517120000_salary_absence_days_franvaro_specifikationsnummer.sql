@@ -23,11 +23,18 @@ ALTER TABLE salary_absence_days
 -- rows get lower numbers so the first AGI submission for the period (which
 -- happens shortly after the month ends) stays consistent with what was
 -- already filed before this migration.
+--
+-- The year-month key is computed as YEAR*100+MONTH (e.g. 202605) rather
+-- than date_trunc('month', …) because expressions used in unique indexes
+-- must be IMMUTABLE, and date_trunc(text, date) resolves to the STABLE
+-- timestamptz overload on PostgreSQL < 14 (and even on newer versions with
+-- some search_path / overload-resolution combinations). extract(year/month
+-- from date) is unambiguously IMMUTABLE.
 WITH numbered AS (
   SELECT
     id,
     ROW_NUMBER() OVER (
-      PARTITION BY employee_id, date_trunc('month', absence_date)
+      PARTITION BY employee_id, (extract(year FROM absence_date)::int * 100 + extract(month FROM absence_date)::int)
       ORDER BY absence_date, id
     ) AS rn
   FROM salary_absence_days
@@ -41,7 +48,11 @@ UPDATE salary_absence_days sad
 -- One number per (employee, year-month, type-applicable-row). The partial
 -- index lets sick/pregnancy/etc rows leave the column NULL.
 CREATE UNIQUE INDEX idx_salary_absence_days_franvaro_specnum
-  ON salary_absence_days (employee_id, date_trunc('month', absence_date), franvaro_specifikationsnummer)
+  ON salary_absence_days (
+    employee_id,
+    (extract(year FROM absence_date)::int * 100 + extract(month FROM absence_date)::int),
+    franvaro_specifikationsnummer
+  )
   WHERE franvaro_specifikationsnummer IS NOT NULL;
 
 -- Trigger: assign max+1 within the (employee, year-month) bucket on INSERT
@@ -59,7 +70,8 @@ BEGIN
       INTO NEW.franvaro_specifikationsnummer
       FROM salary_absence_days
      WHERE employee_id = NEW.employee_id
-       AND date_trunc('month', absence_date) = date_trunc('month', NEW.absence_date)
+       AND (extract(year FROM absence_date)::int * 100 + extract(month FROM absence_date)::int)
+         = (extract(year FROM NEW.absence_date)::int * 100 + extract(month FROM NEW.absence_date)::int)
        AND franvaro_specifikationsnummer IS NOT NULL;
   END IF;
   RETURN NEW;
@@ -83,7 +95,8 @@ BEGIN
       INTO NEW.franvaro_specifikationsnummer
       FROM salary_absence_days
      WHERE employee_id = NEW.employee_id
-       AND date_trunc('month', absence_date) = date_trunc('month', NEW.absence_date)
+       AND (extract(year FROM absence_date)::int * 100 + extract(month FROM absence_date)::int)
+         = (extract(year FROM NEW.absence_date)::int * 100 + extract(month FROM NEW.absence_date)::int)
        AND franvaro_specifikationsnummer IS NOT NULL;
   END IF;
   RETURN NEW;

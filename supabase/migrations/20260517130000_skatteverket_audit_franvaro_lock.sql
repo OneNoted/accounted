@@ -119,7 +119,8 @@ BEGIN
       INTO v_new_num
       FROM salary_absence_days
      WHERE employee_id = NEW.employee_id
-       AND date_trunc('month', absence_date) = date_trunc('month', NEW.absence_date)
+       AND (extract(year FROM absence_date)::int * 100 + extract(month FROM absence_date)::int)
+         = (extract(year FROM NEW.absence_date)::int * 100 + extract(month FROM NEW.absence_date)::int)
        AND franvaro_specifikationsnummer IS NOT NULL;
 
     NEW.franvaro_specifikationsnummer := v_new_num;
@@ -154,7 +155,8 @@ BEGIN
       INTO v_new_num
       FROM salary_absence_days
      WHERE employee_id = NEW.employee_id
-       AND date_trunc('month', absence_date) = date_trunc('month', NEW.absence_date)
+       AND (extract(year FROM absence_date)::int * 100 + extract(month FROM absence_date)::int)
+         = (extract(year FROM NEW.absence_date)::int * 100 + extract(month FROM NEW.absence_date)::int)
        AND franvaro_specifikationsnummer IS NOT NULL;
 
     NEW.franvaro_specifikationsnummer := v_new_num;
