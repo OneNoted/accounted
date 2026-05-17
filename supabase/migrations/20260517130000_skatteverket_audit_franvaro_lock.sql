@@ -25,7 +25,7 @@ CREATE TABLE public.skatteverket_api_audit_log (
 ALTER TABLE public.skatteverket_api_audit_log ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY skatteverket_api_audit_log_select ON public.skatteverket_api_audit_log
-  FOR SELECT USING (company_id = ANY(public.user_company_ids()));
+  FOR SELECT USING (company_id IN (SELECT public.user_company_ids()));
 
 -- No INSERT/UPDATE/DELETE policies for normal roles — service role writes
 -- only. Immutability triggers below block all UPDATE/DELETE regardless of role.
