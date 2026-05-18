@@ -46,7 +46,31 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
         .order('invoice_date', { ascending: false })
         .limit(200)
       if (cancelled) return
-      setInvoices((data as OpenInvoice[]) || [])
+      const all = (data as OpenInvoice[]) || []
+
+      // Status-leak guard: if an invoice still says 'sent'/'overdue' but
+      // already has a payment voucher attached (manual or system), hide it.
+      // Partially-paid invoices intentionally pass through — they may take
+      // more payments. Mirrors the server-side filter in findMatchingInvoices.
+      const fullIds = all
+        .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
+        .map((inv) => inv.id)
+      let visible = all
+      if (fullIds.length > 0) {
+        const { data: paid } = await supabase
+          .from('invoice_payments')
+          .select('invoice_id')
+          .eq('company_id', company!.id)
+          .in('invoice_id', fullIds)
+          .not('journal_entry_id', 'is', null)
+        if (cancelled) return
+        const paidSet = new Set<string>(
+          ((paid as { invoice_id: string }[] | null) ?? []).map((r) => r.invoice_id),
+        )
+        visible = all.filter((inv) => !paidSet.has(inv.id))
+      }
+
+      setInvoices(visible)
       setIsLoading(false)
     }
     load()

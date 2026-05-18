@@ -362,6 +362,21 @@ export const BookInboxItemDirectlySchema = z.object({
 
 export const MatchInvoiceSchema = z.object({
   invoice_id: uuid,
+  // Bypass the soft-duplicate guard (MATCH_INVOICE_POSSIBLE_DUPLICATE).
+  // Set after the user reviews the candidate verifikation and confirms it
+  // is not this payment. v1 callers must use a fresh Idempotency-Key on
+  // the retry — the original is body-hash bound.
+  force: z.boolean().optional(),
+})
+
+export const LinkTransactionJournalEntrySchema = z.object({
+  journal_entry_id: uuid,
+  // Optional invoice to settle alongside the link. When provided, the
+  // server inserts an invoice_payments row pointing at the existing JE
+  // and flips the invoice status with the same optimistic-lock pattern
+  // as the match-invoice route. Omit to only link the bank transaction
+  // (e.g. when the JE doesn't relate to a customer invoice).
+  invoice_id: uuid.optional(),
 })
 
 export const CreateTransactionFromDocumentSchema = z.object({

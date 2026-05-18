@@ -21,6 +21,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
+import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
 import type { TransactionWithInvoice, HistoryFilter } from './transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
@@ -272,6 +273,24 @@ function BankHistoryRow({
                       <Check className="h-3 w-3 mr-1" />
                       Bokförd
                     </Badge>
+                    <Link
+                      href={`/bookkeeping/${transaction.journal_entry_id}`}
+                      className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                    >
+                      Visa verifikation
+                    </Link>
+                    <CorrectionAffordance journalEntryId={transaction.journal_entry_id}>
+                      {({ open, isLoading }) => (
+                        <button
+                          type="button"
+                          onClick={open}
+                          disabled={isLoading}
+                          className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
+                        >
+                          {isLoading ? 'Hämtar…' : 'Skapa ändringsverifikation'}
+                        </button>
+                      )}
+                    </CorrectionAffordance>
                   </>
                 ) : (
                   <>

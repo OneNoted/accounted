@@ -30,6 +30,7 @@ import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import type { EntityType, Invoice, Transaction } from '@/types'
 
@@ -122,7 +123,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     }
-    const { invoice_id } = parsed.data
+    const { invoice_id, force } = parsed.data
     const txLog = ctx.log.child({ transactionId: txId, invoiceId: invoice_id })
 
     const { data: transaction, error: fetchTxErr } = await ctx.supabase
@@ -181,6 +182,56 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('MATCH_INVOICE_NOT_OPEN', txLog, {
         requestId: ctx.requestId,
         details: { currentStatus: invoice.status },
+      })
+    }
+
+    // Hard-duplicate guard: status leak — the invoice still says
+    // 'sent'/'overdue' but already has a payment voucher attached. Mirror
+    // of the internal route's defensive check.
+    if (invoice.status === 'sent' || invoice.status === 'overdue') {
+      const { data: existingPayments } = await ctx.supabase
+        .from('invoice_payments')
+        .select('journal_entry_id')
+        .eq('company_id', ctx.companyId!)
+        .eq('invoice_id', invoice_id)
+        .not('journal_entry_id', 'is', null)
+        .limit(1)
+      if (existingPayments && existingPayments.length > 0) {
+        return v1ErrorResponseFromCode('MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER', txLog, {
+          requestId: ctx.requestId,
+          details: {
+            existing_journal_entry_id:
+              (existingPayments[0] as { journal_entry_id: string }).journal_entry_id,
+          },
+        })
+      }
+    }
+
+    // Soft-duplicate guard: a manual verifikation already books this
+    // bank receipt. Bypassed with force=true; the v1 caller MUST use a
+    // fresh Idempotency-Key on the retry (body-hash bound).
+    if (!force) {
+      try {
+        const candidate = await detectDuplicatePaymentVoucher(ctx.supabase, {
+          companyId: ctx.companyId!,
+          transactionId: txId,
+          transactionDate: transaction.date,
+          transactionAmount: transaction.amount,
+        })
+        if (candidate) {
+          return v1ErrorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
+            requestId: ctx.requestId,
+            details: { candidate },
+          })
+        }
+      } catch (err) {
+        txLog.warn('duplicate-payment-voucher detection failed (continuing)', err as Error)
+      }
+    } else {
+      txLog.warn('soft-duplicate guard bypassed', {
+        reason: 'force=true',
+        transactionId: txId,
+        invoiceId: invoice_id,
       })
     }
 

@@ -32,6 +32,11 @@ vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
 }))
 
+const mockDetectDuplicate = vi.fn()
+vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
+  detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
+}))
+
 vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: vi.fn() },
 }))
@@ -61,6 +66,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     vi.clearAllMocks()
     reset()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    // Default to no soft-duplicate detected — happy-path tests don't care.
+    mockDetectDuplicate.mockResolvedValue(null)
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -205,6 +212,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: tx, error: null })
     // Fetch invoice
     enqueue({ data: invoice, error: null })
+    // Hard-duplicate check: no prior payment voucher for this invoice
+    enqueue({ data: [], error: null })
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
@@ -271,6 +280,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: tx, error: null })
     // Fetch invoice
     enqueue({ data: invoice, error: null })
+    // Hard-duplicate check: no prior payment voucher for this invoice
+    enqueue({ data: [], error: null })
 
     mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
     // Clear journal_entry_id on transaction
@@ -315,6 +326,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
+    // Hard-duplicate check: no prior payment voucher
+    enqueue({ data: [], error: null })
 
     mockReverseEntry.mockRejectedValue(new Error('Period locked'))
 
@@ -345,6 +358,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-partial' })
@@ -388,6 +402,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
 
     mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-clearing' })
@@ -426,6 +441,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
 
@@ -454,6 +470,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
     mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
 
@@ -479,6 +496,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     mockCreateInvoicePaymentJournalEntry.mockRejectedValue(new Error('Period locked'))
@@ -507,5 +525,138 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBeNull()
     expect(body.journal_entry_error).toBe('Period locked')
+  })
+
+  // ────────────────────────────────────────────────────────────────
+  // Duplicate-payment guards (Phase A4)
+  // ────────────────────────────────────────────────────────────────
+
+  it('returns 409 MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER when a payment row already links a JE for a sent invoice', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: 12500,
+      remaining_amount: 12500,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    // Hard-duplicate check returns a row pointing at the existing JE
+    enqueue({ data: [{ journal_entry_id: 'je-existing' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: { existing_journal_entry_id?: string } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER')
+    expect(body.error.details?.existing_journal_entry_id).toBe('je-existing')
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('does NOT run hard-duplicate guard for partially_paid invoices (legitimate additional payment)', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 2500, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'partially_paid',
+      total: 12500,
+      remaining_amount: 2500,
+      paid_amount: 10000,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    // Hard-duplicate check is skipped for partially_paid; jump straight to settings
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // update tx
+    enqueue({ data: null, error: null }) // logMatchEvent
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; invoice_status: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.invoice_status).toBe('paid')
+  })
+
+  it('returns 409 MATCH_INVOICE_POSSIBLE_DUPLICATE when the soft-duplicate detector finds a manual voucher', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
+    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 1000, remaining_amount: 1000 })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check: clean
+
+    mockDetectDuplicate.mockResolvedValueOnce({
+      journal_entry_id: 'je-manual',
+      voucher_label: 'A12',
+      entry_date: '2026-05-15',
+      description: 'Inbetalning faktura',
+      amount: 1000,
+      bank_account_number: '1930',
+      reason: 'exact_amount_same_date',
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { candidate?: { journal_entry_id: string; voucher_label: string } } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_POSSIBLE_DUPLICATE')
+    expect(body.error.details?.candidate?.journal_entry_id).toBe('je-manual')
+    expect(body.error.details?.candidate?.voucher_label).toBe('A12')
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('force=true bypasses the soft-duplicate guard and books the new payment voucher', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: 1000,
+      remaining_amount: 1000,
+      invoice_number: 'F-2024099',
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check: clean
+    // detectDuplicatePaymentVoucher must NOT be called when force=true
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-forced' })
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // update tx
+    enqueue({ data: null, error: null }) // logMatchEvent
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID, force: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_id).toBe('je-forced')
+    expect(mockDetectDuplicate).not.toHaveBeenCalled()
   })
 })
