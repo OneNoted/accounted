@@ -92,7 +92,19 @@ export function OAuthClientsPanel() {
     if (!ok) return
 
     try {
-      await fetch(`/api/settings/oauth-clients/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/settings/oauth-clients/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        // Surface the server error rather than optimistically pretending the
+        // revocation succeeded — a silent fail leaves the row in the
+        // allowlist while the UI says it's gone, which is the opposite of
+        // what the user expected.
+        const body = await res.json().catch(() => ({}))
+        toast({
+          title: body?.error || 'Kunde inte återkalla klient',
+          variant: 'destructive',
+        })
+        return
+      }
       setClients((prev) => prev.filter((c) => c.id !== id))
       toast({ title: 'Klient återkallad' })
     } catch {

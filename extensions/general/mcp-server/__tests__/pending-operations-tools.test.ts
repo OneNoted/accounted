@@ -90,7 +90,7 @@ describe('gnubok_list_pending_operations', () => {
 describe('gnubok_approve_pending_operation', () => {
   it('fetches the op then delegates to commitPendingOperation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', params: {} }
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
     enqueue({ data: op, error: null }) // fetch
     commitSpy.mockResolvedValue({ status: 'committed', data: { invoice_id: 'inv-1' } })
 
@@ -104,10 +104,62 @@ describe('gnubok_approve_pending_operation', () => {
 
     expect(commitSpy).toHaveBeenCalledTimes(1)
     expect(commitSpy.mock.calls[0][3]).toMatchObject({ id: 'op-1' })
-    expect(commitSpy.mock.calls[0][4]).toEqual({ commitMethod: 'user_accept' })
+    // commit options always include commitMethod; userEmail is added when
+    // the supabase mock supports auth.admin.getUserById (it doesn't here, so
+    // the resolution silently fails and we fall back to just commitMethod).
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({ commitMethod: 'user_accept' })
     expect(result.status).toBe('committed')
     expect(result.operation_id).toBe('op-1')
     expect(result.data?.invoice_id).toBe('inv-1')
+  })
+
+  it('refuses to approve a risk_level=high op without confirmed=true', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = {
+      id: 'op-1',
+      operation_type: 'create_voucher',
+      company_id: 'company-1',
+      status: 'pending',
+      risk_level: 'high',
+      params: {},
+    }
+    enqueue({ data: op, error: null }) // fetch
+
+    await expect(
+      approveTool.execute(
+        { operation_id: 'op-1' },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' }
+      )
+    ).rejects.toThrow(/confirmed=true/i)
+    expect(commitSpy).not.toHaveBeenCalled()
+  })
+
+  it('approves a risk_level=high op when confirmed=true is supplied', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = {
+      id: 'op-1',
+      operation_type: 'create_voucher',
+      company_id: 'company-1',
+      status: 'pending',
+      risk_level: 'high',
+      params: {},
+    }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    const result = (await approveTool.execute(
+      { operation_id: 'op-1', confirmed: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as { status: string; operation_id: string }
+
+    expect(commitSpy).toHaveBeenCalledTimes(1)
+    expect(result.status).toBe('committed')
   })
 
   it('throws when the operation is not found', async () => {
@@ -141,7 +193,7 @@ describe('gnubok_reject_pending_operation', () => {
   it('flips status to rejected and never invokes the executor', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
-    enqueue({ data: null, error: null }) // update
+    enqueue({ data: [{ id: 'op-1' }], error: null }) // update CAS — returns rows
 
     const result = (await rejectTool.execute(
       { operation_id: 'op-1' },
@@ -153,6 +205,16 @@ describe('gnubok_reject_pending_operation', () => {
     expect(result.status).toBe('rejected')
     expect(result.operation_id).toBe('op-1')
     expect(commitSpy).not.toHaveBeenCalled()
+  })
+
+  it('throws when the CAS update affects 0 rows (concurrent claim)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
+    enqueue({ data: [], error: null }) // update CAS — 0 rows (lost race)
+
+    await expect(
+      rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', supabase as never)
+    ).rejects.toThrow(/no longer pending/i)
   })
 
   it('throws 409-style error if the op is already resolved', async () => {

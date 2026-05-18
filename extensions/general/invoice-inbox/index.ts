@@ -497,14 +497,30 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
+        // Rate-limit BYO extraction the same way fresh uploads are limited —
+        // both paths inject extracted_data into invoice_inbox_items, so an
+        // unbounded BYO loop is the same abuse surface as an upload flood
+        // (ISO 27001 A.8.12, data-injection guard).
+        const rl = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
+        if (!rl.ok) {
+          return NextResponse.json(
+            { error: `För många förfrågningar — försök igen om en stund.` },
+            {
+              status: 429,
+              headers: rl.retryAfterSec ? { 'Retry-After': String(rl.retryAfterSec) } : undefined,
+            }
+          )
+        }
+
         let extracted: InvoiceExtractionResult
         try {
           const json = await request.json()
           // ExtractionSchema doesn't include `confidence` (the AI path tacks
-          // it on after parsing). Inject 1.0 here — agent-supplied data is
-          // treated as authoritative.
+          // it on after parsing). BYO data gets 0.95 so downstream UI can
+          // distinguish it from a perfect AI parse — financial-data
+          // provenance per ISO 27001 A.8.12.
           const parsed = ExtractionSchema.parse(json)
-          extracted = { ...parsed, confidence: 1 }
+          extracted = { ...parsed, confidence: 0.95 }
         } catch (err) {
           return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Invalid extracted_data shape' },
@@ -514,12 +530,18 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, created_supplier_invoice_id')
+          .select('id, company_id, created_supplier_invoice_id')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
 
         if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        // Explicit tenant boundary assertion alongside the .eq filter
+        // (V4.5.1 defense-in-depth). Surfaces any future change that
+        // accidentally bypasses the where-clause.
+        if (item.company_id !== ctx.companyId) {
+          return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        }
         if (item.created_supplier_invoice_id) {
           return NextResponse.json(
             { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
@@ -564,6 +586,31 @@ export const invoiceInboxExtension: Extension = {
 
         if (updateError) {
           return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        // Audit the BYO override so financial-data provenance is traceable
+        // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure logged but never blocks
+        // the response — the override has already happened.
+        try {
+          await appendProcessingHistory({
+            companyId: ctx.companyId,
+            correlationId: id,
+            aggregateType: 'Document',
+            aggregateId: id,
+            eventType: 'DocumentExtractionOverridden',
+            payload: {
+              inbox_item_id: id,
+              channel: 'rest_api',
+              has_supplier_org_number: extracted.supplier.orgNumber != null,
+              has_invoice_number: extracted.invoice.invoiceNumber != null,
+              extracted_total: extracted.totals.total,
+              matched_supplier_id: matchedSupplierId,
+            },
+            actor: { type: 'user', id: ctx.userId },
+            occurredAt: new Date(),
+          })
+        } catch (auditErr) {
+          console.error('[invoice-inbox] Failed to append DocumentExtractionOverridden:', auditErr)
         }
 
         return NextResponse.json({ data: updated })

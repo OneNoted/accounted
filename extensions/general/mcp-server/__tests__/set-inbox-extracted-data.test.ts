@@ -55,8 +55,12 @@ describe('gnubok_set_inbox_extracted_data — registration', () => {
 describe('gnubok_set_inbox_extracted_data — happy path', () => {
   it('validates the payload, fetches the item, matches supplier, and updates', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // fetch inbox item
-    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null }, error: null })
+    // fetch inbox item — must include company_id so the defense-in-depth
+    // tenant check passes.
+    enqueue({
+      data: { id: 'inbox-1', company_id: 'company-1', created_supplier_invoice_id: null },
+      error: null,
+    })
     // supplier match by orgNumber — payload has none, skipped
     // supplier match by name (ILIKE) — found
     enqueue({ data: { id: 'sup-1' }, error: null })
@@ -69,10 +73,13 @@ describe('gnubok_set_inbox_extracted_data — happy path', () => {
       'user-1',
       supabase as never,
       { type: 'api_key' }
-    )) as { inbox_item_id: string; matched_supplier_id: string | null }
+    )) as { inbox_item_id: string; matched_supplier_id: string | null; extracted_data: { confidence: number } }
 
     expect(result.inbox_item_id).toBe('inbox-1')
     expect(result.matched_supplier_id).toBe('sup-1')
+    // BYO data is marked confidence 0.95 (vs 1.0 for AI-perfect parse) so
+    // downstream provenance is distinguishable.
+    expect(result.extracted_data.confidence).toBe(0.95)
   })
 })
 
@@ -105,7 +112,7 @@ describe('gnubok_set_inbox_extracted_data — validation & guards', () => {
   it('refuses to overwrite when the item already created a supplier invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
-      data: { id: 'inbox-1', created_supplier_invoice_id: 'sinv-1' },
+      data: { id: 'inbox-1', company_id: 'company-1', created_supplier_invoice_id: 'sinv-1' },
       error: null,
     })
     await expect(
@@ -116,6 +123,25 @@ describe('gnubok_set_inbox_extracted_data — validation & guards', () => {
         supabase as never
       )
     ).rejects.toThrow(/already linked/i)
+  })
+
+  it('rejects when the fetched row belongs to a different company (defense-in-depth)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The .eq('company_id', companyId) on the SELECT should already prevent
+    // this in practice, but the explicit assert catches any future query
+    // change that bypasses the where-clause (V4.5.1).
+    enqueue({
+      data: { id: 'inbox-1', company_id: 'company-other', created_supplier_invoice_id: null },
+      error: null,
+    })
+    await expect(
+      tool.execute(
+        { inbox_item_id: 'inbox-1', extracted_data: validPayload() },
+        'company-1',
+        'user-1',
+        supabase as never
+      )
+    ).rejects.toThrow(/different company/i)
   })
 
   it('requires inbox_item_id', async () => {

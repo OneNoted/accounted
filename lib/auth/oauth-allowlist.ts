@@ -21,10 +21,14 @@ export function isBuiltInRedirectUri(uri: string): boolean {
  * Resolve whether a redirect URI is allowed. Built-in patterns short-circuit;
  * otherwise we look for a non-revoked registration in oauth_client_registrations.
  *
- * Uses the service role client because the /register and /authorize endpoints
- * may run without a user session (dynamic client registration is anonymous).
- * The lookup is by exact URI — the unique partial index on the table ensures
- * at most one active row.
+ * The supabase client should be supplied explicitly by the caller so the
+ * trust boundary is visible at the callsite (SOC 2 CC6.1). When omitted, the
+ * function falls back to a service-role client — required for the /register
+ * endpoint which has no user session yet. The lookup is by exact URI; the
+ * unique partial index on the table ensures at most one active row.
+ *
+ * Fails closed on any error (client construction, DB query) — for an
+ * allowlist, "unknown → deny" is the safe default.
  */
 export async function isAllowedRedirectUri(
   uri: string,

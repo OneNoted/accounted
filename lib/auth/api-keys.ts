@@ -44,6 +44,69 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
   'reports:read',
 ]
 
+/**
+ * Read-only fallback granted to OAuth-issued keys when the client did not
+ * pass an explicit `scope` parameter at /authorize. Per GDPR Art. 25(2)
+ * (data protection by default), the silent fallback must never include
+ * destructive scopes (*:write, pending_operations:approve, bookkeeping:write).
+ * Destructive scopes must be requested explicitly by the client and consented
+ * to by the user.
+ */
+export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
+  'transactions:read',
+  'customers:read',
+  'invoices:read',
+  'suppliers:read',
+  'reports:read',
+  'companies:read',
+  'events:read',
+  'operations:read',
+  'documents:read',
+  'compliance:read',
+  'payroll:read',
+  'pending_operations:read',
+]
+
+/**
+ * Scopes advertised in the RFC 8414 authorization-server metadata document
+ * (/.well-known/oauth-authorization-server). Restricted to the same set that
+ * /authorize will grant by default — destructive scopes still work when
+ * requested explicitly, they just aren't enumerated for unauthenticated
+ * callers (defense-in-depth against scope-escalation reconnaissance).
+ */
+export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCOPES]
+
+/**
+ * Scopes that allow staging a pending_operation. Used to detect a
+ * segregation-of-duties conflict when paired with `pending_operations:approve`
+ * on the same API key (ISO 27001:2022 A.5.3, SOC 2 CC6.1).
+ */
+export const STAGING_SCOPES: ApiKeyScope[] = [
+  'transactions:write',
+  'customers:write',
+  'invoices:write',
+  'suppliers:write',
+  'bookkeeping:write',
+  'payroll:write',
+  'documents:write',
+]
+
+/**
+ * Detect a segregation-of-duties conflict between staging and approval scopes
+ * on the same key. Returns the offending staging scope, or null when the
+ * combination is clean. Callers may choose to block, warn, or record an
+ * acknowledged risk acceptance.
+ *
+ * Granting both stage+approve to the same actor lets an automated agent both
+ * stage AND commit financial postings without a human-in-the-loop review,
+ * which is the explicit control surface for BFNAR 2013:2 (behandlingshistorik)
+ * and BFL 5 kap 5§ traceability requirements.
+ */
+export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | null {
+  if (!scopes.includes('pending_operations:approve')) return null
+  return scopes.find((s) => STAGING_SCOPES.includes(s)) ?? null
+}
+
 /** Scope domain groups for UI rendering */
 export const SCOPE_GROUPS = [
   { domain: 'transactions',        label: 'Transaktioner',        read: 'transactions:read' as const,        write: 'transactions:write' as const },
