@@ -53,9 +53,16 @@ export const POST = withRouteContext(
 
     const txLog = log.child({ transactionId, journalEntryId: journal_entry_id, invoiceId: invoice_id })
 
+    // Data minimization (GDPR Art.5(1)(c)): pull only the columns the route
+    // actually uses for validation, the optimistic-lock invoice update, the
+    // invoice_payments insert, and the compensating-rollback path. Avoid
+    // `select('*')` so freshly-added columns (PII or otherwise) never leak
+    // into the request scope or downstream logs by accident.
     const { data: transaction, error: fetchTxError } = await supabase
       .from('transactions')
-      .select('*')
+      .select(
+        'id, date, amount, currency, exchange_rate, journal_entry_id, invoice_id, is_business, potential_invoice_id, potential_supplier_invoice_id',
+      )
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -129,11 +136,22 @@ export const POST = withRouteContext(
       newStatus = isFullyPaid ? 'paid' : 'partially_paid'
     }
 
-    // Link the transaction first. If a subsequent step fails we'll surface
-    // an error; the link itself is reversible via unlink-journal-entry (or
-    // by setting potential_invoice_id back from the match log). Doing the
-    // tx update before the invoice update preserves the "transaction
-    // disappears from inbox" UX even if invoice update races.
+    // Capture pre-link values so the compensating-rollback path below can
+    // restore the row if the optimistic invoice update loses its race or
+    // the invoice_payments insert fails. Without this snapshot a partial
+    // state would persist: tx linked, invoice unchanged, no payment row.
+    const priorTxState = {
+      journal_entry_id: transaction.journal_entry_id, // validated null above
+      invoice_id: transaction.invoice_id,
+      potential_invoice_id: transaction.potential_invoice_id,
+      potential_supplier_invoice_id: transaction.potential_supplier_invoice_id,
+      is_business: transaction.is_business,
+    }
+
+    // Link the transaction first. If a subsequent step fails the compensating
+    // path below restores priorTxState. Doing the tx update before the invoice
+    // update preserves the "transaction disappears from inbox" UX even if the
+    // invoice update races.
     const { error: updateTxError } = await supabase
       .from('transactions')
       .update({
@@ -150,6 +168,24 @@ export const POST = withRouteContext(
     if (updateTxError) {
       txLog.error('failed to link transaction to journal entry', updateTxError)
       return errorResponse(updateTxError, txLog, { requestId })
+    }
+
+    async function rollbackTxLink(reason: string) {
+      const { error: rollbackErr } = await supabase
+        .from('transactions')
+        .update(priorTxState)
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+      if (rollbackErr) {
+        // Best-effort: the original error is more useful to surface; a
+        // failed rollback gets warn-logged so a reconciliation job can pick
+        // up the partial state offline. PI1.3 risk is documented here so
+        // the audit trail is honest about the remaining gap.
+        txLog.warn('failed to roll back transaction link after subsequent step failed', {
+          rollbackError: rollbackErr.message,
+          reason,
+        })
+      }
     }
 
     const now = new Date().toISOString()
@@ -170,11 +206,13 @@ export const POST = withRouteContext(
         .select('id')
 
       if (updateInvError) {
+        await rollbackTxLink('invoice update errored')
         txLog.error('failed to update invoice status', updateInvError)
         return errorResponse(updateInvError, txLog, { requestId })
       }
 
       if (!updatedRows || updatedRows.length === 0) {
+        await rollbackTxLink('invoice optimistic lock returned 0 rows')
         return errorResponseFromCode('LINK_TX_INVOICE_RACE', txLog, { requestId })
       }
 
@@ -194,10 +232,26 @@ export const POST = withRouteContext(
         })
 
       if (paymentInsertError && paymentInsertError.code !== '23505') {
-        // Don't roll back the tx link — surface the partial state. The
-        // invoice ledger may now be inconsistent with paid_amount; the user
-        // can correct via the invoice page if needed.
-        txLog.error('failed to record invoice payment (link succeeded)', paymentInsertError)
+        // Compensate: revert the invoice update and the tx link before
+        // surfacing the error so the ledger doesn't carry an invoice that
+        // says "paid" with no corresponding payment row.
+        const { error: invRevertErr } = await supabase
+          .from('invoices')
+          .update({
+            status: invoice.status,
+            paid_at: invoice.paid_at ?? null,
+            paid_amount: invoice.paid_amount ?? 0,
+            remaining_amount: invoice.remaining_amount ?? invoice.total,
+          })
+          .eq('id', invoice_id)
+          .eq('company_id', companyId)
+        if (invRevertErr) {
+          txLog.warn('failed to revert invoice status after payment insert failed', {
+            rollbackError: invRevertErr.message,
+          })
+        }
+        await rollbackTxLink('invoice_payments insert failed')
+        txLog.error('failed to record invoice payment', paymentInsertError)
         return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
       }
     }

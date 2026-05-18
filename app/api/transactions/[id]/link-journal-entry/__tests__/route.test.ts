@@ -281,7 +281,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(body.error.code).toBe('LINK_TX_INVOICE_NOT_OPEN')
   })
 
-  it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses', async () => {
+  it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses and rolls back the tx link', async () => {
     enqueue({
       data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000, date: '2026-05-15' }),
       error: null,
@@ -304,6 +304,8 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     enqueue({ data: null, error: null })
     // Optimistic invoice update returns 0 rows
     enqueue({ data: [], error: null })
+    // Compensating rollback: restore prior tx state
+    enqueue({ data: null, error: null })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
       method: 'POST',
@@ -313,5 +315,51 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(409)
     expect(body.error.code).toBe('LINK_TX_INVOICE_RACE')
+  })
+
+  it('rolls back both the tx link and the invoice update when invoice_payments insert fails', async () => {
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000, date: '2026-05-15' }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: JE_UUID,
+        status: 'posted',
+        voucher_series: 'A',
+        voucher_number: 1,
+        entry_date: '2026-05-15',
+      },
+      error: null,
+    })
+    enqueue({
+      data: makeInvoice({
+        id: INV_UUID,
+        status: 'sent',
+        total: 1000,
+        remaining_amount: 1000,
+        paid_amount: 0,
+      }),
+      error: null,
+    })
+    // Update transaction succeeds
+    enqueue({ data: null, error: null })
+    // Optimistic invoice update succeeds
+    enqueue({ data: [{ id: INV_UUID }], error: null })
+    // invoice_payments insert fails with non-23505 error
+    enqueue({ data: null, error: { code: '99999', message: 'unexpected' } })
+    // Compensating invoice revert
+    enqueue({ data: null, error: null })
+    // Compensating tx rollback
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
+      method: 'POST',
+      body: { journal_entry_id: JE_UUID, invoice_id: INV_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('MATCH_INVOICE_RECORD_PAYMENT_FAILED')
   })
 })

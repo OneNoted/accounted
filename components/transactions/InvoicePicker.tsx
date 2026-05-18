@@ -26,6 +26,11 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
 
   useEffect(() => {
     if (!company) return
+    // Capture the company id once so the async closure below never
+    // dereferences a `company` that has flipped to null between renders.
+    // The earlier non-null assertions allowed a stale render to query
+    // against an undefined company_id; pinning the value avoids that.
+    const companyId = company.id
     let cancelled = false
     async function load() {
       setIsLoading(true)
@@ -39,7 +44,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
       const { data } = await supabase
         .from('invoices')
         .select('*, customer:customers(*)')
-        .eq('company_id', company!.id)
+        .eq('company_id', companyId)
         .eq('document_type', 'invoice')
         .in('status', ['sent', 'overdue', 'partially_paid'])
         .gt('remaining_amount', 0)
@@ -60,7 +65,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
         const { data: paid } = await supabase
           .from('invoice_payments')
           .select('invoice_id')
-          .eq('company_id', company!.id)
+          .eq('company_id', companyId)
           .in('invoice_id', fullIds)
           .not('journal_entry_id', 'is', null)
         if (cancelled) return

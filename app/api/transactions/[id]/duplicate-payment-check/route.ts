@@ -20,6 +20,13 @@ export const GET = withRouteContext(
     const { id: transactionId } = await params
     const { supabase, companyId, log, requestId } = ctx
 
+    // Membership is enforced by withRouteContext (see its docstring) — the
+    // resolved companyId is always a company the caller is a member of, so
+    // intra-company multi-user visibility of transaction metadata here is
+    // the intended tenancy model. The selected column set is intentionally
+    // narrow (id, date, amount, journal_entry_id) so this endpoint cannot
+    // leak description / counterparty fields that aren't required to
+    // surface a duplicate-payment candidate. GDPR Art.5(1)(c)/(f).
     const { data: transaction, error } = await supabase
       .from('transactions')
       .select('id, date, amount, journal_entry_id')

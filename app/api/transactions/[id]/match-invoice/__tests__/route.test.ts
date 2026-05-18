@@ -58,6 +58,9 @@ import { POST } from '../route'
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001'
+const CANDIDATE_UUID = '550e8400-e29b-41d4-a716-446655440003'
+const STALE_UUID = '550e8400-e29b-41d4-a716-446655440004'
+const OTHER_CANDIDATE_UUID = '550e8400-e29b-41d4-a716-446655440005'
 
 describe('POST /api/transactions/[id]/match-invoice', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -625,7 +628,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('force=true bypasses the soft-duplicate guard and books the new payment voucher', async () => {
+  it('force=true bypasses the soft-duplicate guard when the candidate echo matches', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
     const invoice = makeInvoice({
       id: VALID_UUID,
@@ -638,7 +641,18 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check: clean
-    // detectDuplicatePaymentVoucher must NOT be called when force=true
+
+    // force=true re-detects the candidate to verify the echoed id matches.
+    mockDetectDuplicate.mockResolvedValueOnce({
+      journal_entry_id: CANDIDATE_UUID,
+      voucher_label: 'A12',
+      entry_date: '2026-05-15',
+      description: 'Inbetalning faktura',
+      amount: 1000,
+      bank_account_number: '1930',
+      reason: 'exact_amount_same_date',
+    })
+
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-forced' })
@@ -649,7 +663,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
       method: 'POST',
-      body: { invoice_id: VALID_UUID, force: true },
+      body: { invoice_id: VALID_UUID, force: true, expected_journal_entry_id: CANDIDATE_UUID },
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
@@ -657,6 +671,74 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBe('je-forced')
-    expect(mockDetectDuplicate).not.toHaveBeenCalled()
+    expect(mockDetectDuplicate).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns 400 when force=true is sent without expected_journal_entry_id', async () => {
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID, force: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+    // Refusal happens at the schema layer (refine) before any DB work.
+    expect(status).toBe(400)
+  })
+
+  it('returns 409 MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH when the echoed candidate no longer matches', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
+    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 1000, remaining_amount: 1000 })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check: clean
+
+    // Re-detection returns a different candidate than the caller echoed.
+    mockDetectDuplicate.mockResolvedValueOnce({
+      journal_entry_id: OTHER_CANDIDATE_UUID,
+      voucher_label: 'A99',
+      entry_date: '2026-05-15',
+      description: 'Annan verifikation',
+      amount: 1000,
+      bank_account_number: '1930',
+      reason: 'exact_amount_same_date',
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID, force: true, expected_journal_entry_id: STALE_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { expected_journal_entry_id?: string; detected_journal_entry_id?: string } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH')
+    expect(body.error.details?.expected_journal_entry_id).toBe(STALE_UUID)
+    expect(body.error.details?.detected_journal_entry_id).toBe(OTHER_CANDIDATE_UUID)
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH when no current duplicate exists for the force call', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, date: '2026-05-15' })
+    const invoice = makeInvoice({ id: VALID_UUID, status: 'sent', total: 1000, remaining_amount: 1000 })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check: clean
+
+    // Detection returns null — the duplicate the caller saw has resolved.
+    mockDetectDuplicate.mockResolvedValueOnce(null)
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID, force: true, expected_journal_entry_id: STALE_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH')
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
   })
 })

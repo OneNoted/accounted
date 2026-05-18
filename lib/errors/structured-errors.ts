@@ -370,6 +370,13 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'A posted journal entry already books the same amount on a nearby date. The user may have already booked this payment manually — link to the existing voucher or pass force=true to create a new one anyway.',
   },
+  MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen som dubblettkontrollen visade matchar inte längre. Stäng dialogen och försök igen så att rätt verifikation visas.',
+    message_en:
+      'The candidate journal entry echoed in expected_journal_entry_id does not match the one detected at request time. Re-run the duplicate-payment pre-flight to obtain the current candidate, then retry.',
+  },
 }
 
 const LINK_TX_JE: Record<string, StructuredErrorEntry> = {

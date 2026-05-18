@@ -22,7 +22,7 @@ interface InvoiceMatchDialogProps {
   onOpenChange: (open: boolean) => void
   transaction: TransactionWithInvoice | null
   isConfirming: boolean
-  onConfirm: (opts?: { force?: boolean }) => void
+  onConfirm: (opts?: { force?: boolean; expected_journal_entry_id?: string }) => void
   onLinkToExisting?: (journalEntryId: string) => void
 }
 
@@ -101,7 +101,18 @@ export default function InvoiceMatchDialog({
                       Har du redan bokfört denna betalning manuellt?
                     </p>
                     {candidate.description && (
-                      <p className="text-xs text-muted-foreground truncate">{candidate.description}</p>
+                      // Truncate to a short head before render. The
+                      // description is free-text and may carry a customer
+                      // name or note that's not strictly required to
+                      // identify the verifikation (voucher_label + amount +
+                      // date already do that). Cap length to keep the
+                      // dialog tight and limit incidental PII surfacing
+                      // in the rendered DOM. GDPR Art.5(1)(c).
+                      <p className="text-xs text-muted-foreground truncate">
+                        {candidate.description.length > 80
+                          ? `${candidate.description.slice(0, 80).trimEnd()}…`
+                          : candidate.description}
+                      </p>
                     )}
                   </div>
                 </div>
@@ -119,7 +130,15 @@ export default function InvoiceMatchDialog({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => onConfirm({ force: true })}
+                      onClick={() =>
+                        onConfirm({
+                          force: true,
+                          // Echo the candidate the user reviewed back to
+                          // the server so the bypass is bound to this
+                          // specific duplicate. See match-invoice route.
+                          expected_journal_entry_id: candidate.journal_entry_id,
+                        })
+                      }
                       disabled={isConfirming}
                       className="sm:flex-1"
                     >

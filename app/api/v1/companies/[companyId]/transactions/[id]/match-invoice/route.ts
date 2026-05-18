@@ -123,7 +123,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     }
-    const { invoice_id, force } = parsed.data
+    const { invoice_id, force, expected_journal_entry_id } = parsed.data
     const txLog = ctx.log.child({ transactionId: txId, invoiceId: invoice_id })
 
     const { data: transaction, error: fetchTxErr } = await ctx.supabase
@@ -208,30 +208,60 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Soft-duplicate guard: a manual verifikation already books this
-    // bank receipt. Bypassed with force=true; the v1 caller MUST use a
-    // fresh Idempotency-Key on the retry (body-hash bound).
-    if (!force) {
-      try {
-        const candidate = await detectDuplicatePaymentVoucher(ctx.supabase, {
-          companyId: ctx.companyId!,
-          transactionId: txId,
-          transactionDate: transaction.date,
-          transactionAmount: transaction.amount,
-        })
+    // bank receipt. Bypassed only when the caller echoes the candidate's
+    // journal_entry_id back in expected_journal_entry_id (validated by
+    // the schema). The Idempotency-Key body hash already prevents replay
+    // with a different body, and re-detecting the candidate here means an
+    // automation can't fabricate or stale-roll an id past the guard.
+    let dismissedCandidateId: string | null = null
+    try {
+      const candidate = await detectDuplicatePaymentVoucher(ctx.supabase, {
+        companyId: ctx.companyId!,
+        transactionId: txId,
+        transactionDate: transaction.date,
+        transactionAmount: transaction.amount,
+      })
+      if (!force) {
         if (candidate) {
           return v1ErrorResponseFromCode('MATCH_INVOICE_POSSIBLE_DUPLICATE', txLog, {
             requestId: ctx.requestId,
             details: { candidate },
           })
         }
-      } catch (err) {
-        txLog.warn('duplicate-payment-voucher detection failed (continuing)', err as Error)
+      } else {
+        if (!candidate || candidate.journal_entry_id !== expected_journal_entry_id) {
+          return v1ErrorResponseFromCode('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH', txLog, {
+            requestId: ctx.requestId,
+            details: {
+              expected_journal_entry_id,
+              detected_journal_entry_id: candidate?.journal_entry_id ?? null,
+            },
+          })
+        }
+        dismissedCandidateId = candidate.journal_entry_id
       }
-    } else {
+    } catch (err) {
+      if (force) {
+        txLog.error('duplicate-payment-voucher detection failed under force=true', err as Error)
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
+      txLog.warn('duplicate-payment-voucher detection failed (continuing)', err as Error)
+    }
+
+    if (force && dismissedCandidateId) {
       txLog.warn('soft-duplicate guard bypassed', {
         reason: 'force=true',
+        requestId: ctx.requestId,
         transactionId: txId,
         invoiceId: invoice_id,
+        // Attribute the override to the calling user AND the API key. The
+        // user identifier alone is not enough for v1 — a single user can
+        // hold multiple keys (CI bot, integration, personal), and revocation
+        // / abuse triage needs to know which key was used.
+        userId: ctx.userId,
+        apiKeyId: ctx.apiKeyId,
+        // The verifikation the caller acknowledged and dismissed.
+        dismissedJournalEntryId: dismissedCandidateId,
       })
     }
 

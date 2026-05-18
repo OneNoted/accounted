@@ -699,7 +699,7 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleConfirmInvoiceMatch(opts?: { force?: boolean }) {
+  async function handleConfirmInvoiceMatch(opts?: { force?: boolean; expected_journal_entry_id?: string }) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
     const isCustomer = !!selectedTransaction.potential_invoice
@@ -714,7 +714,16 @@ export default function TransactionsPage() {
       const body: Record<string, unknown> = isSupplier
         ? { supplier_invoice_id: selectedTransaction.potential_supplier_invoice!.id }
         : { invoice_id: selectedTransaction.potential_invoice!.id }
-      if (!isSupplier && opts?.force) body.force = true
+      if (!isSupplier && opts?.force) {
+        body.force = true
+        // Bind the override to the candidate the user saw in the dialog.
+        // The server re-detects the candidate and rejects the bypass if
+        // the id doesn't match, so an empty value here surfaces as a
+        // clean validation error instead of silently widening the guard.
+        if (opts.expected_journal_entry_id) {
+          body.expected_journal_entry_id = opts.expected_journal_entry_id
+        }
+      }
 
       const response = await fetch(url, {
         method: 'POST',
