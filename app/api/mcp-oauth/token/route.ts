@@ -5,6 +5,7 @@ import {
   generateRefreshToken,
   hashRefreshToken,
   createServiceClientNoCookies,
+  validateScopes,
   ALL_SCOPES,
 } from '@/lib/auth/api-keys'
 import { requireCompanyId } from '@/lib/company/context'
@@ -121,6 +122,11 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()
 
+  // Use the scopes the user consented to during /authorize. Falling back to
+  // ALL_SCOPES preserves behaviour for codes minted before the scope param
+  // was wired through (and for Claude, which doesn't pass one yet).
+  const grantedScopes = validateScopes(payload.scopes) ?? ALL_SCOPES
+
   const { error: insertError } = await supabase
     .from('api_keys')
     .insert({
@@ -129,7 +135,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       key_hash: hash,
       key_prefix: prefix,
       name: 'MCP-klient (OAuth)',
-      scopes: ALL_SCOPES,
+      scopes: grantedScopes,
       refresh_token_hash: refresh.hash,
     })
 
@@ -145,7 +151,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
     refresh_token: refresh.token,
-    scope: 'mcp',
+    scope: grantedScopes.join(' '),
   })
 }
 

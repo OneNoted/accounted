@@ -267,4 +267,72 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.error_description).toContain('already used')
     })
   })
+
+  describe('scope plumbing', () => {
+    it('mints an API key with ALL_SCOPES when the auth code carries no scopes', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: null, error: null },
+      ])
+
+      const res = await POST(
+        formRequest({
+          grant_type: 'authorization_code',
+          code: 'ciphertext',
+          code_verifier: 'verifier',
+          redirect_uri: 'https://claude.ai/api/cb',
+        })
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      // ALL_SCOPES contains 25+ entries; assert a representative few are present
+      // rather than coupling the test to the exact list.
+      const granted = body.scope.split(' ')
+      expect(granted).toContain('transactions:read')
+      expect(granted).toContain('bookkeeping:write')
+      expect(granted).toContain('pending_operations:approve')
+    })
+
+    it('honours scopes from the auth code when present', async () => {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['transactions:read', 'invoices:read'],
+        exp: Date.now() + 60_000,
+      })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany([
+        { data: null, error: null },
+        { data: null, error: null },
+        { data: null, error: null },
+      ])
+
+      const res = await POST(
+        formRequest({
+          grant_type: 'authorization_code',
+          code: 'ciphertext',
+          code_verifier: 'verifier',
+          redirect_uri: 'https://claude.ai/api/cb',
+        })
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.scope).toBe('transactions:read invoices:read')
+    })
+  })
 })

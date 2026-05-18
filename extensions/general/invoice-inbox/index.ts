@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields } from './lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import {
   verifyInboundWebhook,
   fetchReceivingEmail,
@@ -107,7 +107,8 @@ async function uploadAndExtract(
   companyId: string,
   file: { name: string; buffer: ArrayBuffer; type: string },
   source: 'upload' | 'email',
-  emailMeta?: EmailMeta
+  emailMeta?: EmailMeta,
+  opts: { skipExtraction?: boolean } = {}
 ) {
   const correlationId = crypto.randomUUID()
 
@@ -139,11 +140,18 @@ async function uploadAndExtract(
     console.error('[invoice-inbox] Failed to append DocumentIngested:', err)
   }
 
-  const { data: extracted, rawText } = await extractInvoiceFields({
-    buffer: Buffer.from(file.buffer),
-    mimeType: file.type,
-    fileName: file.name,
-  })
+  // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
+  // empty extraction skeleton. The caller is expected to PUT the parsed
+  // fields via /items/:id/extracted-data before converting to a supplier
+  // invoice. extracted_data is never null in the DB; an empty skeleton
+  // keeps downstream readers (UI, MCP) happy.
+  const { data: extracted, rawText } = opts.skipExtraction
+    ? { data: emptyResult(), rawText: null }
+    : await extractInvoiceFields({
+        buffer: Buffer.from(file.buffer),
+        mimeType: file.type,
+        fileName: file.name,
+      })
 
   // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
   let matchedSupplierId: string | null = null
@@ -275,6 +283,12 @@ export const invoiceInboxExtension: Extension = {
 
         const formData = await request.formData()
         const file = formData.get('file') as File | null
+        // Opt-out of the built-in Claude/Bedrock OCR. Agents with their own
+        // extraction pipeline upload the document, get the inbox row, then
+        // PUT /items/:id/extracted-data with their parsed fields.
+        const skipExtraction =
+          formData.get('skip_extraction') === 'true' ||
+          formData.get('skip_extraction') === '1'
 
         if (!file) return NextResponse.json({ error: 'No file provided' }, { status: 400 })
         if (file.size > MAX_FILE_SIZE) {
@@ -294,7 +308,9 @@ export const invoiceInboxExtension: Extension = {
             ctx.userId,
             ctx.companyId,
             { name: file.name, buffer, type: file.type },
-            'upload'
+            'upload',
+            undefined,
+            { skipExtraction }
           )
           return NextResponse.json({ data: result })
         } catch (error) {
@@ -456,6 +472,94 @@ export const invoiceInboxExtension: Extension = {
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .select('id, extracted_data')
+          .single()
+
+        if (updateError) {
+          return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        return NextResponse.json({ data: updated })
+      },
+    },
+
+    // ── Replace extracted_data wholesale (BYO extraction) ────
+    // Used by agents that ran their own OCR/extraction pipeline. Validates
+    // the full InvoiceExtractionResult shape via the same Zod schema that
+    // gates Bedrock output, so downstream consumers (UI, supplier-invoice
+    // creation) cannot tell apart agent-supplied from AI-extracted data.
+    {
+      method: 'PUT',
+      path: '/items/:id/extracted-data',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        let extracted: InvoiceExtractionResult
+        try {
+          const json = await request.json()
+          // ExtractionSchema doesn't include `confidence` (the AI path tacks
+          // it on after parsing). Inject 1.0 here — agent-supplied data is
+          // treated as authoritative.
+          const parsed = ExtractionSchema.parse(json)
+          extracted = { ...parsed, confidence: 1 }
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid extracted_data shape' },
+            { status: 400 }
+          )
+        }
+
+        const { data: item } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, created_supplier_invoice_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        if (item.created_supplier_invoice_id) {
+          return NextResponse.json(
+            { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
+            { status: 409 }
+          )
+        }
+
+        // Re-run supplier match so the agent's parsed fields trigger the
+        // same auto-link the AI path uses. Skipped if neither key is present.
+        let matchedSupplierId: string | null = null
+        if (extracted.supplier.orgNumber) {
+          const { data: s } = await ctx.supabase
+            .from('suppliers')
+            .select('id')
+            .eq('company_id', ctx.companyId)
+            .eq('org_number', extracted.supplier.orgNumber)
+            .limit(1)
+            .maybeSingle()
+          if (s) matchedSupplierId = s.id
+        }
+        if (!matchedSupplierId && extracted.supplier.name) {
+          const { data: s } = await ctx.supabase
+            .from('suppliers')
+            .select('id')
+            .eq('company_id', ctx.companyId)
+            .ilike('name', extracted.supplier.name)
+            .limit(1)
+            .maybeSingle()
+          if (s) matchedSupplierId = s.id
+        }
+
+        const { data: updated, error: updateError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .update({
+            extracted_data: extracted as unknown as Record<string, unknown>,
+            matched_supplier_id: matchedSupplierId,
+          })
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .select('id, extracted_data, matched_supplier_id')
           .single()
 
         if (updateError) {

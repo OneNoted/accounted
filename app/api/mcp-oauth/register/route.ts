@@ -1,22 +1,14 @@
 import { NextResponse } from 'next/server'
 import crypto from 'crypto'
-
-// Allowed redirect URI patterns (must match CLAUDE.md allowlist)
-const ALLOWED_REDIRECT_PATTERNS = [
-  /^https:\/\/claude\.ai\/api\//,
-  /^https:\/\/claude\.com\/api\//,
-  /^http:\/\/localhost(:\d+)?(\/|$)/,
-  /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/,
-]
-
-function isRedirectUriAllowed(uri: string): boolean {
-  return ALLOWED_REDIRECT_PATTERNS.some(pattern => pattern.test(uri))
-}
+import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
 
 /**
  * RFC 7591 — Dynamic Client Registration.
- * Claude Desktop registers itself as an OAuth client before starting the auth flow.
- * Validates redirect_uris against the allowlist before accepting registration.
+ *
+ * Claude Desktop and self-hosted MCP clients register themselves before
+ * starting the auth flow. The redirect URIs they declare are validated
+ * against built-in patterns (Claude/localhost) and the user-managed
+ * oauth_client_registrations table (self-hosted custom apps).
  */
 export async function POST(request: Request) {
   let body: Record<string, unknown>
@@ -26,10 +18,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 })
   }
 
-  // Validate redirect_uris against allowlist
   const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris : []
   for (const uri of redirectUris) {
-    if (typeof uri !== 'string' || !isRedirectUriAllowed(uri)) {
+    if (typeof uri !== 'string' || !(await isAllowedRedirectUri(uri))) {
       return NextResponse.json(
         { error: 'invalid_redirect_uri', error_description: `Redirect URI not allowed: ${uri}` },
         { status: 400 }

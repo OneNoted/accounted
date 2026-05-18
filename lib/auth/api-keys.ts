@@ -27,6 +27,8 @@ export const API_KEY_SCOPES = {
   'documents:read':     { label: 'Dokument — läs',       description: 'Lista och hämta dokumentbilagor' },
   'documents:write':    { label: 'Dokument — skriv',     description: 'Ladda upp och koppla dokument till verifikationer' },
   'compliance:read':    { label: 'Compliance — läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet' },
+  'pending_operations:read':    { label: 'Stagade operationer — läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
+  'pending_operations:approve': { label: 'Stagade operationer — godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP — agenten ersätter web-UI:s granskning' },
 } as const
 
 export type ApiKeyScope = keyof typeof API_KEY_SCOPES
@@ -44,13 +46,14 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
 
 /** Scope domain groups for UI rendering */
 export const SCOPE_GROUPS = [
-  { domain: 'transactions', label: 'Transaktioner',  read: 'transactions:read' as const, write: 'transactions:write' as const },
-  { domain: 'customers',    label: 'Kunder',         read: 'customers:read' as const,    write: 'customers:write' as const },
-  { domain: 'invoices',     label: 'Fakturor',       read: 'invoices:read' as const,     write: 'invoices:write' as const },
-  { domain: 'suppliers',    label: 'Leverantörer',   read: 'suppliers:read' as const,    write: 'suppliers:write' as const },
-  { domain: 'reports',      label: 'Rapporter',      read: 'reports:read' as const,      write: null },
-  { domain: 'bookkeeping',  label: 'Bokföring',      read: null,                          write: 'bookkeeping:write' as const },
-  { domain: 'payroll',      label: 'Löner',          read: 'payroll:read' as const,      write: 'payroll:write' as const },
+  { domain: 'transactions',        label: 'Transaktioner',        read: 'transactions:read' as const,        write: 'transactions:write' as const },
+  { domain: 'customers',           label: 'Kunder',               read: 'customers:read' as const,           write: 'customers:write' as const },
+  { domain: 'invoices',            label: 'Fakturor',             read: 'invoices:read' as const,            write: 'invoices:write' as const },
+  { domain: 'suppliers',           label: 'Leverantörer',         read: 'suppliers:read' as const,           write: 'suppliers:write' as const },
+  { domain: 'reports',             label: 'Rapporter',            read: 'reports:read' as const,             write: null },
+  { domain: 'bookkeeping',         label: 'Bokföring',            read: null,                                 write: 'bookkeeping:write' as const },
+  { domain: 'payroll',             label: 'Löner',                read: 'payroll:read' as const,             write: 'payroll:write' as const },
+  { domain: 'pending_operations',  label: 'Stagade operationer',  read: 'pending_operations:read' as const,  write: 'pending_operations:approve' as const },
 ] as const
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
@@ -126,6 +129,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_approve_supplier_invoice:        'suppliers:write',
   gnubok_credit_supplier_invoice:         'suppliers:write',
   gnubok_create_supplier_invoice_from_inbox: 'suppliers:write',
+  gnubok_set_inbox_extracted_data:        'suppliers:write',
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',
@@ -133,6 +137,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_voucher:                  'bookkeeping:write',
   gnubok_correct_entry:                   'bookkeeping:write',
   gnubok_reverse_journal_entry:           'bookkeeping:write',
+  // Pending operations approval (mirrors the /pending web UI)
+  gnubok_list_pending_operations:         'pending_operations:read',
+  gnubok_approve_pending_operation:       'pending_operations:approve',
+  gnubok_reject_pending_operation:        'pending_operations:approve',
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {

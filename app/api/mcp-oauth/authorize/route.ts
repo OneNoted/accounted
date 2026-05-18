@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
 import { requireCompanyId } from '@/lib/company/context'
 import { getBranding } from '@/lib/branding/service'
+import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
+import { API_KEY_SCOPES, ALL_SCOPES, type ApiKeyScope } from '@/lib/auth/api-keys'
 
 /**
  * OAuth 2.0 Authorization Endpoint.
@@ -14,16 +16,19 @@ import { getBranding } from '@/lib/branding/service'
  * after PKCE verification, preventing orphaned keys on abandoned flows.
  */
 
-// Allowed redirect URI patterns — prevent open redirect attacks
-const ALLOWED_REDIRECT_PATTERNS = [
-  /^https:\/\/claude\.ai\/api\//, // Claude.ai API callbacks (connector IDs vary in path)
-  /^https:\/\/claude\.com\/api\//, // Claude.com API callbacks
-  /^http:\/\/localhost(:\d+)?\//, // Local development
-  /^http:\/\/127\.0\.0\.1(:\d+)?\//, // Local development
-]
-
-function isAllowedRedirectUri(uri: string): boolean {
-  return ALLOWED_REDIRECT_PATTERNS.some((pattern) => pattern.test(uri))
+/**
+ * Parse the OAuth `scope` query param (RFC 6749 §3.3 — space-delimited list)
+ * into the subset of API_KEY_SCOPES that the user actually granted. Returns
+ * undefined when the param is missing so the token endpoint can fall back to
+ * ALL_SCOPES (preserves the pre-scope-param Claude behaviour).
+ */
+function parseRequestedScopes(scopeParam: string | null): ApiKeyScope[] | undefined {
+  if (!scopeParam) return undefined
+  const requested = scopeParam.split(/\s+/).filter(Boolean)
+  // Drop "mcp" (the OAuth-level marker we advertise in metadata) and anything
+  // unknown — never silently widen the grant beyond what the client asked for.
+  const valid = requested.filter((s): s is ApiKeyScope => s in API_KEY_SCOPES)
+  return valid.length > 0 ? valid : ALL_SCOPES
 }
 
 function buildLoginRedirect(request: Request): Response {
@@ -68,7 +73,7 @@ export async function GET(request: Request) {
   }
 
   // Validate redirect_uri against allowlist (prevents open redirect)
-  if (!isAllowedRedirectUri(redirectUri)) {
+  if (!(await isAllowedRedirectUri(redirectUri))) {
     return NextResponse.json(
       { error: 'invalid_request', error_description: 'redirect_uri is not allowed' },
       { status: 400 }
@@ -171,7 +176,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'invalid_request' }, { status: 400 })
   }
 
-  if (!isAllowedRedirectUri(redirectUri)) {
+  if (!(await isAllowedRedirectUri(redirectUri))) {
     return NextResponse.json(
       { error: 'invalid_request', error_description: 'redirect_uri is not allowed' },
       { status: 400 }
@@ -196,11 +201,16 @@ export async function POST(request: Request) {
     return errorRedirect(redirectUri, state, 'access_denied', 'User denied the request')
   }
 
+  // Carry forward the granted scopes from the original authorize request so
+  // the token endpoint knows which scopes to mint the API key with.
+  const requestedScopes = parseRequestedScopes(url.searchParams.get('scope'))
+
   // Create auth code with userId (NO API key — that's created at /token after PKCE)
   const code = createAuthCode({
     userId: user.id,
     codeChallenge,
     redirectUri,
+    ...(requestedScopes ? { scopes: requestedScopes } : {}),
   })
 
   // Redirect to callback with the code

@@ -60,10 +60,11 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { uploadDocument, MAX_DOCUMENT_SIZE } from '@/lib/core/documents/document-service'
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { commitPendingOperation } from '@/lib/pending-operations/commit'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler — no duplicate call needed here.
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -6192,6 +6193,251 @@ export const tools: McpTool[] = [
         expansionsfondExistingBalance: args.expansionsfond_existing_balance as number | undefined,
         expansionsfondDesiredChange: args.expansionsfond_desired_change as number | undefined,
       })
+    },
+  },
+
+  // ── Pending operations: list / approve / reject ──────────────
+  // Mirrors the /pending web UI for agents that self-review before committing.
+  {
+    name: 'gnubok_list_pending_operations',
+    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Use to review the queue before calling gnubok_approve_pending_operation or gnubok_reject_pending_operation.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['pending', 'committing', 'committed', 'rejected'], description: 'Default: pending' },
+        risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
+        operation_type: { type: 'string', description: 'Filter to a single operation_type (e.g. "create_invoice")' },
+        limit: { type: 'number', minimum: 1, maximum: 200, description: 'Default 50' },
+        offset: { type: 'number', minimum: 0, description: 'Default 0' },
+      },
+      required: [],
+    },
+    outputSchema: paginatedSchema('operations'),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const status = (args.status as string) ?? 'pending'
+      const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
+      const offset = Math.max(0, (args.offset as number) ?? 0)
+
+      let query = supabase
+        .from('pending_operations')
+        .select(
+          'id, operation_type, title, params, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data',
+          { count: 'exact' }
+        )
+        .eq('company_id', companyId)
+        .eq('status', status)
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+
+      if (args.risk_level) query = query.eq('risk_level', args.risk_level as string)
+      if (args.operation_type) query = query.eq('operation_type', args.operation_type as string)
+
+      const { data, error, count } = await query
+      if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
+
+      const operations = data ?? []
+      const totalCount = count ?? operations.length
+      const hasMore = offset + operations.length < totalCount
+      return {
+        operations,
+        count: operations.length,
+        total_count: totalCount,
+        has_more: hasMore,
+        ...(hasMore ? { next_offset: offset + operations.length } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_approve_pending_operation',
+    description: 'Approve a staged pending_operation. Runs the same commit path as web-UI approval — atomic claim → executor → status update. Returns status=committed on success, or status=rejected/failed with error details.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        operation_id: { type: 'string', description: 'UUID of the pending_operations row to approve' },
+      },
+      required: ['operation_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['committed', 'rejected', 'failed'] },
+        operation_id: { type: 'string' },
+        data: { type: 'object' },
+        error: { type: 'string' },
+        auto_rejected: { type: 'boolean' },
+      },
+      required: ['status', 'operation_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase) {
+      const operationId = args.operation_id as string
+      if (!operationId) throw new Error('operation_id is required')
+
+      const { data: op, error: fetchError } = await supabase
+        .from('pending_operations')
+        .select('*')
+        .eq('id', operationId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !op) throw new Error('Pending operation not found')
+
+      const result = await commitPendingOperation(
+        supabase,
+        userId,
+        companyId,
+        op as PendingOperation,
+        { commitMethod: 'user_accept' }
+      )
+
+      return {
+        status: result.status,
+        operation_id: operationId,
+        ...(result.data ? { data: result.data } : {}),
+        ...(result.error ? { error: result.error } : {}),
+        ...(result.auto_rejected ? { auto_rejected: true } : {}),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_reject_pending_operation',
+    description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        operation_id: { type: 'string', description: 'UUID of the pending_operations row to reject' },
+      },
+      required: ['operation_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['rejected'] },
+        operation_id: { type: 'string' },
+      },
+      required: ['status', 'operation_id'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const operationId = args.operation_id as string
+      if (!operationId) throw new Error('operation_id is required')
+
+      const { data: op, error: fetchError } = await supabase
+        .from('pending_operations')
+        .select('id, status')
+        .eq('id', operationId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (fetchError || !op) throw new Error('Pending operation not found')
+      if (op.status !== 'pending') throw new Error(`Operation already ${op.status}`)
+
+      const { error: updateError } = await supabase
+        .from('pending_operations')
+        .update({ status: 'rejected', resolved_at: new Date().toISOString() })
+        .eq('id', operationId)
+
+      if (updateError) throw new Error(`Failed to reject operation: ${updateError.message}`)
+
+      return { status: 'rejected' as const, operation_id: operationId }
+    },
+  },
+
+  // ── Bring-your-own-extraction for inbox items ────────────────
+  {
+    name: 'gnubok_set_inbox_extracted_data',
+    description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than gnubok\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inbox_item_id: { type: 'string', description: 'UUID of the invoice_inbox_items row' },
+        extracted_data: {
+          type: 'object',
+          description: 'Full InvoiceExtractionResult (supplier, invoice, lineItems, totals, vatBreakdown). Validated server-side via the same Zod schema as the AI extractor.',
+        },
+      },
+      required: ['inbox_item_id', 'extracted_data'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        inbox_item_id: { type: 'string' },
+        matched_supplier_id: { type: ['string', 'null'] },
+        extracted_data: { type: 'object' },
+      },
+      required: ['inbox_item_id', 'extracted_data'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const inboxItemId = args.inbox_item_id as string
+      if (!inboxItemId) throw new Error('inbox_item_id is required')
+
+      const parsed = InvoiceExtractionSchema.parse(args.extracted_data)
+      const extracted = { ...parsed, confidence: 1 }
+
+      const { data: item, error: fetchError } = await supabase
+        .from('invoice_inbox_items')
+        .select('id, created_supplier_invoice_id')
+        .eq('id', inboxItemId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (fetchError) throw new Error(`Failed to fetch inbox item: ${fetchError.message}`)
+      if (!item) throw new Error('Inbox item not found')
+      if (item.created_supplier_invoice_id) {
+        throw new Error('Inbox item is already linked to a supplier invoice and cannot be modified')
+      }
+
+      // Re-run supplier match so agent-supplied fields trigger the same
+      // auto-link the AI path does (org-nr → name, ILIKE).
+      let matchedSupplierId: string | null = null
+      if (extracted.supplier.orgNumber) {
+        const { data: s } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('org_number', extracted.supplier.orgNumber)
+          .limit(1)
+          .maybeSingle()
+        if (s) matchedSupplierId = s.id
+      }
+      if (!matchedSupplierId && extracted.supplier.name) {
+        const { data: s } = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('company_id', companyId)
+          .ilike('name', extracted.supplier.name)
+          .limit(1)
+          .maybeSingle()
+        if (s) matchedSupplierId = s.id
+      }
+
+      const { error: updateError } = await supabase
+        .from('invoice_inbox_items')
+        .update({
+          extracted_data: extracted as unknown as Record<string, unknown>,
+          matched_supplier_id: matchedSupplierId,
+        })
+        .eq('id', inboxItemId)
+        .eq('company_id', companyId)
+
+      if (updateError) throw new Error(`Failed to update inbox item: ${updateError.message}`)
+
+      return {
+        inbox_item_id: inboxItemId,
+        matched_supplier_id: matchedSupplierId,
+        extracted_data: extracted as unknown as Record<string, unknown>,
+      }
     },
   },
 ]
