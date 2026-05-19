@@ -16,10 +16,16 @@ services:
     # tmpfs ordering matters — the parent /app/.next must be mounted before
     # any sub-mounts. The entrypoint cp's image-baked templates into these
     # mounts at startup, then sed-substitutes, then chmod -R a-w.
+    #
+    # mode=750: root-owned, group-readable. The entrypoint runs as root long
+    # enough to copy templates, substitute placeholders, and chown the cache
+    # directory to nextjs:nodejs (gid 1001). nodejs group members can read
+    # the partially-substituted bundle during startup; nothing else on the
+    # host can. After chmod a-w the served files are read-only for everyone.
     tmpfs:
       - /tmp
-      - /app/.next:uid=0,gid=0,mode=755,size=400m
-      - /app/public:uid=0,gid=0,mode=755,size=200m
+      - /app/.next:uid=0,gid=1001,mode=750,size=400m
+      - /app/public:uid=0,gid=1001,mode=750,size=200m
     mem_limit: 1g
     cpus: 2
     pids_limit: 200

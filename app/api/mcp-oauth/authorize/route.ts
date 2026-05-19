@@ -200,17 +200,19 @@ export async function GET(request: Request) {
   const scopeBindingValue = scopeParam ?? ''
   const scopeBindingSignature = signScopeBinding(scopeBindingValue)
 
-  // When the client requested specific scopes, the consent UI is bounded to
-  // that exact set (RFC 6749 §3.3 — strict least-privilege).
+  // The consent UI is bounded to a server-enforced ceiling, regardless of
+  // what the user ticks:
   //
-  // When the client passed no scope (or only the legacy `mcp` marker — the
-  // case Claude's connector hits today), the user has full discretion: every
-  // scope is rendered as a tickable option, but only DEFAULT_OAUTH_SCOPES are
-  // pre-checked. The user has to actively tick :write scopes — which preserves
-  // GDPR Art. 25(2) (data protection by default) while still letting the
-  // resource owner widen the grant per RFC 6749 §3.3 ("based on … the resource
-  // owner's instructions").
-  const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
+  //   - Client requested specific scopes → ceiling = that set (RFC 6749 §3.3
+  //     strict least-privilege).
+  //   - Client passed no scope (or only the legacy `mcp` marker — the case
+  //     Claude's connector hits today) → ceiling = DEFAULT_OAUTH_SCOPES
+  //     (read-only). This preserves GDPR Art. 25(2) data-protection-by-default
+  //     and keeps a server-enforced read-only guarantee for clients that
+  //     never declared any intent. Widening the ceiling beyond
+  //     DEFAULT_OAUTH_SCOPES requires the client to ask for it via the
+  //     `scope` parameter.
+  const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
   const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
@@ -675,14 +677,13 @@ export async function POST(request: Request) {
   //          can never end up with write grants, even if the user tampered
   //          with the form (least-privilege, SOC 2 CC6.3, NIST AC-6).
   //        • If the client passed no scope (or only the `mcp` marker), the
-  //          ceiling = ALL_SCOPES. The resource owner has full discretion at
-  //          consent time, which RFC 6749 §3.3 permits ("based on … the
-  //          resource owner's instructions"). The silent fallback when the
-  //          user selects nothing remains DEFAULT_OAUTH_SCOPES (read-only),
-  //          preserving GDPR Art. 25(2) data-protection-by-default.
+  //          ceiling = DEFAULT_OAUTH_SCOPES (read-only). A client that never
+  //          declared write intent cannot receive write grants, even if the
+  //          user tampered with the form — preserving GDPR Art. 25(2)
+  //          data-protection-by-default.
   const submittedScopes = formData.getAll('scopes').filter((s): s is string => typeof s === 'string')
   const validated = validateScopes(submittedScopes)
-  const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...ALL_SCOPES]
+  const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...DEFAULT_OAUTH_SCOPES]
   const ceilingSet = new Set<ApiKeyScope>(clientCeiling)
   const boundedToClient = (validated ?? []).filter(s => ceilingSet.has(s))
   const grantedScopes: ApiKeyScope[] = boundedToClient.length > 0
@@ -710,10 +711,11 @@ export async function POST(request: Request) {
 
 /**
  * Render the scope checkbox UI grouped by domain. Only scopes in `ceiling`
- * (the client's `scope` querystring, or DEFAULT_OAUTH_SCOPES) are surfaced —
- * scopes outside the ceiling are dropped from the consent UI so the user
- * can't tick boxes that the POST handler would refuse anyway. Pre-checks
- * every visible row by default.
+ * are surfaced — scopes outside the ceiling are dropped from the consent UI
+ * so the user can't tick boxes that the POST handler would refuse anyway.
+ * The ceiling is either the client's `scope` querystring (when specified)
+ * or DEFAULT_OAUTH_SCOPES (when the client passed no scope), matching the
+ * server-side enforcement in the POST handler.
  */
 function renderScopeCheckboxes(
   preChecked: Set<ApiKeyScope>,

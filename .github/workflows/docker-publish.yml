@@ -86,7 +86,12 @@ jobs:
         uses: aquasecurity/trivy-action@0.30.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-          severity: CRITICAL
+          # HIGH is blocking for an accounting application — Trivy's CRITICAL
+          # bucket is narrow (mostly RCE-class), and HIGH covers everything
+          # from auth bypass to crypto downgrades. ignore-unfixed keeps the
+          # gate actionable: only CVEs we can patch by rebuilding fail the
+          # pipeline, not upstream-pending issues we have no remediation for.
+          severity: CRITICAL,HIGH
           exit-code: '1'
           ignore-unfixed: true
           format: sarif
