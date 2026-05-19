@@ -99,6 +99,15 @@ export const PATCH = withRouteContext(
         )
       }
 
+      // Snapshot existing rows so we can restore them if the insert fails.
+      // Without this, a failed replace would leave the schedule with zero
+      // items and every subsequent cron run would throw "schedule has no
+      // items", silently skipping billing dates.
+      const { data: previousItems } = await supabase
+        .from('recurring_invoice_schedule_items')
+        .select('sort_order, description, quantity, unit, unit_price, vat_rate')
+        .eq('schedule_id', id)
+
       await supabase
         .from('recurring_invoice_schedule_items')
         .delete()
@@ -118,6 +127,28 @@ export const PATCH = withRouteContext(
         .insert(itemRows)
       if (itemsError) {
         log.error('failed to replace schedule items', itemsError)
+        // Restore the snapshot so the schedule stays valid for the cron.
+        if (previousItems && previousItems.length > 0) {
+          const restoreRows = previousItems.map((row) => ({
+            schedule_id: id,
+            sort_order: row.sort_order,
+            description: row.description,
+            quantity: row.quantity,
+            unit: row.unit,
+            unit_price: row.unit_price,
+            vat_rate: row.vat_rate,
+          }))
+          const { error: restoreError } = await supabase
+            .from('recurring_invoice_schedule_items')
+            .insert(restoreRows)
+          if (restoreError) {
+            log.error(
+              'failed to restore schedule items after failed replace — schedule may be left empty',
+              restoreError,
+              { scheduleId: id },
+            )
+          }
+        }
         return errorResponse(itemsError, log, { requestId })
       }
     }

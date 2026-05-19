@@ -247,7 +247,10 @@ export async function executeRecurringSchedule(
   })
   const { error: itemsError } = await supabase.from('invoice_items').insert(itemRows)
   if (itemsError) {
-    // Roll back the header so we don't orphan a numbered row.
+    // Hard-delete is safe here only because step 5 inserted invoice_number: null
+    // — no F-series slot has been consumed yet (step 7 calls ensureInvoiceNumber).
+    // Once a number is assigned, the soft-cancel path in step 7 must be used to
+    // preserve the sequence per BFL 5 kap 6§ / ML 17 kap 24§.
     await supabase.from('invoices').delete().eq('id', invoice.id)
     throw new Error(`failed to insert invoice items: ${itemsError.message}`)
   }

@@ -181,12 +181,19 @@ export const CreateCreditNoteSchema = z.object({
 // Recurring invoice schedule schemas
 // ============================================================
 
+// Swedish VAT rates per ML 17 kap 24§ p.9 — null means "use customer default
+// from getAvailableVatRates". Any other value would produce a non-compliant
+// invoice (buyer cannot deduct ingående moms). Cron-time validation against
+// the customer's allowed set still runs in executeRecurringSchedule.
 export const RecurringScheduleItemSchema = z.object({
   description: z.string().min(1, 'Item description is required'),
   quantity: z.number().positive('Quantity must be positive'),
   unit: z.string().min(1, 'Unit is required').default('st'),
   unit_price: z.number(),
-  vat_rate: z.number().min(0).max(100).optional().nullable(),
+  vat_rate: z
+    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+    .nullable()
+    .optional(),
 })
 
 export const CreateRecurringScheduleSchema = z.object({

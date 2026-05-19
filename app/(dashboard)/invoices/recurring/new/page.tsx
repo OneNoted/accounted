@@ -24,13 +24,17 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
 import type { Customer, Currency } from '@/types'
+import { formatCurrency } from '@/lib/utils'
 
 const itemSchema = z.object({
   description: z.string().min(1, 'Beskrivning krävs'),
   quantity: z.number().min(0.01, 'Minst 0.01'),
   unit: z.string().min(1, 'Enhet krävs'),
   unit_price: z.number(),
-  vat_rate: z.number().min(0).max(25).nullable().optional(),
+  vat_rate: z
+    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+    .nullable()
+    .optional(),
 })
 
 const schema = z.object({
@@ -116,7 +120,13 @@ export default function NewRecurringSchedulePage() {
   }
 
   const items = watch('items')
-  const subtotal = items.reduce((sum, it) => sum + (it.quantity || 0) * (it.unit_price || 0), 0)
+  const watchCurrency = watch('currency')
+  const subtotalRaw = items.reduce(
+    (sum, it) => sum + (it.quantity || 0) * (it.unit_price || 0),
+    0,
+  )
+  // Round to öre using the project monetary rule, then format.
+  const subtotal = Math.round(subtotalRaw * 100) / 100
 
   return (
     <div className="space-y-8">
@@ -330,7 +340,7 @@ export default function NewRecurringSchedulePage() {
               Lägg till rad
             </Button>
             <div className="pt-2 text-sm text-muted-foreground tabular-nums">
-              Delsumma exkl. moms: {subtotal.toFixed(2)}
+              Delsumma exkl. moms: {formatCurrency(subtotal, watchCurrency)}
             </div>
           </CardContent>
         </Card>
