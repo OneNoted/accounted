@@ -64,7 +64,15 @@ export async function evaluateMappingRules(
   try {
     const transfer = await detectOwnAccountTransfer(supabase, companyId, transaction)
     if (transfer) {
-      return buildOwnAccountTransferResult(transaction, bankAccount, transfer.counterLedgerAccount)
+      const isFx =
+        (transaction.currency || '').toUpperCase() !==
+        (transfer.counterCurrency || '').toUpperCase()
+      return buildOwnAccountTransferResult(
+        transaction,
+        bankAccount,
+        transfer.counterLedgerAccount,
+        isFx,
+      )
     }
   } catch (err) {
     // Non-fatal — falling through to normal categorization is correct when
@@ -330,25 +338,34 @@ function getDefaultResult(transaction: Transaction, bankAccount = '1930'): Mappi
  * credit the counter account.
  *
  * Confidence is high (0.95) because IBAN match against the company's own
- * cash_accounts is an exact identity check, not a heuristic. `requires_review`
- * is false so the categorize-on-ingest flow can auto-book without prompting.
+ * cash_accounts is an exact identity check, not a heuristic.
+ *
+ * `isFx` flips `requires_review` to true when the two legs sit on different
+ * currencies (e.g. SEK 1930 → EUR 1932). A cross-currency leg generally
+ * realises a kursvinst/kursförlust on 3960/7960 (ÅRL 4 kap 10 §) that the
+ * two-line transfer entry doesn't capture — a human must confirm the FX gain
+ * or loss line rather than auto-booking a potentially incomplete entry.
+ * Same-currency transfers stay auto-bookable.
  */
 function buildOwnAccountTransferResult(
   transaction: Transaction,
   bankAccount: string,
   counterAccount: string,
+  isFx: boolean = false,
 ): MappingResult {
   const isOutflow = transaction.amount < 0
   return {
     rule: null,
     debit_account: isOutflow ? counterAccount : bankAccount,
     credit_account: isOutflow ? bankAccount : counterAccount,
-    risk_level: 'LOW',
-    confidence: 0.95,
-    requires_review: false,
+    risk_level: isFx ? 'MEDIUM' : 'LOW',
+    confidence: isFx ? 0.7 : 0.95,
+    requires_review: isFx,
     default_private: false,
     vat_lines: [],
-    description: 'Överföring mellan egna konton',
+    description: isFx
+      ? 'Överföring mellan egna konton (FX — granska kursvinst/förlust)'
+      : 'Överföring mellan egna konton',
   }
 }
 

@@ -60,9 +60,19 @@ export async function detectOwnAccountTransfer(
   // Find the paired transaction on the other side, if it's already been
   // ingested. Match on (company_id, bank_connection_id of counter account,
   // opposite sign, ±2 days, unmatched).
+  //
+  // Within the date window the same account may carry several unrelated rows
+  // of the opposite sign (a supplier payment, a payroll batch, ...). Without
+  // an amount constraint the first one wins, and pairTransactionId can point
+  // at a completely unrelated row. For same-currency transfers we tighten the
+  // filter to the exact opposite amount. For cross-currency we can't — FX
+  // converts the figure — so we fall back to the loose window and then pick
+  // the candidate whose magnitude is closest to the original.
   const dateFrom = addDays(transaction.date, -2)
   const dateTo = addDays(transaction.date, 2)
   const oppositeSign = transaction.amount > 0 ? 'lt' : 'gt'
+  const sameCurrency =
+    transaction.currency?.toUpperCase() === counterAccount.currency?.toUpperCase()
 
   let q = supabase
     .from('transactions')
@@ -77,7 +87,14 @@ export async function detectOwnAccountTransfer(
     q = q.eq('bank_connection_id', counterAccount.bank_connection_id)
   }
 
-  q = oppositeSign === 'lt' ? q.lt('amount', 0) : q.gt('amount', 0)
+  if (sameCurrency) {
+    // Exact opposite amount. Postgres numeric comparison handles trailing
+    // zeroes consistently; bank PSD2 amounts are stored at <= 2 decimals so
+    // an equality match is the right primitive here.
+    q = q.eq('amount', -transaction.amount)
+  } else {
+    q = oppositeSign === 'lt' ? q.lt('amount', 0) : q.gt('amount', 0)
+  }
 
   const { data: pairCandidates, error } = await q.limit(5)
   if (error) {
@@ -88,7 +105,26 @@ export async function detectOwnAccountTransfer(
     })
   }
 
-  const pair = (pairCandidates ?? []).find(p => p.id !== transaction.id) ?? null
+  // Same-currency lookup is already amount-equal so any returned row is a
+  // legitimate pair. Cross-currency: pick the row whose magnitude is closest
+  // to the original, which beats taking whatever DB ordering returns first
+  // when multiple unrelated rows fall inside the window.
+  type PairCandidate = { id: string; amount: number | string; date: string }
+  const candidates = ((pairCandidates ?? []) as PairCandidate[]).filter(p => p.id !== transaction.id)
+  let pair: PairCandidate | null = null
+  if (candidates.length > 0) {
+    if (sameCurrency) {
+      pair = candidates[0]
+    } else {
+      const target = Math.abs(transaction.amount)
+      pair = candidates.reduce<PairCandidate | null>((best, c) => {
+        if (best === null) return c
+        const cAbs = Math.abs(Number(c.amount) || 0)
+        const bestAbs = Math.abs(Number(best.amount) || 0)
+        return Math.abs(cAbs - target) < Math.abs(bestAbs - target) ? c : best
+      }, null)
+    }
+  }
 
   return {
     counterCashAccountId: counterAccount.id,

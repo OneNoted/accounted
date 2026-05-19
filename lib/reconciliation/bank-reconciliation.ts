@@ -247,20 +247,27 @@ export async function runReconciliation(
 
 /**
  * Compare bank transaction totals vs GL bank account balance.
+ *
+ * `bankAccount` and `currency` must agree (e.g. 1932 + EUR). When the caller
+ * omits currency it defaults to SEK for back-compat with the single-account
+ * call sites that only ever reconciled 1930. Multi-currency callers must pass
+ * both — comparing EUR GL movements against SEK transaction totals would
+ * silently produce nonsense.
  */
 export async function getReconciliationStatus(
   supabase: SupabaseClient,
   companyId: string,
   dateFrom?: string,
   dateTo?: string,
-  bankAccount = '1930'
+  bankAccount = '1930',
+  currency: string = 'SEK',
 ): Promise<ReconciliationStatus> {
   // Get all transactions in range
   let txQuery = supabase
     .from('transactions')
     .select('amount, journal_entry_id, reconciliation_method')
     .eq('company_id', companyId)
-    .eq('currency', 'SEK')
+    .eq('currency', currency)
 
   if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
   if (dateTo) txQuery = txQuery.lte('date', dateTo)

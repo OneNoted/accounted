@@ -187,17 +187,26 @@ export async function GET(request: Request) {
 
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
+  // CSP nonce for the inline consent UI controls. A nonce-bound script-src
+  // makes the inline block executable while keeping the rest of the page
+  // immune to script injection — without this the consent page is
+  // incompatible with a strict CSP and counts as unsafe-inline (ASVS V3.3,
+  // SOC 2 CC6.1). The nonce is regenerated per response.
+  const cspNonce = crypto.randomBytes(16).toString('base64')
+
   // Bind the requested scope to the consent display. The HMAC signature is
   // verified on POST so a tampered form submission cannot widen the grant
   // beyond what the user actually saw (V10.3.1).
   const scopeBindingValue = scopeParam ?? ''
   const scopeBindingSignature = signScopeBinding(scopeBindingValue)
 
-  // Pre-check scopes the client explicitly requested; otherwise default to
-  // the read-only OAuth set. The user can tick additional boxes to opt into
-  // write scopes — every grant is bounded server-side by API_KEY_SCOPES.
-  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
-  const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked)
+  // The grant ceiling is the set of scopes the client requested, or
+  // DEFAULT_OAUTH_SCOPES when the client passed no scope param. Pre-checks
+  // everything in the ceiling. The POST handler enforces the same ceiling
+  // server-side so a tampered form can't widen the grant past what the
+  // client actually asked for (RFC 6749 §3.3, SOC 2 CC6.3).
+  const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
+  const scopeCheckboxesHtml = renderScopeCheckboxes(grantCeiling, grantCeiling)
 
   // Render consent page
   const html = `<!DOCTYPE html>
@@ -264,7 +273,7 @@ export async function GET(request: Request) {
       </div>
     </form>
 
-    <script>
+    <script nonce="${cspNonce}">
       (function() {
         var form = document.getElementById('consent-form');
         var boxes = form.querySelectorAll('input[name="scopes"]');
@@ -286,8 +295,25 @@ export async function GET(request: Request) {
 </body>
 </html>`
 
+  // script-src bound to the per-request nonce ensures the consent page's
+  // inline JS can only be the block we actually emitted. Anything injected
+  // by a forged response or persisted XSS would be blocked.
+  const csp = [
+    "default-src 'none'",
+    `script-src 'nonce-${cspNonce}'`,
+    "style-src 'unsafe-inline'",
+    "form-action 'self'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+  ].join('; ')
+
   return new Response(html, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': csp,
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+    },
   })
 }
 
@@ -363,15 +389,29 @@ export async function POST(request: Request) {
     return errorRedirect(redirectUri, state, 'invalid_scope', parsed.description)
   }
 
-  // The user selects scopes via checkboxes on the consent page. We accept any
-  // subset of API_KEY_SCOPES — the user is the resource owner and can grant
-  // more than the client's `scope` querystring asked for. Filtering through
-  // validateScopes ensures unknown values can't sneak in via a forged POST.
+  // The user selects scopes via checkboxes on the consent page. Two upper
+  // bounds apply server-side, regardless of what the form posts:
+  //
+  //   1. validateScopes drops any value that isn't in API_KEY_SCOPES — guards
+  //      against forged values from a tampered POST.
+  //   2. The grant must be a subset of what the client *originally asked for*
+  //      (the `scope` querystring on the GET). Otherwise a client that
+  //      requested only read scopes could end up with write grants because
+  //      the user ticked extra boxes — that's a least-privilege violation
+  //      (RFC 6749 §3.3, SOC 2 CC6.3, NIST AC-6) and removes the client's
+  //      ability to advertise the access surface it actually intends to use.
+  //
+  // When the client didn't pass a scope param at all (parsed.scopes is
+  // undefined), the consent UI defaults to DEFAULT_OAUTH_SCOPES — that becomes
+  // the implicit ceiling for the grant.
   const submittedScopes = formData.getAll('scopes').filter((s): s is string => typeof s === 'string')
   const validated = validateScopes(submittedScopes)
-  const grantedScopes: ApiKeyScope[] = validated && validated.length > 0
-    ? validated
-    : [...DEFAULT_OAUTH_SCOPES]
+  const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...DEFAULT_OAUTH_SCOPES]
+  const ceilingSet = new Set<ApiKeyScope>(clientCeiling)
+  const boundedToClient = (validated ?? []).filter(s => ceilingSet.has(s))
+  const grantedScopes: ApiKeyScope[] = boundedToClient.length > 0
+    ? boundedToClient
+    : [...DEFAULT_OAUTH_SCOPES].filter(s => ceilingSet.has(s))
 
   // Create auth code with userId (NO API key — that's created at /token after PKCE)
   const code = createAuthCode({
@@ -393,25 +433,26 @@ export async function POST(request: Request) {
 }
 
 /**
- * Render the scope checkbox UI grouped by domain. Pre-checks scopes the
- * client requested (or DEFAULT_OAUTH_SCOPES on first connect). The user is
- * free to add or remove any boxes — every selection is bounded server-side
- * by API_KEY_SCOPES.
+ * Render the scope checkbox UI grouped by domain. Only scopes in `ceiling`
+ * (the client's `scope` querystring, or DEFAULT_OAUTH_SCOPES) are surfaced —
+ * scopes outside the ceiling are dropped from the consent UI so the user
+ * can't tick boxes that the POST handler would refuse anyway. Pre-checks
+ * every visible row by default.
  */
-function renderScopeCheckboxes(preChecked: Set<ApiKeyScope>): string {
-  // Render the canonical paired groups (read/write per domain) first, then
-  // sweep up any scopes that don't fit that shape (e.g. webhooks:manage,
-  // documents:read/write, compliance:read).
+function renderScopeCheckboxes(
+  preChecked: Set<ApiKeyScope>,
+  ceiling: Set<ApiKeyScope>,
+): string {
   const renderedInGroups = new Set<ApiKeyScope>()
   const groups: string[] = []
 
   for (const group of SCOPE_GROUPS) {
     const rows: string[] = []
-    if (group.read) {
+    if (group.read && ceiling.has(group.read)) {
       rows.push(scopeRow(group.read, preChecked.has(group.read), 'read'))
       renderedInGroups.add(group.read)
     }
-    if (group.write) {
+    if (group.write && ceiling.has(group.write)) {
       rows.push(scopeRow(group.write, preChecked.has(group.write), 'write'))
       renderedInGroups.add(group.write)
     }
@@ -422,9 +463,7 @@ function renderScopeCheckboxes(preChecked: Set<ApiKeyScope>): string {
     }
   }
 
-  // Bucket remaining scopes (REST-API-only, ungrouped) under a single
-  // "Övriga" card so they're still grantable.
-  const remaining = ALL_SCOPES.filter((s) => !renderedInGroups.has(s))
+  const remaining = ALL_SCOPES.filter(s => ceiling.has(s) && !renderedInGroups.has(s))
   if (remaining.length > 0) {
     const rows = remaining.map((s) =>
       scopeRow(s, preChecked.has(s), s.endsWith(':write') || s.endsWith(':manage') || s.endsWith(':approve') ? 'write' : 'read')

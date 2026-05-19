@@ -195,30 +195,23 @@ export async function setLedgerAccount(
 }
 
 /**
- * Mark a cash account as the primary for its company. Honors the partial-unique
- * index by first clearing any existing primary. Two writes inside one logical
- * operation — safe under RLS because both target rows owned by the caller.
+ * Mark a cash account as the primary for its company. Delegates to the
+ * `set_cash_account_primary` RPC so the clear-old-primary and set-new-primary
+ * updates happen inside a single transaction. The intermediate "no primary"
+ * state is never visible to concurrent readers — important because
+ * skattekonto-booking's __PRIMARY_SEK__ resolver runs through getPrimary() and
+ * would otherwise see null in the gap and mis-route the counter account.
  */
 export async function setPrimary(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string,
 ): Promise<void> {
-  const { error: clearError } = await supabase
-    .from('cash_accounts')
-    .update({ is_primary: false })
-    .eq('company_id', companyId)
-    .eq('is_primary', true)
-  if (clearError) {
-    throw new Error(`cash_accounts setPrimary (clear) failed: ${clearError.message}`)
-  }
-
-  const { error: setError } = await supabase
-    .from('cash_accounts')
-    .update({ is_primary: true })
-    .eq('company_id', companyId)
-    .eq('id', cashAccountId)
-  if (setError) {
-    throw new Error(`cash_accounts setPrimary (set) failed: ${setError.message}`)
+  const { error } = await supabase.rpc('set_cash_account_primary', {
+    p_company_id: companyId,
+    p_cash_account_id: cashAccountId,
+  })
+  if (error) {
+    throw new Error(`cash_accounts setPrimary failed: ${error.message}`)
   }
 }

@@ -29,25 +29,23 @@ export async function POST(request: Request) {
   const accountNumber = account_number ?? '1930'
 
   // Defense-in-depth: only allow account numbers the company has registered as
-  // a cash account. Without this, a curious caller could probe arbitrary GL
-  // accounts. 1930 stays callable without lookup for back-compat.
-  let currency = 'SEK'
-  if (accountNumber !== '1930') {
-    const { data: cashAccount } = await supabase
-      .from('cash_accounts')
-      .select('currency')
-      .eq('company_id', companyId)
-      .eq('ledger_account', accountNumber)
-      .maybeSingle()
+  // a cash account. Applies uniformly including '1930' — the cash_accounts
+  // backfill seeds 1930 for every company that had a SEK PSD2 account, and the
+  // AccountPickerDialog seeds it for new companies on first connection.
+  const { data: cashAccount } = await supabase
+    .from('cash_accounts')
+    .select('currency')
+    .eq('company_id', companyId)
+    .eq('ledger_account', accountNumber)
+    .maybeSingle()
 
-    if (!cashAccount) {
-      return NextResponse.json(
-        { error: 'Okänt kassakonto för det här företaget' },
-        { status: 400 },
-      )
-    }
-    currency = (cashAccount.currency as string | undefined) ?? 'SEK'
+  if (!cashAccount) {
+    return NextResponse.json(
+      { error: 'Okänt kassakonto för det här företaget' },
+      { status: 400 },
+    )
   }
+  const currency = (cashAccount.currency as string | undefined) ?? 'SEK'
 
   const result = await runReconciliation(supabase, companyId, user.id, {
     dateFrom: date_from,

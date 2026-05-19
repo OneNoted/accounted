@@ -52,6 +52,20 @@ export type CoreEvent =
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
   | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
+  // Emitted when the PSD2 callback fails to mirror a returned account into
+  // cash_accounts. ASVS V16 / ISO 27001 A.8.15 — security-relevant failures
+  // must land in a structured audit log (event_log, 30-day TTL) rather than
+  // being lost to console.error.
+  | { type: 'bank_connection.cash_account_mirror_failed'; payload: {
+      connectionId: string
+      bankName: string | null
+      accountUid: string
+      ledgerAccount: string
+      currency: string
+      reason: string
+      userId: string
+      companyId: string
+    } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }

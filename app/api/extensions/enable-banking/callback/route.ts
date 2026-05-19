@@ -190,22 +190,48 @@ export async function GET(request: Request) {
     // AccountPickerDialog after this redirect; until then we route SEK→1930,
     // EUR→1932, USD→1933, GBP→1934 by convention.
     for (const account of accountsMetadata) {
+      const targetLedger = defaultLedgerForCurrency(account.currency)
       try {
         await upsertFromPsd2(supabase, updatedConnection.company_id, {
           bank_connection_id: updatedConnection.id,
           external_uid: account.uid,
           currency: account.currency,
-          ledger_account: defaultLedgerForCurrency(account.currency),
+          ledger_account: targetLedger,
           iban: account.iban ?? null,
           name: account.name ?? null,
           enabled: account.enabled ?? true,
         })
       } catch (cashErr) {
+        const reason = cashErr instanceof Error ? cashErr.message : String(cashErr)
         console.error('[enable-banking] Failed to mirror cash_account on callback', {
           connectionId: updatedConnection.id,
           uid: account.uid,
-          error: cashErr instanceof Error ? cashErr.message : String(cashErr),
+          error: reason,
         })
+        // Persist the failure to event_log so a security review can see that
+        // a PSD2 account returned by the bank was not mirrored into our
+        // routing table — otherwise this is only visible in console output
+        // (ASVS V16 / ISO 27001 A.8.15 / SOC 2 CC7.2).
+        try {
+          await eventBus.emit({
+            type: 'bank_connection.cash_account_mirror_failed',
+            payload: {
+              connectionId: updatedConnection.id,
+              bankName: updatedConnection.bank_name ?? null,
+              accountUid: account.uid,
+              ledgerAccount: targetLedger,
+              currency: account.currency,
+              reason,
+              userId: updatedConnection.user_id,
+              companyId: updatedConnection.company_id,
+            },
+          })
+        } catch (emitError) {
+          console.error('[enable-banking] Failed to emit cash_account_mirror_failed event', {
+            connectionId: updatedConnection.id,
+            error: emitError instanceof Error ? emitError.message : String(emitError),
+          })
+        }
       }
     }
 

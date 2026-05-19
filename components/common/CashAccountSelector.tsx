@@ -39,8 +39,14 @@ interface Props {
  * read to a particular settlement account (1930 SEK, 1932 EUR, …).
  *
  * Loads /api/cash-accounts for the active company, persists the last selection
- * per company in localStorage, and renders the same Select primitive as the
+ * per company in sessionStorage, and renders the same Select primitive as the
  * fiscal-year picker so the UX stays consistent.
+ *
+ * sessionStorage (not localStorage) so the selection clears when the tab/
+ * session ends. The data is a UI preference, not a credential; persisting
+ * which BAS account a company uses across sessions in browser storage would
+ * couple company id + financial account reference for the lifetime of the
+ * browser profile (GDPR Art. 25(2) data minimisation, ISO 27001 A.8.12).
  */
 export function CashAccountSelector({
   value,
@@ -78,7 +84,7 @@ export function CashAccountSelector({
 
       // Restore last selection or pick the primary as default.
       if (typeof window !== 'undefined') {
-        const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
+        const stored = window.sessionStorage.getItem(STORAGE_KEY_PREFIX + company.id)
         const inFetched = (ledger: string) =>
           fetched.some(a => a.ledger_account === ledger)
 
@@ -104,7 +110,7 @@ export function CashAccountSelector({
 
   const handleChange = (next: string) => {
     if (company?.id && typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY_PREFIX + company.id, next)
+      window.sessionStorage.setItem(STORAGE_KEY_PREFIX + company.id, next)
     }
     onChange(next)
   }
