@@ -16,8 +16,28 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const dateFrom = searchParams.get('date_from') || undefined
   const dateTo = searchParams.get('date_to') || undefined
+  const accountNumber = searchParams.get('account_number') || '1930'
 
-  const lines = await fetchUnlinkedGLLines(supabase, companyId, dateFrom, dateTo)
+  // Defense-in-depth: only allow account numbers that the company has actually
+  // registered as a cash account. Without this, a curious caller could probe
+  // arbitrary GL accounts for posted-but-unmatched amounts.
+  if (accountNumber !== '1930') {
+    const { data: cashAccount } = await supabase
+      .from('cash_accounts')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('ledger_account', accountNumber)
+      .maybeSingle()
+
+    if (!cashAccount) {
+      return NextResponse.json(
+        { error: 'Unknown cash account for this company' },
+        { status: 400 },
+      )
+    }
+  }
+
+  const lines = await fetchUnlinkedGLLines(supabase, companyId, accountNumber, dateFrom, dateTo)
 
   return NextResponse.json({ data: lines })
 }

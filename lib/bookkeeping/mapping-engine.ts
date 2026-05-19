@@ -9,6 +9,7 @@ import {
   findCounterpartyTemplate,
   buildMappingResultFromCounterpartyTemplate,
 } from './counterparty-templates'
+import { detectOwnAccountTransfer } from './own-account-detector'
 import type {
   MappingRule,
   MappingResult,
@@ -55,6 +56,25 @@ export async function evaluateMappingRules(
   settlementAccount?: string
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
+
+  // Pre-step: detect intra-company transfers. When the counterparty IBAN
+  // matches another cash_accounts row for the same company, book both legs
+  // as a transfer between the two ledger accounts instead of running the
+  // priority rules (which would mis-categorize the outflow as an expense).
+  try {
+    const transfer = await detectOwnAccountTransfer(supabase, companyId, transaction)
+    if (transfer) {
+      return buildOwnAccountTransferResult(transaction, bankAccount, transfer.counterLedgerAccount)
+    }
+  } catch (err) {
+    // Non-fatal — falling through to normal categorization is correct when
+    // the detector fails. We log so an unexpected upstream error is visible.
+    log.warn('own-account transfer detection failed', {
+      companyId,
+      transactionId: transaction.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   // Fetch all active rules (user-specific + system defaults), ordered by priority
   const { data: rules, error } = await supabase
@@ -296,6 +316,39 @@ function getDefaultResult(transaction: Transaction, bankAccount = '1930'): Mappi
     default_private: false,
     vat_lines: [],
     description: 'Obokförd transaktion',
+  }
+}
+
+/**
+ * Build a MappingResult for a detected own-account transfer.
+ *
+ * For an outflow (negative amount): debit the counter account, credit this
+ * side's settlement account. The counter side will book the mirror entry when
+ * its row is ingested.
+ *
+ * For an inflow (positive amount): debit this side's settlement account,
+ * credit the counter account.
+ *
+ * Confidence is high (0.95) because IBAN match against the company's own
+ * cash_accounts is an exact identity check, not a heuristic. `requires_review`
+ * is false so the categorize-on-ingest flow can auto-book without prompting.
+ */
+function buildOwnAccountTransferResult(
+  transaction: Transaction,
+  bankAccount: string,
+  counterAccount: string,
+): MappingResult {
+  const isOutflow = transaction.amount < 0
+  return {
+    rule: null,
+    debit_account: isOutflow ? counterAccount : bankAccount,
+    credit_account: isOutflow ? bankAccount : counterAccount,
+    risk_level: 'LOW',
+    confidence: 0.95,
+    requires_review: false,
+    default_private: false,
+    vat_lines: [],
+    description: 'Överföring mellan egna konton',
   }
 }
 

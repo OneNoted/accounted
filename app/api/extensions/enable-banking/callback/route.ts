@@ -3,6 +3,21 @@ import { NextResponse } from 'next/server'
 import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
+import { upsertFromPsd2 } from '@/lib/cash-accounts/service'
+
+// Suggested BAS account per currency. Mirrors the AccountPickerDialog defaults
+// (SEK→1930, EUR→1932, USD→1933, GBP→1934). The user can re-map in the picker
+// after this callback redirects them.
+const CURRENCY_DEFAULTS: Record<string, string> = {
+  SEK: '1930',
+  EUR: '1932',
+  USD: '1933',
+  GBP: '1934',
+}
+
+function defaultLedgerForCurrency(currency: string): string {
+  return CURRENCY_DEFAULTS[currency.toUpperCase()] ?? '1930'
+}
 
 /**
  * GET /api/extensions/enable-banking/callback
@@ -168,6 +183,30 @@ export async function GET(request: Request) {
         sessionId: '[REDACTED]',
       })
       throw new Error(`Failed to update connection: ${updateError.message}`)
+    }
+
+    // Mirror each PSD2 account into cash_accounts so routing decisions read from
+    // the canonical entity table. The user picks a ledger_account in the
+    // AccountPickerDialog after this redirect; until then we route SEK→1930,
+    // EUR→1932, USD→1933, GBP→1934 by convention.
+    for (const account of accountsMetadata) {
+      try {
+        await upsertFromPsd2(supabase, updatedConnection.company_id, {
+          bank_connection_id: updatedConnection.id,
+          external_uid: account.uid,
+          currency: account.currency,
+          ledger_account: defaultLedgerForCurrency(account.currency),
+          iban: account.iban ?? null,
+          name: account.name ?? null,
+          enabled: account.enabled ?? true,
+        })
+      } catch (cashErr) {
+        console.error('[enable-banking] Failed to mirror cash_account on callback', {
+          connectionId: updatedConnection.id,
+          uid: account.uid,
+          error: cashErr instanceof Error ? cashErr.message : String(cashErr),
+        })
+      }
     }
 
     // Audit trail: PSD2 consent has been exchanged and account metadata stored.
