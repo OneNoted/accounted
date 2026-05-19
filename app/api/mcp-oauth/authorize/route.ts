@@ -200,13 +200,19 @@ export async function GET(request: Request) {
   const scopeBindingValue = scopeParam ?? ''
   const scopeBindingSignature = signScopeBinding(scopeBindingValue)
 
-  // The grant ceiling is the set of scopes the client requested, or
-  // DEFAULT_OAUTH_SCOPES when the client passed no scope param. Pre-checks
-  // everything in the ceiling. The POST handler enforces the same ceiling
-  // server-side so a tampered form can't widen the grant past what the
-  // client actually asked for (RFC 6749 §3.3, SOC 2 CC6.3).
-  const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
-  const scopeCheckboxesHtml = renderScopeCheckboxes(grantCeiling, grantCeiling)
+  // When the client requested specific scopes, the consent UI is bounded to
+  // that exact set (RFC 6749 §3.3 — strict least-privilege).
+  //
+  // When the client passed no scope (or only the legacy `mcp` marker — the
+  // case Claude's connector hits today), the user has full discretion: every
+  // scope is rendered as a tickable option, but only DEFAULT_OAUTH_SCOPES are
+  // pre-checked. The user has to actively tick :write scopes — which preserves
+  // GDPR Art. 25(2) (data protection by default) while still letting the
+  // resource owner widen the grant per RFC 6749 §3.3 ("based on … the resource
+  // owner's instructions").
+  const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
+  const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
+  const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
 
   // Render consent page
   const html = `<!DOCTYPE html>
@@ -215,83 +221,351 @@ export async function GET(request: Request) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="translate" content="no">
+  <meta name="color-scheme" content="light">
   <title>Anslut MCP-klient — ${appNameLower}</title>
   <style>
+    :root {
+      --bg: hsl(0 0% 100%);
+      --surface: hsl(0 0% 100%);
+      --secondary: hsl(40 11% 89%);
+      --secondary-hover: hsl(40 11% 84%);
+      --muted: hsl(40 8% 93%);
+      --border: hsl(45 5% 85%);
+      --border-strong: hsl(45 5% 72%);
+      --fg: hsl(0 0% 9%);
+      --fg-muted: hsl(0 0% 40%);
+      --fg-faint: hsl(0 0% 55%);
+      --primary: hsl(0 0% 9%);
+      --primary-hover: hsl(0 0% 20%);
+      --warning: hsl(38 55% 50%);
+      --warning-bg: hsl(38 60% 96%);
+      --warning-border: hsl(38 45% 82%);
+      --warning-fg: hsl(28 60% 28%);
+      --warm-accent: hsl(38 45% 52%);
+      --ring: hsl(0 0% 9%);
+    }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; background: #fafafa; color: #111; display: flex; align-items: flex-start; justify-content: center; min-height: 100vh; padding: 2rem 1rem; }
-    .card { background: white; border-radius: 12px; border: 1px solid #e5e5e5; padding: 2rem; max-width: 520px; width: 100%; }
-    h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.5rem; }
-    p { font-size: 0.875rem; color: #666; line-height: 1.5; margin-bottom: 1rem; }
-    .account { font-size: 0.875rem; color: #111; font-weight: 500; background: #f5f5f5; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
-    .scopes-header { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #666; margin-bottom: 0.75rem; }
-    .scopes-controls { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
-    .scopes-controls button { padding: 0.25rem 0.625rem; font-size: 0.75rem; font-weight: 500; background: white; color: #444; border: 1px solid #e5e5e5; border-radius: 6px; cursor: pointer; }
-    .scopes-controls button:hover { background: #f5f5f5; }
-    .scope-group { border: 1px solid #ececec; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 0.5rem; }
-    .scope-group-title { font-size: 0.8125rem; font-weight: 600; color: #111; margin-bottom: 0.5rem; }
-    .scope-row { display: flex; gap: 0.625rem; padding: 0.375rem 0; align-items: flex-start; }
-    .scope-row input { margin-top: 0.1875rem; cursor: pointer; }
-    .scope-row label { font-size: 0.8125rem; color: #333; cursor: pointer; line-height: 1.4; }
-    .scope-row .scope-name { font-weight: 500; color: #111; }
-    .scope-row .scope-desc { color: #666; font-size: 0.75rem; display: block; margin-top: 0.125rem; }
-    .scope-row.write .scope-name::after { content: " · skriv"; color: #b85c2c; font-weight: 500; }
-    .warn { font-size: 0.75rem; color: #8b5a00; background: #fff7e6; border: 1px solid #f0d6a1; border-radius: 6px; padding: 0.625rem 0.75rem; margin: 1rem 0; line-height: 1.4; }
-    .actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
-    .actions button { flex: 1; padding: 0.625rem 1rem; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: 1px solid #e5e5e5; }
-    .allow { background: #111; color: white; border-color: #111; }
-    .allow:hover { background: #333; }
-    .deny { background: white; color: #111; }
-    .deny:hover { background: #f5f5f5; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: 'Geist', -apple-system, system-ui, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 4rem 1.5rem 3rem;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 560px;
+      width: 100%;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-faint);
+      margin-bottom: 0.875rem;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--warm-accent);
+    }
+    h1 {
+      font-family: 'Hedvig Letters Serif', Georgia, 'Times New Roman', serif;
+      font-size: 2rem;
+      font-weight: 400;
+      letter-spacing: -0.018em;
+      line-height: 1.1;
+      color: var(--fg);
+      margin-bottom: 0.625rem;
+    }
+    .lede {
+      font-size: 0.875rem;
+      color: var(--fg-muted);
+      line-height: 1.55;
+      margin-bottom: 1.5rem;
+    }
+    .account {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      background: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.75rem 0.875rem;
+      margin-bottom: 1.75rem;
+    }
+    .account-label {
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-faint);
+    }
+    .account-name {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--fg);
+      text-align: right;
+      word-break: break-word;
+    }
+    .scopes-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 0.625rem;
+      margin-bottom: 0.25rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .scopes-title {
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-muted);
+    }
+    .scopes-controls {
+      display: flex;
+      gap: 0.25rem;
+    }
+    .scopes-controls button {
+      padding: 0.3125rem 0.625rem;
+      font-family: inherit;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      color: var(--fg-muted);
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 150ms, color 150ms, border-color 150ms;
+    }
+    .scopes-controls button:hover {
+      background: var(--secondary);
+      color: var(--fg);
+      border-color: var(--border-strong);
+    }
+    .scopes-controls button:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
+    .scope-group {
+      padding: 0.375rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .scope-group:last-of-type { border-bottom: none; padding-bottom: 0; }
+    .scope-group-title {
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--fg-faint);
+      padding: 0.625rem 0 0.25rem;
+    }
+    .scope-row {
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.5rem;
+      margin: 0 -0.5rem;
+      align-items: flex-start;
+      border-radius: 6px;
+      transition: background 150ms;
+    }
+    .scope-row:hover { background: var(--secondary); }
+    .scope-row input[type="checkbox"] {
+      margin-top: 0.1875rem;
+      width: 15px;
+      height: 15px;
+      accent-color: var(--primary);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .scope-row input[type="checkbox"]:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+      border-radius: 2px;
+    }
+    .scope-row label {
+      flex: 1;
+      cursor: pointer;
+      line-height: 1.45;
+    }
+    .scope-name-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .scope-name {
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: var(--fg);
+    }
+    .scope-desc {
+      display: block;
+      margin-top: 0.1875rem;
+      font-size: 0.75rem;
+      color: var(--fg-muted);
+      line-height: 1.5;
+    }
+    .scope-tag {
+      font-size: 0.625rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 4px;
+      background: hsl(38 60% 92%);
+      color: hsl(28 65% 30%);
+      border: 1px solid hsl(38 45% 78%);
+    }
+    .warn {
+      display: flex;
+      gap: 0.625rem;
+      font-size: 0.75rem;
+      color: var(--warning-fg);
+      background: var(--warning-bg);
+      border: 1px solid var(--warning-border);
+      border-radius: 8px;
+      padding: 0.75rem 0.875rem;
+      margin: 1.5rem 0 0;
+      line-height: 1.55;
+    }
+    .warn-icon {
+      flex-shrink: 0;
+      width: 14px;
+      height: 14px;
+      margin-top: 0.125rem;
+      color: var(--warning);
+    }
+    .actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 1.75rem;
+    }
+    .actions button {
+      flex: 1;
+      padding: 0.6875rem 1rem;
+      font-family: inherit;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid;
+      transition: background 150ms, border-color 150ms, color 150ms;
+    }
+    .actions button:focus-visible {
+      outline: 2px solid var(--ring);
+      outline-offset: 2px;
+    }
+    .allow {
+      background: var(--primary);
+      color: hsl(0 0% 100%);
+      border-color: var(--primary);
+    }
+    .allow:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+    .deny {
+      background: var(--surface);
+      color: var(--fg);
+      border-color: var(--border-strong);
+    }
+    .deny:hover { background: var(--secondary); }
+    .footer {
+      margin-top: 1.25rem;
+      font-size: 0.6875rem;
+      color: var(--fg-faint);
+      text-align: center;
+      line-height: 1.5;
+    }
+    @media (max-width: 480px) {
+      body { padding: 1.5rem 1rem 2rem; }
+      .card { padding: 1.5rem; border-radius: 10px; }
+      h1 { font-size: 1.625rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; }
+    }
   </style>
 </head>
 <body>
-  <div class="card">
+  <main class="card" role="main">
+    <div class="eyebrow">${appNameLower} · mcp</div>
     <h1>Anslut MCP-klient</h1>
-    <p>En extern applikation vill ansluta till ditt ${appNameLower}-konto. Välj vilka behörigheter du vill ge.</p>
-    <div class="account">${escapeHtml(companyName)}</div>
+    <p class="lede">En extern applikation begär åtkomst till ditt ${appNameLower}-konto. Välj vilka behörigheter du vill bevilja.</p>
+
+    <div class="account">
+      <span class="account-label">Företag</span>
+      <span class="account-name">${escapeHtml(companyName)}</span>
+    </div>
 
     <form method="POST" action="${url.pathname}${url.search}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
 
-      <div class="scopes-header">Behörigheter</div>
-      <div class="scopes-controls">
-        <button type="button" id="select-read">Endast läs</button>
-        <button type="button" id="select-all">Markera alla</button>
-        <button type="button" id="select-none">Avmarkera alla</button>
+      <div class="scopes-header">
+        <span class="scopes-title">Behörigheter</span>
+        <div class="scopes-controls">
+          <button type="button" id="select-read">Endast läs</button>
+          <button type="button" id="select-all">Alla</button>
+          <button type="button" id="select-none">Inga</button>
+        </div>
       </div>
 
       ${scopeCheckboxesHtml}
 
       <div class="warn">
-        Skrivbehörigheter låter agenten stagea verifikationer, fakturor och löner. Alla skrivoperationer kräver din godkännande i ${appNameLower} innan de skrivs till databasen.
+        <svg class="warn-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.5"/>
+          <path d="M8 5v3.5" stroke-linecap="round"/>
+          <circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none"/>
+        </svg>
+        <span>Skrivbehörigheter låter agenten stagea verifikationer, fakturor och löner. Varje skrivoperation kräver ditt godkännande i ${appNameLower} innan den skrivs till databasen.</span>
       </div>
 
       <div class="actions">
         <button type="submit" name="consent" value="deny" class="deny">Neka</button>
-        <button type="submit" name="consent" value="allow" class="allow">Tillåt</button>
+        <button type="submit" name="consent" value="allow" class="allow">Tillåt åtkomst</button>
       </div>
     </form>
 
-    <script nonce="${cspNonce}">
-      (function() {
-        var form = document.getElementById('consent-form');
-        var boxes = form.querySelectorAll('input[name="scopes"]');
-        function setAll(predicate) {
-          boxes.forEach(function(b) { b.checked = predicate(b); });
-        }
-        document.getElementById('select-read').addEventListener('click', function() {
-          setAll(function(b) { return b.dataset.kind === 'read'; });
-        });
-        document.getElementById('select-all').addEventListener('click', function() {
-          setAll(function() { return true; });
-        });
-        document.getElementById('select-none').addEventListener('click', function() {
-          setAll(function() { return false; });
-        });
-      })();
-    </script>
-  </div>
+    <p class="footer">Du kan när som helst återkalla åtkomsten under Inställningar &rsaquo; API-nycklar.</p>
+  </main>
+
+  <script nonce="${cspNonce}">
+    (function() {
+      var form = document.getElementById('consent-form');
+      var boxes = form.querySelectorAll('input[name="scopes"]');
+      function setAll(predicate) {
+        boxes.forEach(function(b) { b.checked = predicate(b); });
+      }
+      document.getElementById('select-read').addEventListener('click', function() {
+        setAll(function(b) { return b.dataset.kind === 'read'; });
+      });
+      document.getElementById('select-all').addEventListener('click', function() {
+        setAll(function() { return true; });
+      });
+      document.getElementById('select-none').addEventListener('click', function() {
+        setAll(function() { return false; });
+      });
+    })();
+  </script>
 </body>
 </html>`
 
@@ -394,19 +668,21 @@ export async function POST(request: Request) {
   //
   //   1. validateScopes drops any value that isn't in API_KEY_SCOPES — guards
   //      against forged values from a tampered POST.
-  //   2. The grant must be a subset of what the client *originally asked for*
-  //      (the `scope` querystring on the GET). Otherwise a client that
-  //      requested only read scopes could end up with write grants because
-  //      the user ticked extra boxes — that's a least-privilege violation
-  //      (RFC 6749 §3.3, SOC 2 CC6.3, NIST AC-6) and removes the client's
-  //      ability to advertise the access surface it actually intends to use.
-  //
-  // When the client didn't pass a scope param at all (parsed.scopes is
-  // undefined), the consent UI defaults to DEFAULT_OAUTH_SCOPES — that becomes
-  // the implicit ceiling for the grant.
+  //   2. The grant must be a subset of the ceiling derived from the client's
+  //      original request:
+  //        • If the client requested specific scopes, the ceiling = that set
+  //          (RFC 6749 §3.3 strict). A client that asked for only read scopes
+  //          can never end up with write grants, even if the user tampered
+  //          with the form (least-privilege, SOC 2 CC6.3, NIST AC-6).
+  //        • If the client passed no scope (or only the `mcp` marker), the
+  //          ceiling = ALL_SCOPES. The resource owner has full discretion at
+  //          consent time, which RFC 6749 §3.3 permits ("based on … the
+  //          resource owner's instructions"). The silent fallback when the
+  //          user selects nothing remains DEFAULT_OAUTH_SCOPES (read-only),
+  //          preserving GDPR Art. 25(2) data-protection-by-default.
   const submittedScopes = formData.getAll('scopes').filter((s): s is string => typeof s === 'string')
   const validated = validateScopes(submittedScopes)
-  const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...DEFAULT_OAUTH_SCOPES]
+  const clientCeiling: ApiKeyScope[] = parsed.scopes ?? [...ALL_SCOPES]
   const ceilingSet = new Set<ApiKeyScope>(clientCeiling)
   const boundedToClient = (validated ?? []).filter(s => ceilingSet.has(s))
   const grantedScopes: ApiKeyScope[] = boundedToClient.length > 0
@@ -479,11 +755,22 @@ function renderScopeCheckboxes(
 function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'): string {
   const meta = API_KEY_SCOPES[scope]
   const id = `scope-${scope.replace(/[^a-z0-9]/gi, '-')}`
+  // Labels are formatted "Område — verb" (läs/skriv/hantera/godkänn). Pull the
+  // prefix as the display name and only render the verb as a tag for elevated
+  // scopes — read-only is the implicit default and doesn't need a tag.
+  const [namePart, verbPart] = meta.label.split(' — ')
+  const displayName = namePart ?? meta.label
+  const tagHtml = verbPart && kind === 'write'
+    ? `<span class="scope-tag">${escapeHtml(verbPart)}</span>`
+    : ''
   return `
     <div class="scope-row ${kind}">
       <input type="checkbox" id="${id}" name="scopes" value="${escapeHtml(scope)}" data-kind="${kind}" ${checked ? 'checked' : ''}>
       <label for="${id}">
-        <span class="scope-name">${escapeHtml(meta.label)}</span>
+        <span class="scope-name-row">
+          <span class="scope-name">${escapeHtml(displayName)}</span>
+          ${tagHtml}
+        </span>
         <span class="scope-desc">${escapeHtml(meta.description)}</span>
       </label>
     </div>

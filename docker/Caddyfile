@@ -1,0 +1,6 @@
+{$DOMAIN} {
+	reverse_proxy app:3000
+
+	# HSTS: lock clients onto HTTPS for one year. Eligible for browser preload lists.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+}
