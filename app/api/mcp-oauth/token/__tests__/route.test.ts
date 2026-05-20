@@ -269,7 +269,7 @@ describe('POST /api/mcp-oauth/token', () => {
   })
 
   describe('scope plumbing', () => {
-    it('falls back to read-only DEFAULT_OAUTH_SCOPES when the auth code carries no scopes', async () => {
+    it('falls back to the full agent-loop DEFAULT_OAUTH_SCOPES when the auth code carries no scopes', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
         codeChallenge: 'challenge',
@@ -296,14 +296,19 @@ describe('POST /api/mcp-oauth/token', () => {
       )
       expect(res.status).toBe(200)
       const body = await res.json()
-      // DEFAULT_OAUTH_SCOPES is read-only by design (GDPR Art. 25(2) —
-      // destructive scopes must be requested explicitly).
+      // DEFAULT_OAUTH_SCOPES covers the full agent loop: read → stage → approve.
+      // Excludes only the legally-irreversible BFL surface (bookkeeping:write,
+      // payroll:write, webhooks:manage), which must be requested explicitly.
       const granted = body.scope.split(' ')
       expect(granted).toContain('transactions:read')
-      expect(granted).toContain('reports:read')
+      expect(granted).toContain('transactions:write')
+      expect(granted).toContain('invoices:write')
+      expect(granted).toContain('suppliers:write')
+      expect(granted).toContain('pending_operations:approve')
+      // Still excluded from the silent default — opt-in only:
       expect(granted).not.toContain('bookkeeping:write')
-      expect(granted).not.toContain('pending_operations:approve')
-      expect(granted).not.toContain('transactions:write')
+      expect(granted).not.toContain('payroll:write')
+      expect(granted).not.toContain('webhooks:manage')
     })
 
     it('honours scopes from the auth code when present', async () => {
@@ -421,8 +426,10 @@ describe('POST /api/mcp-oauth/token', () => {
       const body = await res.json()
       const granted = body.scope.split(' ')
       expect(granted).toContain('transactions:read')
+      expect(granted).toContain('pending_operations:approve')
+      // Opt-in scopes still excluded from the silent default.
       expect(granted).not.toContain('bookkeeping:write')
-      expect(granted).not.toContain('pending_operations:approve')
+      expect(granted).not.toContain('payroll:write')
     })
   })
 })

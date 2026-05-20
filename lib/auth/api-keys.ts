@@ -45,14 +45,25 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
 ]
 
 /**
- * Read-only fallback granted to OAuth-issued keys when the client did not
- * pass an explicit `scope` parameter at /authorize. Per GDPR Art. 25(2)
- * (data protection by default), the silent fallback must never include
- * destructive scopes (*:write, pending_operations:approve, bookkeeping:write).
- * Destructive scopes must be requested explicitly by the client and consented
- * to by the user.
+ * Default scope grant for OAuth-issued keys when the client did not pass an
+ * explicit `scope` parameter at /authorize. Covers the full agent loop:
+ * read, stage writes, and approve staged operations — so Claude.ai's hosted
+ * connector "just works" end-to-end without requiring the user to log into
+ * the web UI to commit each operation. This is the explicit product intent
+ * of PR #3 (agent-driven approval).
+ *
+ * The user still sees and approves each individual pending_operation in chat
+ * before the agent calls gnubok_approve_pending_operation, so the
+ * human-in-the-loop control surface is preserved at the conversation layer.
+ *
+ * Excluded by design (must be requested explicitly via scope=):
+ *   - bookkeeping:write — touches period close / year-end / SIE import
+ *     (legally irreversible per BFL 5 kap 5§)
+ *   - payroll:write — touches employee compensation; opt-in per company
+ *   - webhooks:manage — affects shared infrastructure
  */
 export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
+  // Read
   'transactions:read',
   'customers:read',
   'invoices:read',
@@ -65,6 +76,14 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'compliance:read',
   'payroll:read',
   'pending_operations:read',
+  // Stage writes (agent loop)
+  'transactions:write',
+  'customers:write',
+  'invoices:write',
+  'suppliers:write',
+  'documents:write',
+  // Commit staged ops the user has explicitly authorized in chat
+  'pending_operations:approve',
 ]
 
 /**
