@@ -269,7 +269,7 @@ describe('POST /api/mcp-oauth/token', () => {
   })
 
   describe('scope plumbing', () => {
-    it('falls back to the full agent-loop DEFAULT_OAUTH_SCOPES when the auth code carries no scopes', async () => {
+    it('falls back to read-only DEFAULT_OAUTH_SCOPES when the auth code carries no scopes', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
         codeChallenge: 'challenge',
@@ -296,16 +296,22 @@ describe('POST /api/mcp-oauth/token', () => {
       )
       expect(res.status).toBe(200)
       const body = await res.json()
-      // DEFAULT_OAUTH_SCOPES covers the full agent loop: read → stage → approve.
-      // Excludes only the legally-irreversible BFL surface (bookkeeping:write,
-      // payroll:write, webhooks:manage), which must be requested explicitly.
+      // DEFAULT_OAUTH_SCOPES is read-only by design. Write and approval scopes
+      // must be requested explicitly by the client AND ticked by the user on
+      // the consent screen — GDPR Art. 25(2), ISO 27001:2022 A.5.18 / A.8.2,
+      // SOC 2 CC6.3, ASVS V8.1.1 / V10.2.1.
       const granted = body.scope.split(' ')
       expect(granted).toContain('transactions:read')
-      expect(granted).toContain('transactions:write')
-      expect(granted).toContain('invoices:write')
-      expect(granted).toContain('suppliers:write')
-      expect(granted).toContain('pending_operations:approve')
-      // Still excluded from the silent default — opt-in only:
+      expect(granted).toContain('invoices:read')
+      expect(granted).toContain('suppliers:read')
+      expect(granted).toContain('reports:read')
+      // No silent write or approval grants:
+      expect(granted).not.toContain('transactions:write')
+      expect(granted).not.toContain('invoices:write')
+      expect(granted).not.toContain('suppliers:write')
+      expect(granted).not.toContain('customers:write')
+      expect(granted).not.toContain('documents:write')
+      expect(granted).not.toContain('pending_operations:approve')
       expect(granted).not.toContain('bookkeeping:write')
       expect(granted).not.toContain('payroll:write')
       expect(granted).not.toContain('webhooks:manage')
@@ -408,7 +414,7 @@ describe('POST /api/mcp-oauth/token', () => {
       )
     })
 
-    it('falls back to DEFAULT_OAUTH_SCOPES for legacy keys with null scopes', async () => {
+    it('falls back to read-only DEFAULT_OAUTH_SCOPES for legacy keys with null scopes', async () => {
       const { supabase, enqueueMany } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueueMany([
@@ -426,8 +432,10 @@ describe('POST /api/mcp-oauth/token', () => {
       const body = await res.json()
       const granted = body.scope.split(' ')
       expect(granted).toContain('transactions:read')
-      expect(granted).toContain('pending_operations:approve')
-      // Opt-in scopes still excluded from the silent default.
+      // No silent grant of write or approval scopes (GDPR Art. 25(2),
+      // SoD per findStageApproveConflict — see lib/auth/api-keys.ts).
+      expect(granted).not.toContain('transactions:write')
+      expect(granted).not.toContain('pending_operations:approve')
       expect(granted).not.toContain('bookkeeping:write')
       expect(granted).not.toContain('payroll:write')
     })

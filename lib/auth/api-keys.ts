@@ -46,24 +46,26 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
 
 /**
  * Default scope grant for OAuth-issued keys when the client did not pass an
- * explicit `scope` parameter at /authorize. Covers the full agent loop:
- * read, stage writes, and approve staged operations — so Claude.ai's hosted
- * connector "just works" end-to-end without requiring the user to log into
- * the web UI to commit each operation. This is the explicit product intent
- * of PR #3 (agent-driven approval).
+ * explicit `scope` parameter at /authorize. Read-only by design — every
+ * write or approval scope must be requested explicitly by the client AND
+ * affirmatively ticked by the user on the consent screen.
  *
- * The user still sees and approves each individual pending_operation in chat
- * before the agent calls gnubok_approve_pending_operation, so the
- * human-in-the-loop control surface is preserved at the conversation layer.
- *
- * Excluded by design (must be requested explicitly via scope=):
- *   - bookkeeping:write — touches period close / year-end / SIE import
- *     (legally irreversible per BFL 5 kap 5§)
- *   - payroll:write — touches employee compensation; opt-in per company
- *   - webhooks:manage — affects shared infrastructure
+ * Rationale (do not weaken without a documented security decision):
+ *   - GDPR Art. 25(2) data-protection-by-default: the minimum-necessary
+ *     access set must be the silent baseline.
+ *   - ISO 27001:2022 A.5.18 / A.8.2 / SOC 2 CC6.3: privileged capabilities
+ *     (write, approve) must not be bundled into a default grant.
+ *   - Segregation of Duties (findStageApproveConflict below): granting any
+ *     STAGING_SCOPES member together with `pending_operations:approve` on a
+ *     single key lets an automated agent both stage AND commit financial
+ *     postings without a human-in-the-loop review. Keeping the default
+ *     read-only prevents this combination from being silently issued.
+ *   - BFL 5 kap 5§ / BFNAR 2013:2 behandlingshistorik: write paths that
+ *     create or modify verifikationer must be opt-in at the authorization
+ *     layer; conversational acknowledgement at the agent layer is not an
+ *     auditable substitute.
  */
 export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
-  // Read
   'transactions:read',
   'customers:read',
   'invoices:read',
@@ -76,14 +78,6 @@ export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'compliance:read',
   'payroll:read',
   'pending_operations:read',
-  // Stage writes (agent loop)
-  'transactions:write',
-  'customers:write',
-  'invoices:write',
-  'suppliers:write',
-  'documents:write',
-  // Commit staged ops the user has explicitly authorized in chat
-  'pending_operations:approve',
 ]
 
 /**

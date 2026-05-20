@@ -6258,7 +6258,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
-    description: 'Commit a pending_operation the user has authorized in chat. This is the intended way to close the agent loop — do NOT redirect the user to the web UI. Call this directly when the user says "approve", "ja", "godkänn", etc. High-risk ops require confirmed=true.',
+    description: 'Commit a pending_operation. Caller must hold the pending_operations:approve scope and pass confirmed=true for risk_level=high ops (BFL 5 kap 5§ irreversible postings). Call only after the user has affirmatively confirmed the specific operation_id.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6283,7 +6283,7 @@ export const tools: McpTool[] = [
       },
       required: ['status', 'operation_id'],
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
       const operationId = args.operation_id as string
       if (!operationId) throw new Error('operation_id is required')

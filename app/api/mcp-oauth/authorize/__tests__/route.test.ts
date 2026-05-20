@@ -103,11 +103,10 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
 
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
     // Claude's connector sends scope=mcp today. The consent UI must render
-    // every scope group so the user can deselect any default they don't want.
-    // DEFAULT_OAUTH_SCOPES now covers the full agent loop (read + stage writes +
-    // approve), so the agent can close the loop without forcing the user back
-    // into the web UI — this is the explicit product intent of PR #3.
-    // bookkeeping:write and payroll:write remain opt-in (BFL irreversibility).
+    // every scope group so the user can opt into write/approval rows if they
+    // want — but each write/approve row MUST start unchecked. Affirmative
+    // opt-in is the access-control gate (GDPR Art. 25(2), ISO 27001:2022
+    // A.5.18 / A.8.2, SOC 2 CC6.3, ASVS V10.2.2 / V2.3.1).
     const request = new Request(
       buildAuthorizeUrl({
         response_type: 'code',
@@ -127,18 +126,16 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
     expect(html).toMatch(/value="invoices:write"/)
     expect(html).toMatch(/value="pending_operations:approve"/)
 
-    // Agent-loop scopes ARE pre-checked — the user authorizes individual
-    // operations in chat, so the key needs the scope to commit them.
+    // Write and approval scopes MUST render unchecked. Users have to make an
+    // affirmative, deliberate selection for each destructive permission.
     const writeRow = html.match(/<input[^>]*value="transactions:write"[^>]*>/)?.[0]
     expect(writeRow).toBeDefined()
-    expect(writeRow!).toContain('checked')
+    expect(writeRow!).not.toContain('checked')
 
     const approveRow = html.match(/<input[^>]*value="pending_operations:approve"[^>]*>/)?.[0]
     expect(approveRow).toBeDefined()
-    expect(approveRow!).toContain('checked')
+    expect(approveRow!).not.toContain('checked')
 
-    // BFL-irreversible scopes still require an explicit click — they aren't
-    // in DEFAULT_OAUTH_SCOPES and so must NOT be pre-checked.
     const bookkeepingRow = html.match(/<input[^>]*value="bookkeeping:write"[^>]*>/)?.[0]
     expect(bookkeepingRow).toBeDefined()
     expect(bookkeepingRow!).not.toContain('checked')
