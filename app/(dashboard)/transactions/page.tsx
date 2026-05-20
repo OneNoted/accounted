@@ -529,38 +529,48 @@ export default function TransactionsPage() {
             (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
             (Array.isArray(result.error.details?.account_numbers) && result.error.details.account_numbers) ||
             []
+          // Synchronous in-flight flag per toast closure: a double-click
+          // would otherwise fire two activate+categorize pairs, where the
+          // second categorize races the first's verifikation insert.
+          let activateInFlight = false
           toast({
             title: 'Kontot finns inte i din kontoplan',
             description: `Bokföringsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
             variant: 'destructive',
             action: accountNumbers.length > 0 ? (
               <ToastAction altText="Aktivera och bokför" onClick={async () => {
-                const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ account_numbers: accountNumbers }),
-                })
-                if (!activateRes.ok) {
-                  const errBody = await activateRes.json().catch(() => null)
-                  toast({
-                    title: 'Kunde inte aktivera konton',
-                    description: getErrorMessage(errBody, { statusCode: activateRes.status }),
-                    variant: 'destructive',
+                if (activateInFlight) return
+                activateInFlight = true
+                try {
+                  const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_numbers: accountNumbers }),
                   })
-                  return
+                  if (!activateRes.ok) {
+                    const errBody = await activateRes.json().catch(() => null)
+                    toast({
+                      title: 'Kunde inte aktivera konton',
+                      description: getErrorMessage(errBody, { statusCode: activateRes.status }),
+                      variant: 'destructive',
+                    })
+                    return
+                  }
+                  const activateBody = await activateRes.json()
+                  // unknown[] = numbers not in BAS reference at all. Those
+                  // can't be auto-created; tell the user to add them manually.
+                  if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
+                    toast({
+                      title: 'Kunde inte hitta alla konton',
+                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`,
+                      variant: 'destructive',
+                    })
+                    return
+                  }
+                  await runCategorize(args)
+                } finally {
+                  activateInFlight = false
                 }
-                const activateBody = await activateRes.json()
-                // unknown[] = numbers not in BAS reference at all. Those
-                // can't be auto-created; tell the user to add them manually.
-                if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
-                  toast({
-                    title: 'Kunde inte hitta alla konton',
-                    description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`,
-                    variant: 'destructive',
-                  })
-                  return
-                }
-                await runCategorize(args)
               }}>
                 Aktivera och bokför
               </ToastAction>
@@ -1316,38 +1326,57 @@ export default function TransactionsPage() {
             (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
             (Array.isArray(result.error.details?.account_numbers) && result.error.details?.account_numbers) ||
             []
+          // Synchronous in-flight flag per toast closure — see same pattern
+          // in runCategorize. Double-click on the counterparty-template
+          // retry would race the second cpCategorize against the first's
+          // verifikation insert.
+          let activateInFlight = false
           toast({
             title: 'Kontot finns inte i din kontoplan',
             description: `Motpartsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
             variant: 'destructive',
             action: accountNumbers.length > 0 ? (
               <ToastAction altText="Aktivera och bokför" onClick={async () => {
-                const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ account_numbers: accountNumbers }),
-                })
-                if (!activateRes.ok) {
-                  const errBody = await activateRes.json().catch(() => null)
-                  toast({ title: 'Kunde inte aktivera konton', description: getErrorMessage(errBody, { statusCode: activateRes.status }), variant: 'destructive' })
-                  return
-                }
-                const activateBody = await activateRes.json()
-                if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
-                  toast({ title: 'Kunde inte hitta alla konton', description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`, variant: 'destructive' })
-                  return
-                }
-                const retry = await cpCategorize()
-                if (retry.ok && retry.journalEntryId) {
-                  setExitingIds((prev) => new Set(prev).add(id))
-                  setTransactions((prev) =>
-                    prev.map((t) =>
-                      t.id === id ? { ...t, is_business: true, journal_entry_id: retry.journalEntryId } : t
+                if (activateInFlight) return
+                activateInFlight = true
+                try {
+                  const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_numbers: accountNumbers }),
+                  })
+                  if (!activateRes.ok) {
+                    const errBody = await activateRes.json().catch(() => null)
+                    toast({ title: 'Kunde inte aktivera konton', description: getErrorMessage(errBody, { statusCode: activateRes.status }), variant: 'destructive' })
+                    return
+                  }
+                  const activateBody = await activateRes.json()
+                  if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
+                    toast({ title: 'Kunde inte hitta alla konton', description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`, variant: 'destructive' })
+                    return
+                  }
+                  const retry = await cpCategorize()
+                  // Gate on retry.ok alone: a 200 with null journal_entry_id
+                  // is allowed by the declared type (e.g. already-categorized
+                  // flag flip), and showing "Kategorisering misslyckades"
+                  // after the server returned success is misleading. The state
+                  // update conditionally writes the journal_entry_id when it's
+                  // actually present.
+                  if (retry.ok) {
+                    setExitingIds((prev) => new Set(prev).add(id))
+                    setTransactions((prev) =>
+                      prev.map((t) =>
+                        t.id === id
+                          ? { ...t, is_business: true, ...(retry.journalEntryId ? { journal_entry_id: retry.journalEntryId } : {}) }
+                          : t
+                      )
                     )
-                  )
-                  toast({ title: 'Bokförd' })
-                } else {
-                  toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+                    toast({ title: 'Bokförd' })
+                  } else {
+                    toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+                  }
+                } finally {
+                  activateInFlight = false
                 }
               }}>
                 Aktivera och bokför
