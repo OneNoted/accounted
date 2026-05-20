@@ -229,6 +229,11 @@ export default function QuickReviewDialog({
       setShowUploadZone(false)
     } catch {
       setError('Ett fel uppstod vid bokföring.')
+    } finally {
+      // Always reset isProcessing — without this, an onConfirm that resolves
+      // with null (e.g. server returned a structured 4xx error like
+      // ACCOUNTS_NOT_IN_CHART) leaves the dialog frozen because the
+      // <Dialog onOpenChange> below disables backdrop/ESC while processing.
       setIsProcessing(false)
     }
   }

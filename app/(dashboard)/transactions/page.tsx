@@ -519,6 +519,56 @@ export default function TransactionsPage() {
           setProcessingId(null)
           return null
         }
+        if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
+          // The mapped template/category references one or more accounts
+          // that aren't active in this company's kontoplan. Without an
+          // inline action the user has to navigate to settings, activate
+          // each account, and come back — surface a one-click "Aktivera
+          // och bokför" instead.
+          const accountNumbers: string[] =
+            (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
+            (Array.isArray(result.error.details?.account_numbers) && result.error.details.account_numbers) ||
+            []
+          toast({
+            title: 'Kontot finns inte i din kontoplan',
+            description: `Bokföringsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
+            variant: 'destructive',
+            action: accountNumbers.length > 0 ? (
+              <ToastAction altText="Aktivera och bokför" onClick={async () => {
+                const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ account_numbers: accountNumbers }),
+                })
+                if (!activateRes.ok) {
+                  const errBody = await activateRes.json().catch(() => null)
+                  toast({
+                    title: 'Kunde inte aktivera konton',
+                    description: getErrorMessage(errBody, { statusCode: activateRes.status }),
+                    variant: 'destructive',
+                  })
+                  return
+                }
+                const activateBody = await activateRes.json()
+                // unknown[] = numbers not in BAS reference at all. Those
+                // can't be auto-created; tell the user to add them manually.
+                if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
+                  toast({
+                    title: 'Kunde inte hitta alla konton',
+                    description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`,
+                    variant: 'destructive',
+                  })
+                  return
+                }
+                await runCategorize(args)
+              }}>
+                Aktivera och bokför
+              </ToastAction>
+            ) : undefined,
+          })
+          setProcessingId(null)
+          return null
+        }
         toast({
           title: 'Kategorisering misslyckades',
           description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
@@ -1250,28 +1300,80 @@ export default function TransactionsPage() {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
       const cpTemplateId = extractCounterpartyId(quickReview.template.id)
-      const response = await fetch(`/api/transactions/${id}/categorize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          is_business: true,
-          counterparty_template_id: cpTemplateId,
-        }),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction' }), variant: 'destructive' })
+      const cpCategorize = async (): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[] } }; journal_entry_id?: string | null }; status: number }> => {
+        const r = await fetch(`/api/transactions/${id}/categorize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_business: true, counterparty_template_id: cpTemplateId }),
+        })
+        const b = await r.json()
+        return { ok: r.ok, status: r.status, result: b, journalEntryId: b?.journal_entry_id || null }
+      }
+      const { ok: cpOk, status: cpStatus, result, journalEntryId: cpJeId } = await cpCategorize()
+      if (!cpOk) {
+        if (result?.error?.code === 'ACCOUNTS_NOT_IN_CHART') {
+          const accountNumbers: string[] =
+            (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
+            (Array.isArray(result.error.details?.account_numbers) && result.error.details?.account_numbers) ||
+            []
+          toast({
+            title: 'Kontot finns inte i din kontoplan',
+            description: `Motpartsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
+            variant: 'destructive',
+            action: accountNumbers.length > 0 ? (
+              <ToastAction altText="Aktivera och bokför" onClick={async () => {
+                const activateRes = await fetch('/api/bookkeeping/accounts/activate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ account_numbers: accountNumbers }),
+                })
+                if (!activateRes.ok) {
+                  const errBody = await activateRes.json().catch(() => null)
+                  toast({ title: 'Kunde inte aktivera konton', description: getErrorMessage(errBody, { statusCode: activateRes.status }), variant: 'destructive' })
+                  return
+                }
+                const activateBody = await activateRes.json()
+                if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
+                  toast({ title: 'Kunde inte hitta alla konton', description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`, variant: 'destructive' })
+                  return
+                }
+                const retry = await cpCategorize()
+                if (retry.ok && retry.journalEntryId) {
+                  setExitingIds((prev) => new Set(prev).add(id))
+                  setTransactions((prev) =>
+                    prev.map((t) =>
+                      t.id === id ? { ...t, is_business: true, journal_entry_id: retry.journalEntryId } : t
+                    )
+                  )
+                  toast({ title: 'Bokförd' })
+                } else {
+                  toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+                }
+              }}>
+                Aktivera och bokför
+              </ToastAction>
+            ) : undefined,
+          })
+        } else {
+          toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
+        }
+        // Close the review dialog on hard errors — the toast (with action if
+        // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
+        setQuickReviewOpen(false)
+        setQuickReview(null)
         return null
       }
       setExitingIds((prev) => new Set(prev).add(id))
-      journalEntryId = result.journal_entry_id || null
+      journalEntryId = cpJeId
     } else {
       journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId)
     }
-    if (journalEntryId) {
-      setQuickReviewOpen(false)
-      setQuickReview(null)
-    }
+    // Always close — whether the server created a verifikation, returned a
+    // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
+    // partial-success path. The toast from runCategorize already communicates
+    // the outcome; keeping the dialog open serves no purpose.
+    setQuickReviewOpen(false)
+    setQuickReview(null)
     return journalEntryId
   }
 
