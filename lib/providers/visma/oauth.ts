@@ -7,24 +7,24 @@ import {
 } from '@/lib/http/fetch-with-timeout';
 
 const DEFAULT_SCOPES = [
-  'offline_access',
   'ea:api',
+  'offline_access',
   'ea:sales',
   'ea:accounting',
   'ea:purchase',
-  'vls:api',
 ];
 
 const EACCOUNTING_ACR_VALUE = 'service:44643EB1-3F76-4C1C-A672-402AE8085934';
 
 export function buildVismaAuthUrl(
   config: OAuthConfig,
-  options?: { scopes?: string[]; state?: string; acrValues?: string },
+  options?: { scopes?: string[]; state?: string; acrValues?: string; prompt?: string },
 ): string {
   const params = new URLSearchParams({
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: 'code',
+    prompt: options?.prompt ?? 'select_account',
     acr_values: options?.acrValues ?? EACCOUNTING_ACR_VALUE,
   });
 
