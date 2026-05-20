@@ -30,6 +30,8 @@ import { dataResources, findResource, parseResourceQuery } from './resources'
 import { prompts, findPrompt } from './prompts'
 import { skills, findSkill, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { z } from 'zod'
 import {
   checkIdempotencyKey,
   storeIdempotencyResponse,
@@ -2639,30 +2641,79 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        name: { type: 'string', description: 'Supplier name' },
+        name: { type: 'string', maxLength: 255, description: 'Supplier name' },
         supplier_type: {
           type: 'string',
           enum: ['swedish_business', 'eu_business', 'non_eu_business'],
-          description: 'Supplier type (default swedish_business)',
+          description: 'Supplier type (default swedish_business). eu_business requires vat_number.',
         },
-        email: { type: 'string', description: 'Email address' },
-        phone: { type: 'string', description: 'Phone number' },
-        org_number: { type: 'string', description: 'Swedish org number' },
-        vat_number: { type: 'string', description: 'EU VAT number' },
-        address_line1: { type: 'string', description: 'Street address' },
-        address_line2: { type: 'string' },
-        postal_code: { type: 'string' },
-        city: { type: 'string' },
-        country: { type: 'string', description: 'ISO country code (default SE)' },
-        bankgiro: { type: 'string', description: 'Bankgiro number (Swedish)' },
-        plusgiro: { type: 'string', description: 'Plusgiro number (Swedish)' },
-        bank_account: { type: 'string', description: 'Bank account number' },
-        iban: { type: 'string' },
-        bic: { type: 'string' },
-        default_expense_account: { type: 'string', description: 'BAS expense account (e.g. "5010")' },
-        default_payment_terms: { type: 'number', description: 'Payment terms in days (default 30)' },
-        default_currency: { type: 'string', description: 'Default invoice currency (default SEK)' },
-        notes: { type: 'string' },
+        email: { type: 'string', maxLength: 255, format: 'email', description: 'Email address' },
+        phone: { type: 'string', maxLength: 50, description: 'Phone number' },
+        org_number: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^\\d{6}-?\\d{4}$|^\\d{12}$',
+          description: 'Swedish org number (10 digits with optional hyphen XXXXXX-XXXX, or 12 digits).',
+        },
+        vat_number: {
+          type: 'string',
+          maxLength: 20,
+          description: 'EU VAT number with country prefix (e.g. SE556677778800, DE123456789). Required when supplier_type is eu_business.',
+        },
+        address_line1: { type: 'string', maxLength: 255, description: 'Street address' },
+        address_line2: { type: 'string', maxLength: 255 },
+        postal_code: { type: 'string', maxLength: 20 },
+        city: { type: 'string', maxLength: 100 },
+        country: {
+          type: 'string',
+          maxLength: 2,
+          pattern: '^[A-Za-z]{2}$',
+          description: 'ISO 3166-1 alpha-2 country code (default SE)',
+        },
+        bankgiro: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^\\d{3,4}-?\\d{4}$',
+          description: 'Swedish Bankgiro number (7-8 digits with valid Luhn check digit).',
+        },
+        plusgiro: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^\\d{1,7}-?\\d{1}$',
+          description: 'Swedish Plusgiro number (2-8 digits).',
+        },
+        bank_account: { type: 'string', maxLength: 50, description: 'Bank account number' },
+        iban: {
+          type: 'string',
+          maxLength: 34,
+          pattern: '^[A-Z]{2}\\d{2}[A-Z0-9]{11,30}$',
+          description: 'IBAN (ISO 13616). Country code + 2 check digits + alphanumeric.',
+        },
+        bic: {
+          type: 'string',
+          maxLength: 11,
+          pattern: '^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$',
+          description: 'BIC/SWIFT code (8 or 11 chars).',
+        },
+        default_expense_account: {
+          type: 'string',
+          maxLength: 10,
+          pattern: '^[4567]\\d{3}$',
+          description: '4-digit BAS expense account (class 4, 5, 6, or 7). e.g. "5010".',
+        },
+        default_payment_terms: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 365,
+          description: 'Payment terms in days (default 30). Use 0 for due-on-receipt.',
+        },
+        default_currency: {
+          type: 'string',
+          minLength: 3,
+          maxLength: 3,
+          description: 'Default invoice currency, 3-letter ISO code (default SEK).',
+        },
+        notes: { type: 'string', maxLength: 2000 },
         dry_run: {
           type: 'boolean',
           description: 'If true, validate inputs and return the would-be preview without staging or creating. No DB writes, no side-effects.',
@@ -2681,35 +2732,23 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase, actor) {
-      const name = args.name as string
-      const supplierType = (args.supplier_type as string) || 'swedish_business'
-
-      if (!name?.trim()) throw new Error('Supplier name is required.')
-      if (!['swedish_business', 'eu_business', 'non_eu_business'].includes(supplierType)) {
-        throw new Error('Invalid supplier_type. Must be: swedish_business, eu_business, non_eu_business')
-      }
-
-      const params = {
-        name: name.trim(),
-        supplier_type: supplierType,
-        email: (args.email as string) || null,
-        phone: (args.phone as string) || null,
-        org_number: (args.org_number as string) || null,
-        vat_number: (args.vat_number as string) || null,
-        address_line1: (args.address_line1 as string) || null,
-        address_line2: (args.address_line2 as string) || null,
-        postal_code: (args.postal_code as string) || null,
-        city: (args.city as string) || null,
-        country: (args.country as string) || 'SE',
-        bankgiro: (args.bankgiro as string) || null,
-        plusgiro: (args.plusgiro as string) || null,
-        bank_account: (args.bank_account as string) || null,
-        iban: (args.iban as string) || null,
-        bic: (args.bic as string) || null,
-        default_expense_account: (args.default_expense_account as string) || null,
-        default_payment_terms: Number(args.default_payment_terms) || 30,
-        default_currency: (args.default_currency as string) || 'SEK',
-        notes: (args.notes as string) || null,
+      // Server-side validation (defense in depth): MCP transport already
+      // checks the JSON Schema, but we re-validate with Zod so financial
+      // identifiers (IBAN, BIC, bankgiro Luhn, org_number, VAT format) are
+      // rejected at the ingestion boundary rather than persisted.
+      // Strip MCP control fields before parsing — the strict schema rejects
+      // unknown keys to satisfy ASVS V4.5 field-allow-listing.
+      const { dry_run, idempotency_key, ...supplierArgs } = args
+      let params
+      try {
+        params = CreateSupplierParamsSchema.parse(supplierArgs)
+      } catch (err) {
+        if (err instanceof z.ZodError) {
+          const issue = err.issues[0]
+          const path = issue?.path?.join('.') ?? 'params'
+          throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+        }
+        throw err
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'create_supplier',
@@ -2722,8 +2761,8 @@ export const tools: McpTool[] = [
           tool: 'gnubok_create_supplier_invoice_from_inbox',
         },
         {
-          dryRun: Boolean(args.dry_run),
-          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dryRun: Boolean(dry_run),
+          idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
         }
       )
     },

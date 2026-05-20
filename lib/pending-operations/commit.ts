@@ -52,6 +52,8 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { z } from 'zod'
 import type {
   Transaction,
   TransactionCategory,
@@ -326,31 +328,46 @@ async function commitCreateSupplier(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so a
+  // tampered pending_operations row cannot inject unexpected fields or
+  // malformed payment-routing data into the suppliers table (ASVS V4.5).
+  let validated
+  try {
+    validated = CreateSupplierParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      const path = issue?.path?.join('.') ?? 'params'
+      return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
   const { data, error } = await supabase
     .from('suppliers')
     .insert({
       user_id: userId,
       company_id: companyId,
-      name: params.name as string,
-      supplier_type: (params.supplier_type as string) || 'swedish_business',
-      email: (params.email as string) || null,
-      phone: (params.phone as string) || null,
-      org_number: (params.org_number as string) || null,
-      vat_number: (params.vat_number as string) || null,
-      address_line1: (params.address_line1 as string) || null,
-      address_line2: (params.address_line2 as string) || null,
-      postal_code: (params.postal_code as string) || null,
-      city: (params.city as string) || null,
-      country: (params.country as string) || 'SE',
-      bankgiro: (params.bankgiro as string) || null,
-      plusgiro: (params.plusgiro as string) || null,
-      bank_account: (params.bank_account as string) || null,
-      iban: (params.iban as string) || null,
-      bic: (params.bic as string) || null,
-      default_expense_account: (params.default_expense_account as string) || null,
-      default_payment_terms: (params.default_payment_terms as number) || 30,
-      default_currency: (params.default_currency as string) || 'SEK',
-      notes: (params.notes as string) || null,
+      name: validated.name,
+      supplier_type: validated.supplier_type,
+      email: validated.email ?? null,
+      phone: validated.phone ?? null,
+      org_number: validated.org_number ?? null,
+      vat_number: validated.vat_number ?? null,
+      address_line1: validated.address_line1 ?? null,
+      address_line2: validated.address_line2 ?? null,
+      postal_code: validated.postal_code ?? null,
+      city: validated.city ?? null,
+      country: validated.country ?? 'SE',
+      bankgiro: validated.bankgiro ?? null,
+      plusgiro: validated.plusgiro ?? null,
+      bank_account: validated.bank_account ?? null,
+      iban: validated.iban ?? null,
+      bic: validated.bic ?? null,
+      default_expense_account: validated.default_expense_account ?? null,
+      default_payment_terms: validated.default_payment_terms,
+      default_currency: validated.default_currency ?? 'SEK',
+      notes: validated.notes ?? null,
     })
     .select()
     .single()

@@ -21,13 +21,18 @@ export type RiskLevel = 'low' | 'medium' | 'high'
 export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Low: pure data, no booking impact ─────────────────────────────
   create_customer: 'low',
-  create_supplier: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
   match_transaction_invoice: 'medium',
   create_invoice: 'medium', // creates as draft; sending is a separate op
   create_transaction: 'medium', // ingests an uncategorized row; reversible by delete
+  // Supplier master data carries payment-routing fields (IBAN, BIC, bankgiro,
+  // bank_account) that drive outgoing payment files and supplier invoice
+  // postings. A wrong account or org_number can enable supplier-fraud / BEC
+  // (silently rerouting payment), so always require explicit human approval
+  // rather than auto-commit.
+  create_supplier: 'medium',
   // Pinning a doc to a tx is reversible while pre-categorization, but the link
   // becomes part of the verifikation underlag (BFL 5 kap 6 §) once categorize
   // propagates it. A wrong attachment requires a rättelse, so require human

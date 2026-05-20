@@ -22,7 +22,7 @@ const RegistrationSchema = z.object({
     .string()
     .url('redirect_uri must be a valid URL')
     .refine(
-      (u) => !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(u),
+      (u) => !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|::1)(:|\/|$)/i.test(u),
       'localhost är redan tillåtet utan registrering'
     )
     .refine((u) => u.startsWith('https://'), 'redirect_uri måste använda https://')
@@ -63,7 +63,9 @@ export async function POST(request: Request) {
     const message =
       err instanceof z.ZodError
         ? err.issues[0]?.message ?? 'Ogiltig redirect URI'
-        : 'Ogiltig redirect URI'
+        : err instanceof SyntaxError
+          ? 'Ogiltig JSON i request body'
+          : 'Ogiltig redirect URI'
     return NextResponse.json({ error: message }, { status: 400 })
   }
 
