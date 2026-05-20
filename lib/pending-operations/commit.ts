@@ -60,6 +60,7 @@ import type {
   Currency,
   Invoice,
   Customer,
+  Supplier,
   PendingOperation,
   CompanySettings,
   InvoiceItem,
@@ -317,6 +318,48 @@ async function commitCreateCustomer(
   await eventBus.emit({ type: 'customer.created', payload: { customer: data as Customer, userId, companyId } })
 
   return { data: { customer_id: data.id } }
+}
+
+async function commitCreateSupplier(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const { data, error } = await supabase
+    .from('suppliers')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      name: params.name as string,
+      supplier_type: (params.supplier_type as string) || 'swedish_business',
+      email: (params.email as string) || null,
+      phone: (params.phone as string) || null,
+      org_number: (params.org_number as string) || null,
+      vat_number: (params.vat_number as string) || null,
+      address_line1: (params.address_line1 as string) || null,
+      address_line2: (params.address_line2 as string) || null,
+      postal_code: (params.postal_code as string) || null,
+      city: (params.city as string) || null,
+      country: (params.country as string) || 'SE',
+      bankgiro: (params.bankgiro as string) || null,
+      plusgiro: (params.plusgiro as string) || null,
+      bank_account: (params.bank_account as string) || null,
+      iban: (params.iban as string) || null,
+      bic: (params.bic as string) || null,
+      default_expense_account: (params.default_expense_account as string) || null,
+      default_payment_terms: (params.default_payment_terms as number) || 30,
+      default_currency: (params.default_currency as string) || 'SEK',
+      notes: (params.notes as string) || null,
+    })
+    .select()
+    .single()
+
+  if (error) return { error: error.message, status: 500 }
+
+  await eventBus.emit({ type: 'supplier.created', payload: { supplier: data as Supplier, userId, companyId } })
+
+  return { data: { supplier_id: data.id } }
 }
 
 async function commitCreateTransaction(
@@ -1934,6 +1977,9 @@ export async function commitPendingOperation(
         break
       case 'create_customer':
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_supplier':
+        result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_invoice':
         result = await commitCreateInvoice(supabase, userId, companyId, pendingOp.params)

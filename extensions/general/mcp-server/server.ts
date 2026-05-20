@@ -2632,6 +2632,104 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_create_supplier',
+    description: 'Stage a new supplier (leverantör). Stages for user approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Supplier name' },
+        supplier_type: {
+          type: 'string',
+          enum: ['swedish_business', 'eu_business', 'non_eu_business'],
+          description: 'Supplier type (default swedish_business)',
+        },
+        email: { type: 'string', description: 'Email address' },
+        phone: { type: 'string', description: 'Phone number' },
+        org_number: { type: 'string', description: 'Swedish org number' },
+        vat_number: { type: 'string', description: 'EU VAT number' },
+        address_line1: { type: 'string', description: 'Street address' },
+        address_line2: { type: 'string' },
+        postal_code: { type: 'string' },
+        city: { type: 'string' },
+        country: { type: 'string', description: 'ISO country code (default SE)' },
+        bankgiro: { type: 'string', description: 'Bankgiro number (Swedish)' },
+        plusgiro: { type: 'string', description: 'Plusgiro number (Swedish)' },
+        bank_account: { type: 'string', description: 'Bank account number' },
+        iban: { type: 'string' },
+        bic: { type: 'string' },
+        default_expense_account: { type: 'string', description: 'BAS expense account (e.g. "5010")' },
+        default_payment_terms: { type: 'number', description: 'Payment terms in days (default 30)' },
+        default_currency: { type: 'string', description: 'Default invoice currency (default SEK)' },
+        notes: { type: 'string' },
+        dry_run: {
+          type: 'boolean',
+          description: 'If true, validate inputs and return the would-be preview without staging or creating. No DB writes, no side-effects.',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+        },
+      },
+      required: ['name'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const name = args.name as string
+      const supplierType = (args.supplier_type as string) || 'swedish_business'
+
+      if (!name?.trim()) throw new Error('Supplier name is required.')
+      if (!['swedish_business', 'eu_business', 'non_eu_business'].includes(supplierType)) {
+        throw new Error('Invalid supplier_type. Must be: swedish_business, eu_business, non_eu_business')
+      }
+
+      const params = {
+        name: name.trim(),
+        supplier_type: supplierType,
+        email: (args.email as string) || null,
+        phone: (args.phone as string) || null,
+        org_number: (args.org_number as string) || null,
+        vat_number: (args.vat_number as string) || null,
+        address_line1: (args.address_line1 as string) || null,
+        address_line2: (args.address_line2 as string) || null,
+        postal_code: (args.postal_code as string) || null,
+        city: (args.city as string) || null,
+        country: (args.country as string) || 'SE',
+        bankgiro: (args.bankgiro as string) || null,
+        plusgiro: (args.plusgiro as string) || null,
+        bank_account: (args.bank_account as string) || null,
+        iban: (args.iban as string) || null,
+        bic: (args.bic as string) || null,
+        default_expense_account: (args.default_expense_account as string) || null,
+        default_payment_terms: Number(args.default_payment_terms) || 30,
+        default_currency: (args.default_currency as string) || 'SEK',
+        notes: (args.notes as string) || null,
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_supplier',
+        `Ny leverantör: ${params.name}`,
+        params,
+        params,
+        actor,
+        {
+          description: 'Once approved, you can book supplier invoices against this supplier with gnubok_create_supplier_invoice_from_inbox using the returned supplier_id.',
+          tool: 'gnubok_create_supplier_invoice_from_inbox',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
     name: 'gnubok_list_supplier_invoices',
     description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
     inputSchema: {
@@ -6821,6 +6919,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'Common workflows:',
             '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → gnubok_approve_pending_operation (after user confirms in chat). Use gnubok_match_transaction_to_invoice to apply income to a specific invoice.',
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
+            '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative).',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger — all default to the most recent fiscal period.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',

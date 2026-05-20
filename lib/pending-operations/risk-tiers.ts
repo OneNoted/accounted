@@ -21,6 +21,7 @@ export type RiskLevel = 'low' | 'medium' | 'high'
 export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Low: pure data, no booking impact ─────────────────────────────
   create_customer: 'low',
+  create_supplier: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
