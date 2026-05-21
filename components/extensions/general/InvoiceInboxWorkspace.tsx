@@ -1525,15 +1525,15 @@ const FIELD_DEFS: FieldDef[] = [
   { key: 'supplier.name', label: 'Leverantör', type: 'text' },
   { key: 'supplier.orgNumber', label: 'Org.nr', type: 'text' },
   { key: 'supplier.vatNumber', label: 'VAT-nr', type: 'text' },
+  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
+  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
+  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
   { key: 'supplier.bankgiro', label: 'Bankgiro', type: 'text' },
   { key: 'supplier.plusgiro', label: 'Plusgiro', type: 'text' },
   { key: 'invoice.invoiceNumber', label: 'Fakturanr', type: 'text' },
   { key: 'invoice.paymentReference', label: 'OCR/Referens', type: 'text' },
   { key: 'invoice.invoiceDate', label: 'Fakturadatum', type: 'date' },
   { key: 'invoice.dueDate', label: 'Förfallodatum', type: 'date' },
-  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
-  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
-  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
 ]
 
 function readField(data: InvoiceExtractionResult, key: FieldKey): string {
