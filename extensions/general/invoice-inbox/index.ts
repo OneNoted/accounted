@@ -24,6 +24,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/api/schemas'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
+import { simpleParser } from 'mailparser'
 import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
@@ -1166,7 +1167,6 @@ export const invoiceInboxExtension: Extension = {
             // Unwrap it and process the inner attachments as if they had arrived
             // directly, carrying the inner email's subject/from into our metadata.
             if (download.contentType === 'message/rfc822') {
-              const { simpleParser } = await import('mailparser')
               const parsed = await simpleParser(Buffer.from(download.buffer))
               const innerAttachments = parsed.attachments || []
               if (innerAttachments.length === 0) {

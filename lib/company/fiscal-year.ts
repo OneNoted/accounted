@@ -35,8 +35,14 @@ export function getPreviousFiscalYearStart(
 }
 
 export function daysBetween(from: string | Date, to: string | Date = new Date()): number {
-  const fromDate = typeof from === 'string' ? new Date(from) : from
-  const toDate = typeof to === 'string' ? new Date(to) : to
-  const diff = toDate.getTime() - fromDate.getTime()
+  // Bare ISO date strings ("2026-01-01") are parsed as UTC midnight, but
+  // `new Date()` is local wall-clock time. Mixing the two means timezones east
+  // of UTC can be one day past UTC midnight while still on the prior local
+  // date, producing off-by-one drift. Pin both string operands to UTC so the
+  // math is timezone-independent. Date operands (rare; tests + future callers)
+  // are trusted as-is.
+  const parse = (v: string | Date) =>
+    typeof v === 'string' ? new Date(v + 'T00:00:00Z') : v
+  const diff = parse(to).getTime() - parse(from).getTime()
   return Math.max(0, Math.ceil(diff / (24 * 60 * 60 * 1000)))
 }

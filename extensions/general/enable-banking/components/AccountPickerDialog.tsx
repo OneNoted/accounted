@@ -242,6 +242,23 @@ export function AccountPickerDialog({
       return
     }
 
+    // Block save when the user picked "Anpassat datum" but left the date blank.
+    // Without this guard, lookback.body is null and the PATCH would silently
+    // fall back to the backend's 120-day default — not what the user asked for.
+    if (
+      isInitialSelection &&
+      lookbackMode === 'custom' &&
+      customSubMode === 'date' &&
+      !lookback.body
+    ) {
+      toast({
+        title: 'Ange startdatum',
+        description: 'Välj ett datum för att hämta historik, eller välj ett annat alternativ.',
+        variant: 'destructive',
+      })
+      return
+    }
+
     setIsSaving(true)
 
     // For the initial-selection path, open the progress modal up-front so the

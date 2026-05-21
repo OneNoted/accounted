@@ -1,7 +1,6 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -47,13 +46,8 @@ export function BankSyncProgressDialog({
   accounts,
   state,
 }: BankSyncProgressDialogProps) {
-  // Prevent escape/click-outside from closing while sync is in flight — the
-  // PATCH continues regardless, but the user assumes "closed = cancelled".
-  useEffect(() => {
-    if (state.kind === 'syncing' && !open) {
-      // no-op — parent decides when to close
-    }
-  }, [state.kind, open])
+  // Close-prevention while sync is in flight is handled inline below via the
+  // onOpenChange guard + onPointerDownOutside + onEscapeKeyDown handlers.
 
   const enabledAccounts = accounts.filter((a) => a.enabled !== false)
 
