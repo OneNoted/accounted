@@ -458,6 +458,7 @@ export const enableBankingExtension: Extension = {
         const connection_id = body?.connection_id
         const enabled_uids = body?.enabled_uids
         const rawLookback = body?.initial_lookback_days
+        const rawLookbackFromDate = body?.initial_lookback_from_date
         const account_mappings = body?.account_mappings
 
         if (typeof connection_id !== 'string' || !connection_id) {
@@ -519,7 +520,19 @@ export const enableBankingExtension: Extension = {
         // Default 120; clamp to [30, 365]. Ignored for selection edits.
         // PSD2 obliges ASPSPs to ~90 days without fresh SCA, but many Swedish banks
         // return more if asked — request 120 and accept whatever the bank gives back.
+        //
+        // If the client sent initial_lookback_from_date (preferred for fiscal-year-anchored
+        // backfills), derive days from that. Reject obviously bad dates (future or > 365d
+        // ago) but otherwise trust the user.
         const initialLookbackDays = (() => {
+          if (typeof rawLookbackFromDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawLookbackFromDate)) {
+            const from = new Date(rawLookbackFromDate + 'T00:00:00Z')
+            if (Number.isFinite(from.getTime())) {
+              const diffMs = Date.now() - from.getTime()
+              const days = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
+              if (days > 0) return Math.min(365, Math.max(1, days))
+            }
+          }
           const n = typeof rawLookback === 'number' && Number.isFinite(rawLookback) ? rawLookback : 120
           return Math.min(365, Math.max(30, Math.round(n)))
         })()

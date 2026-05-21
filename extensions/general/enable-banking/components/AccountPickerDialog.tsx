@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -22,6 +24,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
+import {
+  getCurrentFiscalYearStart,
+  getPreviousFiscalYearStart,
+  daysBetween,
+} from '@/lib/company/fiscal-year'
+import type { CompanySettings } from '@/types'
 import type { StoredAccount } from '../types'
 
 interface AccountPickerDialogProps {
@@ -42,11 +50,8 @@ interface ChartAccount {
   account_name: string
 }
 
-const LOOKBACK_OPTIONS = [
-  { days: 90, label: 'Senaste 90 dagar (PSD2 standard, rekommenderas)' },
-  { days: 180, label: 'Senaste 180 dagar' },
-  { days: 365, label: 'Senaste 365 dagar' },
-] as const
+type LookbackMode = 'fast' | 'fiscal-year' | 'custom'
+type CustomSubMode = 'date' | 'previous-fiscal-year'
 
 // Suggested BAS account per currency. The mapping engine falls back to 1930
 // when ledger_account is unset, so the SEK case is just an explicit hint.
@@ -77,11 +82,14 @@ export function AccountPickerDialog({
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [isSaving, setIsSaving] = useState(false)
-  const [lookbackDays, setLookbackDays] = useState<number>(90)
   const [sieLastDate, setSieLastDate] = useState<string | null>(null)
-  const [showCustomLookback, setShowCustomLookback] = useState(false)
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
+  const [companySettings, setCompanySettings] = useState<Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null>(null)
+
+  const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
+  const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
+  const [customDate, setCustomDate] = useState<string>('')
 
   useEffect(() => {
     if (open) {
@@ -89,7 +97,9 @@ export function AccountPickerDialog({
         accounts.filter(a => a.enabled !== false).map(a => a.uid)
       )
       setSelected(initial)
-      setShowCustomLookback(false)
+      setLookbackMode('fiscal-year')
+      setCustomSubMode('date')
+      setCustomDate('')
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
       // back to currency-based suggestions for accounts the user hasn't mapped yet.
@@ -103,8 +113,25 @@ export function AccountPickerDialog({
     }
   }, [open, accounts])
 
-  // Fetch the latest SIE import end date so we can anchor the backfill to
-  // "day after last SIE entry" (SpeedLedger pattern). Only matters on the
+  // Load fiscal_year_start_month + entity_type so "Sedan räkenskapsårets början"
+  // resolves to the right date for non-calendar fiscal years.
+  useEffect(() => {
+    if (!open || !company?.id) return
+    let cancelled = false
+    ;(async () => {
+      const { data } = await supabase
+        .from('company_settings')
+        .select('fiscal_year_start_month, entity_type')
+        .eq('company_id', company.id)
+        .maybeSingle()
+      if (cancelled) return
+      setCompanySettings((data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
+    })()
+    return () => { cancelled = true }
+  }, [open, company?.id, supabase])
+
+  // Fetch the latest SIE import end date so we can offer "day after last SIE entry"
+  // as a one-click escape from the default fiscal-year start. Only matters on the
   // initial activation flow — selection edits don't re-run sync.
   useEffect(() => {
     if (!open || !isInitialSelection || !company?.id) {
@@ -122,16 +149,7 @@ export function AccountPickerDialog({
         .limit(1)
         .maybeSingle()
       if (cancelled) return
-      const fye = (data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null
-      setSieLastDate(fye)
-      if (fye) {
-        const dayAfter = new Date(fye)
-        dayAfter.setDate(dayAfter.getDate() + 1)
-        const days = Math.ceil((Date.now() - dayAfter.getTime()) / (24 * 60 * 60 * 1000))
-        setLookbackDays(Math.min(365, Math.max(30, days)))
-      } else {
-        setLookbackDays(90)
-      }
+      setSieLastDate((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
     })()
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, supabase])
@@ -233,7 +251,7 @@ export function AccountPickerDialog({
           connection_id: connectionId,
           enabled_uids: Array.from(selected),
           account_mappings,
-          ...(isInitialSelection ? { initial_lookback_days: lookbackDays } : {}),
+          ...(isInitialSelection && lookback.body ? lookback.body : {}),
         }),
       })
 
@@ -289,6 +307,34 @@ export function AccountPickerDialog({
     return d.toISOString().split('T')[0]
   }, [sieLastDate])
 
+  const fiscalYearStart = useMemo(
+    () => getCurrentFiscalYearStart(companySettings),
+    [companySettings],
+  )
+
+  const previousFiscalYearStart = useMemo(
+    () => getPreviousFiscalYearStart(companySettings),
+    [companySettings],
+  )
+
+  // Resolve mode → concrete request payload and a "resolved from-date" for display.
+  const lookback = useMemo(() => {
+    if (lookbackMode === 'fast') {
+      return { body: { initial_lookback_days: 90 }, fromDate: null as string | null, days: 90 }
+    }
+    if (lookbackMode === 'fiscal-year') {
+      return { body: { initial_lookback_from_date: fiscalYearStart }, fromDate: fiscalYearStart, days: daysBetween(fiscalYearStart) }
+    }
+    // custom
+    const date = customSubMode === 'previous-fiscal-year' ? previousFiscalYearStart : customDate
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return { body: { initial_lookback_from_date: date }, fromDate: date, days: daysBetween(date) }
+    }
+    return { body: null as Record<string, string | number> | null, fromDate: null as string | null, days: 0 }
+  }, [lookbackMode, customSubMode, customDate, fiscalYearStart, previousFiscalYearStart])
+
+  const showLongRangeHelper = lookback.days > 90
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
@@ -302,70 +348,131 @@ export function AccountPickerDialog({
         </DialogHeader>
 
         {isInitialSelection && (
-          <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
-            {sieLastDate && dayAfterSie ? (
-              <div className="space-y-2">
-                <p>
-                  Vi hittade en SIE-import som täcker fram till{' '}
-                  <span className="font-medium tabular-nums">{sieLastDate}</span>.
-                  Vi hämtar bankhistorik från{' '}
-                  <span className="font-medium tabular-nums">{dayAfterSie}</span>{' '}
-                  så att inget överlappar din tidigare bokföring.
+          <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
+            <div>
+              <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Hämta historik från
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Vi börjar hämta transaktioner från det datum du väljer. Du behöver inte tänka i dagar.
+              </p>
+            </div>
+
+            {sieLastDate && dayAfterSie && (
+              <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background/60 p-3">
+                <p className="text-xs text-muted-foreground">
+                  Senaste SIE-importen täcker till{' '}
+                  <span className="font-medium tabular-nums text-foreground">{sieLastDate}</span>.
+                  Vi föreslår{' '}
+                  <span className="font-medium tabular-nums text-foreground">{dayAfterSie}</span>{' '}
+                  som startdatum så inget överlappar din bokföring.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setShowCustomLookback(v => !v)}
-                  className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+                  className="shrink-0 text-xs text-foreground underline underline-offset-2"
+                  onClick={() => {
+                    setLookbackMode('custom')
+                    setCustomSubMode('date')
+                    setCustomDate(dayAfterSie)
+                  }}
                   disabled={isSaving}
                 >
-                  {showCustomLookback ? 'Använd föreslagen period' : 'Anpassa period'}
+                  Använd detta datum
                 </button>
-                {showCustomLookback && (
-                  <Select
-                    value={String(lookbackDays)}
-                    onValueChange={(v) => setLookbackDays(Number(v))}
-                    disabled={isSaving}
-                  >
-                    <SelectTrigger className="mt-2 w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {LOOKBACK_OPTIONS.map(opt => (
-                        <SelectItem key={opt.days} value={String(opt.days)}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
               </div>
-            ) : (
-              <div className="space-y-2">
-                <label className="block text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  Hämta historik från
-                </label>
-                <Select
-                  value={String(lookbackDays)}
-                  onValueChange={(v) => setLookbackDays(Number(v))}
+            )}
+
+            <div className="space-y-2">
+              <label className="flex cursor-pointer items-start gap-2">
+                <input
+                  type="radio"
+                  name="lookback-mode"
+                  value="fast"
+                  checked={lookbackMode === 'fast'}
+                  onChange={() => setLookbackMode('fast')}
                   disabled={isSaving}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block">Senaste 90 dagar <span className="text-muted-foreground">(snabbt)</span></span>
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-2">
+                <input
+                  type="radio"
+                  name="lookback-mode"
+                  value="fiscal-year"
+                  checked={lookbackMode === 'fiscal-year'}
+                  onChange={() => setLookbackMode('fiscal-year')}
+                  disabled={isSaving}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block">Sedan räkenskapsårets början</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    från {fiscalYearStart}
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-2">
+                <input
+                  type="radio"
+                  name="lookback-mode"
+                  value="custom"
+                  checked={lookbackMode === 'custom'}
+                  onChange={() => setLookbackMode('custom')}
+                  disabled={isSaving}
+                  className="mt-1"
+                />
+                <span className="flex-1">
+                  <span className="block">Anpassat datum</span>
+                  {lookbackMode === 'custom' && (
+                    <div className="mt-2 space-y-2">
+                      <Select
+                        value={customSubMode}
+                        onValueChange={(v) => setCustomSubMode(v as CustomSubMode)}
+                        disabled={isSaving}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="date">Specifikt datum</SelectItem>
+                          <SelectItem value="previous-fiscal-year">
+                            Föregående räkenskapsårets start ({previousFiscalYearStart})
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {customSubMode === 'date' && (
+                        <Input
+                          type="date"
+                          value={customDate}
+                          onChange={(e) => setCustomDate(e.target.value)}
+                          max={new Date().toISOString().split('T')[0]}
+                          min={new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+                          disabled={isSaving}
+                          className="tabular-nums"
+                        />
+                      )}
+                    </div>
+                  )}
+                </span>
+              </label>
+            </div>
+
+            {showLongRangeHelper && (
+              <p className="text-xs text-muted-foreground">
+                Din bank returnerar oftast max 90 dagar. Behöver du äldre transaktioner kan du{' '}
+                <Link
+                  href="/import?mode=sie"
+                  className="text-foreground underline underline-offset-2"
                 >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {LOOKBACK_OPTIONS.map(opt => (
-                      <SelectItem key={opt.days} value={String(opt.days)}>
-                        {opt.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  PSD2-bankregler begränsar oftast historiken till 90 dagar bakåt.
-                  Vi visar exakt vad banken returnerade efter sparat val.
-                  För äldre data, använd SIE- eller CSV-import.
-                </p>
-              </div>
+                  importera via SIE eller bankfil
+                </Link>
+                . Vi visar exakt vad banken returnerade efter sparat val.
+              </p>
             )}
           </div>
         )}
