@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { BankDetailsForm, validateBankFields } from '@/components/settings/BankDetailsForm'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
@@ -10,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import type { CompanySettings } from '@/types'
 
 export default function InvoicingSettingsPage() {
+  const t = useTranslations('settings_invoicing')
   const { settings, isLoading, updateSettings } = useSettings()
   const { toast } = useToast()
 
@@ -19,7 +21,7 @@ export default function InvoicingSettingsPage() {
     const bankErrors = validateBankFields(formData)
     if (bankErrors.length > 0) {
       toast({
-        title: 'Kontrollera bankuppgifter',
+        title: t('bank_validation_title'),
         description: bankErrors.map(e => e.message).join(', '),
         variant: 'destructive',
       })

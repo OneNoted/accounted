@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { motion, useMotionValue, useTransform, AnimatePresence, type PanInfo } from 'framer-motion'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -47,6 +48,8 @@ export default function SwipeCategorizationView({
   onClose,
   entityType,
 }: SwipeCategorizationViewProps) {
+  const t = useTranslations('tx_swipe_view')
+  const tCat = useTranslations('tx_categories')
   const { toast } = useToast()
   const [currentIndex, setCurrentIndex] = useState(0)
   const [showCategorySelect, setShowCategorySelect] = useState(false)
@@ -244,8 +247,8 @@ export default function SwipeCategorizationView({
           }
           if (linkFailCount > 0) {
             toast({
-              title: 'Underlag kunde inte bifogas',
-              description: `${linkFailCount} fil(er) kunde inte länkas till verifikationen.`,
+              title: t('doc_link_failed_title'),
+              description: t('doc_link_failed_description', { count: linkFailCount }),
               variant: 'destructive',
             })
           }
@@ -259,10 +262,10 @@ export default function SwipeCategorizationView({
         setPendingInboxItemId(null)
         moveToNext()
       } else {
-        setError('Kunde inte bokföra. Tryck "Hoppa över" för att gå vidare.')
+        setError(t('booking_failed_skip'))
       }
     } catch {
-      setError('Ett fel uppstod. Tryck "Hoppa över" för att gå vidare.')
+      setError(t('generic_error_skip'))
     } finally {
       setIsProcessing(false)
     }
@@ -281,10 +284,10 @@ export default function SwipeCategorizationView({
       if (success) {
         moveToNext()
       } else {
-        setError('Kunde inte matcha faktura. Tryck "Hoppa över" för att gå vidare.')
+        setError(t('match_failed_skip'))
       }
     } catch {
-      setError('Ett fel uppstod. Tryck "Hoppa över" för att gå vidare.')
+      setError(t('generic_error_skip'))
     } finally {
       setIsProcessing(false)
     }
@@ -308,12 +311,12 @@ export default function SwipeCategorizationView({
           <div className="h-16 w-16 rounded-full bg-success/10 flex items-center justify-center mx-auto mb-4">
             <Check className="h-8 w-8 text-success" />
           </div>
-          <h2 className="font-display text-2xl font-medium">Klart!</h2>
+          <h2 className="font-display text-2xl font-medium">{t('done_title')}</h2>
           <p className="text-muted-foreground mt-2">
-            Alla transaktioner är nu bokförda
+            {t('done_subtitle')}
           </p>
           <Button onClick={onClose} className="mt-6">
-            Tillbaka till transaktioner
+            {t('back_to_transactions')}
           </Button>
         </div>
       </div>
@@ -330,7 +333,7 @@ export default function SwipeCategorizationView({
           <Button variant="ghost" size="icon" onClick={() => setShowCategorySelect(false)}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <h1 className="font-semibold">Välj mall</h1>
+          <h1 className="font-semibold">{t('choose_template')}</h1>
           <div className="w-10" />
         </div>
 
@@ -366,7 +369,7 @@ export default function SwipeCategorizationView({
             onClick={handleSkip}
           >
             <SkipForward className="mr-2 h-4 w-4" />
-            Hoppa över
+            {t('skip')}
           </Button>
         </div>
       </div>
@@ -374,9 +377,10 @@ export default function SwipeCategorizationView({
   }
 
   if (showReviewStep && pendingCategory) {
-    const categoryLabel = [...expenseCategories, ...incomeCategories].find(
+    const catOption = [...expenseCategories, ...incomeCategories].find(
       (c) => c.value === pendingCategory
-    )?.label || pendingCategory
+    )
+    const categoryLabel = catOption ? tCat(catOption.labelKey) : pendingCategory
     const selectedTemplate = pendingTemplate
 
     // Auto-clear VAT when a class 2 (liability/equity) account is selected
@@ -395,7 +399,7 @@ export default function SwipeCategorizationView({
           >
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <h1 className="font-semibold">Granska bokföring</h1>
+          <h1 className="font-semibold">{t('review_title')}</h1>
           <div className="w-10" />
         </div>
 
@@ -432,7 +436,7 @@ export default function SwipeCategorizationView({
           {/* Selected template or category */}
           <div>
             <label className="text-sm font-medium text-muted-foreground">
-              {selectedTemplate ? 'Mall' : 'Kategori'}
+              {selectedTemplate ? t('label_template') : t('label_category')}
             </label>
             <div className="mt-1 flex items-center gap-2">
               <Badge variant="outline" className="text-sm py-1 px-3">
@@ -446,7 +450,7 @@ export default function SwipeCategorizationView({
                   setShowCategorySelect(true)
                 }}
               >
-                Byt mall
+                {t('change_template')}
               </button>
             </div>
             {selectedTemplate && (
@@ -480,7 +484,7 @@ export default function SwipeCategorizationView({
               <div className="flex items-start gap-2">
                 <AlertTriangle className="h-4 w-4 text-warning-foreground flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-warning-foreground leading-snug">
-                  Omvänd skattskyldighet kräver leverantörens momsregistreringsnummer och land.
+                  {t('reverse_charge_warning')}
                 </p>
               </div>
             </div>
@@ -503,7 +507,7 @@ export default function SwipeCategorizationView({
 
           {/* Account override */}
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Konto</label>
+            <label className="text-sm font-medium text-muted-foreground">{t('label_account')}</label>
             <div className="mt-1">
               <AccountCombobox
                 value={accountOverride}
@@ -515,11 +519,11 @@ export default function SwipeCategorizationView({
 
           {/* VAT treatment */}
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Momsbehandling</label>
+            <label className="text-sm font-medium text-muted-foreground">{t('label_vat_treatment')}</label>
             <div className="mt-1">
               {isLiabilityAccount ? (
                 <p className="text-sm text-muted-foreground">
-                  Ingen moms för skuld-/eget kapital-konton
+                  {t('no_vat_liability_account')}
                 </p>
               ) : showVatDropdown ? (
                 <VatTreatmentSelect
@@ -528,14 +532,17 @@ export default function SwipeCategorizationView({
                 />
               ) : (
                 <p className="text-sm">
-                  {VAT_TREATMENT_OPTIONS.find(o => o.value === vatTreatment)?.label || 'Ingen moms'}
+                  {(() => {
+                    const opt = VAT_TREATMENT_OPTIONS.find(o => o.value === vatTreatment)
+                    return opt ? tCat(opt.labelKey) : t('no_vat_default')
+                  })()}
                   {' '}
                   <button
                     type="button"
                     className="text-xs text-primary hover:underline"
                     onClick={() => setShowVatDropdown(true)}
                   >
-                    Ändra
+                    {t('change')}
                   </button>
                 </p>
               )}
@@ -552,10 +559,10 @@ export default function SwipeCategorizationView({
               >
                 <div className="flex items-center gap-2">
                   <Paperclip className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-medium">Underlag</span>
+                  <span className="font-medium">{t('doc_label')}</span>
                   {uploadedFiles.filter((f) => f.status === 'uploaded').length > 0 && (
                     <span className="text-xs text-muted-foreground">
-                      {uploadedFiles.filter((f) => f.status === 'uploaded').length} bifogade
+                      {t('doc_attached_count', { count: uploadedFiles.filter((f) => f.status === 'uploaded').length })}
                     </span>
                   )}
                 </div>
@@ -592,7 +599,7 @@ export default function SwipeCategorizationView({
             disabled={isProcessing || !accountOverride}
           >
             <Check className="mr-2 h-4 w-4" />
-            {isProcessing ? 'Bokför...' : 'Bokför'}
+            {isProcessing ? t('booking') : t('book')}
           </Button>
           <Button
             variant="ghost"
@@ -601,7 +608,7 @@ export default function SwipeCategorizationView({
             disabled={isProcessing}
           >
             <SkipForward className="mr-2 h-4 w-4" />
-            Hoppa över
+            {t('skip')}
           </Button>
         </div>
       </div>
@@ -617,7 +624,7 @@ export default function SwipeCategorizationView({
         </Button>
         <div className="text-center">
           <p className="text-sm text-muted-foreground">
-            {currentIndex + 1} av {transactions.length}
+            {t('progress_label', { current: currentIndex + 1, total: transactions.length })}
           </p>
         </div>
         <div className="w-10" />
@@ -628,10 +635,10 @@ export default function SwipeCategorizationView({
         <div className="flex items-center gap-2 text-muted-foreground">
           <ArrowLeft className="h-4 w-4" />
           <SkipForward className="h-4 w-4" />
-          <span>Hoppa över</span>
+          <span>{t('instr_skip')}</span>
         </div>
         <div className="flex items-center gap-2 text-muted-foreground">
-          <span>Bokför</span>
+          <span>{t('instr_book')}</span>
           <Building className="h-4 w-4" />
           <ArrowRight className="h-4 w-4" />
         </div>
@@ -645,14 +652,14 @@ export default function SwipeCategorizationView({
           style={{ opacity: skipIndicatorOpacity }}
         >
           <SkipForward className="h-8 w-8" />
-          <span className="font-semibold">Hoppa över</span>
+          <span className="font-semibold">{t('indicator_skip')}</span>
         </motion.div>
 
         <motion.div
           className="absolute right-8 flex items-center gap-2 text-success"
           style={{ opacity: businessIndicatorOpacity }}
         >
-          <span className="font-semibold">Företag</span>
+          <span className="font-semibold">{t('indicator_business')}</span>
           <Building className="h-8 w-8" />
         </motion.div>
 
@@ -675,13 +682,13 @@ export default function SwipeCategorizationView({
                     {currentTransaction.receipt_id && (
                       <Badge variant="secondary" className="gap-1">
                         <ReceiptIcon className="h-3 w-3" />
-                        Kvitto
+                        {t('badge_receipt')}
                       </Badge>
                     )}
                     {currentTransaction.document_id && (
                       <Badge variant="secondary" className="gap-1">
                         <Paperclip className="h-3 w-3" />
-                        Bilaga
+                        {t('badge_attachment')}
                       </Badge>
                     )}
                     <Badge>{currentTransaction.currency}</Badge>
@@ -706,18 +713,18 @@ export default function SwipeCategorizationView({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2 text-success">
                         <FileText className="h-5 w-5" />
-                        <span className="font-semibold text-sm">Fakturamatchning hittad</span>
+                        <span className="font-semibold text-sm">{t('invoice_match_title')}</span>
                       </div>
                       <Badge variant="outline" className="text-success border-success">
-                        Match
+                        {t('invoice_match_badge')}
                       </Badge>
                     </div>
                     <div className="text-sm">
                       <p className="font-medium">
-                        Faktura {currentTransaction.potential_invoice.invoice_number}
+                        {t('invoice_label', { number: currentTransaction.potential_invoice.invoice_number ?? '' })}
                       </p>
                       <p className="text-muted-foreground">
-                        {currentTransaction.potential_invoice.customer?.name || 'Okänd kund'}
+                        {currentTransaction.potential_invoice.customer?.name || t('unknown_customer')}
                       </p>
                       <p className="font-medium text-success">
                         {formatCurrency(
@@ -776,14 +783,14 @@ export default function SwipeCategorizationView({
               disabled={isProcessing}
             >
               <Link2 className="mr-2 h-4 w-4" />
-              Matcha med Faktura {currentTransaction.potential_invoice.invoice_number}
+              {t('match_invoice_btn', { number: currentTransaction.potential_invoice.invoice_number ?? '' })}
             </Button>
           )}
 
           {/* Suggested categories - shown as quick-select buttons */}
           {suggestions && suggestions[currentTransaction.id] && suggestions[currentTransaction.id].length > 0 && (
             <div className="space-y-2">
-              <p className="text-xs text-muted-foreground text-center">Föreslagna kategorier</p>
+              <p className="text-xs text-muted-foreground text-center">{t('suggested_categories')}</p>
               <div className="grid grid-cols-2 gap-2">
                 {suggestions[currentTransaction.id].map((suggestion) => (
                   <Button
@@ -818,7 +825,7 @@ export default function SwipeCategorizationView({
             disabled={isProcessing}
           >
             <Building className="mr-2 h-4 w-4" />
-            Bokför
+            {t('book')}
           </Button>
 
           {/* Skip button - always visible */}
@@ -829,7 +836,7 @@ export default function SwipeCategorizationView({
             disabled={isProcessing}
           >
             <SkipForward className="mr-2 h-4 w-4" />
-            Hoppa över
+            {t('skip')}
           </Button>
         </div>
       </div>

@@ -3,15 +3,17 @@
 import { useState, useEffect, useRef } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Landmark, X } from 'lucide-react'
+import { Landmark, Search, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import SwipeCategorizationView from '@/components/transactions/SwipeCategorizationView'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
@@ -76,6 +78,7 @@ interface QuickReviewState {
 
 export default function TransactionsPage() {
   const { company } = useCompany()
+  const t = useTranslations('transactions')
   const [transactions, setTransactions] = useState<TransactionWithInvoice[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [mode, setMode] = useState<ViewMode>('inbox')
@@ -174,6 +177,7 @@ export default function TransactionsPage() {
   // Source filter for the merged inbox. Defaults to 'all' so users see
   // both sources unless they want to narrow down.
   const [sourceFilter, setSourceFilter] = useState<'all' | 'bank' | 'skatteverket'>('all')
+  const [searchQuery, setSearchQuery] = useState('')
 
   const { toast } = useToast()
   const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
@@ -224,11 +228,29 @@ export default function TransactionsPage() {
         items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
       }
     }
-    return items.sort((a, b) => {
+    const sorted = items.sort((a, b) => {
       if (a.date !== b.date) return b.date.localeCompare(a.date)
       // Same date → bank first so invoice-match cards lead.
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
+    })
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return sorted
+    return sorted.filter(item => {
+      if (item.source === 'bank') {
+        const tx = item.data
+        return (
+          tx.description?.toLowerCase().includes(query) ||
+          tx.date.includes(query) ||
+          String(tx.amount).includes(query)
+        )
+      }
+      const r = item.data
+      return (
+        r.transaktionstext?.toLowerCase().includes(query) ||
+        r.transaktionsdatum.includes(query) ||
+        String(r.belopp_skatteverket).includes(query)
+      )
     })
   })()
   const transactionsWithMatches = transactions.filter(
@@ -257,7 +279,7 @@ export default function TransactionsPage() {
     ])
 
     if (txError) {
-      toast({ title: 'Kunde inte ladda transaktioner', description: 'Kontrollera din anslutning och försök igen.', variant: 'destructive' })
+      toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
       setIsLoading(false)
       return
     }
@@ -608,7 +630,7 @@ export default function TransactionsPage() {
                     )
                   )
                   setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
-                  toast({ title: 'Ångrad', description: 'Kategorisering har ångrats' })
+                  toast({ title: t('undone_title'), description: t('undone_description') })
                 } else {
                   const errData = await undoRes.json()
                   toast({
@@ -618,7 +640,7 @@ export default function TransactionsPage() {
                   })
                 }
               } catch {
-                toast({ title: 'Kunde inte ångra', description: 'Kategoriseringen kunde inte ångras. Försök igen.', variant: 'destructive' })
+                toast({ title: t('undo_failed_title'), description: t('undo_failed_description'), variant: 'destructive' })
               }
             }}>
               Ångra
@@ -628,7 +650,7 @@ export default function TransactionsPage() {
       } else if (result.journal_entry_error) {
         toast({ title: 'Delvis bokförd', description: `Verifikation kunde inte skapas: ${result.journal_entry_error}`, variant: 'destructive' })
       } else {
-        toast({ title: 'Delvis bokförd', description: 'Transaktion uppdaterad men verifikation kunde inte skapas' })
+        toast({ title: t('partially_booked_title'), description: t('partially_booked_description') })
       }
 
       // Update transaction in state after a brief delay for animation
@@ -651,7 +673,7 @@ export default function TransactionsPage() {
 
       return result.journal_entry_id || null
     } catch {
-      toast({ title: 'Bokföring misslyckades', description: 'Transaktionen kunde inte bokföras. Försök igen.', variant: 'destructive' })
+      toast({ title: t('booking_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
       setProcessingId(null)
       return null
     }
@@ -680,7 +702,7 @@ export default function TransactionsPage() {
         return
       }
 
-      toast({ title: 'Kundfaktura matchad', description: 'Fakturan markerades som betald' })
+      toast({ title: t('customer_invoice_matched_title'), description: t('customer_invoice_matched_description') })
       setCiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
       setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
@@ -704,7 +726,7 @@ export default function TransactionsPage() {
         })
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_description_retry'), variant: 'destructive' })
     } finally {
       setCiMatchProcessing(false)
     }
@@ -729,7 +751,7 @@ export default function TransactionsPage() {
         return
       }
 
-      toast({ title: 'Leverantörsfaktura matchad', description: 'Fakturan markerades som betald' })
+      toast({ title: t('supplier_invoice_matched_title'), description: t('supplier_invoice_matched_description') })
       setSiMatchSuggestion(null)
       setExitingIds((prev) => new Set(prev).add(transactionId))
       setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
@@ -753,7 +775,7 @@ export default function TransactionsPage() {
         })
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_description_retry'), variant: 'destructive' })
     } finally {
       setSiMatchProcessing(false)
     }
@@ -842,7 +864,7 @@ export default function TransactionsPage() {
         setIsConfirmingMatch(false)
       }, 350)
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Transaktionen kunde inte matchas. Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_transaction'), variant: 'destructive' })
       setIsConfirmingMatch(false)
     }
   }
@@ -911,7 +933,7 @@ export default function TransactionsPage() {
     } catch {
       toast({
         title: 'Koppling misslyckades',
-        description: 'Verifikationen kunde inte kopplas. Försök igen.',
+        description: t('voucher_link_failed_description'),
         variant: 'destructive',
       })
       setIsConfirmingMatch(false)
@@ -953,7 +975,7 @@ export default function TransactionsPage() {
       toast({ title: 'Faktura matchad', description: `Faktura ${invoiceNumber} markerad som betald` })
       return true
     } catch {
-      toast({ title: 'Matchning misslyckades', description: 'Transaktionen kunde inte matchas med fakturan. Försök igen.', variant: 'destructive' })
+      toast({ title: t('match_failed_title'), description: t('match_failed_with_invoice'), variant: 'destructive' })
       return false
     }
   }
@@ -1014,7 +1036,7 @@ export default function TransactionsPage() {
     } catch {
       toast({
         title: 'Matchning misslyckades',
-        description: 'Transaktionen kunde inte matchas med fakturan. Försök igen.',
+        description: t('match_failed_with_invoice'),
         variant: 'destructive',
       })
       setIsMatchingFromPicker(false)
@@ -1025,7 +1047,7 @@ export default function TransactionsPage() {
     setIsCreating(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) {
-      toast({ title: 'Inloggning krävs', description: 'Du måste vara inloggad för att lägga till transaktioner.', variant: 'destructive' })
+      toast({ title: t('login_required_title'), description: t('login_required_description'), variant: 'destructive' })
       setIsCreating(false)
       return
     }
@@ -1080,11 +1102,11 @@ export default function TransactionsPage() {
         return
       }
       setTransactions((prev) => prev.filter((t) => t.id !== id))
-      toast({ title: 'Borttagen', description: 'Transaktionen har tagits bort' })
+      toast({ title: t('deleted_title'), description: t('deleted_description') })
     } catch {
       toast({
         title: 'Kunde inte ta bort',
-        description: 'Transaktionen kunde inte tas bort. Försök igen.',
+        description: t('delete_failed_description'),
         variant: 'destructive',
       })
     }
@@ -1103,7 +1125,7 @@ export default function TransactionsPage() {
       }
       toast({
         title: 'Utkast skapat',
-        description: 'Granska och bokför verifikatet i Bokföring.',
+        description: t('review_in_bookkeeping_description'),
       })
       window.location.href = `/bookkeeping/${json.data.entry.id}`
     } catch (err) {
@@ -1454,18 +1476,28 @@ export default function TransactionsPage() {
           ))}
         </div>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 ? (
+        uncategorizedTransactions.length === 0 && skvUnmatched.length === 0 ? (
           <InboxZeroState
             hasTransactions={transactions.length > 0 || skvRows.length > 0}
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
           <div className="space-y-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder={t('search_placeholder')}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
             {/* Source filter — only render when both sources have content
                 to filter between, otherwise it'd be a no-op chip row. */}
             {skvUnmatched.length > 0 && uncategorizedTransactions.length > 0 && (
               <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Källa:</span>
+                <span className="text-muted-foreground">{t('source_label')}</span>
                 <button
                   onClick={() => setSourceFilter('all')}
                   className={cn(
@@ -1475,7 +1507,7 @@ export default function TransactionsPage() {
                       : 'border-border text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  Alla ({uncategorizedTransactions.length + skvUnmatched.length})
+                  {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
                 </button>
                 <button
                   onClick={() => setSourceFilter('bank')}
@@ -1486,7 +1518,7 @@ export default function TransactionsPage() {
                       : 'border-border text-muted-foreground hover:text-foreground',
                   )}
                 >
-                  Bank ({uncategorizedTransactions.length})
+                  {t('source_bank', { count: uncategorizedTransactions.length })}
                 </button>
                 <button
                   onClick={() => setSourceFilter('skatteverket')}
@@ -1498,44 +1530,50 @@ export default function TransactionsPage() {
                   )}
                 >
                   <Landmark className="h-3 w-3" />
-                  Skatteverket ({skvUnmatched.length})
+                  {t('source_skatteverket', { count: skvUnmatched.length })}
                 </button>
               </div>
             )}
-            <AnimatePresence mode="popLayout">
-              {inboxItems.map(item =>
-                item.source === 'bank' ? (
-                  <TransactionInboxCard
-                    key={`bank-${item.data.id}`}
-                    transaction={item.data}
-                    suggestions={categorySuggestions[item.data.id]}
-                    templateSuggestions={templateSuggestions[item.data.id]}
-                    skvCounterpartDate={bankToSkvHints.get(item.data.id)}
-                    processingId={processingId}
-                    isBatchMode={isBatchMode}
-                    isSelected={selectedIds.has(item.data.id)}
-                    entityType={entityType}
-                    onCategorize={handleCategorize}
-                    onMarkPrivate={handleMarkPrivate}
-                    onOpenMatchDialog={openMatchDialog}
-                    onOpenCategoryDialog={openCategoryDialog}
-                    onDelete={handleDeleteTransaction}
-                    onOpenQuickReview={handleOpenQuickReview}
-                    onOpenTemplateReview={handleOpenTemplateReview}
-                    onToggleSelect={toggleBatchSelect}
-                  />
-                ) : (
-                  <SkattekontoInboxCard
-                    key={`skv-${item.data.id}`}
-                    row={item.data}
-                    matchSuggestion={item.data.match_suggestion}
-                    processing={skvProcessingId === item.data.id}
-                    onBokfor={handleSkvBokfor}
-                    onMatch={r => setSkvMatchTarget(r)}
-                  />
-                ),
-              )}
-            </AnimatePresence>
+            {inboxItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-8 text-center">
+                {t('no_search_results')}
+              </p>
+            ) : (
+              <AnimatePresence mode="popLayout">
+                {inboxItems.map(item =>
+                  item.source === 'bank' ? (
+                    <TransactionInboxCard
+                      key={`bank-${item.data.id}`}
+                      transaction={item.data}
+                      suggestions={categorySuggestions[item.data.id]}
+                      templateSuggestions={templateSuggestions[item.data.id]}
+                      skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                      processingId={processingId}
+                      isBatchMode={isBatchMode}
+                      isSelected={selectedIds.has(item.data.id)}
+                      entityType={entityType}
+                      onCategorize={handleCategorize}
+                      onMarkPrivate={handleMarkPrivate}
+                      onOpenMatchDialog={openMatchDialog}
+                      onOpenCategoryDialog={openCategoryDialog}
+                      onDelete={handleDeleteTransaction}
+                      onOpenQuickReview={handleOpenQuickReview}
+                      onOpenTemplateReview={handleOpenTemplateReview}
+                      onToggleSelect={toggleBatchSelect}
+                    />
+                  ) : (
+                    <SkattekontoInboxCard
+                      key={`skv-${item.data.id}`}
+                      row={item.data}
+                      matchSuggestion={item.data.match_suggestion}
+                      processing={skvProcessingId === item.data.id}
+                      onBokfor={handleSkvBokfor}
+                      onMatch={r => setSkvMatchTarget(r)}
+                    />
+                  ),
+                )}
+              </AnimatePresence>
+            )}
           </div>
         )
       ) : (
@@ -1611,7 +1649,7 @@ export default function TransactionsPage() {
       <Dialog open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Välj mall</DialogTitle>
+            <DialogTitle>{t('dialog_choose_template')}</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
             <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
@@ -1665,7 +1703,7 @@ export default function TransactionsPage() {
       >
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Matcha med faktura</DialogTitle>
+            <DialogTitle>{t('dialog_match_invoice')}</DialogTitle>
           </DialogHeader>
           {invoicePickerTransaction && (
             <>
@@ -1716,7 +1754,7 @@ export default function TransactionsPage() {
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Lägg till transaktion</DialogTitle>
+            <DialogTitle>{t('dialog_add_transaction')}</DialogTitle>
           </DialogHeader>
           <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} />
         </DialogContent>
@@ -1740,7 +1778,7 @@ export default function TransactionsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Matcha mot leverantörsfaktura?</DialogTitle>
+            <DialogTitle>{t('dialog_match_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
@@ -1798,7 +1836,7 @@ export default function TransactionsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Matcha mot kundfaktura?</DialogTitle>
+            <DialogTitle>{t('dialog_match_customer_invoice')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
@@ -1815,7 +1853,7 @@ export default function TransactionsPage() {
                         {c.customer_name || 'Kund'} · {c.invoice_number ?? '—'}
                       </span>
                       {c.match_reason === 'ocr_exact' && (
-                        <Badge variant="success">Exakt OCR-träff</Badge>
+                        <Badge variant="success">{t('badge_exact_ocr')}</Badge>
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground tabular-nums">

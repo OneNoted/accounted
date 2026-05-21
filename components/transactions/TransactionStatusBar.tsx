@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
@@ -31,25 +32,26 @@ export default function TransactionStatusBar({
   onToggleBatchMode,
 }: TransactionStatusBarProps) {
   const { canWrite } = useCanWrite()
+  const t = useTranslations('transactions')
   return (
     <div className="space-y-4">
       {/* Header with title + actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Transaktioner</h1>
+          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('page_title')}</h1>
           {uncategorizedCount > 0 && mode === 'inbox' && (
             <p className="text-muted-foreground mt-1">
-              <span className="text-foreground font-semibold">{uncategorizedCount}</span> att bokföra
+              <span className="text-foreground font-semibold">{uncategorizedCount}</span> {t('subtitle_to_post')}
               {invoiceMatchCount > 0 && (
                 <span className="ml-2">
                   · <FileText className="inline h-3.5 w-3.5 text-primary" />{' '}
-                  <span className="text-foreground font-semibold">{invoiceMatchCount} fakturamatchningar</span>
+                  <span className="text-foreground font-semibold">{t('subtitle_matches', { count: invoiceMatchCount })}</span>
                 </span>
               )}
             </p>
           )}
           {mode === 'history' && (
-            <p className="text-muted-foreground">Alla dina transaktioner</p>
+            <p className="text-muted-foreground">{t('history_subtitle')}</p>
           )}
         </div>
 
@@ -57,7 +59,7 @@ export default function TransactionStatusBar({
           <Button variant="outline" size="sm" asChild>
             <Link href="/import">
               <Upload className="mr-2 h-4 w-4" />
-              Importera
+              {t('action_import')}
             </Link>
           </Button>
           {mode === 'inbox' && uncategorizedCount > 0 && (
@@ -69,7 +71,7 @@ export default function TransactionStatusBar({
                 disabled={isLoadingSuggestions}
               >
                 <Wand className="mr-2 h-4 w-4" />
-                {isLoadingSuggestions ? 'Laddar...' : 'Gå igenom alla'}
+                {isLoadingSuggestions ? t('action_review_loading') : t('action_review_all')}
               </Button>
               <Button
                 variant={isBatchMode ? 'default' : 'outline'}
@@ -77,7 +79,7 @@ export default function TransactionStatusBar({
                 onClick={onToggleBatchMode}
               >
                 <CheckSquare className="mr-2 h-4 w-4" />
-                {isBatchMode ? 'Avsluta' : 'Välj flera'}
+                {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
               </Button>
             </>
           )}
@@ -85,14 +87,14 @@ export default function TransactionStatusBar({
             size="sm"
             onClick={onOpenCreateDialog}
             disabled={!canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
             {canWrite ? (
               <Plus className="mr-2 h-4 w-4" />
             ) : (
               <Lock className="mr-2 h-4 w-4" />
             )}
-            Ny transaktion
+            {t('action_new_transaction')}
           </Button>
         </div>
       </div>
@@ -105,7 +107,7 @@ export default function TransactionStatusBar({
           className="h-8 rounded-md"
           onClick={() => onModeChange('inbox')}
         >
-          Att bokföra
+          {t('mode_inbox')}
           {uncategorizedCount > 0 && (
             <Badge
               variant={mode === 'inbox' ? 'secondary' : 'outline'}
@@ -121,7 +123,7 @@ export default function TransactionStatusBar({
           className="h-8 rounded-md"
           onClick={() => onModeChange('history')}
         >
-          Alla transaktioner
+          {t('mode_history')}
         </Button>
       </div>
     </div>

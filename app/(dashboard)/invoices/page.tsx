@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -21,35 +22,40 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Invoice, InvoiceStatus } from '@/types'
 
-const statusConfig: Record<InvoiceStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
-  draft: { label: 'Utkast', variant: 'secondary' },
-  sent: { label: 'Skickad', variant: 'default' },
-  paid: { label: 'Betald', variant: 'success' },
-  partially_paid: { label: 'Delbetalad', variant: 'warning' },
-  overdue: { label: 'Förfallen', variant: 'destructive' },
-  cancelled: { label: 'Makulerad', variant: 'secondary' },
-  credited: { label: 'Krediterad', variant: 'secondary' },
+type InvoiceStatusVariant = 'default' | 'secondary' | 'success' | 'warning' | 'destructive'
+
+const STATUS_CONFIG: Record<InvoiceStatus, { labelKey: string; variant: InvoiceStatusVariant }> = {
+  draft: { labelKey: 'status_draft', variant: 'secondary' },
+  sent: { labelKey: 'status_sent', variant: 'default' },
+  paid: { labelKey: 'status_paid', variant: 'success' },
+  partially_paid: { labelKey: 'status_partially_paid', variant: 'warning' },
+  overdue: { labelKey: 'status_overdue', variant: 'destructive' },
+  cancelled: { labelKey: 'status_cancelled', variant: 'secondary' },
+  credited: { labelKey: 'status_credited', variant: 'secondary' },
 }
 
-function getRelativeTimeLabel(dueDateStr: string, status: InvoiceStatus): { text: string; color: string } | null {
-  if (status === 'paid' || status === 'cancelled' || status === 'credited' || status === 'draft') return null
+function useRelativeTimeLabel() {
+  const t = useTranslations('invoices')
+  return function getRelativeTimeLabel(dueDateStr: string, status: InvoiceStatus): { text: string; color: string } | null {
+    if (status === 'paid' || status === 'cancelled' || status === 'credited' || status === 'draft') return null
 
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const dueDate = new Date(dueDateStr)
-  dueDate.setHours(0, 0, 0, 0)
-  const diffDays = Math.round((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const dueDate = new Date(dueDateStr)
+    dueDate.setHours(0, 0, 0, 0)
+    const diffDays = Math.round((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
-  if (diffDays < 0) {
-    return { text: `${Math.abs(diffDays)} dagar försenad`, color: 'text-destructive' }
-  } else if (diffDays === 0) {
-    return { text: 'Förfaller idag', color: 'text-warning-foreground' }
-  } else if (diffDays <= 3) {
-    return { text: `${diffDays} dagar kvar`, color: 'text-warning-foreground' }
-  } else if (diffDays <= 7) {
-    return { text: `${diffDays} dagar kvar`, color: 'text-muted-foreground' }
+    if (diffDays < 0) {
+      return { text: t('due_days_overdue', { days: Math.abs(diffDays) }), color: 'text-destructive' }
+    } else if (diffDays === 0) {
+      return { text: t('due_today'), color: 'text-warning-foreground' }
+    } else if (diffDays <= 3) {
+      return { text: t('due_days_left', { days: diffDays }), color: 'text-warning-foreground' }
+    } else if (diffDays <= 7) {
+      return { text: t('due_days_left', { days: diffDays }), color: 'text-muted-foreground' }
+    }
+    return null
   }
-  return null
 }
 
 export default function InvoicesPage() {
@@ -62,6 +68,8 @@ export default function InvoicesPage() {
   const [activeTab, setActiveTab] = useState('all')
   const { toast } = useToast()
   const supabase = createClient()
+  const t = useTranslations('invoices')
+  const getRelativeTimeLabel = useRelativeTimeLabel()
 
   async function fetchInvoices() {
     if (!company) return
@@ -81,8 +89,8 @@ export default function InvoicesPage() {
 
     if (invoicesResult.error) {
       toast({
-        title: 'Kunde inte ladda fakturor',
-        description: 'Kontrollera din anslutning och försök igen.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
     } else {
@@ -103,9 +111,6 @@ export default function InvoicesPage() {
 
     const isCreditNote = !!invoice.credited_invoice_id
     const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-    // Cancelled invoices are kept in the table for compliance but hidden from
-    // the default 'Alla' view; they only show up when the user explicitly picks
-    // the 'Makulerade' tab.
     const matchesTab =
       (activeTab === 'all' && invoice.status !== 'cancelled') ||
       (activeTab === 'unpaid' && ['sent', 'overdue'].includes(invoice.status) && !isCreditNote && docType === 'invoice') ||
@@ -136,29 +141,29 @@ export default function InvoicesPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Fakturor"
+        title={t('title')}
         action={
           <div className="flex gap-2">
             <Link href="/invoices/recurring">
               <Button variant="secondary">
                 <Repeat className="mr-2 h-4 w-4" />
-                Återkommande
+                {t('recurring')}
               </Button>
             </Link>
             {canWrite ? (
               <Link href="/invoices/new">
                 <Button>
                   <Plus className="mr-2 h-4 w-4" />
-                  Ny faktura
+                  {t('new_invoice')}
                 </Button>
               </Link>
             ) : (
               <Button
                 disabled
-                title="Du har endast läsbehörighet i detta företag"
+                title={t('viewer_disabled_tooltip')}
               >
                 <Lock className="mr-2 h-4 w-4" />
-                Ny faktura
+                {t('new_invoice')}
               </Button>
             )}
           </div>
@@ -168,17 +173,17 @@ export default function InvoicesPage() {
       {/* Inline summary */}
       {!isLoading && invoices.length > 0 && (
         <p className="text-sm text-muted-foreground tabular-nums">
-          {invoices.length} {invoices.length === 1 ? 'faktura' : 'fakturor'}
+          {invoices.length === 1 ? t('summary_one', { count: invoices.length }) : t('summary_other', { count: invoices.length })}
           {stats.unpaid > 0 && (
             <>
               {' · '}
-              <span className="text-foreground">{stats.unpaid} obetalda</span>
+              <span className="text-foreground">{t('summary_unpaid', { count: stats.unpaid })}</span>
               {' · '}
-              {formatCurrency(stats.unpaidAmount)} att få in
+              {t('summary_to_collect', { amount: formatCurrency(stats.unpaidAmount) })}
               {stats.overdue > 0 && (
                 <>
                   {' · '}
-                  <span className="text-destructive">{stats.overdue} förfallna</span>
+                  <span className="text-destructive">{t('summary_overdue', { count: stats.overdue })}</span>
                 </>
               )}
             </>
@@ -191,7 +196,7 @@ export default function InvoicesPage() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Sök fakturor"
+            placeholder={t('search_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-10"
@@ -203,27 +208,27 @@ export default function InvoicesPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Alla</SelectItem>
-            <SelectItem value="unpaid">Obetalda</SelectItem>
-            <SelectItem value="paid">Betalda</SelectItem>
-            <SelectItem value="draft">Utkast</SelectItem>
-            <SelectItem value="proforma">Proforma</SelectItem>
-            <SelectItem value="delivery_note">Följesedel</SelectItem>
-            <SelectItem value="credit">Kredit</SelectItem>
-            <SelectItem value="cancelled">Makulerade</SelectItem>
+            <SelectItem value="all">{t('tab_all')}</SelectItem>
+            <SelectItem value="unpaid">{t('tab_unpaid')}</SelectItem>
+            <SelectItem value="paid">{t('tab_paid')}</SelectItem>
+            <SelectItem value="draft">{t('tab_draft')}</SelectItem>
+            <SelectItem value="proforma">{t('tab_proforma')}</SelectItem>
+            <SelectItem value="delivery_note">{t('tab_delivery_note')}</SelectItem>
+            <SelectItem value="credit">{t('tab_credit')}</SelectItem>
+            <SelectItem value="cancelled">{t('tab_cancelled')}</SelectItem>
           </SelectContent>
         </Select>
         {/* Desktop: tab bar */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="hidden sm:block">
           <TabsList>
-            <TabsTrigger value="all">Alla</TabsTrigger>
-            <TabsTrigger value="unpaid">Obetalda</TabsTrigger>
-            <TabsTrigger value="paid">Betalda</TabsTrigger>
-            <TabsTrigger value="draft">Utkast</TabsTrigger>
-            <TabsTrigger value="proforma">Proforma</TabsTrigger>
-            <TabsTrigger value="delivery_note">Följesedel</TabsTrigger>
-            <TabsTrigger value="credit">Kredit</TabsTrigger>
-            <TabsTrigger value="cancelled">Makulerade</TabsTrigger>
+            <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
+            <TabsTrigger value="unpaid">{t('tab_unpaid')}</TabsTrigger>
+            <TabsTrigger value="paid">{t('tab_paid')}</TabsTrigger>
+            <TabsTrigger value="draft">{t('tab_draft')}</TabsTrigger>
+            <TabsTrigger value="proforma">{t('tab_proforma')}</TabsTrigger>
+            <TabsTrigger value="delivery_note">{t('tab_delivery_note')}</TabsTrigger>
+            <TabsTrigger value="credit">{t('tab_credit')}</TabsTrigger>
+            <TabsTrigger value="cancelled">{t('tab_cancelled')}</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
@@ -251,16 +256,16 @@ export default function InvoicesPage() {
             {searchTerm ? (
               <EmptyState
                 icon={Receipt}
-                title="Inga träffar"
-                description={`Inga fakturor matchar "${searchTerm}".`}
+                title={t('no_search_results_title')}
+                description={t('no_search_results_description', { term: searchTerm })}
               />
             ) : invoices.length === 0 ? (
               <EmptyInvoices />
             ) : (
               <EmptyState
                 icon={Receipt}
-                title="Inga fakturor i denna kategori"
-                description="Prova att byta flik för att se fler fakturor."
+                title={t('no_category_title')}
+                description={t('no_category_description')}
               />
             )}
           </CardContent>
@@ -268,7 +273,7 @@ export default function InvoicesPage() {
       ) : (
         <div className="space-y-3">
           {filteredInvoices.map((invoice) => {
-            const status = statusConfig[invoice.status]
+            const status = STATUS_CONFIG[invoice.status]
             const isCreditNote = !!invoice.credited_invoice_id
             const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
             const isProforma = docType === 'proforma'
@@ -296,21 +301,21 @@ export default function InvoicesPage() {
                         <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                           {isCreditNote && (
                             <Badge variant="destructive" className="text-xs">
-                              Kredit
+                              {t('badge_credit')}
                             </Badge>
                           )}
                           {isProforma && (
                             <Badge variant="secondary" className="text-xs bg-primary/10 text-primary">
-                              Proforma
+                              {t('badge_proforma')}
                             </Badge>
                           )}
                           {isDeliveryNote && (
                             <Badge variant="secondary" className="text-xs bg-success/10 text-success">
-                              Följesedel
+                              {t('badge_delivery_note')}
                             </Badge>
                           )}
                           <Badge variant={status.variant as 'default' | 'secondary' | 'destructive'}>
-                            {status.label}
+                            {t(status.labelKey)}
                           </Badge>
                           {relativeTime && (
                             <span className={`text-xs font-medium ${relativeTime.color}`}>

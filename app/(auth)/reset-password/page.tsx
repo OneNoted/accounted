@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, KeyRound } from 'lucide-react'
 
 export default function ResetPasswordPage() {
+  const t = useTranslations('reset_password')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -29,8 +31,8 @@ export default function ResetPasswordPage() {
 
     if (!strong) {
       toast({
-        title: 'Lösenordet är för svagt',
-        description: 'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
+        title: t('weak_title'),
+        description: t('weak_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -39,8 +41,8 @@ export default function ResetPasswordPage() {
 
     if (password !== confirmPassword) {
       toast({
-        title: 'Lösenorden matchar inte',
-        description: 'Kontrollera att du skrev samma lösenord i båda fälten.',
+        title: t('mismatch_title'),
+        description: t('weak_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -52,7 +54,7 @@ export default function ResetPasswordPage() {
 
       if (error) {
         toast({
-          title: 'Kunde inte uppdatera lösenord',
+          title: t('save_failed_title'),
           description: error.message,
           variant: 'destructive',
         })
@@ -60,16 +62,16 @@ export default function ResetPasswordPage() {
       }
 
       toast({
-        title: 'Lösenord uppdaterat',
-        description: 'Ditt lösenord har ändrats.',
+        title: t('saved_title'),
+        description: t('saved_description'),
       })
 
       router.push('/')
       router.refresh()
     } catch {
       toast({
-        title: 'Något gick fel',
-        description: 'Försök igen senare.',
+        title: t('save_failed_title'),
+        description: t('save_failed_description'),
         variant: 'destructive',
       })
     } finally {
@@ -86,21 +88,21 @@ export default function ResetPasswordPage() {
               <KeyRound className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">Nytt lösenord</h1>
+          <h1 className="text-2xl font-medium tracking-tight">{t('title')}</h1>
           <p className="text-muted-foreground text-sm mt-2">
-            Ange ditt nya lösenord nedan
+            {t('subtitle')}
           </p>
         </div>
 
         <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
           <form onSubmit={handleResetPassword} className="space-y-5">
             <div className="space-y-2">
-              <Label htmlFor="password">Nytt lösenord</Label>
+              <Label htmlFor="password">{t('new_password_label')}</Label>
               <Input
                 id="password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Minst 8 tecken, Aa1!"
+                placeholder={t('new_password_placeholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -110,12 +112,12 @@ export default function ResetPasswordPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirm_password">Bekräfta lösenord</Label>
+              <Label htmlFor="confirm_password">{t('confirm_password_label')}</Label>
               <Input
                 id="confirm_password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Upprepa lösenordet"
+                placeholder={t('confirm_password_placeholder')}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
@@ -128,10 +130,10 @@ export default function ResetPasswordPage() {
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Sparar...
+                  {t('submitting')}
                 </>
               ) : (
-                'Spara nytt lösenord'
+                t('submit')
               )}
             </Button>
           </form>

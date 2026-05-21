@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, Search, Users, Lock } from 'lucide-react'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
@@ -18,11 +19,11 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 
-const customerTypeLabels: Record<CustomerType, string> = {
-  individual: 'Privatperson',
-  swedish_business: 'Svenskt företag eller organisation',
-  eu_business: 'EU-företag',
-  non_eu_business: 'Utanför EU',
+const CUSTOMER_TYPE_LABEL_KEYS: Record<CustomerType, string> = {
+  individual: 'type_individual',
+  swedish_business: 'type_swedish_business',
+  eu_business: 'type_eu_business',
+  non_eu_business: 'type_non_eu_business',
 }
 
 function getInitials(name: string): string {
@@ -44,6 +45,8 @@ export default function CustomersPage() {
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
   const supabase = createClient()
+  const t = useTranslations('customers')
+  const errorLocale = useLocale() as ErrorLocale
 
   async function fetchCustomers() {
     if (!company) return
@@ -56,8 +59,8 @@ export default function CustomersPage() {
 
     if (error) {
       toast({
-        title: 'Kunde inte ladda kunder',
-        description: 'Kontrollera din anslutning och försök igen.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
     } else {
@@ -83,14 +86,14 @@ export default function CustomersPage() {
 
     if (!response.ok) {
       toast({
-        title: 'Kunde inte skapa kund',
-        description: getErrorMessage(result, { context: 'customer' }),
+        title: t('create_failed_title'),
+        description: getErrorMessage(result, { context: 'customer', locale: errorLocale }),
         variant: 'destructive',
       })
     } else {
       toast({
-        title: 'Kund skapad',
-        description: `${data.name} har lagts till`,
+        title: t('created_title'),
+        description: t('created_description', { name: data.name }),
       })
       setCustomers([...customers, result.data])
       setIsDialogOpen(false)
@@ -108,25 +111,25 @@ export default function CustomersPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Kunder"
+        title={t('title')}
         action={
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button
                 disabled={!canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? (
                   <Plus className="mr-2 h-4 w-4" />
                 ) : (
                   <Lock className="mr-2 h-4 w-4" />
                 )}
-                Ny kund
+                {t('new_customer')}
               </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Lägg till kund</DialogTitle>
+                <DialogTitle>{t('add_customer')}</DialogTitle>
               </DialogHeader>
               <CustomerForm
                 onSubmit={handleCreateCustomer}
@@ -141,7 +144,7 @@ export default function CustomersPage() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Sök kunder"
+          placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           className="pl-10"
@@ -169,8 +172,8 @@ export default function CustomersPage() {
             {searchTerm ? (
               <EmptyState
                 icon={Users}
-                title="Inga träffar"
-                description={`Inga kunder matchar "${searchTerm}".`}
+                title={t('no_search_results_title')}
+                description={t('no_search_results_description', { term: searchTerm })}
               />
             ) : (
               <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
@@ -190,7 +193,7 @@ export default function CustomersPage() {
                       <div className="min-w-0">
                         <CardTitle className="text-base truncate group-hover:text-primary transition-colors">{customer.name}</CardTitle>
                         <Badge variant="secondary" className="mt-1">
-                          {customerTypeLabels[customer.customer_type]}
+                          {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
                         </Badge>
                       </div>
                     </div>
@@ -204,7 +207,7 @@ export default function CustomersPage() {
                         <div className="flex items-center gap-2">
                           <span>{customer.org_number}</span>
                           {customer.vat_number_validated && (
-                            <Badge variant="success" className="text-xs">Verifierad</Badge>
+                            <Badge variant="success" className="text-xs">{t('verified')}</Badge>
                           )}
                         </div>
                       )}

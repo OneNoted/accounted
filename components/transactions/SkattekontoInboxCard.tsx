@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { motion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -38,6 +39,7 @@ export default function SkattekontoInboxCard({
   onMatch: (row: StoredSkattekontoTransaction) => void
   onAnimationComplete?: (id: string) => void
 }) {
+  const t = useTranslations('tx_skattekonto_card')
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
 
@@ -86,7 +88,7 @@ export default function SkattekontoInboxCard({
                   <p className="font-medium truncate">{row.transaktionstext}</p>
                   <Badge variant="outline" className="gap-1 text-[10px]">
                     <Landmark className="h-3 w-3" />
-                    Skatteverket
+                    {t('skv_badge')}
                   </Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">
@@ -113,17 +115,15 @@ export default function SkattekontoInboxCard({
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-warning" />
               <div className="min-w-0">
                 <p className="font-medium">
-                  Möjlig dublett av verifikat{' '}
                   {matchSuggestion.voucher_series && matchSuggestion.voucher_number
-                    ? `${matchSuggestion.voucher_series}${matchSuggestion.voucher_number}`
-                    : '(utkast)'}
+                    ? t('duplicate_title_with_voucher', { label: `${matchSuggestion.voucher_series}${matchSuggestion.voucher_number}` })
+                    : t('duplicate_title_draft')}
                 </p>
                 <p className="text-muted-foreground truncate">
                   {matchSuggestion.entry_date} • {matchSuggestion.description}
                 </p>
                 <p className="text-muted-foreground">
-                  Det här ser ut som samma kassaflöde — koppla istället för
-                  att bokföra om.
+                  {t('duplicate_body')}
                 </p>
               </div>
             </div>
@@ -140,7 +140,7 @@ export default function SkattekontoInboxCard({
                   disabled={processing}
                 >
                   <Link2 className="mr-1.5 h-3 w-3" />
-                  Koppla till verifikat
+                  {t('link_to_voucher')}
                 </Button>
                 <Button
                   size="sm"
@@ -152,7 +152,7 @@ export default function SkattekontoInboxCard({
                   {processing ? (
                     <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : null}
-                  Bokför ändå
+                  {t('book_anyway')}
                 </Button>
               </>
             ) : (
@@ -167,7 +167,7 @@ export default function SkattekontoInboxCard({
                   {processing ? (
                     <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : null}
-                  Bokför
+                  {t('book')}
                 </Button>
                 <Button
                   size="sm"
@@ -177,7 +177,7 @@ export default function SkattekontoInboxCard({
                   disabled={processing}
                 >
                   <Link2 className="mr-1.5 h-3 w-3" />
-                  Matcha mot verifikat
+                  {t('match_to_voucher')}
                 </Button>
               </>
             )}

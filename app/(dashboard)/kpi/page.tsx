@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
@@ -13,6 +14,7 @@ import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
 
 export default function KpiPage() {
+  const t = useTranslations('kpi')
   const [selectedPeriod, setSelectedPeriod] = useState<string>('')
   const [report, setReport] = useState<KPIReport | null>(null)
   const [preferences, setPreferences] = useState<KPIPreferences>(getDefaultPreferences())
@@ -39,15 +41,15 @@ export default function KpiPage() {
     setError(null)
     try {
       const res = await fetch(`/api/reports/kpi?period_id=${periodId}`)
-      if (!res.ok) throw new Error('Kunde inte hämta nyckeltal')
+      if (!res.ok) throw new Error(t('fetch_failed'))
       const { data } = await res.json()
       setReport(data)
     } catch {
-      setError('Kunde inte hämta nyckeltal')
+      setError(t('fetch_failed'))
     } finally {
       setIsLoadingReport(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     if (!selectedPeriod) return
@@ -80,7 +82,7 @@ export default function KpiPage() {
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Nyckeltal</h1>
+        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
         <KPISettingsDialog
           preferences={preferences}
           onSave={handleSavePreferences}

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +14,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   ArrowLeftRight,
+  ChevronRight,
   Check,
   Landmark,
   Link2,
@@ -60,6 +62,7 @@ export default function TransactionHistoryList({
   isLoadingMore,
   onLoadMore,
 }: TransactionHistoryListProps) {
+  const t = useTranslations('tx_history')
   const [searchTerm, setSearchTerm] = useState('')
   const [filter, setFilter] = useState<HistoryFilter>('all')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
@@ -108,7 +111,7 @@ export default function TransactionHistoryList({
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Sök transaktioner..."
+            placeholder={t('search_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-10"
@@ -123,7 +126,7 @@ export default function TransactionHistoryList({
               className="h-9"
               onClick={() => setFilter(f)}
             >
-              {f === 'all' ? 'Alla' : f === 'business' ? 'Företag' : 'Privat'}
+              {f === 'all' ? t('filter_all') : f === 'business' ? t('filter_business') : t('filter_private')}
             </Button>
           ))}
         </div>
@@ -131,7 +134,7 @@ export default function TransactionHistoryList({
 
       {showSourceFilter && (
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Källa:</span>
+          <span className="text-muted-foreground">{t('source_label')}</span>
           {(['all', 'bank', 'skatteverket'] as const).map((s) => (
             <button
               key={s}
@@ -144,7 +147,7 @@ export default function TransactionHistoryList({
               )}
             >
               {s === 'skatteverket' && <Landmark className="h-3 w-3" />}
-              {s === 'all' ? 'Alla' : s === 'bank' ? 'Bank' : 'Skatteverket'}
+              {s === 'all' ? t('source_all') : s === 'bank' ? t('source_bank') : t('source_skatteverket')}
             </button>
           ))}
         </div>
@@ -155,11 +158,9 @@ export default function TransactionHistoryList({
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <ArrowLeftRight className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-medium">Inga transaktioner</h3>
+            <h3 className="text-lg font-medium">{t('empty_title')}</h3>
             <p className="text-muted-foreground text-center mt-1">
-              {searchTerm
-                ? 'Inga transaktioner matchar din sökning'
-                : 'Inga transaktioner att visa med valt filter'}
+              {searchTerm ? t('empty_search') : t('empty_filter')}
             </p>
           </CardContent>
         </Card>
@@ -193,10 +194,10 @@ export default function TransactionHistoryList({
                 {isLoadingMore ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Laddar...
+                    {t('loading_more')}
                   </>
                 ) : (
-                  'Ladda fler'
+                  t('load_more')
                 )}
               </Button>
             </div>
@@ -218,6 +219,7 @@ function BankHistoryRow({
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
 }) {
+  const t = useTranslations('tx_history')
   // Viewers must not see write affordances. CorrectionAffordance opens a
   // dialog that stages a storno + correction journal entry; the API path
   // already 403s for viewers but rendering the trigger creates a confusing
@@ -259,31 +261,31 @@ function BankHistoryRow({
                       <Badge variant={transaction.is_business ? 'default' : 'secondary'}>
                         {transaction.is_business
                           ? getCategoryDisplayName(transaction.category)
-                          : 'Privat'}
+                          : t('private_badge')}
                       </Badge>
                     </>
                   )}
                 {transaction.invoice_id && (
                   <>
                     <span>·</span>
-                    <Badge variant="outline" className="text-primary border-primary">
+                    <Badge variant="outline" className="border-primary/40 text-primary">
                       <Link2 className="h-3 w-3 mr-1" />
-                      Kopplad till faktura
+                      {t('linked_to_invoice')}
                     </Badge>
                   </>
                 )}
                 {transaction.journal_entry_id ? (
                   <>
                     <span>·</span>
-                    <Badge variant="outline" className="text-success border-success">
+                    <Badge variant="outline" className="border-success/40 text-success">
                       <Check className="h-3 w-3 mr-1" />
-                      Bokförd
+                      {t('posted')}
                     </Badge>
                     <Link
                       href={`/bookkeeping/${transaction.journal_entry_id}`}
                       className="text-xs text-muted-foreground hover:text-foreground hover:underline"
                     >
-                      Visa verifikation
+                      {t('view_voucher')}
                     </Link>
                     {canWrite && (
                       <CorrectionAffordance journalEntryId={transaction.journal_entry_id}>
@@ -294,7 +296,7 @@ function BankHistoryRow({
                             disabled={isLoading}
                             className="text-xs text-muted-foreground hover:text-foreground hover:underline disabled:opacity-50"
                           >
-                            {isLoading ? 'Hämtar…' : 'Skapa ändringsverifikation'}
+                            {isLoading ? t('fetching') : t('create_correction')}
                           </button>
                         )}
                       </CorrectionAffordance>
@@ -305,10 +307,11 @@ function BankHistoryRow({
                     <span>·</span>
                     <button
                       type="button"
-                      className="inline-flex items-center rounded-md border border-warning px-2.5 py-0.5 text-xs font-semibold text-warning-foreground hover:bg-warning/10 transition-colors"
+                      className="group/post inline-flex items-center gap-1 rounded-md border border-warning/60 bg-background px-2.5 py-1 text-xs font-semibold text-warning-foreground hover:bg-warning/10 transition-colors"
                       onClick={() => onOpenCategoryDialog(transaction)}
                     >
-                      Ej bokförd
+                      {t('not_posted')}
+                      <ChevronRight className="h-3 w-3 transition-transform group-hover/post:translate-x-0.5" />
                     </button>
                   </>
                 )}
@@ -317,50 +320,41 @@ function BankHistoryRow({
                     <span>·</span>
                     <button
                       type="button"
-                      className="inline-flex items-center rounded-md border border-primary px-2.5 py-0.5 text-xs font-semibold text-primary hover:bg-primary/10 transition-colors"
+                      className="inline-flex items-center rounded-md border border-primary/40 bg-transparent px-2.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
                       onClick={() => onOpenMatchDialog(transaction)}
                     >
                       <FileText className="h-3 w-3 mr-1" />
-                      Möjlig match: Faktura {transaction.potential_invoice.invoice_number}
+                      {t('possible_match_invoice', { number: transaction.potential_invoice.invoice_number ?? '' })}
+                    </button>
+                  </>
+                )}
+                {!transaction.journal_entry_id && onDelete && (
+                  <>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(transaction.id)}
+                      aria-label={t('delete_aria')}
+                      className="inline-flex items-center gap-1 rounded-md border border-destructive/30 bg-transparent px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      {t('delete')}
                     </button>
                   </>
                 )}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {!transaction.journal_entry_id && (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-10 text-xs"
-                onClick={() => onOpenCategoryDialog(transaction)}
-              >
-                Bokför
-              </Button>
-            )}
-            {!transaction.journal_entry_id && onDelete && (
-              <Button
-                size="icon"
-                variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
-                onClick={() => onDelete(transaction.id)}
-                aria-label="Ta bort transaktion"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-            <div className="text-right">
-              <p className="font-medium tabular-nums">
-                {transaction.amount > 0 ? '+' : ''}
-                {formatCurrency(transaction.amount, transaction.currency)}
+          <div className="text-right tabular-nums shrink-0">
+            <p className="font-medium tabular-nums">
+              {transaction.amount > 0 ? '+' : ''}
+              {formatCurrency(transaction.amount, transaction.currency)}
+            </p>
+            {transaction.currency !== 'SEK' && transaction.amount_sek && (
+              <p className="text-sm text-muted-foreground">
+                {formatCurrency(transaction.amount_sek)}
               </p>
-              {transaction.currency !== 'SEK' && transaction.amount_sek && (
-                <p className="text-sm text-muted-foreground">
-                  {formatCurrency(transaction.amount_sek)}
-                </p>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </CardContent>
@@ -377,6 +371,7 @@ function SkattekontoHistoryRow({
   onBokfor?: (row: StoredSkattekontoTransaction) => void
   onMatch?: (row: StoredSkattekontoTransaction) => void
 }) {
+  const t = useTranslations('tx_history')
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
   const isBooked = !!row.journal_entry_id
@@ -404,70 +399,71 @@ function SkattekontoHistoryRow({
                 <span>·</span>
                 <Badge variant="outline" className="gap-1">
                   <Landmark className="h-3 w-3" />
-                  Skatteverket
+                  {t('skv_badge')}
                 </Badge>
                 {isBooked ? (
                   <>
                     <span>·</span>
-                    <Badge variant="outline" className="text-success border-success">
+                    <Badge variant="outline" className="border-success/40 text-success">
                       <Check className="h-3 w-3 mr-1" />
-                      Bokförd
+                      {t('posted')}
                     </Badge>
+                    {row.journal_entry_id && (
+                      <Link
+                        href={`/bookkeeping/${row.journal_entry_id}`}
+                        className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {t('view_voucher')}
+                      </Link>
+                    )}
                   </>
                 ) : row.match_suggestion ? (
                   <>
                     <span>·</span>
-                    <Badge variant="outline" className="border-warning text-warning">
-                      Möjlig dublett
-                    </Badge>
+                    <button
+                      type="button"
+                      className="group/post inline-flex items-center gap-1 rounded-md border border-warning/60 bg-background px-2.5 py-1 text-xs font-semibold text-warning-foreground hover:bg-warning/10 transition-colors"
+                      onClick={() => onMatch?.(row)}
+                    >
+                      {t('possible_duplicate')}
+                      <ChevronRight className="h-3 w-3 transition-transform group-hover/post:translate-x-0.5" />
+                    </button>
                   </>
                 ) : (
                   <>
                     <span>·</span>
-                    <Badge variant="outline">Ej bokförd</Badge>
+                    <button
+                      type="button"
+                      className="group/post inline-flex items-center gap-1 rounded-md border border-warning/60 bg-background px-2.5 py-1 text-xs font-semibold text-warning-foreground hover:bg-warning/10 transition-colors"
+                      onClick={() => onBokfor?.(row)}
+                    >
+                      {t('not_posted')}
+                      <ChevronRight className="h-3 w-3 transition-transform group-hover/post:translate-x-0.5" />
+                    </button>
+                    {onMatch && (
+                      <button
+                        type="button"
+                        onClick={() => onMatch(row)}
+                        className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {t('match')}
+                      </button>
+                    )}
                   </>
                 )}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            {!isBooked && onMatch && (
-              <Button
-                size="sm"
-                variant={row.match_suggestion ? 'default' : 'outline'}
-                className="h-10 text-xs"
-                onClick={() => onMatch(row)}
-              >
-                <Link2 className="mr-1 h-3 w-3" />
-                {row.match_suggestion ? 'Koppla' : 'Matcha'}
-              </Button>
-            )}
-            {!isBooked && !row.match_suggestion && onBokfor && (
-              <Button
-                size="sm"
-                variant="default"
-                className="h-10 text-xs"
-                onClick={() => onBokfor(row)}
-              >
-                Bokför
-              </Button>
-            )}
-            {isBooked && (
-              <Button asChild size="sm" variant="ghost" className="h-10 text-xs">
-                <Link href={`/bookkeeping/${row.journal_entry_id}`}>Visa verifikat</Link>
-              </Button>
-            )}
-            <div className="text-right">
-              <p
-                className={cn(
-                  'font-medium tabular-nums',
-                  isIncome && 'text-success',
-                )}
-              >
-                {isIncome ? '+' : ''}
-                {formatCurrency(amount)}
-              </p>
-            </div>
+          <div className="text-right tabular-nums shrink-0">
+            <p
+              className={cn(
+                'font-medium tabular-nums',
+                isIncome && 'text-success',
+              )}
+            >
+              {isIncome ? '+' : ''}
+              {formatCurrency(amount)}
+            </p>
           </div>
         </div>
       </CardContent>

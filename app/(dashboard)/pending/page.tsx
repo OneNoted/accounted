@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -24,18 +25,18 @@ import {
 } from 'lucide-react'
 import type { PendingOperation, PendingOperationStatus } from '@/types'
 
-const operationLabels: Record<string, { label: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
-  categorize_transaction: { label: 'Kategorisering', icon: ArrowLeftRight, variant: 'default' },
-  create_customer: { label: 'Ny kund', icon: Users, variant: 'secondary' },
-  create_invoice: { label: 'Ny faktura', icon: Receipt, variant: 'outline' },
-  create_transaction: { label: 'Ny transaktion', icon: ArrowLeftRight, variant: 'secondary' },
-  create_voucher: { label: 'Ny verifikation', icon: BookOpen, variant: 'outline' },
-  correct_entry: { label: 'Rättelse', icon: BookOpen, variant: 'outline' },
-  reverse_entry: { label: 'Makulering', icon: BookOpen, variant: 'outline' },
-  mark_invoice_paid: { label: 'Betald faktura', icon: Receipt, variant: 'default' },
-  send_invoice: { label: 'Skicka faktura', icon: Receipt, variant: 'outline' },
-  mark_invoice_sent: { label: 'Markera skickad', icon: Receipt, variant: 'outline' },
-  match_transaction_invoice: { label: 'Fakturamatchning', icon: ArrowLeftRight, variant: 'secondary' },
+const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
+  categorize_transaction: { labelKey: 'type_categorize_transaction', icon: ArrowLeftRight, variant: 'default' },
+  create_customer: { labelKey: 'type_create_customer', icon: Users, variant: 'secondary' },
+  create_invoice: { labelKey: 'type_create_invoice', icon: Receipt, variant: 'outline' },
+  create_transaction: { labelKey: 'type_create_transaction', icon: ArrowLeftRight, variant: 'secondary' },
+  create_voucher: { labelKey: 'type_create_voucher', icon: BookOpen, variant: 'outline' },
+  correct_entry: { labelKey: 'type_correct_entry', icon: BookOpen, variant: 'outline' },
+  reverse_entry: { labelKey: 'type_reverse_entry', icon: BookOpen, variant: 'outline' },
+  mark_invoice_paid: { labelKey: 'type_mark_invoice_paid', icon: Receipt, variant: 'default' },
+  send_invoice: { labelKey: 'type_send_invoice', icon: Receipt, variant: 'outline' },
+  mark_invoice_sent: { labelKey: 'type_mark_invoice_sent', icon: Receipt, variant: 'outline' },
+  match_transaction_invoice: { labelKey: 'type_match_transaction_invoice', icon: ArrowLeftRight, variant: 'secondary' },
 }
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
@@ -56,10 +57,11 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
     n === 1 ? 'En kategorisering tas bort.' : `${n} kategoriseringar tas bort.`,
 }
 
-function bulkActionLabel(operationType: string, count: number): string {
+function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
-  const fallback = operationLabels[operationType]?.label ?? operationType
+  const entry = OPERATION_LABEL_KEYS[operationType]
+  const fallback = entry ? t(entry.labelKey) : operationType
   return `${count} × ${fallback}`
 }
 
@@ -383,6 +385,7 @@ function OperationPreview({ op }: { op: PendingOperation }) {
 type SourceFilter = 'all' | 'agent' | 'high_risk'
 
 export default function PendingOperationsPage() {
+  const t = useTranslations('pending')
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
@@ -574,23 +577,23 @@ export default function PendingOperationsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Granskning"
-        description="Operationer som väntar på godkännande"
+        title={t('title')}
+        description={t('subtitle')}
       />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
         <TabsList>
-          <TabsTrigger value="pending">Väntande</TabsTrigger>
-          <TabsTrigger value="committed">Godkända</TabsTrigger>
-          <TabsTrigger value="rejected">Avvisade</TabsTrigger>
+          <TabsTrigger value="pending">{t('tab_pending')}</TabsTrigger>
+          <TabsTrigger value="committed">{t('tab_committed')}</TabsTrigger>
+          <TabsTrigger value="rejected">{t('tab_rejected')}</TabsTrigger>
         </TabsList>
       </Tabs>
 
       <Tabs value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>
         <TabsList>
-          <TabsTrigger value="all">Alla</TabsTrigger>
-          <TabsTrigger value="agent">Från agent</TabsTrigger>
-          <TabsTrigger value="high_risk">Hög risk</TabsTrigger>
+          <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
+          <TabsTrigger value="agent">{t('tab_agent')}</TabsTrigger>
+          <TabsTrigger value="high_risk">{t('tab_high_risk')}</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -601,20 +604,21 @@ export default function PendingOperationsPage() {
               id="select-all"
               checked={allSelected ? true : someSelected ? 'indeterminate' : false}
               onCheckedChange={() => toggleSelectAll()}
-              aria-label="Markera alla"
+              aria-label={t('select_all_aria')}
             />
             <label htmlFor="select-all" className="text-sm cursor-pointer">
               {selectedCount > 0
-                ? `${selectedCount} valda`
-                : `Markera alla (${bulkEligible.length})`}
+                ? t('selected_count', { count: selectedCount })
+                : t('select_all_count', { count: bulkEligible.length })}
             </label>
           </div>
 
           {typeCounts.length > 0 && selectedCount === 0 && (
             <div className="flex flex-wrap items-center gap-1">
-              <span className="text-xs text-muted-foreground">Snabbval:</span>
+              <span className="text-xs text-muted-foreground">{t('quick_pick')}</span>
               {typeCounts.map(([type, count]) => {
-                const config = operationLabels[type] || { label: type }
+                const entry = OPERATION_LABEL_KEYS[type]
+                const label = entry ? t(entry.labelKey) : type
                 return (
                   <Button
                     key={type}
@@ -623,7 +627,7 @@ export default function PendingOperationsPage() {
                     className="h-7 px-2 text-xs"
                     onClick={() => selectAllOfType(type)}
                   >
-                    {config.label} ({count})
+                    {label} ({count})
                   </Button>
                 )
               })}
@@ -638,7 +642,7 @@ export default function PendingOperationsPage() {
                 className="h-8 px-3 text-xs"
                 onClick={() => setSelectedIds(new Set())}
               >
-                Avmarkera
+                {t('deselect')}
               </Button>
             )}
             <Button
@@ -647,7 +651,7 @@ export default function PendingOperationsPage() {
               disabled={selectedCount === 0 || isBulkCommitting}
               onClick={() => setShowBulkDialog(true)}
             >
-              Godkänn valda ({selectedCount})
+              {t('approve_selected', { count: selectedCount })}
             </Button>
           </div>
         </div>
@@ -667,22 +671,25 @@ export default function PendingOperationsPage() {
             </div>
             <p className="font-medium">
               {activeTab === 'pending'
-                ? 'Inga väntande operationer'
+                ? t('empty_pending_title')
                 : activeTab === 'committed'
-                  ? 'Inga godkända operationer'
-                  : 'Inga avvisade operationer'}
+                  ? t('empty_committed_title')
+                  : t('empty_rejected_title')}
             </p>
             <p className="text-sm text-muted-foreground mt-1">
               {activeTab === 'pending'
-                ? 'När en operation kräver godkännande visas den här för granskning.'
-                : 'Operationer du har godkänt eller avvisat visas här.'}
+                ? t('empty_pending_description')
+                : t('empty_finished_description')}
             </p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-2">
           {filteredOperations.map((op) => {
-            const config = operationLabels[op.operation_type] || { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
+            const entry = OPERATION_LABEL_KEYS[op.operation_type]
+            const config = entry
+              ? { label: t(entry.labelKey), icon: entry.icon, variant: entry.variant }
+              : { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
             const isExpanded = expandedId === op.id
             const canBulkSelect = showBulkControls && op.status === 'pending' && op.risk_level !== 'high'
             const isSelected = selectedIds.has(op.id)
@@ -705,7 +712,7 @@ export default function PendingOperationsPage() {
                         <Checkbox
                           checked={isSelected}
                           onCheckedChange={() => toggleSelected(op.id)}
-                          aria-label="Välj operation"
+                          aria-label={t('select_operation_aria')}
                         />
                       </div>
                     )}
@@ -714,7 +721,7 @@ export default function PendingOperationsPage() {
                         <Badge variant={config.variant}>{config.label}</Badge>
                         {op.risk_level === 'high' && (
                           <Badge variant="outline" className="border-terracotta/40 text-terracotta">
-                            Hög risk
+                            {t('badge_high_risk')}
                           </Badge>
                         )}
                         {op.actor_type && op.actor_type !== 'user' && (
@@ -726,13 +733,13 @@ export default function PendingOperationsPage() {
                         {op.status === 'committed' && (
                           <Badge variant="success">
                             <CheckCircle2 className="h-3 w-3 mr-1" />
-                            Godkänd
+                            {t('badge_approved')}
                           </Badge>
                         )}
                         {op.status === 'rejected' && (
                           <Badge variant="destructive">
                             <XCircle className="h-3 w-3 mr-1" />
-                            Avvisad
+                            {t('badge_rejected')}
                           </Badge>
                         )}
                         <span className="text-xs text-muted-foreground">
@@ -753,7 +760,7 @@ export default function PendingOperationsPage() {
                             setShowCommitDialog(true)
                           }}
                         >
-                          Godkänn
+                          {t('approve')}
                         </Button>
                         <Button
                           size="sm"
@@ -764,7 +771,7 @@ export default function PendingOperationsPage() {
                             handleReject(op)
                           }}
                         >
-                          Avvisa
+                          {t('reject')}
                         </Button>
                       </div>
                     )}
@@ -789,9 +796,9 @@ export default function PendingOperationsPage() {
       <ConfirmationDialog
         open={showCommitDialog}
         onOpenChange={setShowCommitDialog}
-        title={selectedOp?.title || 'Godkänn operation'}
+        title={selectedOp?.title || t('approve_operation_title')}
         warningText={selectedOp ? singleActionWarning(selectedOp.operation_type) : ''}
-        confirmLabel="Godkänn"
+        confirmLabel={t('approve')}
         isSubmitting={isCommitting}
         onConfirm={handleCommit}
       >
@@ -802,24 +809,24 @@ export default function PendingOperationsPage() {
       <ConfirmationDialog
         open={showBulkDialog}
         onOpenChange={setShowBulkDialog}
-        title={`Godkänn ${selectedCount} operationer?`}
+        title={t('approve_bulk_title', { count: selectedCount })}
         warningText=""
-        confirmLabel={`Godkänn ${selectedCount}`}
+        confirmLabel={t('approve_count', { count: selectedCount })}
         isSubmitting={isBulkCommitting}
         onConfirm={() => handleBulkCommit(Array.from(selectedIds))}
       >
         <div className="space-y-3 text-sm">
-          <p>Genom att bekräfta utförs följande:</p>
+          <p>{t('bulk_confirm_intro')}</p>
           <ul className="space-y-1 rounded-md border bg-muted/30 px-3 py-2">
             {selectedBreakdown.map(({ type, count }) => (
               <li key={type} className="flex justify-between font-mono tabular-nums">
-                <span className="font-sans">{bulkActionLabel(type, count)}</span>
+                <span className="font-sans">{bulkActionLabel(type, count, t)}</span>
                 <span className="text-muted-foreground">{count}</span>
               </li>
             ))}
           </ul>
           <p className="text-xs text-muted-foreground">
-            Operationerna körs i ordning. Misslyckade hoppas över och rapporteras efteråt.
+            {t('bulk_confirm_footer')}
           </p>
         </div>
       </ConfirmationDialog>

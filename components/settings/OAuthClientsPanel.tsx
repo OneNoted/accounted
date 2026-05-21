@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ interface OAuthClient {
 }
 
 export function OAuthClientsPanel() {
+  const t = useTranslations('settings_oauth_clients')
   const { toast } = useToast()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
 
@@ -44,11 +46,11 @@ export function OAuthClientsPanel() {
         setClients(json.data.filter((c: OAuthClient) => !c.revoked_at))
       }
     } catch {
-      toast({ title: 'Kunde inte hämta OAuth-klienter', variant: 'destructive' })
+      toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   useEffect(() => {
     fetchClients()
@@ -61,14 +63,14 @@ export function OAuthClientsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          client_name: clientName.trim() || 'OAuth-klient',
+          client_name: clientName.trim() || t('default_client_name'),
           redirect_uri: redirectUri.trim(),
         }),
       })
       const json = await res.json()
 
       if (!res.ok) {
-        toast({ title: json.error ?? 'Kunde inte registrera redirect URI', variant: 'destructive' })
+        toast({ title: json.error ?? t('toast_register_failed'), variant: 'destructive' })
         return
       }
 
@@ -77,7 +79,7 @@ export function OAuthClientsPanel() {
       setRedirectUri('')
       fetchClients()
     } catch {
-      toast({ title: 'Kunde inte registrera redirect URI', variant: 'destructive' })
+      toast({ title: t('toast_register_failed'), variant: 'destructive' })
     } finally {
       setIsCreating(false)
     }
@@ -85,30 +87,26 @@ export function OAuthClientsPanel() {
 
   async function handleRevoke(id: string, name: string) {
     const ok = await confirmRevoke({
-      title: 'Återkalla OAuth-klient',
-      description: `"${name}" tas bort från allowlist. Pågående auth-flöden slutar fungera direkt; redan utfärdade API-nycklar fortsätter att gälla tills de återkallas separat.`,
-      confirmLabel: 'Återkalla',
+      title: t('revoke_dialog_title'),
+      description: t('revoke_dialog_description', { name }),
+      confirmLabel: t('revoke_confirm'),
     })
     if (!ok) return
 
     try {
       const res = await fetch(`/api/settings/oauth-clients/${id}`, { method: 'DELETE' })
       if (!res.ok) {
-        // Surface the server error rather than optimistically pretending the
-        // revocation succeeded — a silent fail leaves the row in the
-        // allowlist while the UI says it's gone, which is the opposite of
-        // what the user expected.
         const body = await res.json().catch(() => ({}))
         toast({
-          title: body?.error || 'Kunde inte återkalla klient',
+          title: body?.error || t('toast_revoke_failed'),
           variant: 'destructive',
         })
         return
       }
       setClients((prev) => prev.filter((c) => c.id !== id))
-      toast({ title: 'Klient återkallad' })
+      toast({ title: t('toast_revoked') })
     } catch {
-      toast({ title: 'Kunde inte återkalla klient', variant: 'destructive' })
+      toast({ title: t('toast_revoke_failed'), variant: 'destructive' })
     }
   }
 
@@ -126,15 +124,14 @@ export function OAuthClientsPanel() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>OAuth-klienter</CardTitle>
+              <CardTitle>{t('title')}</CardTitle>
               <CardDescription>
-                Registrera redirect-URI:er för egenutvecklade MCP-klienter. Claude.ai och localhost
-                är redan godkända som standard — registrera bara här om du bygger en egen app.
+                {t('description')}
               </CardDescription>
             </div>
             <Button size="sm" onClick={() => setShowCreateDialog(true)}>
               <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Registrera URI
+              {t('register_uri')}
             </Button>
           </div>
         </CardHeader>
@@ -146,9 +143,9 @@ export function OAuthClientsPanel() {
           ) : clients.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <Globe className="h-8 w-8 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">Inga egna OAuth-klienter registrerade.</p>
+              <p className="text-sm text-muted-foreground">{t('empty_title')}</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Bygger du en agent som ska ansluta via OAuth? Registrera dess callback-URI här.
+                {t('empty_help')}
               </p>
             </div>
           ) : (
@@ -165,7 +162,7 @@ export function OAuthClientsPanel() {
                         {c.redirect_uri}
                       </code>
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        Registrerad {formatDate(c.created_at)}
+                        {t('registered_on')} {formatDate(c.created_at)}
                       </span>
                     </div>
                   </div>
@@ -173,7 +170,7 @@ export function OAuthClientsPanel() {
                     variant="ghost"
                     size="sm"
                     onClick={() => handleRevoke(c.id, c.client_name)}
-                    aria-label={`Återkalla ${c.client_name}`}
+                    aria-label={t('revoke_aria', { name: c.client_name })}
                     className="text-destructive hover:text-destructive"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -188,29 +185,26 @@ export function OAuthClientsPanel() {
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Registrera redirect URI</DialogTitle>
+            <DialogTitle>{t('register_dialog_title')}</DialogTitle>
             <DialogDescription>
-              Bara för egenbyggda MCP-klienter med en publik HTTPS-callback. Lägg{' '}
-              <span className="font-medium">inte</span> till{' '}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">localhost</code>{' '}
-              eller{' '}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">claude.ai</code>{' '}
-              — de fungerar redan utan registrering. URI:n jämförs ord-för-ord mot
-              redirect_uri-parametern i OAuth-flödet.
+              {t.rich('register_dialog_description', {
+                bold: (chunks) => <span className="font-medium">{chunks}</span>,
+                code: (chunks) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{chunks}</code>,
+              })}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="client-name">Klientnamn</Label>
+              <Label htmlFor="client-name">{t('client_name_label')}</Label>
               <Input
                 id="client-name"
-                placeholder="t.ex. Min bokföringsagent"
+                placeholder={t('client_name_placeholder')}
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="redirect-uri">Redirect URI</Label>
+              <Label htmlFor="redirect-uri">{t('redirect_uri_label')}</Label>
               <Input
                 id="redirect-uri"
                 type="url"
@@ -223,11 +217,11 @@ export function OAuthClientsPanel() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-              Avbryt
+              {t('cancel')}
             </Button>
             <Button onClick={handleCreate} disabled={isCreating || !redirectUri.trim()}>
               {isCreating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Registrera
+              {t('register')}
             </Button>
           </DialogFooter>
         </DialogContent>

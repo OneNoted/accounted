@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { motion } from 'framer-motion'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -8,7 +9,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AlertCircle, ArrowUpRight, ArrowDownRight, FileText, Loader2, Trash2 } from 'lucide-react'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/info-tooltip'
-import { getAccountName, formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
@@ -57,6 +57,7 @@ export default function TransactionInboxCard({
   onToggleSelect,
   onAnimationComplete,
 }: TransactionInboxCardProps) {
+  const t = useTranslations('tx_inbox_card')
   const isProcessing = processingId === transaction.id
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
@@ -98,17 +99,13 @@ export default function TransactionInboxCard({
         )}
         onClick={showCheckbox ? () => onToggleSelect(transaction.id) : undefined}
       >
-        <CardContent className="py-4">
+        <CardContent className="py-3">
           {skvCounterpartDate && (
             <div className="mb-3 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-warning" />
               <p className="min-w-0">
-                <span className="font-medium">Möjlig 1930↔1630-överföring.</span>{' '}
-                Det finns en skattekonto-händelse den{' '}
-                <span className="tabular-nums">{skvCounterpartDate}</span> som
-                matchar — bokför detta verifikat först, koppla sedan
-                skattekonto-raden mot samma verifikat istället för att bokföra
-                två gånger.
+                <span className="font-medium">{t('skv_counterpart_label')}</span>{' '}
+                {t('skv_counterpart_body', { date: skvCounterpartDate })}
               </p>
             </div>
           )}
@@ -158,7 +155,7 @@ export default function TransactionInboxCard({
 
           {/* Inline action buttons - only shown when not in batch mode */}
           {!isBatchMode && (
-            <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t">
+            <div className="flex flex-wrap items-center gap-2 mt-2">
               {/* Primary action: invoice match or top suggestion */}
               {hasInvoiceMatch ? (
                 <Button
@@ -173,7 +170,7 @@ export default function TransactionInboxCard({
                   ) : (
                     <FileText className="mr-1.5 h-3 w-3 flex-shrink-0" />
                   )}
-                  Matcha Faktura {transaction.potential_invoice!.invoice_number}
+                  {t('match_invoice_btn', { number: transaction.potential_invoice!.invoice_number ?? '' })}
                 </Button>
               ) : hasSupplierInvoiceMatch ? (
                 <Button
@@ -188,7 +185,7 @@ export default function TransactionInboxCard({
                   ) : (
                     <FileText className="mr-1.5 h-3 w-3 flex-shrink-0" />
                   )}
-                  Matcha Leverantörsfaktura {transaction.potential_supplier_invoice!.supplier_invoice_number}
+                  {t('match_supplier_invoice_btn', { number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '' })}
                 </Button>
               ) : templateSuggestions && templateSuggestions.length > 0 ? (
                 <>
@@ -199,8 +196,8 @@ export default function TransactionInboxCard({
                       <Button
                         key={ts.template_id}
                         size="sm"
-                        variant={idx === 0 ? 'default' : 'outline'}
-                        className="h-auto py-1.5 text-xs"
+                        variant={idx === 0 ? 'secondary' : 'outline'}
+                        className="h-9 w-44 text-xs"
                         onClick={() => {
                           if (onOpenTemplateReview && (isCounterparty || tmpl)) {
                             onOpenTemplateReview(transaction, ts.template_id)
@@ -210,20 +207,10 @@ export default function TransactionInboxCard({
                         }}
                         disabled={isProcessing || isDisabled}
                       >
-                        <div className="flex flex-col items-start">
-                          <div className="flex items-center">
-                            {isProcessing && idx === 0 ? (
-                              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                            ) : null}
-                            {ts.name_sv}
-                          </div>
-                          <span className="opacity-70 font-normal text-[10px]">
-                            {isCounterparty
-                              ? `${ts.description_sv}`
-                              : getAccountName(tmpl?.debit_account || ts.debit_account)
-                            }
-                          </span>
-                        </div>
+                        {isProcessing && idx === 0 ? (
+                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin flex-shrink-0" />
+                        ) : null}
+                        <span className="truncate">{ts.name_sv}</span>
                       </Button>
                     )
                   })}
@@ -231,22 +218,17 @@ export default function TransactionInboxCard({
               ) : topSuggestion ? (
                 <Button
                   size="sm"
-                  variant="default"
-                  className="h-9 text-xs"
+                  variant="secondary"
+                  className="h-9 w-44 text-xs"
                   onClick={() => handleSuggestionClick(topSuggestion)}
                   disabled={isProcessing || isDisabled}
                 >
                   {isProcessing ? (
-                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin flex-shrink-0" />
                   ) : null}
-                  {topSuggestion.label}
-                  {topSuggestion.account && (
-                    <span className="ml-1 opacity-70 font-normal">
-                      ({formatAccountWithName(topSuggestion.account)})
-                    </span>
-                  )}
+                  <span className="truncate">{topSuggestion.label}</span>
                   {topSuggestion.confidence >= 0.8 && (
-                    <Badge variant="secondary" className="ml-1.5 text-[10px] px-1 py-0">
+                    <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 flex-shrink-0">
                       {Math.round(topSuggestion.confidence * 100)}%
                     </Badge>
                   )}
@@ -256,12 +238,12 @@ export default function TransactionInboxCard({
               {/* Open category dialog / template picker */}
               <Button
                 size="sm"
-                variant={!hasInvoiceMatch && !hasSupplierInvoiceMatch && !topSuggestion && (!templateSuggestions || templateSuggestions.length === 0) ? 'default' : 'outline'}
-                className="h-9 text-xs"
+                variant={!hasInvoiceMatch && !hasSupplierInvoiceMatch && !topSuggestion && (!templateSuggestions || templateSuggestions.length === 0) ? 'secondary' : 'outline'}
+                className="h-9 w-44 text-xs"
                 onClick={() => onOpenCategoryDialog(transaction)}
                 disabled={isProcessing || isDisabled}
               >
-                Välj mall...
+                {t('choose_template_btn')}
               </Button>
 
               {/* Delete button — available for all unbooked transactions */}
@@ -272,7 +254,7 @@ export default function TransactionInboxCard({
                   className="ml-auto text-muted-foreground hover:text-destructive"
                   onClick={() => onDelete(transaction.id)}
                   disabled={isProcessing || isDisabled}
-                  aria-label="Ta bort transaktion"
+                  aria-label={t('delete_aria')}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>

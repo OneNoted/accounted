@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -1729,6 +1730,7 @@ export default function ImportPage() {
   const [mode, setMode] = useState<ImportMode>(null)
   const [userId, setUserId] = useState('')
   const [isSandbox, setIsSandbox] = useState(false)
+  const t = useTranslations('import')
 
   // Fetch authenticated user ID and sandbox status
   useEffect(() => {
@@ -1769,9 +1771,9 @@ export default function ImportPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Importera</h1>
+        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
         <p className="text-muted-foreground">
-          Importera banktransaktioner eller bokföringsdata till ditt företag
+          {t('subtitle')}
         </p>
       </div>
 
@@ -1781,7 +1783,7 @@ export default function ImportPage() {
             <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
               <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <p className="text-sm text-muted-foreground">
-                Import är inte tillgängligt i sandlådemiljön. Skapa ett konto för att importera data.
+                {t('sandbox_disabled')}
               </p>
             </div>
           )}
@@ -1807,13 +1809,13 @@ export default function ImportPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2.5">
-                    <h3 className="text-[15px] font-semibold leading-tight">Koppla bank</h3>
+                    <h3 className="text-[15px] font-semibold leading-tight">{t('psd2_title')}</h3>
                     <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-full leading-none">
-                      Rekommenderat
+                      {t('psd2_recommended')}
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                    Anslut ditt bankkonto direkt och synka transaktioner automatiskt via PSD2.
+                    {t('psd2_description')}
                   </p>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
@@ -1840,9 +1842,9 @@ export default function ImportPage() {
                     <ArrowRightLeft className="h-[18px] w-[18px] text-foreground/60" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-[15px] font-semibold leading-tight">Hämta från annat system</h3>
+                    <h3 className="text-[15px] font-semibold leading-tight">{t('migration_title')}</h3>
                     <p className="text-sm mt-1.5 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
-                      Inget ändras i ditt befintliga system.
+                      {t('migration_description')}
                     </p>
                   </div>
                   <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
@@ -1882,9 +1884,9 @@ export default function ImportPage() {
                 <ArrowLeftRight className="h-[18px] w-[18px] text-foreground/60" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">Banktransaktioner</h3>
+                <h3 className="text-[15px] font-semibold leading-tight">{t('bankfile_title')}</h3>
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                  Importera kontoutdrag från din bank. Stöder de flesta svenska banker.
+                  {t('bankfile_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
                   {['CSV', 'OFX', 'SEB', 'Swedbank', 'Nordea'].map(fmt => (
@@ -1915,14 +1917,20 @@ export default function ImportPage() {
                 <FileSpreadsheet className="h-[18px] w-[18px] text-foreground/60" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">Importera CSV/Excel-data</h3>
+                <h3 className="text-[15px] font-semibold leading-tight">{t('csv_data_title')}</h3>
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                  Importera ingående balanser, kunder eller leverantörer.
+                  {t('csv_data_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
-                  {['XLSX', 'CSV', 'Ingående balanser', 'Kunder', 'Leverantörer'].map(fmt => (
-                    <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
-                      {fmt}
+                  {[
+                    { key: 'XLSX', label: 'XLSX' },
+                    { key: 'CSV', label: 'CSV' },
+                    { key: 'opening_balances', label: t('csv_chip_opening_balances') },
+                    { key: 'customers', label: t('csv_chip_customers') },
+                    { key: 'suppliers', label: t('csv_chip_suppliers') },
+                  ].map(chip => (
+                    <span key={chip.key} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
+                      {chip.label}
                     </span>
                   ))}
                 </div>
@@ -1948,9 +1956,9 @@ export default function ImportPage() {
                 <FileText className="h-[18px] w-[18px] text-foreground/60" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">Bokföringsdata (SIE)</h3>
+                <h3 className="text-[15px] font-semibold leading-tight">{t('sie_title')}</h3>
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
-                  Importera verifikationer och kontoplan från ett annat bokföringsprogram.
+                  {t('sie_description')}
                 </p>
                 <div className="flex flex-wrap gap-1.5 mt-2.5">
                   {['SIE4', '.se', '.si'].map(fmt => (
@@ -1969,7 +1977,7 @@ export default function ImportPage() {
       {mode !== null && (
         <Button variant="ghost" size="sm" onClick={() => setMode(null)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka till val
+          {t('back_to_choices')}
         </Button>
       )}
 
