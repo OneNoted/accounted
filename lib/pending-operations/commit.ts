@@ -1059,6 +1059,23 @@ async function commitAttachDocumentToTransaction(
   }
   if (!postUpdate) return { error: 'Transaction not found', status: 404 }
 
+  // If the attached doc came from an invoice_inbox_items row, mark that row
+  // as matched so the inbox UI shows "Kopplad till transaktion". Best-effort:
+  // a failure must not roll back the (compliant) attach. Mirrors the REST
+  // route in app/api/transactions/[id]/attach-document/route.ts so MCP-staged
+  // and REST attaches converge on the same inbox state.
+  try {
+    await supabase
+      .from('invoice_inbox_items')
+      .update({ matched_transaction_id: txId })
+      .eq('document_id', documentId)
+      .eq('company_id', companyId)
+      .is('matched_transaction_id', null)
+      .is('created_supplier_invoice_id', null)
+  } catch (linkErr) {
+    console.error('[commitAttach] Failed to link inbox item:', linkErr)
+  }
+
   const journalEntryId = postUpdate.journal_entry_id as string | null
   if (journalEntryId) {
     const { error: linkErr } = await supabase
