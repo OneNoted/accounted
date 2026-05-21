@@ -31,6 +31,10 @@ import {
 } from '@/lib/company/fiscal-year'
 import type { CompanySettings } from '@/types'
 import type { StoredAccount } from '../types'
+import {
+  BankSyncProgressDialog,
+  type SyncProgressState,
+} from './BankSyncProgressDialog'
 
 interface AccountPickerDialogProps {
   open: boolean
@@ -90,6 +94,9 @@ export function AccountPickerDialog({
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
   const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
   const [customDate, setCustomDate] = useState<string>('')
+
+  const [progressOpen, setProgressOpen] = useState(false)
+  const [progressState, setProgressState] = useState<SyncProgressState>({ kind: 'syncing' })
 
   useEffect(() => {
     if (open) {
@@ -236,6 +243,16 @@ export function AccountPickerDialog({
     }
 
     setIsSaving(true)
+
+    // For the initial-selection path, open the progress modal up-front so the
+    // user has visible feedback during the 30–60s backfill. Selection edits
+    // (no backfill) keep the existing toast-only feedback.
+    if (isInitialSelection) {
+      setProgressState({ kind: 'syncing' })
+      setProgressOpen(true)
+      onOpenChange(false)
+    }
+
     try {
       // Send a mapping entry per selected account. Account_mappings doesn't
       // include disabled accounts — their existing ledger_account stays untouched.
@@ -262,39 +279,32 @@ export function AccountPickerDialog({
       }
 
       if (isInitialSelection && data.initial_sync) {
-        const { imported, returned_min_date, returned_max_date } = data.initial_sync as {
-          imported: number
-          returned_min_date: string | null
-          returned_max_date: string | null
-        }
-        const range = returned_min_date && returned_max_date
-          ? ` från ${returned_min_date} till ${returned_max_date}`
-          : ''
-        toast({
-          title: 'Konton sparade',
-          description: `Importerade ${imported} transaktioner${range}.`,
-        })
+        setProgressState({ kind: 'done', summary: data.initial_sync })
       } else if (isInitialSelection && data.initial_sync_error) {
-        toast({
-          title: 'Konton sparade — bakgrundssync misslyckades',
-          description: 'Vi försöker igen vid nästa körning. Bankanslutningen är aktiv.',
-          variant: 'destructive',
+        setProgressState({
+          kind: 'failed',
+          error: { message: 'Vi sparade kontovalet men kunde inte hämta transaktioner just nu. Vi försöker igen vid nästa körning.' },
         })
       } else {
         toast({
           title: 'Kontoval sparat',
           description: `${data.enabled_count} av ${data.total_count} konton kommer synkas.`,
         })
+        onOpenChange(false)
       }
 
-      onOpenChange(false)
       onSaved()
     } catch (error) {
-      toast({
-        title: 'Fel',
-        description: error instanceof Error ? error.message : 'Kunde inte spara kontoval',
-        variant: 'destructive',
-      })
+      const message = error instanceof Error ? error.message : 'Kunde inte spara kontoval'
+      if (isInitialSelection) {
+        setProgressState({ kind: 'failed', error: { message } })
+      } else {
+        toast({
+          title: 'Fel',
+          description: message,
+          variant: 'destructive',
+        })
+      }
     } finally {
       setIsSaving(false)
     }
@@ -336,6 +346,20 @@ export function AccountPickerDialog({
   const showLongRangeHelper = lookback.days > 90
 
   return (
+    <>
+    <BankSyncProgressDialog
+      open={progressOpen}
+      onOpenChange={(next) => {
+        setProgressOpen(next)
+        // When the user closes the summary, propagate the saved/refresh
+        // signal to the parent (it would have been emitted on success earlier;
+        // this just guards the failure case where we still want a refresh).
+        if (!next) onSaved()
+      }}
+      bankName={bankName}
+      accounts={accounts.filter((a) => selected.has(a.uid))}
+      state={progressState}
+    />
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
@@ -607,5 +631,6 @@ export function AccountPickerDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    </>
   )
 }
