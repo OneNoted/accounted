@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowDown } from 'lucide-react'
+import { ArrowDown, AlertTriangle } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { DocumentViewButton } from './DocumentViewButton'
 
@@ -65,10 +65,23 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
         kopplas till transaktionen
       </div>
 
-      {willOverwrite && (
+      {willOverwrite && existingIsAccounting && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">Ersätter räkenskapsinformation</p>
+            <p className="mt-1 text-xs">
+              Befintligt dokument{existingDocName ? ` (${existingDocName})` : ''} är markerat som
+              räkenskapsinformation enligt BFL 7 kap. Att ersätta det här gör det tidigare
+              verifikationsunderlaget otillgängligt — bekräfta att du har originalet sparat innan
+              du godkänner.
+            </p>
+          </div>
+        </div>
+      )}
+      {willOverwrite && !existingIsAccounting && (
         <div className="rounded-md border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
-          Ersätter befintligt dokument{existingDocName ? `: ${existingDocName}` : ''}
-          {existingIsAccounting ? ' (markerat som räkenskapsinformation)' : ''}.
+          Ersätter befintligt dokument{existingDocName ? `: ${existingDocName}` : ''}.
         </div>
       )}
     </div>

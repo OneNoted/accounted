@@ -3432,7 +3432,7 @@ export const tools: McpTool[] = [
       // Validate both exist and are matchable
       const { data: transaction, error: txError } = await supabase
         .from('transactions')
-        .select('id, description, merchant_name, amount, currency, invoice_id')
+        .select('id, description, merchant_name, amount, currency, date, invoice_id')
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
@@ -3462,9 +3462,14 @@ export const tools: McpTool[] = [
           transaction_description: txDesc,
           transaction_amount: transaction.amount,
           transaction_currency: transaction.currency,
+          // Surface both dates so the reviewer can spot a material mismatch
+          // before approving. Verifikationsdatum must align with affärshändelse
+          // date per BFL 5 kap 6§.
+          transaction_date: transaction.date,
           invoice_number: invoice.invoice_number,
           invoice_total: invoice.total,
           invoice_currency: invoice.currency,
+          invoice_date: invoice.invoice_date,
           customer_name: (invoice.customer as Record<string, unknown>)?.name as string,
         },
         actor

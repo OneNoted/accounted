@@ -1,7 +1,7 @@
 'use client'
 
 import { ArrowDown } from 'lucide-react'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 
 interface MatchTransactionInvoicePreviewProps {
   data: Record<string, unknown>
@@ -15,16 +15,27 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
   const txDescription = (data.transaction_description as string) || '—'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
+  const txDate = data.transaction_date as string | undefined
 
   const invoiceNumber = (data.invoice_number as string) || '—'
   const invoiceTotal = data.invoice_total as number | undefined
   const invoiceCurrency = (data.invoice_currency as string) || txCurrency
+  const invoiceDate = data.invoice_date as string | undefined
   const customerName = data.customer_name as string | undefined
+
+  // BFL 5 kap 6§ requires the verifikation date to align with the
+  // affärshändelse date. Surface a quiet hint when the two dates differ by
+  // more than 31 days so the reviewer doesn't approve a stale match.
+  const showDateDriftHint =
+    txDate &&
+    invoiceDate &&
+    Math.abs(new Date(txDate).getTime() - new Date(invoiceDate).getTime()) > 31 * 24 * 60 * 60 * 1000
 
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <PreviewCard label="Transaktion">
+          {txDate && <Row label="Datum" value={formatDate(txDate)} tabular />}
           <Row label="Beskrivning" value={txDescription} />
           <Row
             label="Belopp"
@@ -35,6 +46,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
         <PreviewCard label="Faktura">
           <Row label="Nummer" value={invoiceNumber} tabular />
+          {invoiceDate && <Row label="Fakturadatum" value={formatDate(invoiceDate)} tabular />}
           {customerName && <Row label="Kund" value={customerName} />}
           {typeof invoiceTotal === 'number' && (
             <Row label="Totalt" value={formatCurrency(invoiceTotal, invoiceCurrency)} tabular />
@@ -46,6 +58,13 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
         <ArrowDown className="h-3.5 w-3.5 mr-1" />
         matchas mot fakturan
       </div>
+
+      {showDateDriftHint && (
+        <p className="text-xs text-muted-foreground">
+          Transaktionsdatum och fakturadatum skiljer sig med mer än 31 dagar — kontrollera att
+          matchningen avser rätt affärshändelse (BFL 5 kap 6§).
+        </p>
+      )}
     </div>
   )
 }
