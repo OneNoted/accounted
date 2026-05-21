@@ -609,6 +609,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <Text style={styles.paymentValue}>{company.plusgiro}</Text>
               </View>
             )}
+            {company.swish && (company.invoice_show_swish ?? true) && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>Swish:</Text>
+                <Text style={styles.paymentValue}>{company.swish}</Text>
+              </View>
+            )}
             {company.iban && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>IBAN:</Text>

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import { validateBankgiroNumber, formatBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { CompanySettings } from '@/types'
 
@@ -18,6 +19,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
   const [bankgiroError, setBankgiroError] = useState<string | null>(null)
   const [clearingError, setClearingError] = useState<string | null>(null)
   const [accountNumberError, setAccountNumberError] = useState<string | null>(null)
+  const [swishError, setSwishError] = useState<string | null>(null)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
 
   return (
@@ -79,25 +81,48 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
         </div>
       </div>
 
-      <div className="max-w-xs space-y-2">
-        <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
-        <Input
-          id="bankgiro"
-          name="bankgiro"
-          placeholder="XXX-XXXX"
-          defaultValue={settings.bankgiro || ''}
-          onBlur={(e) => {
-            const val = e.target.value.trim()
-            if (!val) { setBankgiroError(null); return }
-            if (validateBankgiroNumber(val)) {
-              e.target.value = formatBankgiroNumber(val)
-              setBankgiroError(null)
-            } else {
-              setBankgiroError(t('bankgiro_error'))
-            }
-          }}
-        />
-        {bankgiroError && <p className="text-xs text-destructive">{bankgiroError}</p>}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
+          <Input
+            id="bankgiro"
+            name="bankgiro"
+            placeholder="XXX-XXXX"
+            defaultValue={settings.bankgiro || ''}
+            onBlur={(e) => {
+              const val = e.target.value.trim()
+              if (!val) { setBankgiroError(null); return }
+              if (validateBankgiroNumber(val)) {
+                e.target.value = formatBankgiroNumber(val)
+                setBankgiroError(null)
+              } else {
+                setBankgiroError(t('bankgiro_error'))
+              }
+            }}
+          />
+          {bankgiroError && <p className="text-xs text-destructive">{bankgiroError}</p>}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="swish">{t('swish_label')}</Label>
+          <Input
+            id="swish"
+            name="swish"
+            placeholder={t('swish_placeholder')}
+            defaultValue={settings.swish || ''}
+            onBlur={(e) => {
+              const val = normaliseSwish(e.target.value)
+              if (!val) { setSwishError(null); e.target.value = ''; return }
+              if (isValidSwish(val)) {
+                e.target.value = val
+                setSwishError(null)
+              } else {
+                setSwishError(t('swish_error'))
+              }
+            }}
+          />
+          {swishError && <p className="text-xs text-destructive">{swishError}</p>}
+        </div>
       </div>
     </section>
   )
@@ -109,6 +134,7 @@ export function validateBankFields(formData: FormData): { field: string; message
   const clearing = (formData.get('clearing_number') as string || '').trim()
   const account = (formData.get('account_number') as string || '').trim()
   const bankgiro = (formData.get('bankgiro') as string || '').trim()
+  const swish = normaliseSwish(formData.get('swish') as string)
 
   if (clearing && !/^\d{4,5}$/.test(clearing)) {
     errors.push({ field: 'clearing_number', message: 'Clearingnummer måste vara 4-5 siffror' })
@@ -118,6 +144,9 @@ export function validateBankFields(formData: FormData): { field: string; message
   }
   if (bankgiro && !validateBankgiroNumber(bankgiro)) {
     errors.push({ field: 'bankgiro', message: 'Ogiltigt bankgironummer' })
+  }
+  if (swish && !isValidSwish(swish)) {
+    errors.push({ field: 'swish', message: 'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)' })
   }
   return errors
 }

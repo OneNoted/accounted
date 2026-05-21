@@ -13,6 +13,7 @@ import { Loader2, ShieldCheck, ShieldOff, KeyRound } from 'lucide-react'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
+import { userHasPassword } from '@/lib/auth/has-password'
 
 const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
 const mfaRequired = isMfaRequired()
@@ -27,19 +28,24 @@ export function SecuritySettings() {
   const [isLoadingMfa, setIsLoadingMfa] = useState(true)
   const [isUnenrolling, setIsUnenrolling] = useState(false)
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null)
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
 
   useEffect(() => {
-    async function loadMfaStatus() {
-      const { data } = await supabase.auth.mfa.listFactors()
-      const verifiedFactor = data?.totp?.find(f => f.status === 'verified')
+    async function loadStatus() {
+      const [{ data: factors }, { data: userData }] = await Promise.all([
+        supabase.auth.mfa.listFactors(),
+        supabase.auth.getUser(),
+      ])
+      const verifiedFactor = factors?.totp?.find(f => f.status === 'verified')
       setHasMfa(!!verifiedFactor)
       setMfaFactorId(verifiedFactor?.id ?? null)
+      setHasPassword(userData?.user ? userHasPassword(userData.user) : null)
       setIsLoadingMfa(false)
     }
-    loadMfaStatus()
+    loadStatus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -74,12 +80,17 @@ export function SecuritySettings() {
     }
 
     try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      const res = await fetch('/api/account/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPassword }),
+      })
 
-      if (error) {
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
         toast({
           title: t('toast_update_failed_title'),
-          description: error.message,
+          description: body.error || t('toast_update_failed_description'),
           variant: 'destructive',
         })
         return
@@ -91,6 +102,7 @@ export function SecuritySettings() {
       })
       setNewPassword('')
       setConfirmPassword('')
+      setHasPassword(true)
     } catch {
       toast({
         title: t('toast_generic_error_title'),
@@ -138,7 +150,36 @@ export function SecuritySettings() {
   return (
     <div className="space-y-6">
       {bankIdEnabled && <BankIdSettings />}
-      {/* Change password */}
+
+      {/* BankID-only users with no password — banner above everything else */}
+      {hasPassword === false && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <KeyRound className="h-4 w-4" />
+              Sätt ett lösenord
+            </CardTitle>
+            <CardDescription>
+              Du loggade in med BankID och har inget lösenord ännu. Sätt ett
+              lösenord för att kunna aktivera 2FA eller logga in när BankID
+              inte är tillgängligt.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={() =>
+                router.push('/account/set-password?returnTo=/settings/account')
+              }
+            >
+              Sätt lösenord
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Change password — hidden when the user has no password (the banner
+          above handles the set-initial-password flow). */}
+      {hasPassword !== false && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -192,6 +233,7 @@ export function SecuritySettings() {
           </form>
         </CardContent>
       </Card>
+      )}
 
       {/* MFA — hidden for self-hosted */}
       {!isSelfHosted && (
@@ -258,12 +300,24 @@ export function SecuritySettings() {
                     </p>
                   </div>
                 </div>
-                <Button
-                  onClick={() => router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)}
-                >
-                  <ShieldCheck className="mr-2 h-4 w-4" />
-                  {t('enable_mfa')}
-                </Button>
+                {hasPassword === false ? (
+                  <Button
+                    onClick={() =>
+                      router.push(
+                        '/account/set-password?returnTo=/mfa/enroll',
+                      )
+                    }
+                  >
+                    {t('set_password_first')}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)}
+                  >
+                    <ShieldCheck className="mr-2 h-4 w-4" />
+                    {t('enable_mfa')}
+                  </Button>
+                )}
               </div>
             )}
           </CardContent>

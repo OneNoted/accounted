@@ -220,6 +220,7 @@ export interface CompanySettings {
   account_number: string | null
   bankgiro: string | null
   plusgiro: string | null
+  swish: string | null
   iban: string | null
   bic: string | null
 
@@ -245,11 +246,15 @@ export interface CompanySettings {
   invoice_show_ocr: boolean
   invoice_show_bankgiro: boolean
   invoice_show_plusgiro: boolean
+  invoice_show_swish: boolean
   invoice_show_logo: boolean
   invoice_show_company_name: boolean
   invoice_company_name_position: 'header' | 'footer'
   invoice_late_fee_text: string | null
   invoice_credit_terms_text: string | null
+
+  // Automation
+  send_invoice_reminders: boolean
 
   // Logo
   logo_url: string | null

@@ -1035,7 +1035,10 @@
     "account_number_label": "Kontonummer",
     "account_number_error": "Måste vara 6-12 siffror",
     "bankgiro_label": "Bankgiro",
-    "bankgiro_error": "Ogiltigt bankgironummer"
+    "bankgiro_error": "Ogiltigt bankgironummer",
+    "swish_label": "Swish",
+    "swish_placeholder": "123 XXX XX XX eller 07X XXX XX XX",
+    "swish_error": "Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)"
   },
   "settings_invoice_form": {
     "heading": "Fakturainställningar",
@@ -1058,6 +1061,8 @@
     "show_bankgiro_help": "Visa bankgironummer på fakturautskrift",
     "show_plusgiro_label": "Visa plusgiro",
     "show_plusgiro_help": "Visa plusgironummer på fakturautskrift",
+    "show_swish_label": "Visa Swish",
+    "show_swish_help": "Visa Swish-nummer på fakturautskrift",
     "show_logo_label": "Visa logga",
     "show_logo_help": "Visa uppladdad logga i fakturahuvudet",
     "show_company_name_label": "Visa företagsnamn i faktura",
@@ -1417,6 +1422,8 @@
     "toast_mismatch_title": "Lösenorden matchar inte",
     "toast_mismatch_description": "Kontrollera att du skrev samma lösenord i båda fälten.",
     "toast_update_failed_title": "Kunde inte uppdatera lösenord",
+    "toast_update_failed_description": "Försök igen senare.",
+    "set_password_first": "Sätt ett lösenord först",
     "toast_password_updated_title": "Lösenord uppdaterat",
     "toast_password_updated_description": "Ditt lösenord har ändrats.",
     "toast_generic_error_title": "Något gick fel",
@@ -2207,6 +2214,7 @@
   "supplier_invoice_editor": {
     "page_title": "Registrera leverantörsfaktura",
     "back_aria": "Tillbaka till leverantörsfakturor",
+    "back_aria_inbox": "Tillbaka till inkorgen",
     "loading_inbox": "Laddar uppgifter från inkorgen…",
     "inbox_load_failed_title": "Kunde inte ladda inkorgsposten",
     "inbox_load_failed_description": "Posten finns inte längre eller är otillgänglig.",

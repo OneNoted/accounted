@@ -91,11 +91,11 @@ describe('processOverdueReminders — credit-note filter', () => {
     expect(isCall?.args[1]).toBeNull()
   })
 
-  it('combines the credit-note filter with status=sent and due_date cutoff', async () => {
+  it('combines the credit-note filter with status allowlist and due_date cutoff', async () => {
     await processOverdueReminders()
 
-    const eqStatus = chainCalls.find(
-      (c) => c.method === 'eq' && c.args[0] === 'status',
+    const inStatus = chainCalls.find(
+      (c) => c.method === 'in' && c.args[0] === 'status',
     )
     const isCreditedNull = chainCalls.find(
       (c) => c.method === 'is' && c.args[0] === 'credited_invoice_id',
@@ -104,8 +104,36 @@ describe('processOverdueReminders — credit-note filter', () => {
       (c) => c.method === 'lte' && c.args[0] === 'due_date',
     )
 
-    expect(eqStatus?.args[1]).toBe('sent')
+    expect(inStatus?.args[1]).toEqual(['sent', 'overdue'])
     expect(isCreditedNull?.args[1]).toBeNull()
     expect(lteDueDate).toBeDefined()
+  })
+
+  it('uses a positive allowlist (sent + overdue) so paid / partially_paid / cancelled / credited can never match', async () => {
+    await processOverdueReminders()
+
+    const inStatus = chainCalls.find(
+      (c) => c.method === 'in' && c.args[0] === 'status',
+    )
+    expect(inStatus?.args[1]).toEqual(['sent', 'overdue'])
+
+    // Defense in depth: ensure no .eq('status', terminal) somehow snuck in.
+    const eqTerminal = chainCalls.find(
+      (c) =>
+        c.method === 'eq' &&
+        c.args[0] === 'status' &&
+        ['paid', 'partially_paid', 'cancelled', 'credited'].includes(
+          c.args[1] as string,
+        ),
+    )
+    expect(eqTerminal).toBeUndefined()
+  })
+
+  it('includes overdue in the allowlist so level-2 and level-3 reminders re-fire after the first reminder flips status', async () => {
+    await processOverdueReminders()
+    const inStatus = chainCalls.find(
+      (c) => c.method === 'in' && c.args[0] === 'status',
+    )
+    expect(inStatus?.args[1]).toContain('overdue')
   })
 })

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 
 // ============================================================
 // Shared primitives
@@ -481,6 +482,16 @@ export const UpdateSettingsSchema = z.object({
   account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),
   bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer (7-8 siffror)').nullable().optional().or(z.literal('')),
   plusgiro: z.string().regex(/^\d{1,7}-\d{1}$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
+  swish: z.string()
+    .transform(normaliseSwish)
+    .pipe(
+      z.string().refine(
+        isValidSwish,
+        'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)',
+      ),
+    )
+    .nullable()
+    .optional(),
   iban: z.string().optional(),
   bic: z.string().optional(),
   accounting_method: AccountingMethodSchema.optional(),
@@ -503,11 +514,14 @@ export const UpdateSettingsSchema = z.object({
   invoice_show_ocr: z.boolean().optional(),
   invoice_show_bankgiro: z.boolean().optional(),
   invoice_show_plusgiro: z.boolean().optional(),
+  invoice_show_swish: z.boolean().optional(),
   invoice_show_logo: z.boolean().optional(),
   invoice_show_company_name: z.boolean().optional(),
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
+  // Automation
+  send_invoice_reminders: z.boolean().optional(),
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
   // Salary payment file

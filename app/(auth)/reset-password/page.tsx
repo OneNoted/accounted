@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,7 +16,6 @@ export default function ResetPasswordPage() {
   const [isLoading, setIsLoading] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
-  const supabase = createClient()
 
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -50,12 +48,22 @@ export default function ResetPasswordPage() {
     }
 
     try {
-      const { error } = await supabase.auth.updateUser({ password })
+      // Routed through the API so the has_password flag flips in lock-step
+      // with the password update. This is the unlock path for BankID-only
+      // users who enrolled MFA and got locked out — the recovery session
+      // bypasses AAL2, the API flips has_password, and the lockout banner
+      // disappears the next time they log in.
+      const res = await fetch('/api/account/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
 
-      if (error) {
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
         toast({
           title: t('save_failed_title'),
-          description: error.message,
+          description: body.error || t('save_failed_description'),
           variant: 'destructive',
         })
         return

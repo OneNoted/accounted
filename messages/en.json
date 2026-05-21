@@ -1035,7 +1035,10 @@
     "account_number_label": "Account number",
     "account_number_error": "Must be 6-12 digits",
     "bankgiro_label": "Bankgiro",
-    "bankgiro_error": "Invalid bankgiro number"
+    "bankgiro_error": "Invalid bankgiro number",
+    "swish_label": "Swish",
+    "swish_placeholder": "123 XXX XX XX or 07X XXX XX XX",
+    "swish_error": "Invalid Swish number (business number 123XXXXXXX or mobile number 07XXXXXXXX)"
   },
   "settings_invoice_form": {
     "heading": "Invoice settings",
@@ -1058,6 +1061,8 @@
     "show_bankgiro_help": "Show bankgiro number on invoice printout",
     "show_plusgiro_label": "Show plusgiro",
     "show_plusgiro_help": "Show plusgiro number on invoice printout",
+    "show_swish_label": "Show Swish",
+    "show_swish_help": "Show Swish number on invoice printout",
     "show_logo_label": "Show logo",
     "show_logo_help": "Show uploaded logo in the invoice header",
     "show_company_name_label": "Show company name on invoice",
@@ -1417,6 +1422,8 @@
     "toast_mismatch_title": "Passwords do not match",
     "toast_mismatch_description": "Check that you typed the same password in both fields.",
     "toast_update_failed_title": "Could not update password",
+    "toast_update_failed_description": "Please try again later.",
+    "set_password_first": "Set a password first",
     "toast_password_updated_title": "Password updated",
     "toast_password_updated_description": "Your password has been changed.",
     "toast_generic_error_title": "Something went wrong",
@@ -2207,6 +2214,7 @@
   "supplier_invoice_editor": {
     "page_title": "Register supplier invoice",
     "back_aria": "Back to supplier invoices",
+    "back_aria_inbox": "Back to the inbox",
     "loading_inbox": "Loading data from inbox…",
     "inbox_load_failed_title": "Could not load inbox item",
     "inbox_load_failed_description": "The item no longer exists or is unavailable.",
