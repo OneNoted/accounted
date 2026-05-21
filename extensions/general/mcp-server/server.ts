@@ -3407,7 +3407,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_transaction_to_invoice',
-    description: 'Match a bank transaction (income, amount>0) to a customer invoice. Stages for approval. Supports partial payments and auto-storno of prior categorization.',
+    description: 'Match a bank transaction (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number/customer match before staging — preview mirrors what you pass. Supports partial payments and auto-storno of prior categorization.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4369,7 +4369,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_attach_document_to_transaction',
-    description: 'Stage attaching a document to a bank transaction. The document is pinned to the tx; when the tx is later categorized the link propagates to the journal entry. Stages for approval.',
+    description: 'Stage attaching a document to a bank transaction. Verify tx (date, amount, counterparty) and document (filename, vendor, amount) match first — the preview shown to the human reviewer mirrors what you pass here. Stages for approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
