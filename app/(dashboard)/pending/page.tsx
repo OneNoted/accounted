@@ -2,25 +2,40 @@
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { PageHeader } from '@/components/ui/page-header'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  DataList,
+  DataListHeader,
+  DataListRow,
+  DataListPrimary,
+  DataListMeta,
+  DataListMetaSeparator,
+  DataListEmpty,
+  DataListLoading,
+} from '@/components/ui/data-list'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuLabel,
+} from '@/components/ui/dropdown-menu'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import {
   ClipboardCheck,
-  Loader2,
   ArrowLeftRight,
   Users,
   Receipt,
-  CheckCircle2,
-  XCircle,
   Bot,
   BookOpen,
+  ChevronDown,
 } from 'lucide-react'
 import type { PendingOperation, PendingOperationStatus } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -388,11 +403,25 @@ function OperationPreview({ op }: { op: PendingOperation }) {
 
 type SourceFilter = 'all' | 'agent' | 'high_risk'
 
+const sourceFilterLabels: Record<SourceFilter, string> = {
+  all: 'Alla',
+  agent: 'Från agent',
+  high_risk: 'Hög risk',
+}
+
+type TabStatus = Extract<PendingOperationStatus, 'pending' | 'committed' | 'rejected'>
+type StatusCounts = Record<TabStatus, number | null>
+
 export default function PendingOperationsPage() {
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  const [counts, setCounts] = useState<StatusCounts>({
+    pending: null,
+    committed: null,
+    rejected: null,
+  })
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
@@ -409,15 +438,38 @@ export default function PendingOperationsPage() {
       const res = await fetch(`/api/pending-operations?status=${activeTab}`)
       const json = await res.json()
       setOperations(json.data ?? [])
+      setCounts((prev) => ({ ...prev, [activeTab]: json.count ?? json.data?.length ?? 0 }))
     } catch {
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
     }
     setIsLoading(false)
   }, [activeTab, toast])
 
+  const fetchAllCounts = useCallback(async () => {
+    const statuses: TabStatus[] = ['pending', 'committed', 'rejected']
+    try {
+      const results = await Promise.all(
+        statuses.map((s) =>
+          fetch(`/api/pending-operations?status=${s}&limit=1`).then((r) => r.json())
+        )
+      )
+      setCounts({
+        pending: results[0]?.count ?? 0,
+        committed: results[1]?.count ?? 0,
+        rejected: results[2]?.count ?? 0,
+      })
+    } catch {
+      // Counts are best-effort; the active tab's count will still update via fetchOperations
+    }
+  }, [])
+
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
+
+  useEffect(() => {
+    fetchAllCounts()
+  }, [fetchAllCounts])
 
   // Clear selection when filters/tab change
   useEffect(() => {
@@ -435,6 +487,7 @@ export default function PendingOperationsPage() {
       setShowCommitDialog(false)
       setSelectedOp(null)
       fetchOperations()
+      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -480,6 +533,7 @@ export default function PendingOperationsPage() {
       setShowBulkDialog(false)
       setSelectedIds(new Set())
       fetchOperations()
+      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -504,6 +558,7 @@ export default function PendingOperationsPage() {
       if (!res.ok) throw new Error('Misslyckades')
       toast({ title: 'Avvisad', description: op.title })
       fetchOperations()
+      fetchAllCounts()
     } catch {
       toast({ title: 'Kunde inte avvisa', variant: 'destructive' })
     }
@@ -577,6 +632,13 @@ export default function PendingOperationsPage() {
     return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
   }, [bulkEligible, selectedIds])
 
+  const tabLabel = (label: string, status: TabStatus) => {
+    const count = counts[status]
+    return count == null ? label : `${label} (${count})`
+  }
+
+  const showFilterDot = sourceFilter !== 'all'
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -584,212 +646,204 @@ export default function PendingOperationsPage() {
         description="Operationer som väntar på godkännande"
       />
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
-        <TabsList>
-          <TabsTrigger value="pending">Väntande</TabsTrigger>
-          <TabsTrigger value="committed">Godkända</TabsTrigger>
-          <TabsTrigger value="rejected">Avvisade</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
+          <TabsList>
+            <TabsTrigger value="pending">{tabLabel('Väntande', 'pending')}</TabsTrigger>
+            <TabsTrigger value="committed">{tabLabel('Godkända', 'committed')}</TabsTrigger>
+            <TabsTrigger value="rejected">{tabLabel('Avvisade', 'rejected')}</TabsTrigger>
+          </TabsList>
+        </Tabs>
 
-      <Tabs value={sourceFilter} onValueChange={(v) => setSourceFilter(v as SourceFilter)}>
-        <TabsList>
-          <TabsTrigger value="all">Alla</TabsTrigger>
-          <TabsTrigger value="agent">Från agent</TabsTrigger>
-          <TabsTrigger value="high_risk">Hög risk</TabsTrigger>
-        </TabsList>
-      </Tabs>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-9 gap-2">
+              <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                Filter
+              </span>
+              <span>{sourceFilterLabels[sourceFilter]}</span>
+              {showFilterDot && (
+                <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
+              )}
+              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[12rem]">
+            <DropdownMenuLabel>Källa</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={sourceFilter}
+              onValueChange={(v) => setSourceFilter(v as SourceFilter)}
+            >
+              <DropdownMenuRadioItem value="all">Alla</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="agent">Från agent</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="high_risk">Hög risk</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
-      {showBulkControls && bulkEligible.length > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-3 py-3">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="select-all"
-              checked={allSelected ? true : someSelected ? 'indeterminate' : false}
-              onCheckedChange={() => toggleSelectAll()}
-              aria-label="Markera alla"
-            />
-            <label htmlFor="select-all" className="text-sm cursor-pointer">
-              {selectedCount > 0
-                ? `${selectedCount} valda`
-                : `Markera alla (${bulkEligible.length})`}
-            </label>
-          </div>
-
-          {typeCounts.length > 0 && selectedCount === 0 && (
-            <div className="flex flex-wrap items-center gap-1">
-              <span className="text-xs text-muted-foreground">Snabbval:</span>
-              {typeCounts.map(([type, count]) => {
-                const config = operationLabels[type] || { label: type }
-                return (
-                  <Button
-                    key={type}
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-xs"
-                    onClick={() => selectAllOfType(type)}
-                  >
-                    {config.label} ({count})
-                  </Button>
-                )
-              })}
+      <DataList>
+        {showBulkControls && bulkEligible.length > 0 && (
+          <DataListHeader>
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="select-all"
+                checked={allSelected ? true : someSelected ? 'indeterminate' : false}
+                onCheckedChange={() => toggleSelectAll()}
+                aria-label="Markera alla"
+              />
+              <label htmlFor="select-all" className="text-sm cursor-pointer">
+                {selectedCount > 0
+                  ? `${selectedCount} valda`
+                  : `Markera alla (${bulkEligible.length})`}
+              </label>
             </div>
-          )}
 
-          <div className="ml-auto flex items-center gap-2">
-            {selectedCount > 0 && (
+            {typeCounts.length > 0 && selectedCount === 0 && (
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-xs text-muted-foreground">Snabbval:</span>
+                {typeCounts.map(([type, count]) => {
+                  const config = operationLabels[type] || { label: type }
+                  return (
+                    <Button
+                      key={type}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => selectAllOfType(type)}
+                    >
+                      {config.label} ({count})
+                    </Button>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="ml-auto flex items-center gap-2">
+              {selectedCount > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 px-3 text-xs"
+                  onClick={() => setSelectedIds(new Set())}
+                >
+                  Avmarkera
+                </Button>
+              )}
               <Button
                 size="sm"
-                variant="ghost"
                 className="h-8 px-3 text-xs"
-                onClick={() => setSelectedIds(new Set())}
+                disabled={selectedCount === 0 || isBulkCommitting}
+                onClick={() => setShowBulkDialog(true)}
               >
-                Avmarkera
+                Godkänn valda ({selectedCount})
               </Button>
-            )}
-            <Button
-              size="sm"
-              className="h-8 px-3 text-xs"
-              disabled={selectedCount === 0 || isBulkCommitting}
-              onClick={() => setShowBulkDialog(true)}
-            >
-              Godkänn valda ({selectedCount})
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {isLoading ? (
-        <Card>
-          <CardContent className="flex items-center justify-center py-16">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </CardContent>
-        </Card>
-      ) : filteredOperations.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
-              <ClipboardCheck className="h-6 w-6 text-muted-foreground" />
             </div>
-            <p className="font-medium">
-              {activeTab === 'pending'
+          </DataListHeader>
+        )}
+
+        {isLoading ? (
+          <DataListLoading />
+        ) : filteredOperations.length === 0 ? (
+          <DataListEmpty
+            icon={<ClipboardCheck className="h-6 w-6" />}
+            title={
+              activeTab === 'pending'
                 ? 'Inga väntande operationer'
                 : activeTab === 'committed'
                   ? 'Inga godkända operationer'
-                  : 'Inga avvisade operationer'}
-            </p>
-            <p className="text-sm text-muted-foreground mt-1">
-              {activeTab === 'pending'
+                  : 'Inga avvisade operationer'
+            }
+            description={
+              activeTab === 'pending'
                 ? 'När en operation kräver godkännande visas den här för granskning.'
-                : 'Operationer du har godkänt eller avvisat visas här.'}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {filteredOperations.map((op) => {
-            const config = operationLabels[op.operation_type] || { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
+                : 'Operationer du har godkänt eller avvisat visas här.'
+            }
+          />
+        ) : (
+          filteredOperations.map((op) => {
+            const config = operationLabels[op.operation_type] || {
+              label: op.operation_type,
+              icon: ClipboardCheck,
+              variant: 'default' as const,
+            }
             const isExpanded = expandedId === op.id
             const canBulkSelect = showBulkControls && op.status === 'pending' && op.risk_level !== 'high'
             const isSelected = selectedIds.has(op.id)
+            const isAgent = op.actor_type && op.actor_type !== 'user'
 
             return (
-              <Card
+              <DataListRow
                 key={op.id}
-                className="transition-colors hover:border-primary/30"
-              >
-                <CardContent className="py-4">
-                  <div
-                    className="flex items-start justify-between gap-4 cursor-pointer"
-                    onClick={() => setExpandedId(isExpanded ? null : op.id)}
-                  >
-                    {canBulkSelect && (
-                      <div
-                        className="flex items-center pt-0.5"
-                        onClick={(e) => e.stopPropagation()}
+                selected={isSelected}
+                expanded={isExpanded}
+                onClick={() => setExpandedId(isExpanded ? null : op.id)}
+                leading={
+                  canBulkSelect ? (
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={() => toggleSelected(op.id)}
+                        aria-label="Välj operation"
+                      />
+                    </div>
+                  ) : undefined
+                }
+                trailing={
+                  op.status === 'pending' ? (
+                    <>
+                      <Button
+                        size="sm"
+                        className="h-8 px-3 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedOp(op)
+                          setShowCommitDialog(true)
+                        }}
                       >
-                        <Checkbox
-                          checked={isSelected}
-                          onCheckedChange={() => toggleSelected(op.id)}
-                          aria-label="Välj operation"
-                        />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge variant={config.variant}>{config.label}</Badge>
-                        {op.risk_level === 'high' && (
-                          <Badge variant="outline" className="border-terracotta/40 text-terracotta">
-                            Hög risk
-                          </Badge>
-                        )}
-                        {op.actor_type && op.actor_type !== 'user' && (
-                          <Badge variant="outline" className="text-xs">
-                            <Bot className="h-3 w-3 mr-1" />
-                            {op.actor_label || op.actor_type}
-                          </Badge>
-                        )}
-                        {op.status === 'committed' && (
-                          <Badge variant="success">
-                            <CheckCircle2 className="h-3 w-3 mr-1" />
-                            Godkänd
-                          </Badge>
-                        )}
-                        {op.status === 'rejected' && (
-                          <Badge variant="destructive">
-                            <XCircle className="h-3 w-3 mr-1" />
-                            Avvisad
-                          </Badge>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {formatRelativeTime(op.created_at)}
-                        </span>
-                      </div>
-                      <p className="text-sm font-medium truncate">{op.title}</p>
-                    </div>
-
-                    {op.status === 'pending' && (
-                      <div className="flex gap-2 flex-shrink-0">
-                        <Button
-                          size="sm"
-                          className="h-8 px-3 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setSelectedOp(op)
-                            setShowCommitDialog(true)
-                          }}
-                        >
-                          Godkänn
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 px-3 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleReject(op)
-                          }}
-                        >
-                          Avvisa
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Expandable preview */}
-                  <div className={`grid transition-all duration-200 ${isExpanded ? 'grid-rows-[1fr] mt-3' : 'grid-rows-[0fr]'}`}>
-                    <div className="overflow-hidden">
-                      <div className="border-t pt-3">
-                        <OperationPreview op={op} />
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                        Godkänn
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 px-3 text-xs"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleReject(op)
+                        }}
+                      >
+                        Avvisa
+                      </Button>
+                    </>
+                  ) : undefined
+                }
+                expandedContent={<OperationPreview op={op} />}
+              >
+                <DataListPrimary>{op.title}</DataListPrimary>
+                <DataListMeta>
+                  <span className="font-medium text-foreground/70">{config.label}</span>
+                  {isAgent && (
+                    <>
+                      <DataListMetaSeparator />
+                      <span className="inline-flex items-center gap-1">
+                        <Bot className="h-3 w-3" />
+                        {op.actor_label || op.actor_type}
+                      </span>
+                    </>
+                  )}
+                  <DataListMetaSeparator />
+                  <span>{formatRelativeTime(op.created_at)}</span>
+                  {op.risk_level === 'high' && (
+                    <Badge variant="destructive" className="ml-1 h-4 px-1.5 py-0 text-[10px]">
+                      Hög risk
+                    </Badge>
+                  )}
+                </DataListMeta>
+              </DataListRow>
             )
-          })}
-        </div>
-      )}
+          })
+        )}
+      </DataList>
 
       {/* Commit confirmation dialog */}
       <ConfirmationDialog

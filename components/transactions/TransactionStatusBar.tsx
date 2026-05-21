@@ -1,7 +1,7 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Link from 'next/link'
 import { Upload, Wand, Plus, CheckSquare, FileText, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -36,7 +36,7 @@ export default function TransactionStatusBar({
       {/* Header with title + actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">Transaktioner</h1>
+          <h1 className="font-display text-3xl md:text-4xl tracking-tight">Transaktioner</h1>
           {uncategorizedCount > 0 && mode === 'inbox' && (
             <p className="text-muted-foreground mt-1">
               <span className="text-foreground font-semibold">{uncategorizedCount}</span> att bokföra
@@ -97,33 +97,14 @@ export default function TransactionStatusBar({
         </div>
       </div>
 
-      {/* Mode toggle - segmented control style */}
-      <div className="inline-flex rounded-lg border bg-muted p-1">
-        <Button
-          variant={mode === 'inbox' ? 'default' : 'ghost'}
-          size="sm"
-          className="h-8 rounded-md"
-          onClick={() => onModeChange('inbox')}
-        >
-          Att bokföra
-          {uncategorizedCount > 0 && (
-            <Badge
-              variant={mode === 'inbox' ? 'secondary' : 'outline'}
-              className="ml-2 text-xs"
-            >
-              {uncategorizedCount}
-            </Badge>
-          )}
-        </Button>
-        <Button
-          variant={mode === 'history' ? 'default' : 'ghost'}
-          size="sm"
-          className="h-8 rounded-md"
-          onClick={() => onModeChange('history')}
-        >
-          Alla transaktioner
-        </Button>
-      </div>
+      <Tabs value={mode} onValueChange={(v) => onModeChange(v as ViewMode)}>
+        <TabsList>
+          <TabsTrigger value="inbox">
+            Att bokföra{uncategorizedCount > 0 ? ` (${uncategorizedCount})` : ''}
+          </TabsTrigger>
+          <TabsTrigger value="history">Alla transaktioner</TabsTrigger>
+        </TabsList>
+      </Tabs>
     </div>
   )
 }

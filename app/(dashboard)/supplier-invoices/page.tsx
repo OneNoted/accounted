@@ -1,11 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
+import { DataList, DataListEmpty } from '@/components/ui/data-list'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Plus, FileInput, Lock } from 'lucide-react'
@@ -104,14 +103,14 @@ export default function SupplierInvoicesPage() {
         </TabsList>
 
         <TabsContent value={activeTab}>
-          {isLoading ? (
-            <Card>
-              <CardContent className="p-0">
-                <div className="p-3 border-b">
+          <DataList>
+            {isLoading ? (
+              <div>
+                <div className="p-3 border-b border-border">
                   <Skeleton className="h-4 w-full" />
                 </div>
                 {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex items-center gap-4 p-3 border-b last:border-0">
+                  <div key={i} className="flex items-center gap-4 p-3 border-b border-border last:border-0">
                     <Skeleton className="h-4 w-12" />
                     <Skeleton className="h-4 w-28" />
                     <Skeleton className="h-4 w-20" />
@@ -121,70 +120,67 @@ export default function SupplierInvoicesPage() {
                     <Skeleton className="h-5 w-16" />
                   </div>
                 ))}
-              </CardContent>
-            </Card>
-          ) : filteredInvoices.length === 0 ? (
-            <Card>
-              <CardContent className="p-0">
-                <EmptyState
-                  icon={FileInput}
-                  title="Inga fakturor"
-                  description={
-                    activeTab === 'all'
-                      ? 'Registrera leverantörsfakturor för att hålla koll på inköp och betalningar.'
-                      : 'Inga fakturor i denna kategori.'
-                  }
-                  actionLabel={activeTab === 'all' && canWrite ? 'Registrera faktura' : undefined}
-                  actionHref={activeTab === 'all' && canWrite ? '/supplier-invoices/new' : undefined}
-                />
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ankomst</TableHead>
-                      <TableHead>Leverantör</TableHead>
-                      <TableHead>Fakturanr</TableHead>
-                      <TableHead>Fakturadatum</TableHead>
-                      <TableHead>Förfaller</TableHead>
-                      <TableHead className="text-right">Belopp</TableHead>
-                      <TableHead className="text-right">Kvar att betala</TableHead>
-                      <TableHead>Status</TableHead>
+              </div>
+            ) : filteredInvoices.length === 0 ? (
+              <DataListEmpty
+                icon={<FileInput className="h-6 w-6" />}
+                title="Inga fakturor"
+                description={
+                  activeTab === 'all'
+                    ? 'Registrera leverantörsfakturor för att hålla koll på inköp och betalningar.'
+                    : 'Inga fakturor i denna kategori.'
+                }
+                action={
+                  activeTab === 'all' && canWrite ? (
+                    <Button asChild>
+                      <Link href="/supplier-invoices/new">Registrera faktura</Link>
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Ankomst</TableHead>
+                    <TableHead>Leverantör</TableHead>
+                    <TableHead>Fakturanr</TableHead>
+                    <TableHead>Fakturadatum</TableHead>
+                    <TableHead>Förfaller</TableHead>
+                    <TableHead className="text-right">Belopp</TableHead>
+                    <TableHead className="text-right">Kvar att betala</TableHead>
+                    <TableHead>Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredInvoices.map((inv) => (
+                    <TableRow key={inv.id}>
+                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
+                      <TableCell>
+                        <Link href={`/suppliers/${inv.supplier_id}`} className="hover:underline">
+                          {inv.supplier?.name || '-'}
+                        </Link>
+                      </TableCell>
+                      <TableCell>
+                        <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline">
+                          {inv.supplier_invoice_number}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
+                      <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(inv.total)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariants[inv.status] || 'secondary'}>
+                          {statusLabels[inv.status] || inv.status}
+                        </Badge>
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredInvoices.map((inv) => (
-                      <TableRow key={inv.id}>
-                        <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
-                        <TableCell>
-                          <Link href={`/suppliers/${inv.supplier_id}`} className="hover:underline">
-                            {inv.supplier?.name || '-'}
-                          </Link>
-                        </TableCell>
-                        <TableCell>
-                          <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline">
-                            {inv.supplier_invoice_number}
-                          </Link>
-                        </TableCell>
-                        <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
-                        <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatAmount(inv.total)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
-                        <TableCell>
-                          <Badge variant={statusVariants[inv.status] || 'secondary'}>
-                            {statusLabels[inv.status] || inv.status}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </DataList>
         </TabsContent>
       </Tabs>
     </div>

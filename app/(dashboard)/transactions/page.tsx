@@ -6,12 +6,19 @@ import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Landmark, X } from 'lucide-react'
+import { DataList, DataListHeader } from '@/components/ui/data-list'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from '@/components/ui/dropdown-menu'
+import { ChevronDown, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import SwipeCategorizationView from '@/components/transactions/SwipeCategorizationView'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
@@ -40,7 +47,7 @@ import type {
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry } from '@/types'
 import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
@@ -1438,21 +1445,18 @@ export default function TransactionsPage() {
 
       {/* Content based on mode */}
       {isLoading ? (
-        <div className="space-y-3">
+        <DataList>
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardContent className="py-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-2">
-                    <div className="h-5 bg-muted rounded w-48" />
-                    <div className="h-4 bg-muted rounded w-24" />
-                  </div>
-                  <div className="h-6 bg-muted rounded w-20" />
-                </div>
-              </CardContent>
-            </Card>
+            <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
+              <div className="h-5 w-5 rounded bg-muted" />
+              <div className="flex-1 space-y-2">
+                <div className="h-4 w-48 rounded bg-muted" />
+                <div className="h-3 w-24 rounded bg-muted" />
+              </div>
+              <div className="h-5 w-20 rounded bg-muted" />
+            </div>
           ))}
-        </div>
+        </DataList>
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
           <InboxZeroState
@@ -1460,47 +1464,41 @@ export default function TransactionsPage() {
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
-          <div className="space-y-3">
-            {/* Source filter — only render when both sources have content
-                to filter between, otherwise it'd be a no-op chip row. */}
+          <DataList>
             {skvUnmatched.length > 0 && uncategorizedTransactions.length > 0 && (
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-muted-foreground">Källa:</span>
-                <button
-                  onClick={() => setSourceFilter('all')}
-                  className={cn(
-                    'rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'all'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  Alla ({uncategorizedTransactions.length + skvUnmatched.length})
-                </button>
-                <button
-                  onClick={() => setSourceFilter('bank')}
-                  className={cn(
-                    'rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'bank'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  Bank ({uncategorizedTransactions.length})
-                </button>
-                <button
-                  onClick={() => setSourceFilter('skatteverket')}
-                  className={cn(
-                    'flex items-center gap-1 rounded-full border px-3 py-1 transition-colors',
-                    sourceFilter === 'skatteverket'
-                      ? 'border-foreground bg-foreground text-background'
-                      : 'border-border text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Landmark className="h-3 w-3" />
-                  Skatteverket ({skvUnmatched.length})
-                </button>
-              </div>
+              <DataListHeader>
+                <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                  Källa
+                </span>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                      {sourceFilter === 'all'
+                        ? `Alla (${uncategorizedTransactions.length + skvUnmatched.length})`
+                        : sourceFilter === 'bank'
+                          ? `Bank (${uncategorizedTransactions.length})`
+                          : `Skatteverket (${skvUnmatched.length})`}
+                      <ChevronDown className="h-3 w-3 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="min-w-[12rem]">
+                    <DropdownMenuRadioGroup
+                      value={sourceFilter}
+                      onValueChange={(v) => setSourceFilter(v as typeof sourceFilter)}
+                    >
+                      <DropdownMenuRadioItem value="all">
+                        Alla ({uncategorizedTransactions.length + skvUnmatched.length})
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="bank">
+                        Bank ({uncategorizedTransactions.length})
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="skatteverket">
+                        Skatteverket ({skvUnmatched.length})
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </DataListHeader>
             )}
             <AnimatePresence mode="popLayout">
               {inboxItems.map(item =>
@@ -1536,7 +1534,7 @@ export default function TransactionsPage() {
                 ),
               )}
             </AnimatePresence>
-          </div>
+          </DataList>
         )
       ) : (
         <TransactionHistoryList
