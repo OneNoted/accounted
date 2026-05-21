@@ -161,6 +161,31 @@ describe('parseOpeningBalanceFile', () => {
     expect(result.warnings.some((w) => w.includes('1930'))).toBe(true)
   })
 
+  it('merges duplicates that differ only in whitespace / formatting', async () => {
+    const XLSX = await import('xlsx')
+    const { parseOpeningBalanceFile } = await import('../parser')
+
+    const wb = XLSX.utils.book_new()
+    // Same account written three ways: plain, padded with NBSP, with a dot
+    const data = [
+      ['Kontonr', 'Debet', 'Kredit'],
+      ['1930', 10000, 0],
+      [' 1930 ', 20000, 0],
+      ['1.930', 30000, 0],
+      ['2099', 0, 60000],
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
+    const result = parseOpeningBalanceFile(buffer, 'test.xlsx')
+
+    const matches = result.rows.filter((r) => r.account_number === '1930')
+    expect(matches.length).toBe(1)
+    expect(matches[0].debit_amount).toBe(60000)
+    expect(result.rows.length).toBe(2)
+  })
+
   it('skips zero-amount rows', async () => {
     const XLSX = await import('xlsx')
     const { parseOpeningBalanceFile } = await import('../parser')
