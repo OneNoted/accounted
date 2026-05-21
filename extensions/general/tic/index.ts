@@ -3,11 +3,11 @@ import { NextResponse } from 'next/server'
 import {
   searchCompanyByOrgNumber,
   getBankAccounts,
-  getSNICodes,
+  getIndustryCodes,
   getEmails,
   getPhones,
   getCompanyPurpose,
-  getFinancialReportSummaries,
+  getCompanyDocuments,
 } from './lib/tic-client'
 import {
   startBankIdAuth,
@@ -18,7 +18,7 @@ import {
   fetchEnrichmentData,
 } from './lib/bankid-client'
 import { TICAPIError } from './lib/tic-types'
-import type { TICCompanyProfile } from './lib/tic-types'
+import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-types'
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
@@ -159,14 +159,28 @@ async function fetchAndStoreEnrichment(
 const bankIdStartCooldowns = new Map<string, number>()
 const BANKID_START_COOLDOWN_MS = 5_000
 
-/** Map TIC bankAccountType enum to human-readable string */
-function bankAccountTypeLabel(type?: number): string {
-  switch (type) {
-    case 0: return 'bankkonto'
-    case 1: return 'bankgiro'
-    case 2: return 'plusgiro'
-    case 3: return 'iban'
-    default: return 'bankkonto'
+/**
+ * Map a v2 `CompanyDocument` (financial-report subset) into the legacy
+ * `TICFinancialReportSummary` shape consumed by TicWorkspace. v2 nests
+ * the metadata under `financialReportMetadata` and replaces v1's
+ * `isAudited` boolean / `auditOpinion` string with auditor identity
+ * fields — we derive `isAudited` from the presence of an auditor.
+ */
+function toFinancialReportSummary(
+  doc: import('./lib/tic-types').TICDocument
+): TICFinancialReportSummary {
+  const meta = doc.financialReportMetadata ?? {}
+  const hasAuditor = Boolean(meta.auditor || meta.auditorFullName || meta.auditCompanyName)
+  return {
+    title: doc.type === 'annualReport' ? 'Årsredovisning' : doc.type,
+    arrivalDate: meta.arrivalDate ?? undefined,
+    registrationDate: meta.registrationDate ?? undefined,
+    periodStart: meta.periodStart ?? undefined,
+    periodEnd: meta.periodEnd ?? undefined,
+    isInterimReport: meta.isInterimReport ?? undefined,
+    isConsolidatedAccounts: meta.isConsolidatedAccounts ?? undefined,
+    isAudited: hasAuditor ? true : undefined,
+    auditOpinion: meta.auditorFullName ?? meta.auditCompanyName ?? undefined,
   }
 }
 
@@ -296,13 +310,14 @@ export const ticExtension: Extension = {
             doc.names.find((n) => n.companyNamingType === 'name') ?? doc.names[0]
           const companyName = nameEntry?.nameOrIdentifier ?? ''
 
-          const isCeased = doc.activityStatus === 'ceased'
+          // v2 exposes a top-level `isCeased` boolean; `activityStatus` is
+          // now an enum (`hasNeverBeenActive | isActive | isNoLongerActive
+          // | unknown`) rather than the v1 string with a `'ceased'` value.
+          const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
 
           const address = doc.mostRecentRegisteredAddress
             ? {
-                street: doc.mostRecentRegisteredAddress.streetAddress
-                  ?? doc.mostRecentRegisteredAddress.street
-                  ?? null,
+                street: doc.mostRecentRegisteredAddress.streetAddress ?? null,
                 postalCode: doc.mostRecentRegisteredAddress.postalCode ?? null,
                 city: doc.mostRecentRegisteredAddress.city ?? null,
               }
@@ -315,29 +330,39 @@ export const ticExtension: Extension = {
 
           // Phase 2: Supplementary data (non-blocking)
           const companyId = doc.companyId
-          const [bankResult, sniResult, emailResult, phoneResult] =
+          const [bankResult, industriesResult, emailResult, phoneResult] =
             await Promise.allSettled([
               getBankAccounts(companyId),
-              getSNICodes(companyId),
+              getIndustryCodes(companyId),
               getEmails(companyId),
               getPhones(companyId),
             ])
 
+          // v2 `/companies/{id}/bank-accounts` now returns Bankgirot only.
+          // Drop terminated entries and emit the canonical { type:
+          // 'bankgiro', accountNumber } shape; BIC is no longer
+          // available from this endpoint.
           const bankAccounts =
             bankResult.status === 'fulfilled' && bankResult.value
-              ? bankResult.value.map((ba) => ({
-                  type: bankAccountTypeLabel(ba.bankAccountType),
-                  accountNumber: ba.accountNumber ?? '',
-                  bic: ba.swift_BIC ?? null,
-                }))
+              ? bankResult.value
+                  .filter((ba) => ba.terminated !== true && ba.bankgironumber != null)
+                  .map((ba) => ({
+                    type: 'bankgiro',
+                    accountNumber: String(ba.bankgironumber),
+                    bic: null,
+                  }))
               : []
 
+          // v2 returns a discriminated array across SNI 2007 / 2025;
+          // preserve v1's behavior of surfacing SNI 2007 only.
           const sniCodes =
-            sniResult.status === 'fulfilled' && sniResult.value
-              ? sniResult.value.map((s) => ({
-                  code: s.sni_2007Code ?? '',
-                  name: s.sni_2007Name ?? '',
-                }))
+            industriesResult.status === 'fulfilled' && industriesResult.value
+              ? industriesResult.value
+                  .filter((i) => i.companyIndustryCodeType === 'sni2007')
+                  .map((i) => ({
+                    code: i.industryCode ?? '',
+                    name: i.description ?? '',
+                  }))
               : []
 
           const email =
@@ -345,17 +370,21 @@ export const ticExtension: Extension = {
               ? emailResult.value[0].emailAddress
               : null
 
+          // v2 renamed the phone field to `phoneNumberFormatted` and
+          // added `e164PhoneNumber` as a normalized form.
           const phone =
-            phoneResult.status === 'fulfilled' && phoneResult.value?.[0]?.phoneNumber
-              ? phoneResult.value[0].phoneNumber
+            phoneResult.status === 'fulfilled' && phoneResult.value?.[0]
+              ? phoneResult.value[0].phoneNumberFormatted
+                  ?? phoneResult.value[0].e164PhoneNumber
+                  ?? null
               : null
 
           // Log Phase 2 failures for debugging
           if (bankResult.status === 'rejected') {
             log.warn('[tic] bank accounts fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(bankResult.reason) })
           }
-          if (sniResult.status === 'rejected') {
-            log.warn('[tic] SNI codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(sniResult.reason) })
+          if (industriesResult.status === 'rejected') {
+            log.warn('[tic] industry codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(industriesResult.reason) })
           }
 
           const result: CompanyLookupResult = {
@@ -411,31 +440,35 @@ export const ticExtension: Extension = {
           const companyId = doc.companyId
 
           // Phase 2: Supplementary data (non-blocking)
-          const [bankResult, sniResult, emailResult, phoneResult, purposeResult, reportsResult] =
+          const [bankResult, industriesResult, emailResult, phoneResult, purposeResult, documentsResult] =
             await Promise.allSettled([
               getBankAccounts(companyId),
-              getSNICodes(companyId),
+              getIndustryCodes(companyId),
               getEmails(companyId),
               getPhones(companyId),
               getCompanyPurpose(companyId),
-              getFinancialReportSummaries(companyId),
+              getCompanyDocuments(companyId),
             ])
 
           const bankAccounts =
             bankResult.status === 'fulfilled' && bankResult.value
-              ? bankResult.value.map((ba) => ({
-                  type: bankAccountTypeLabel(ba.bankAccountType),
-                  accountNumber: ba.accountNumber ?? '',
-                  bic: ba.swift_BIC ?? null,
-                }))
+              ? bankResult.value
+                  .filter((ba) => ba.terminated !== true && ba.bankgironumber != null)
+                  .map((ba) => ({
+                    type: 'bankgiro',
+                    accountNumber: String(ba.bankgironumber),
+                    bic: null,
+                  }))
               : []
 
           const sniCodes =
-            sniResult.status === 'fulfilled' && sniResult.value
-              ? sniResult.value.map((s) => ({
-                  code: s.sni_2007Code ?? '',
-                  name: s.sni_2007Name ?? '',
-                }))
+            industriesResult.status === 'fulfilled' && industriesResult.value
+              ? industriesResult.value
+                  .filter((i) => i.companyIndustryCodeType === 'sni2007')
+                  .map((i) => ({
+                    code: i.industryCode ?? '',
+                    name: i.description ?? '',
+                  }))
               : []
 
           const email =
@@ -444,13 +477,20 @@ export const ticExtension: Extension = {
               : null
 
           const phone =
-            phoneResult.status === 'fulfilled' && phoneResult.value?.[0]?.phoneNumber
-              ? phoneResult.value[0].phoneNumber
+            phoneResult.status === 'fulfilled' && phoneResult.value?.[0]
+              ? phoneResult.value[0].phoneNumberFormatted
+                  ?? phoneResult.value[0].e164PhoneNumber
+                  ?? null
               : null
 
+          // v2 `/companies/{id}/documents` returns every document the
+          // company has filed; filter to annualReport rows and map into
+          // the legacy summary shape the workspace expects.
           const financialReports =
-            reportsResult.status === 'fulfilled' && reportsResult.value
-              ? reportsResult.value
+            documentsResult.status === 'fulfilled' && documentsResult.value
+              ? documentsResult.value
+                  .filter((d) => d.type === 'annualReport')
+                  .map(toFinancialReportSummary)
               : []
 
           // Use dedicated purpose endpoint, fall back to search result
@@ -463,11 +503,11 @@ export const ticExtension: Extension = {
           if (bankResult.status === 'rejected') {
             log.warn('[tic] profile: bank accounts fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(bankResult.reason) })
           }
-          if (sniResult.status === 'rejected') {
-            log.warn('[tic] profile: SNI codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(sniResult.reason) })
+          if (industriesResult.status === 'rejected') {
+            log.warn('[tic] profile: industry codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(industriesResult.reason) })
           }
-          if (reportsResult.status === 'rejected') {
-            log.warn('[tic] profile: financial reports fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(reportsResult.reason) })
+          if (documentsResult.status === 'rejected') {
+            log.warn('[tic] profile: documents fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(documentsResult.reason) })
           }
 
           const fin = doc.mostRecentFinancialSummary
@@ -485,19 +525,22 @@ export const ticExtension: Extension = {
               }
             : null
 
+          // Translate v2's activityStatus enum into the v1 string the
+          // TicWorkspace `!== 'ceased'` check still compares against, so
+          // the UI keeps showing "Avregistrerat" for deregistered
+          // companies without UI changes.
+          const isCeasedProfile = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
           const profile: TICCompanyProfile = {
             companyId,
             orgNumber: doc.registrationNumber,
             companyName,
             legalEntityType: doc.legalEntityType,
             registrationDate: doc.registrationDate,
-            activityStatus: doc.activityStatus ?? null,
+            activityStatus: isCeasedProfile ? 'ceased' : (doc.activityStatus ?? null),
             purpose,
             address: doc.mostRecentRegisteredAddress
               ? {
-                  street: doc.mostRecentRegisteredAddress.streetAddress
-                    ?? doc.mostRecentRegisteredAddress.street
-                    ?? null,
+                  street: doc.mostRecentRegisteredAddress.streetAddress ?? null,
                   postalCode: doc.mostRecentRegisteredAddress.postalCode ?? null,
                   city: doc.mostRecentRegisteredAddress.city ?? null,
                 }

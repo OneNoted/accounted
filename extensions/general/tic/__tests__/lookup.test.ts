@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
   getBankAccounts: vi.fn(),
-  getSNICodes: vi.fn(),
+  getIndustryCodes: vi.fn(),
   getEmails: vi.fn(),
   getPhones: vi.fn(),
 }))
@@ -13,7 +13,7 @@ import { ticExtension } from '../index'
 import {
   searchCompanyByOrgNumber,
   getBankAccounts,
-  getSNICodes,
+  getIndustryCodes,
   getEmails,
   getPhones,
 } from '../lib/tic-client'
@@ -22,7 +22,7 @@ import type { TICCompanyDocument } from '../lib/tic-types'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockBank = vi.mocked(getBankAccounts)
-const mockSNI = vi.mocked(getSNICodes)
+const mockIndustries = vi.mocked(getIndustryCodes)
 const mockEmails = vi.mocked(getEmails)
 const mockPhones = vi.mocked(getPhones)
 
@@ -45,13 +45,14 @@ const mockDoc: TICCompanyDocument = {
   legalEntityType: 'AB',
   registrationDate: 0,
   mostRecentRegisteredAddress: {
-    street: 'Storgatan 1',
+    streetAddress: 'Storgatan 1',
     postalCode: '111 22',
     city: 'Stockholm',
   },
   isRegisteredForFTax: true,
   isRegisteredForVAT: true,
-  activityStatus: 'active',
+  isCeased: false,
+  activityStatus: 'isActive',
 }
 
 describe('TIC lookup route', () => {
@@ -74,13 +75,13 @@ describe('TIC lookup route', () => {
   it('returns full lookup result on happy path', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockBank.mockResolvedValue([
-      { bankAccountType: 1, accountNumber: '123-456', swift_BIC: undefined },
+      { bankgironumber: 1234567, terminated: false, name: 'Test AB' },
     ])
-    mockSNI.mockResolvedValue([
-      { sni_2007Code: '62010', sni_2007Name: 'Dataprogrammering' },
+    mockIndustries.mockResolvedValue([
+      { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
     ])
     mockEmails.mockResolvedValue([{ emailAddress: 'info@test.se' }])
-    mockPhones.mockResolvedValue([{ phoneNumber: '08-1234567' }])
+    mockPhones.mockResolvedValue([{ phoneNumberFormatted: '08-1234567', e164PhoneNumber: '+4681234567' }])
 
     const res = await lookupHandler(makeRequest('556036-0793'))
     expect(res.status).toBe(200)
@@ -95,17 +96,61 @@ describe('TIC lookup route', () => {
     })
     expect(data.registration).toEqual({ fTax: true, vat: true })
     expect(data.bankAccounts).toEqual([
-      { type: 'bankgiro', accountNumber: '123-456', bic: null },
+      { type: 'bankgiro', accountNumber: '1234567', bic: null },
     ])
     expect(data.sniCodes).toEqual([{ code: '62010', name: 'Dataprogrammering' }])
     expect(data.email).toBe('info@test.se')
     expect(data.phone).toBe('08-1234567')
   })
 
+  it('drops terminated bankgiro numbers', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    mockBank.mockResolvedValue([
+      { bankgironumber: 1234567, terminated: false },
+      { bankgironumber: 9999999, terminated: true },
+    ])
+    mockIndustries.mockResolvedValue(null)
+    mockEmails.mockResolvedValue(null)
+    mockPhones.mockResolvedValue(null)
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.bankAccounts).toEqual([
+      { type: 'bankgiro', accountNumber: '1234567', bic: null },
+    ])
+  })
+
+  it('filters industry codes to SNI 2007', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    mockBank.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue([
+      { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
+      { companyIndustryCodeType: 'sni2025', industryCode: '62.01', description: 'Computer programming' },
+    ])
+    mockEmails.mockResolvedValue(null)
+    mockPhones.mockResolvedValue(null)
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.sniCodes).toEqual([{ code: '62010', name: 'Dataprogrammering' }])
+  })
+
+  it('falls back to e164 when phoneNumberFormatted is missing', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    mockBank.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue(null)
+    mockEmails.mockResolvedValue(null)
+    mockPhones.mockResolvedValue([{ e164PhoneNumber: '+4681234567' }])
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.phone).toBe('+4681234567')
+  })
+
   it('prefers name type over other naming types', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockBank.mockResolvedValue(null)
-    mockSNI.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue(null)
     mockEmails.mockResolvedValue(null)
     mockPhones.mockResolvedValue(null)
 
@@ -117,7 +162,9 @@ describe('TIC lookup route', () => {
   it('handles partial Phase 2 failures gracefully', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockBank.mockRejectedValue(new Error('timeout'))
-    mockSNI.mockResolvedValue([{ sni_2007Code: '62010', sni_2007Name: 'Dataprogrammering' }])
+    mockIndustries.mockResolvedValue([
+      { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
+    ])
     mockEmails.mockRejectedValue(new Error('timeout'))
     mockPhones.mockResolvedValue(null)
 
@@ -132,10 +179,10 @@ describe('TIC lookup route', () => {
     expect(data.phone).toBeNull()
   })
 
-  it('detects ceased companies', async () => {
-    mockSearch.mockResolvedValue({ ...mockDoc, activityStatus: 'ceased' })
+  it('detects ceased companies via isCeased boolean', async () => {
+    mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isNoLongerActive' })
     mockBank.mockResolvedValue(null)
-    mockSNI.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue(null)
     mockEmails.mockResolvedValue(null)
     mockPhones.mockResolvedValue(null)
 

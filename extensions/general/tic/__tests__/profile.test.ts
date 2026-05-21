@@ -3,32 +3,32 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
   getBankAccounts: vi.fn(),
-  getSNICodes: vi.fn(),
+  getIndustryCodes: vi.fn(),
   getEmails: vi.fn(),
   getPhones: vi.fn(),
   getCompanyPurpose: vi.fn(),
-  getFinancialReportSummaries: vi.fn(),
+  getCompanyDocuments: vi.fn(),
 }))
 
 import { ticExtension } from '../index'
 import {
   searchCompanyByOrgNumber,
   getBankAccounts,
-  getSNICodes,
+  getIndustryCodes,
   getEmails,
   getPhones,
   getCompanyPurpose,
-  getFinancialReportSummaries,
+  getCompanyDocuments,
 } from '../lib/tic-client'
 import type { TICCompanyDocument } from '../lib/tic-types'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockBank = vi.mocked(getBankAccounts)
-const mockSNI = vi.mocked(getSNICodes)
+const mockIndustries = vi.mocked(getIndustryCodes)
 const mockEmails = vi.mocked(getEmails)
 const mockPhones = vi.mocked(getPhones)
 const mockPurpose = vi.mocked(getCompanyPurpose)
-const mockReports = vi.mocked(getFinancialReportSummaries)
+const mockDocuments = vi.mocked(getCompanyDocuments)
 
 function makeRequest(orgNumber?: string): Request {
   const url = orgNumber
@@ -50,14 +50,15 @@ const mockDoc: TICCompanyDocument = {
   registrationDate: 946684800000,
   mostRecentPurpose: 'Software development',
   mostRecentRegisteredAddress: {
-    street: 'Storgatan 1',
+    streetAddress: 'Storgatan 1',
     postalCode: '111 22',
     city: 'Stockholm',
   },
   isRegisteredForFTax: true,
   isRegisteredForVAT: true,
   isRegisteredForPayroll: false,
-  activityStatus: 'active',
+  isCeased: false,
+  activityStatus: 'isActive',
   cSector: { categoryCode: 1, categoryCodeDescription: 'Privat sektor' },
   cNbrEmployeesInterval: { categoryCode: 3, categoryCodeDescription: '10-49' },
   cTurnoverInterval: { categoryCode: 5, categoryCodeDescription: '10-50 MSEK' },
@@ -77,25 +78,37 @@ const mockDoc: TICCompanyDocument = {
 
 function mockAllSupplementary() {
   mockBank.mockResolvedValue([
-    { bankAccountType: 1, accountNumber: '123-456', swift_BIC: undefined },
+    { bankgironumber: 1234567, terminated: false, name: 'Test AB' },
   ])
-  mockSNI.mockResolvedValue([
-    { sni_2007Code: '62010', sni_2007Name: 'Dataprogrammering' },
+  mockIndustries.mockResolvedValue([
+    { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
   ])
   mockEmails.mockResolvedValue([{ emailAddress: 'info@test.se' }])
-  mockPhones.mockResolvedValue([{ phoneNumber: '08-1234567' }])
+  mockPhones.mockResolvedValue([{ phoneNumberFormatted: '08-1234567' }])
   mockPurpose.mockResolvedValue([
     { companyPurposeId: 1, purpose: 'Försäljning av drycker' },
   ])
-  mockReports.mockResolvedValue([
+  mockDocuments.mockResolvedValue([
     {
-      financialReportSummaryId: 1,
-      title: 'Årsredovisning 2023',
-      arrivalDate: '2024-06-15',
-      periodStart: '2023-01-01',
-      periodEnd: '2023-12-31',
-      isAudited: true,
-      auditOpinion: 'Ren',
+      id: 'FRF_abc123',
+      type: 'annualReport',
+      financialReportMetadata: {
+        arrivalDate: '2024-06-15',
+        registrationDate: '2024-07-01',
+        periodStart: '2023-01-01',
+        periodEnd: '2023-12-31',
+        isInterimReport: false,
+        isConsolidatedAccounts: false,
+        auditor: 'Jane Auditor',
+        auditorFullName: 'Jane Auditor (FAR)',
+        auditCompanyName: 'Big Audit AB',
+      },
+    },
+    // A non-financial document type that should be filtered out
+    {
+      id: 'FRF_xyz999',
+      type: 'minutes',
+      financialReportMetadata: {},
     },
   ])
 }
@@ -128,7 +141,7 @@ describe('TIC profile route', () => {
     expect(data.orgNumber).toBe('5560360793')
     expect(data.companyName).toBe('Test AB')
     expect(data.legalEntityType).toBe('AB')
-    expect(data.activityStatus).toBe('active')
+    expect(data.activityStatus).toBe('isActive')
     expect(data.purpose).toBe('Försäljning av drycker')
     expect(data.address).toEqual({
       street: 'Storgatan 1',
@@ -143,9 +156,18 @@ describe('TIC profile route', () => {
     expect(data.phone).toBe('08-1234567')
     expect(data.sniCodes).toEqual([{ code: '62010', name: 'Dataprogrammering' }])
     expect(data.bankAccounts).toEqual([
-      { type: 'bankgiro', accountNumber: '123-456', bic: null },
+      { type: 'bankgiro', accountNumber: '1234567', bic: null },
     ])
     expect(data.fetchedAt).toBeDefined()
+  })
+
+  it('maps activityStatus to "ceased" when isCeased is true', async () => {
+    mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isNoLongerActive' })
+    mockAllSupplementary()
+
+    const res = await profileHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.activityStatus).toBe('ceased')
   })
 
   it('includes financial summary from company document', async () => {
@@ -168,18 +190,22 @@ describe('TIC profile route', () => {
     })
   })
 
-  it('includes financial report summaries', async () => {
+  it('maps v2 documents (annualReport only) to financial-report summaries', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockAllSupplementary()
 
     const res = await profileHandler(makeRequest('556036-0793'))
     const { data } = await res.json()
 
+    // The 'minutes' document is filtered out; only the annualReport remains.
     expect(data.financialReports).toHaveLength(1)
     expect(data.financialReports[0]).toMatchObject({
-      title: 'Årsredovisning 2023',
+      title: 'Årsredovisning',
+      periodStart: '2023-01-01',
+      periodEnd: '2023-12-31',
+      arrivalDate: '2024-06-15',
+      isInterimReport: false,
       isAudited: true,
-      auditOpinion: 'Ren',
     })
   })
 
@@ -197,11 +223,13 @@ describe('TIC profile route', () => {
   it('handles partial Phase 2 failures gracefully', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockBank.mockRejectedValue(new Error('timeout'))
-    mockSNI.mockResolvedValue([{ sni_2007Code: '62010', sni_2007Name: 'Dataprogrammering' }])
+    mockIndustries.mockResolvedValue([
+      { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
+    ])
     mockEmails.mockRejectedValue(new Error('timeout'))
     mockPhones.mockResolvedValue(null)
     mockPurpose.mockRejectedValue(new Error('timeout'))
-    mockReports.mockRejectedValue(new Error('timeout'))
+    mockDocuments.mockRejectedValue(new Error('timeout'))
 
     const res = await profileHandler(makeRequest('556036-0793'))
     expect(res.status).toBe(200)
@@ -226,11 +254,11 @@ describe('TIC profile route', () => {
     }
     mockSearch.mockResolvedValue(minimalDoc)
     mockBank.mockResolvedValue(null)
-    mockSNI.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue(null)
     mockEmails.mockResolvedValue(null)
     mockPhones.mockResolvedValue(null)
     mockPurpose.mockResolvedValue(null)
-    mockReports.mockResolvedValue(null)
+    mockDocuments.mockResolvedValue(null)
 
     const res = await profileHandler(makeRequest('1234567890'))
     const { data } = await res.json()
