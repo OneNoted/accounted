@@ -70,12 +70,14 @@ export async function POST(request: Request) {
   // updateUserById replaces app_metadata wholesale (see lib/auth/has-password.ts
   // and the comment in app/api/account/delete/route.ts).
   const service = createServiceClient()
+  let flagWriteOk = false
   try {
     const { data: u } = await service.auth.admin.getUserById(user.id)
     const prior = u?.user?.app_metadata ?? {}
     await service.auth.admin.updateUserById(user.id, {
       app_metadata: { ...prior, has_password: true },
     })
+    flagWriteOk = true
   } catch (err) {
     log.error('failed to flip has_password flag after successful password set', {
       userId: user.id,
@@ -84,6 +86,8 @@ export async function POST(request: Request) {
     // Don't surface the failure: the user has a working password. The
     // banner will show once more and a retry will succeed.
   }
+
+  log.info('password set', { userId: user.id, flagWriteOk })
 
   return NextResponse.json({ data: { ok: true } })
 }

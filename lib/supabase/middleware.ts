@@ -94,11 +94,19 @@ export async function updateSession(request: NextRequest) {
   // page can lock themselves out — Supabase requires AAL2 to change password
   // or unenroll MFA, and AAL2 needs a prior password sign-in. Force them to
   // set a password first. The /account/set-password page does that and routes
-  // back here via ?returnTo.
+  // back here via ?returnTo. Thread the inner returnTo through so the user
+  // ends up on their original destination after the full chain completes.
   if (pathname.startsWith('/mfa/enroll')) {
     if (!userHasPassword(user)) {
+      const innerReturnTo = request.nextUrl.searchParams.get('returnTo')
+      const mfaTarget = `/mfa/enroll${
+        innerReturnTo ? `?returnTo=${encodeURIComponent(innerReturnTo)}` : ''
+      }`
       return NextResponse.redirect(
-        new URL('/account/set-password?returnTo=/mfa/enroll', request.url),
+        new URL(
+          `/account/set-password?returnTo=${encodeURIComponent(mfaTarget)}`,
+          request.url,
+        ),
       )
     }
     return supabaseResponse

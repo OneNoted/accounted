@@ -914,15 +914,15 @@ export const ticExtension: Extension = {
             )
           }
 
-          // Mark user as BankID-linked (skips TOTP MFA). Preserve any existing
-          // has_password flag — a user reaching this handler is authenticated,
-          // which means they got in via email/password (has_password: true) or
-          // a recovery flow. updateUserById shallow-merges app_metadata, so the
-          // existing flag survives. For legacy users who pre-date the flag
-          // entirely, the userHasPassword() helper defaults them to true based
-          // on bankid_linked being false at the time of legacy signup.
+          // Read-merge-write: updateUserById REPLACES app_metadata wholesale
+          // (see app/api/account/password/route.ts). Passing just
+          // { bankid_linked: true } would wipe has_password for users who
+          // already set one — they'd then be incorrectly shown the
+          // set-password banner on their next session.
+          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const priorMeta = priorUser?.user?.app_metadata ?? {}
           await supabase.auth.admin.updateUserById(ctx.userId, {
-            app_metadata: { bankid_linked: true },
+            app_metadata: { ...priorMeta, bankid_linked: true },
           })
 
           return NextResponse.json({ data: { linked: true } })

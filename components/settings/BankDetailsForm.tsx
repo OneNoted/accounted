@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import { validateBankgiroNumber, formatBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { CompanySettings } from '@/types'
 
@@ -108,9 +109,9 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
             placeholder="123 XXX XX XX eller 07X XXX XX XX"
             defaultValue={settings.swish || ''}
             onBlur={(e) => {
-              const val = e.target.value.replace(/[\s-]/g, '')
+              const val = normaliseSwish(e.target.value)
               if (!val) { setSwishError(null); e.target.value = ''; return }
-              if (/^123\d{7}$/.test(val) || /^07\d{8}$/.test(val)) {
+              if (isValidSwish(val)) {
                 e.target.value = val
                 setSwishError(null)
               } else {
@@ -131,7 +132,7 @@ export function validateBankFields(formData: FormData): { field: string; message
   const clearing = (formData.get('clearing_number') as string || '').trim()
   const account = (formData.get('account_number') as string || '').trim()
   const bankgiro = (formData.get('bankgiro') as string || '').trim()
-  const swish = (formData.get('swish') as string || '').replace(/[\s-]/g, '')
+  const swish = normaliseSwish(formData.get('swish') as string)
 
   if (clearing && !/^\d{4,5}$/.test(clearing)) {
     errors.push({ field: 'clearing_number', message: 'Clearingnummer måste vara 4-5 siffror' })
@@ -142,7 +143,7 @@ export function validateBankFields(formData: FormData): { field: string; message
   if (bankgiro && !validateBankgiroNumber(bankgiro)) {
     errors.push({ field: 'bankgiro', message: 'Ogiltigt bankgironummer' })
   }
-  if (swish && !(/^123\d{7}$/.test(swish) || /^07\d{8}$/.test(swish))) {
+  if (swish && !isValidSwish(swish)) {
     errors.push({ field: 'swish', message: 'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)' })
   }
   return errors

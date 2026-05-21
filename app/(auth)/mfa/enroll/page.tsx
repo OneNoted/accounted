@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export default function MfaEnrollPage() {
   return (
@@ -33,8 +34,7 @@ function MfaEnrollContent() {
   const searchParams = useSearchParams()
   const supabase = createClient()
 
-  const rawReturnTo = searchParams.get('returnTo') || '/'
-  const returnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '/'
+  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/')
 
   // UX defense — middleware already blocks this route for BankID-only users
   // without a password, but a stale tab might land here too. Bounce them to

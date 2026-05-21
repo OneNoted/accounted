@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, KeyRound } from 'lucide-react'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export default function SetPasswordPage() {
   return (
@@ -27,11 +28,7 @@ function SetPasswordContent() {
   const searchParams = useSearchParams()
   const supabase = createClient()
 
-  const rawReturnTo = searchParams.get('returnTo') || '/settings/account'
-  const returnTo =
-    rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//')
-      ? rawReturnTo
-      : '/settings/account'
+  const returnTo = safeReturnTo(searchParams.get('returnTo'), '/settings/account')
 
   // Users who already have a password don't belong here — bounce them away.
   useEffect(() => {
@@ -123,15 +120,15 @@ function SetPasswordContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">
-            <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
+            <div className="h-14 w-14 rounded-lg bg-secondary flex items-center justify-center">
               <KeyRound className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl font-medium tracking-tight">
+          <h1 className="font-display text-3xl tracking-tight">
             Sätt ett lösenord
           </h1>
           <p className="text-muted-foreground text-sm mt-2">
@@ -140,11 +137,8 @@ function SetPasswordContent() {
           </p>
         </div>
 
-        <div
-          className="rounded-xl border bg-card p-6"
-          style={{ boxShadow: 'var(--shadow-md)' }}
-        >
-          <form onSubmit={handleSetPassword} className="space-y-5">
+        <div className="rounded-lg border border-border bg-card p-6">
+          <form onSubmit={handleSetPassword} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="password">Lösenord</Label>
               <Input

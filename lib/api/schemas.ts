@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 
 // ============================================================
 // Shared primitives
@@ -482,10 +483,10 @@ export const UpdateSettingsSchema = z.object({
   bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer (7-8 siffror)').nullable().optional().or(z.literal('')),
   plusgiro: z.string().regex(/^\d{1,7}-\d{1}$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
   swish: z.string()
-    .transform((v) => v.replace(/[\s-]/g, ''))
+    .transform(normaliseSwish)
     .pipe(
       z.string().refine(
-        (v) => v === '' || /^123\d{7}$/.test(v) || /^07\d{8}$/.test(v),
+        isValidSwish,
         'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)',
       ),
     )
