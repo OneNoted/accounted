@@ -188,7 +188,11 @@ export function parseOpeningBalanceFile(
     })
   }
 
-  // Merge duplicate accounts — keyed on the already-normalized account_number
+  // Merge duplicate accounts — keyed on the already-normalized account_number.
+  // Union validation_errors across rows so a warning that fires on row 5 (e.g.
+  // BAS-class mismatch) isn't silently dropped because row 2 of the same
+  // account had no error. Suppressed validation issues on IB-feeding data
+  // would risk a misclassification propagating into the ledger.
   const mergedMap = new Map<string, ParsedOpeningBalanceRow>()
   for (const row of rows) {
     const existing = mergedMap.get(row.account_number)
@@ -198,8 +202,15 @@ export function parseOpeningBalanceFile(
       if (!existing.account_name && row.account_name) {
         existing.account_name = row.account_name
       }
+      if (row.validation_errors?.length) {
+        const seen = new Set(existing.validation_errors)
+        for (const err of row.validation_errors) {
+          if (!seen.has(err)) existing.validation_errors.push(err)
+        }
+        existing.is_valid = existing.is_valid && row.is_valid
+      }
     } else {
-      mergedMap.set(row.account_number, { ...row })
+      mergedMap.set(row.account_number, { ...row, validation_errors: [...row.validation_errors] })
     }
   }
   const mergedRows = Array.from(mergedMap.values())

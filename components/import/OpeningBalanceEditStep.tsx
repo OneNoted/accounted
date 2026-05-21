@@ -69,7 +69,9 @@ export default function OpeningBalanceEditStep({
 }: OpeningBalanceEditStepProps) {
   const [rows, setRows] = useState<EditableRow[]>(() => {
     // Defense-in-depth dedup: if the parser ever leaks duplicates by
-    // account_number, collapse them here before the user sees them.
+    // account_number, collapse them here before the user sees them. Union
+    // validation_errors so a warning surfaced only on the later row isn't
+    // silently dropped during the merge.
     const byAccount = new Map<string, EditableRow>()
     for (const r of initialRows) {
       const key = r.account_number.replace(/\D/g, '')
@@ -78,6 +80,12 @@ export default function OpeningBalanceEditStep({
         existing.debit_amount = Math.round((existing.debit_amount + r.debit_amount) * 100) / 100
         existing.credit_amount = Math.round((existing.credit_amount + r.credit_amount) * 100) / 100
         if (!existing.account_name && r.account_name) existing.account_name = r.account_name
+        if (r.validation_errors?.length) {
+          const seen = new Set(existing.validation_errors)
+          for (const err of r.validation_errors) {
+            if (!seen.has(err)) existing.validation_errors.push(err)
+          }
+        }
         continue
       }
       byAccount.set(key, {
@@ -86,7 +94,7 @@ export default function OpeningBalanceEditStep({
         account_name: r.account_name,
         debit_amount: r.debit_amount,
         credit_amount: r.credit_amount,
-        validation_errors: r.validation_errors,
+        validation_errors: [...r.validation_errors],
         bas_match: r.bas_match,
       })
     }

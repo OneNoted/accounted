@@ -28,7 +28,12 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
 
   const willOverwrite = data.will_overwrite_existing === true
   const existingDocName = data.existing_document_file_name as string | undefined
-  const existingIsAccounting = data.existing_document_is_rakenskapsinformation === true
+  // Fail safe: if the staging tool didn't explicitly assert the existing doc
+  // is NOT räkenskapsinformation (i.e. `=== false`), treat overwrite as a
+  // BFL 7 kap event. A missing/undefined flag must not silently downgrade
+  // the destructive warning.
+  const existingIsAccounting =
+    willOverwrite && data.existing_document_is_rakenskapsinformation !== false
 
   const documentId = params.document_id as string | undefined
 
