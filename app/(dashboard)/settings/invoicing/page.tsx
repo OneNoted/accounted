@@ -31,6 +31,7 @@ export default function InvoicingSettingsPage() {
       clearing_number: formData.get('clearing_number') as string,
       account_number: formData.get('account_number') as string,
       bankgiro: (formData.get('bankgiro') as string) || null,
+      swish: ((formData.get('swish') as string) || '').replace(/[\s-]/g, '') || null,
       invoice_prefix: (formData.get('invoice_prefix') as string) || null,
       next_invoice_number: parseInt(formData.get('next_invoice_number') as string) || 1,
       invoice_default_days: parseInt(formData.get('invoice_default_days') as string) || 30,

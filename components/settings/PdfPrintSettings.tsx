@@ -112,6 +112,17 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
 
         <div className="flex items-center justify-between">
           <div>
+            <Label>Visa Swish</Label>
+            <p className="text-xs text-muted-foreground">Visa Swish-nummer på fakturautskrift</p>
+          </div>
+          <Switch
+            checked={settings.invoice_show_swish ?? true}
+            onCheckedChange={(v) => saveToggle('invoice_show_swish', v)}
+          />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
             <Label>Visa logga</Label>
             <p className="text-xs text-muted-foreground">Visa uppladdad logga i fakturahuvudet</p>
           </div>
@@ -187,6 +198,25 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
             value={creditTermsText}
             onChange={(e) => setCreditTermsText(e.target.value)}
             onBlur={() => saveText('invoice_credit_terms_text', creditTermsText)}
+          />
+        </div>
+      </div>
+
+      <div className="pt-6 space-y-4">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          Automatisering
+        </h2>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Skicka automatiska påminnelser</Label>
+            <p className="text-xs text-muted-foreground">
+              Skicka påminnelser till kunder för försenade fakturor enligt din inställning för påminnelseintervall.
+            </p>
+          </div>
+          <Switch
+            checked={settings.send_invoice_reminders ?? true}
+            onCheckedChange={(v) => saveToggle('send_invoice_reminders', v)}
           />
         </div>
       </div>

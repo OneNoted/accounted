@@ -16,6 +16,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
   const [bankgiroError, setBankgiroError] = useState<string | null>(null)
   const [clearingError, setClearingError] = useState<string | null>(null)
   const [accountNumberError, setAccountNumberError] = useState<string | null>(null)
+  const [swishError, setSwishError] = useState<string | null>(null)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
 
   return (
@@ -77,25 +78,48 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
         </div>
       </div>
 
-      <div className="max-w-xs space-y-2">
-        <Label htmlFor="bankgiro">Bankgiro</Label>
-        <Input
-          id="bankgiro"
-          name="bankgiro"
-          placeholder="XXX-XXXX"
-          defaultValue={settings.bankgiro || ''}
-          onBlur={(e) => {
-            const val = e.target.value.trim()
-            if (!val) { setBankgiroError(null); return }
-            if (validateBankgiroNumber(val)) {
-              e.target.value = formatBankgiroNumber(val)
-              setBankgiroError(null)
-            } else {
-              setBankgiroError('Ogiltigt bankgironummer')
-            }
-          }}
-        />
-        {bankgiroError && <p className="text-xs text-destructive">{bankgiroError}</p>}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="bankgiro">Bankgiro</Label>
+          <Input
+            id="bankgiro"
+            name="bankgiro"
+            placeholder="XXX-XXXX"
+            defaultValue={settings.bankgiro || ''}
+            onBlur={(e) => {
+              const val = e.target.value.trim()
+              if (!val) { setBankgiroError(null); return }
+              if (validateBankgiroNumber(val)) {
+                e.target.value = formatBankgiroNumber(val)
+                setBankgiroError(null)
+              } else {
+                setBankgiroError('Ogiltigt bankgironummer')
+              }
+            }}
+          />
+          {bankgiroError && <p className="text-xs text-destructive">{bankgiroError}</p>}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="swish">Swish</Label>
+          <Input
+            id="swish"
+            name="swish"
+            placeholder="123 XXX XX XX eller 07X XXX XX XX"
+            defaultValue={settings.swish || ''}
+            onBlur={(e) => {
+              const val = e.target.value.replace(/[\s-]/g, '')
+              if (!val) { setSwishError(null); e.target.value = ''; return }
+              if (/^123\d{7}$/.test(val) || /^07\d{8}$/.test(val)) {
+                e.target.value = val
+                setSwishError(null)
+              } else {
+                setSwishError('Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)')
+              }
+            }}
+          />
+          {swishError && <p className="text-xs text-destructive">{swishError}</p>}
+        </div>
       </div>
     </section>
   )
@@ -107,6 +131,7 @@ export function validateBankFields(formData: FormData): { field: string; message
   const clearing = (formData.get('clearing_number') as string || '').trim()
   const account = (formData.get('account_number') as string || '').trim()
   const bankgiro = (formData.get('bankgiro') as string || '').trim()
+  const swish = (formData.get('swish') as string || '').replace(/[\s-]/g, '')
 
   if (clearing && !/^\d{4,5}$/.test(clearing)) {
     errors.push({ field: 'clearing_number', message: 'Clearingnummer måste vara 4-5 siffror' })
@@ -116,6 +141,9 @@ export function validateBankFields(formData: FormData): { field: string; message
   }
   if (bankgiro && !validateBankgiroNumber(bankgiro)) {
     errors.push({ field: 'bankgiro', message: 'Ogiltigt bankgironummer' })
+  }
+  if (swish && !(/^123\d{7}$/.test(swish) || /^07\d{8}$/.test(swish))) {
+    errors.push({ field: 'swish', message: 'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)' })
   }
   return errors
 }

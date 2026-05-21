@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, Suspense } from 'react'
+import { useState, useRef, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
+import { userHasPassword } from '@/lib/auth/has-password'
 
 export default function MfaEnrollPage() {
   return (
@@ -34,6 +35,31 @@ function MfaEnrollContent() {
 
   const rawReturnTo = searchParams.get('returnTo') || '/'
   const returnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '/'
+
+  // UX defense — middleware already blocks this route for BankID-only users
+  // without a password, but a stale tab might land here too. Bounce them to
+  // the set-password flow before they enroll a factor they cannot later
+  // un-enroll without AAL2.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (cancelled || !user) return
+      if (!userHasPassword(user)) {
+        router.replace(
+          `/account/set-password?returnTo=${encodeURIComponent(
+            `/mfa/enroll?returnTo=${encodeURIComponent(returnTo)}`,
+          )}`,
+        )
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleEnroll = async () => {
     setIsEnrolling(true)

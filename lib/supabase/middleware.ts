@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
+import { userHasPassword } from '@/lib/auth/has-password'
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -89,8 +90,29 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  // MFA pages — accessible to authenticated users (AAL1+), skip MFA enforcement
+  // /mfa/enroll: gate behind has-password. BankID-only users who reach this
+  // page can lock themselves out — Supabase requires AAL2 to change password
+  // or unenroll MFA, and AAL2 needs a prior password sign-in. Force them to
+  // set a password first. The /account/set-password page does that and routes
+  // back here via ?returnTo.
+  if (pathname.startsWith('/mfa/enroll')) {
+    if (!userHasPassword(user)) {
+      return NextResponse.redirect(
+        new URL('/account/set-password?returnTo=/mfa/enroll', request.url),
+      )
+    }
+    return supabaseResponse
+  }
+
+  // Other MFA pages — accessible to authenticated users (AAL1+), skip MFA enforcement
   if (pathname.startsWith('/mfa/')) {
+    return supabaseResponse
+  }
+
+  // /account/set-password is the escape hatch from the BankID/MFA lockout
+  // and must be reachable even when the user has no company yet (e.g. mid-
+  // onboarding) and is at AAL1.
+  if (pathname.startsWith('/account/set-password')) {
     return supabaseResponse
   }
 

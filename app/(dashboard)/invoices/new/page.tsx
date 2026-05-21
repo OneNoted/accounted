@@ -27,6 +27,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
+import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType } from '@/types'
 
@@ -85,6 +86,12 @@ export default function NewInvoicePage() {
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
+  const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  // True only when the user had zero invoices when this page loaded. The
+  // post-create flow uses this to offer a one-shot "upload a logo?" prompt
+  // — issue #520. Self-limits: once count > 0 it stays false.
+  const [hadZeroInvoices, setHadZeroInvoices] = useState<boolean | null>(null)
+  const [showLogoPrompt, setShowLogoPrompt] = useState(false)
   const pendingCustomerRef = useRef<Customer | null>(null)
 
   const {
@@ -144,7 +151,7 @@ export default function NewInvoicePage() {
     if (!company?.id) return
     const { data } = await supabase
       .from('company_settings')
-      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding')
+      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url')
       .eq('company_id', company.id)
       .single()
     if (data?.invoice_default_notes) {
@@ -160,7 +167,28 @@ export default function NewInvoicePage() {
     if (typeof data?.ore_rounding === 'boolean') {
       setOreRounding(data.ore_rounding)
     }
+    setLogoUrl(data?.logo_url ?? null)
   }
+
+  // First-invoice detection (issue #520): captured at page load so the
+  // post-create flow can offer the logo prompt for genuinely first-time
+  // invoices only. head:true keeps it cheap — no rows pulled.
+  useEffect(() => {
+    if (!company?.id) return
+    let cancelled = false
+    ;(async () => {
+      const { count } = await supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', company.id)
+      if (!cancelled) setHadZeroInvoices(count === 0 || count === null)
+    })()
+    return () => {
+      cancelled = true
+    }
+    // supabase is a stable reference from createClient() at top of component
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id])
 
   // Preview the next invoice number so the user can catch a mis-set
   // sequence/prefix before committing. The actual allocator still runs
@@ -319,6 +347,16 @@ export default function NewInvoicePage() {
     }
   }
 
+  function handleLogoPromptClose() {
+    setShowLogoPrompt(false)
+    // Resume the post-create flow that was deferred by the logo prompt.
+    if (selectedCustomer?.email && createdInvoiceId) {
+      setShowSendPrompt(true)
+    } else if (createdInvoiceId) {
+      router.push(`/invoices/${createdInvoiceId}`)
+    }
+  }
+
   async function handleConfirm() {
     if (!pendingData) return
     setIsSubmitting(true)
@@ -343,10 +381,15 @@ export default function NewInvoicePage() {
       })
 
       setShowReview(false)
+      setCreatedInvoiceId(result.data.id)
 
-      // If customer has email, offer to send immediately
-      if (selectedCustomer?.email) {
-        setCreatedInvoiceId(result.data.id)
+      // First-invoice-only logo prompt (issue #520) takes priority over the
+      // send-now dialog so a fresh upload makes it onto the just-sent PDF
+      // (pdf-template reads logo_url live from company_settings). Once the
+      // prompt closes, handleLogoPromptClose resumes the regular flow.
+      if (hadZeroInvoices === true && !logoUrl) {
+        setShowLogoPrompt(true)
+      } else if (selectedCustomer?.email) {
         setShowSendPrompt(true)
       } else {
         router.push(`/invoices/${result.data.id}`)
@@ -930,6 +973,14 @@ export default function NewInvoicePage() {
         open={showBankSetup}
         onOpenChange={setShowBankSetup}
         onComplete={handleBankSetupComplete}
+      />
+
+      {/* First-invoice logo prompt (issue #520) */}
+      <FirstInvoiceLogoPrompt
+        open={showLogoPrompt}
+        onClose={handleLogoPromptClose}
+        logoUrl={logoUrl}
+        onLogoUpdate={(url) => setLogoUrl(url)}
       />
 
       {/* Send now prompt dialog */}
