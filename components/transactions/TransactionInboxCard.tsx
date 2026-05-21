@@ -10,35 +10,21 @@ import {
   DataListMeta,
   DataListMetaSeparator,
 } from '@/components/ui/data-list'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuLabel,
-} from '@/components/ui/dropdown-menu'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import {
   AlertCircle,
   ArrowUpRight,
   ArrowDownRight,
   FileText,
+  Link2,
   Loader2,
-  MoreHorizontal,
   Trash2,
 } from 'lucide-react'
-import { getAccountName, formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
-import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
-import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
-import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
-  suggestions?: SuggestedCategory[]
-  templateSuggestions?: SuggestedTemplate[]
   /** When set, this bank tx looks like the bank side of a 1930↔1630
    *  transfer that the user will later see on /skattekonto. */
   skvCounterpartDate?: string
@@ -48,29 +34,26 @@ interface TransactionInboxCardProps {
   entityType?: string
   onCategorize: CategorizeHandler
   onMarkPrivate: (id: string) => void
+  /** Confirm an auto-detected invoice match (1-click shortcut). */
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
+  /** Open the manual picker — routes to customer or supplier picker by amount sign. */
+  onOpenMatchInvoicePicker: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
-  onOpenQuickReview?: (transaction: TransactionWithInvoice, suggestion: SuggestedCategory) => void
-  onOpenTemplateReview?: (transaction: TransactionWithInvoice, templateId: string) => void
   onToggleSelect: (id: string) => void
   onAnimationComplete?: (id: string) => void
 }
 
 export default function TransactionInboxCard({
   transaction,
-  suggestions,
-  templateSuggestions,
   skvCounterpartDate,
   processingId,
   isBatchMode,
   isSelected,
-  onCategorize,
   onOpenMatchDialog,
+  onOpenMatchInvoicePicker,
   onOpenCategoryDialog,
   onDelete,
-  onOpenQuickReview,
-  onOpenTemplateReview,
   onToggleSelect,
   onAnimationComplete,
 }: TransactionInboxCardProps) {
@@ -78,38 +61,21 @@ export default function TransactionInboxCard({
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
   const hasInvoiceMatch = !!transaction.potential_invoice && !transaction.invoice_id
-  const hasSupplierInvoiceMatch = !!transaction.potential_supplier_invoice && !transaction.supplier_invoice_id
-  const topSuggestion = suggestions?.[0]
-  const topTemplate = templateSuggestions?.[0]
-  const alternateTemplates = templateSuggestions?.slice(1, 4) ?? []
+  const hasSupplierInvoiceMatch =
+    !!transaction.potential_supplier_invoice && !transaction.supplier_invoice_id
   const isUncategorized = transaction.is_business === null && !transaction.journal_entry_id
   const showCheckbox = isBatchMode && isUncategorized
   const isDeletable = !transaction.journal_entry_id
 
-  function handleSuggestionClick(suggestion: SuggestedCategory) {
-    if (onOpenQuickReview) {
-      onOpenQuickReview(transaction, suggestion)
-    } else {
-      onCategorize(transaction.id, true, suggestion.category)
-    }
-  }
-
-  function handleTemplateClick(templateId: string) {
-    if (onOpenTemplateReview) {
-      onOpenTemplateReview(transaction, templateId)
-    } else if (topSuggestion) {
-      handleSuggestionClick(topSuggestion)
-    }
-  }
-
-  // Decide the single primary action button shown in the trailing slot.
+  // Primary action: invoice/supplier-invoice match keeps the 1-click shortcut;
+  // otherwise the user opens the template picker.
   const primaryAction = (() => {
     if (hasInvoiceMatch) {
       return (
         <Button
           size="sm"
           variant="default"
-          className="h-8 px-3 text-xs"
+          className="h-9 px-3 text-sm"
           onClick={(e) => {
             e.stopPropagation()
             onOpenMatchDialog(transaction)
@@ -117,9 +83,9 @@ export default function TransactionInboxCard({
           disabled={isProcessing || isDisabled}
         >
           {isProcessing ? (
-            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
           ) : (
-            <FileText className="mr-1 h-3 w-3" />
+            <FileText className="mr-1.5 h-3.5 w-3.5" />
           )}
           Matcha {transaction.potential_invoice!.invoice_number}
         </Button>
@@ -130,7 +96,7 @@ export default function TransactionInboxCard({
         <Button
           size="sm"
           variant="default"
-          className="h-8 px-3 text-xs"
+          className="h-9 px-3 text-sm"
           onClick={(e) => {
             e.stopPropagation()
             onOpenMatchDialog(transaction)
@@ -138,49 +104,11 @@ export default function TransactionInboxCard({
           disabled={isProcessing || isDisabled}
         >
           {isProcessing ? (
-            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
           ) : (
-            <FileText className="mr-1 h-3 w-3" />
+            <FileText className="mr-1.5 h-3.5 w-3.5" />
           )}
           Matcha {transaction.potential_supplier_invoice!.supplier_invoice_number}
-        </Button>
-      )
-    }
-    if (topTemplate) {
-      const isCounterparty = isCounterpartyTemplateId(topTemplate.template_id)
-      return (
-        <Button
-          size="sm"
-          variant="default"
-          className="h-8 px-3 text-xs"
-          onClick={(e) => {
-            e.stopPropagation()
-            const tmpl = isCounterparty ? null : getTemplateById(topTemplate.template_id)
-            if (isCounterparty || tmpl) {
-              handleTemplateClick(topTemplate.template_id)
-            }
-          }}
-          disabled={isProcessing || isDisabled}
-        >
-          {isProcessing && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-          {topTemplate.name_sv}
-        </Button>
-      )
-    }
-    if (topSuggestion) {
-      return (
-        <Button
-          size="sm"
-          variant="default"
-          className="h-8 px-3 text-xs"
-          onClick={(e) => {
-            e.stopPropagation()
-            handleSuggestionClick(topSuggestion)
-          }}
-          disabled={isProcessing || isDisabled}
-        >
-          {isProcessing && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-          {topSuggestion.label}
         </Button>
       )
     }
@@ -188,7 +116,7 @@ export default function TransactionInboxCard({
       <Button
         size="sm"
         variant="default"
-        className="h-8 px-3 text-xs"
+        className="h-9 px-3 text-sm"
         onClick={(e) => {
           e.stopPropagation()
           onOpenCategoryDialog(transaction)
@@ -200,152 +128,10 @@ export default function TransactionInboxCard({
     )
   })()
 
-  // Suggestion text for the meta line (what the primary button will do).
-  const primaryHint = (() => {
-    if (hasInvoiceMatch) return null // primary already names the invoice
-    if (hasSupplierInvoiceMatch) return null
-    if (topTemplate) {
-      const isCounterparty = isCounterpartyTemplateId(topTemplate.template_id)
-      const tmpl = isCounterparty ? null : getTemplateById(topTemplate.template_id)
-      const detail = isCounterparty
-        ? topTemplate.description_sv
-        : getAccountName(tmpl?.debit_account || topTemplate.debit_account)
-      return detail ? `Förslag: ${detail}` : null
-    }
-    if (topSuggestion?.account) {
-      const conf =
-        topSuggestion.confidence >= 0.8 ? ` · ${Math.round(topSuggestion.confidence * 100)}%` : ''
-      return `Förslag: ${formatAccountWithName(topSuggestion.account)}${conf}`
-    }
-    return null
-  })()
-
-  const hasOverflow =
-    isDeletable || alternateTemplates.length > 0 || hasInvoiceMatch || hasSupplierInvoiceMatch || topTemplate || topSuggestion
-
-  const row = (
-    <DataListRow
-      data-tx-id={transaction.id}
-      selected={isSelected}
-      className={cn(isDisabled && 'opacity-50')}
-      onClick={showCheckbox ? () => onToggleSelect(transaction.id) : undefined}
-      leading={
-        showCheckbox ? (
-          <Checkbox
-            checked={isSelected}
-            onCheckedChange={() => onToggleSelect(transaction.id)}
-            onClick={(e) => e.stopPropagation()}
-            aria-label="Välj transaktion"
-          />
-        ) : (
-          <span
-            className={cn(
-              'inline-flex h-5 w-5 items-center justify-center text-muted-foreground',
-              isIncome ? 'text-success' : 'text-foreground/60'
-            )}
-            aria-hidden
-          >
-            {isIncome ? (
-              <ArrowUpRight className="h-4 w-4" />
-            ) : (
-              <ArrowDownRight className="h-4 w-4" />
-            )}
-          </span>
-        )
-      }
-      trailing={
-        <>
-          <div className="text-right">
-            <p
-              className={cn(
-                'font-medium tabular-nums leading-none',
-                isIncome && 'text-success'
-              )}
-            >
-              {isIncome ? '+' : ''}
-              {formatCurrency(transaction.amount, transaction.currency)}
-            </p>
-            {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
-              <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
-                {formatCurrency(transaction.amount_sek)}
-              </p>
-            )}
-          </div>
-          {!isBatchMode && primaryAction}
-          {!isBatchMode && hasOverflow && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground"
-                  onClick={(e) => e.stopPropagation()}
-                  aria-label="Fler alternativ"
-                  disabled={isProcessing || isDisabled}
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[14rem]">
-                {alternateTemplates.length > 0 && (
-                  <>
-                    <DropdownMenuLabel>Andra mallar</DropdownMenuLabel>
-                    {alternateTemplates.map((ts) => (
-                      <DropdownMenuItem
-                        key={ts.template_id}
-                        onSelect={() => handleTemplateClick(ts.template_id)}
-                      >
-                        {ts.name_sv}
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem onSelect={() => onOpenCategoryDialog(transaction)}>
-                  Välj mall…
-                </DropdownMenuItem>
-                {isDeletable && onDelete && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => onDelete(transaction.id)}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Ta bort
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </>
-      }
-    >
-      <div className="flex items-center gap-1.5 min-w-0">
-        <DataListPrimary>{transaction.description}</DataListPrimary>
-        <TransactionAttachmentIndicator documentId={transaction.document_id} />
-      </div>
-      <DataListMeta>
-        <span className="tabular-nums">{formatDate(transaction.date)}</span>
-        {primaryHint && (
-          <>
-            <DataListMetaSeparator />
-            <span className="truncate max-w-[28ch]">{primaryHint}</span>
-          </>
-        )}
-        {skvCounterpartDate && (
-          <>
-            <DataListMetaSeparator />
-            <Badge variant="warning" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
-              <AlertCircle className="h-3 w-3" />
-              Möjlig 1930↔1630
-            </Badge>
-          </>
-        )}
-      </DataListMeta>
-    </DataListRow>
-  )
+  // Manual invoice-match affordance. Hidden once an auto-detected match is
+  // already shown as the primary button — having both makes the row noisy.
+  const showInvoiceMatchButton =
+    isDeletable && !hasInvoiceMatch && !hasSupplierInvoiceMatch
 
   return (
     <motion.div
@@ -359,7 +145,118 @@ export default function TransactionInboxCard({
         }
       }}
     >
-      {row}
+      <DataListRow
+        data-tx-id={transaction.id}
+        selected={isSelected}
+        className={cn(isDisabled && 'opacity-50')}
+        rowClassName="py-4 gap-4"
+        onClick={showCheckbox ? () => onToggleSelect(transaction.id) : undefined}
+        leading={
+          showCheckbox ? (
+            <Checkbox
+              checked={isSelected}
+              onCheckedChange={() => onToggleSelect(transaction.id)}
+              onClick={(e) => e.stopPropagation()}
+              aria-label="Välj transaktion"
+            />
+          ) : (
+            <span
+              className={cn(
+                'inline-flex h-6 w-6 items-center justify-center',
+                isIncome ? 'text-success' : 'text-foreground/60'
+              )}
+              aria-hidden
+            >
+              {isIncome ? (
+                <ArrowUpRight className="h-5 w-5" />
+              ) : (
+                <ArrowDownRight className="h-5 w-5" />
+              )}
+            </span>
+          )
+        }
+        trailing={
+          <>
+            <div className="text-right">
+              <p
+                className={cn(
+                  'text-base font-medium tabular-nums leading-none',
+                  isIncome && 'text-success'
+                )}
+              >
+                {isIncome ? '+' : ''}
+                {formatCurrency(transaction.amount, transaction.currency)}
+              </p>
+              {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
+                <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                  {formatCurrency(transaction.amount_sek)}
+                </p>
+              )}
+            </div>
+            {!isBatchMode && (
+              <>
+                {primaryAction}
+                {showInvoiceMatchButton && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpenMatchInvoicePicker(transaction)
+                    }}
+                    aria-label={
+                      isIncome
+                        ? 'Matcha mot kundfaktura'
+                        : 'Matcha mot leverantörsfaktura'
+                    }
+                    title={
+                      isIncome
+                        ? 'Matcha mot kundfaktura'
+                        : 'Matcha mot leverantörsfaktura'
+                    }
+                    disabled={isProcessing || isDisabled}
+                  >
+                    <Link2 className="h-4 w-4" />
+                  </Button>
+                )}
+                {isDeletable && onDelete && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 text-muted-foreground hover:text-destructive"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onDelete(transaction.id)
+                    }}
+                    aria-label="Ta bort transaktion"
+                    disabled={isProcessing || isDisabled}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </>
+            )}
+          </>
+        }
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <DataListPrimary className="text-base">{transaction.description}</DataListPrimary>
+          <TransactionAttachmentIndicator documentId={transaction.document_id} />
+        </div>
+        <DataListMeta className="mt-1">
+          <span className="tabular-nums">{formatDate(transaction.date)}</span>
+          {skvCounterpartDate && (
+            <>
+              <DataListMetaSeparator />
+              <Badge variant="warning" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
+                <AlertCircle className="h-3 w-3" />
+                Möjlig 1930↔1630
+              </Badge>
+            </>
+          )}
+        </DataListMeta>
+      </DataListRow>
     </motion.div>
   )
 }

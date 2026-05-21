@@ -88,7 +88,7 @@ const DataListRow = React.forwardRef<HTMLDivElement, DataListRowProps>(
           )}
           <div className="min-w-0 flex-1">{children}</div>
           {trailing != null && (
-            <div className="flex shrink-0 items-center gap-2">{trailing}</div>
+            <div className="flex shrink-0 items-center gap-3">{trailing}</div>
           )}
         </div>
         {expandedContent != null && (

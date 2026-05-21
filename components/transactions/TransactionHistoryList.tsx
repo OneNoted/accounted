@@ -4,7 +4,6 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   DataList,
@@ -27,7 +26,6 @@ import {
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
 import {
-  Search,
   ArrowUpRight,
   ArrowDownRight,
   ArrowLeftRight,
@@ -58,6 +56,7 @@ type HistoryRow =
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
+  searchTerm?: string
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
@@ -71,6 +70,7 @@ interface TransactionHistoryListProps {
 export default function TransactionHistoryList({
   transactions,
   skvRows = [],
+  searchTerm = '',
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onDelete,
@@ -80,7 +80,6 @@ export default function TransactionHistoryList({
   isLoadingMore,
   onLoadMore,
 }: TransactionHistoryListProps) {
-  const [searchTerm, setSearchTerm] = useState('')
   const [filter, setFilter] = useState<HistoryFilter>('all')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
@@ -123,25 +122,14 @@ export default function TransactionHistoryList({
 
   return (
     <div className="space-y-4">
-      {/* Search + business/private tabs */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Sök transaktioner..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-        <Tabs value={filter} onValueChange={(v) => setFilter(v as HistoryFilter)}>
-          <TabsList>
-            <TabsTrigger value="all">Alla</TabsTrigger>
-            <TabsTrigger value="business">Företag</TabsTrigger>
-            <TabsTrigger value="private">Privat</TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
+      {/* Business/private tabs */}
+      <Tabs value={filter} onValueChange={(v) => setFilter(v as HistoryFilter)}>
+        <TabsList>
+          <TabsTrigger value="all">Alla</TabsTrigger>
+          <TabsTrigger value="business">Företag</TabsTrigger>
+          <TabsTrigger value="private">Privat</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       <DataList>
         {showHeader && (

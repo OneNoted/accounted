@@ -10,7 +10,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { DataList, DataListHeader } from '@/components/ui/data-list'
+import { DataList, DataListHeader, DataListEmpty } from '@/components/ui/data-list'
+import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -18,9 +19,8 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, X } from 'lucide-react'
+import { ChevronDown, Search, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
-import SwipeCategorizationView from '@/components/transactions/SwipeCategorizationView'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
@@ -30,11 +30,11 @@ import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard
 import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatchDialog'
 import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
 import InvoicePicker from '@/components/transactions/InvoicePicker'
+import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
 import TransactionBookingDialog from '@/components/transactions/TransactionBookingDialog'
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
-import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '@/components/transactions/transaction-types'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
@@ -49,7 +49,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry } from '@/types'
-import type { SuggestedCategory, SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
@@ -88,11 +88,9 @@ export default function TransactionsPage() {
   const [mode, setMode] = useState<ViewMode>('inbox')
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
-  const [showSwipeView, setShowSwipeView] = useState(false)
-  const [categorySuggestions, setCategorySuggestions] = useState<Record<string, SuggestedCategory[]>>({})
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
   const [processingId, setProcessingId] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
 
   // Batch mode
   const [isBatchMode, setIsBatchMode] = useState(false)
@@ -116,6 +114,9 @@ export default function TransactionsPage() {
   // Invoice picker dialog (manual match)
   const [invoicePickerOpen, setInvoicePickerOpen] = useState(false)
   const [invoicePickerTransaction, setInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [supplierInvoicePickerOpen, setSupplierInvoicePickerOpen] = useState(false)
+  const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
+  const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
 
   // Quick review dialog (suggestion review before booking)
@@ -218,8 +219,10 @@ export default function TransactionsPage() {
 
   const inboxItems: InboxItem[] = (() => {
     const items: InboxItem[] = []
+    const needle = searchTerm.trim().toLowerCase()
     if (sourceFilter !== 'skatteverket') {
       for (const t of uncategorizedTransactions) {
+        if (needle && !t.description.toLowerCase().includes(needle)) continue
         items.push({ source: 'bank', date: t.date, data: t })
       }
     }
@@ -228,6 +231,7 @@ export default function TransactionsPage() {
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
         if (exitingIds.has(r.id)) continue
+        if (needle && !r.transaktionstext.toLowerCase().includes(needle)) continue
         items.push({ source: 'skatteverket', date: r.transaktionsdatum, data: r })
       }
     }
@@ -378,7 +382,6 @@ export default function TransactionsPage() {
 
   async function fetchCategorySuggestions(txIds: string[]) {
     if (txIds.length === 0) return
-    setIsLoadingSuggestions(true)
     try {
       const response = await fetch('/api/transactions/suggest-categories', {
         method: 'POST',
@@ -387,16 +390,12 @@ export default function TransactionsPage() {
       })
       if (!response.ok) throw new Error('Failed to fetch suggestions')
       const data = await response.json()
-      if (data.suggestions) {
-        setCategorySuggestions(data.suggestions)
-      }
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
     } catch {
       // Non-critical
     }
-    setIsLoadingSuggestions(false)
   }
 
   // Fetch transactions and entity type in parallel on mount, then suggestions
@@ -1028,6 +1027,76 @@ export default function TransactionsPage() {
     }
   }
 
+  async function handleSelectSupplierInvoiceFromPicker(invoice: SupplierInvoice & { supplier?: Supplier }) {
+    if (!supplierInvoicePickerTransaction) return
+    const tx = supplierInvoicePickerTransaction
+    setIsMatchingSupplierFromPicker(true)
+    try {
+      const response = await fetch(`/api/transactions/${tx.id}/match-supplier-invoice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier_invoice_id: invoice.id }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: 'Matchning misslyckades',
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        setIsMatchingSupplierFromPicker(false)
+        return
+      }
+
+      toast({
+        title: 'Leverantörsfaktura matchad',
+        description: `Faktura ${invoice.supplier_invoice_number ?? ''} markerad som betald`,
+      })
+
+      setSupplierInvoicePickerOpen(false)
+      setSupplierInvoicePickerTransaction(null)
+      setExitingIds((prev) => new Set(prev).add(tx.id))
+      setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+      setTimeout(() => {
+        setTransactions((prev) =>
+          prev.map((t) =>
+            t.id === tx.id
+              ? {
+                  ...t,
+                  supplier_invoice_id: invoice.id,
+                  is_business: true,
+                  journal_entry_id: result.journal_entry_id ?? t.journal_entry_id,
+                }
+              : t
+          )
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(tx.id)
+          return next
+        })
+        setIsMatchingSupplierFromPicker(false)
+      }, 350)
+    } catch {
+      toast({
+        title: 'Matchning misslyckades',
+        description: 'Transaktionen kunde inte matchas med leverantörsfakturan. Försök igen.',
+        variant: 'destructive',
+      })
+      setIsMatchingSupplierFromPicker(false)
+    }
+  }
+
+  function openInvoiceMatchPicker(transaction: TransactionWithInvoice) {
+    if (transaction.amount >= 0) {
+      setInvoicePickerTransaction(transaction)
+      setInvoicePickerOpen(true)
+    } else {
+      setSupplierInvoicePickerTransaction(transaction)
+      setSupplierInvoicePickerOpen(true)
+    }
+  }
+
   async function handleCreateTransaction(data: CreateTransactionInput) {
     setIsCreating(true)
     const { data: { user } } = await supabase.auth.getUser()
@@ -1177,15 +1246,46 @@ export default function TransactionsPage() {
     setSelectedIds(new Set())
   }
 
-  async function handleBatchMarkPrivate() {
+  async function handleBatchDelete() {
     const ids = Array.from(selectedIds)
+    const ok = await confirmDelete({
+      title: `Ta bort ${ids.length} transaktioner?`,
+      description: 'Åtgärden kan inte ångras.',
+      confirmLabel: 'Ta bort',
+      variant: 'destructive',
+    })
+    if (!ok) return
+
     setBatchProgress({ done: 0, total: ids.length })
+    let successes = 0
+    const failures: string[] = []
     for (let i = 0; i < ids.length; i++) {
-      await handleCategorize(ids[i], false, 'private')
+      try {
+        const response = await fetch(`/api/transactions/${ids[i]}`, { method: 'DELETE' })
+        if (response.ok) {
+          successes++
+        } else {
+          const tx = transactions.find((t) => t.id === ids[i])
+          failures.push(tx?.description || ids[i])
+        }
+      } catch {
+        failures.push(ids[i])
+      }
       setBatchProgress({ done: i + 1, total: ids.length })
     }
+    if (successes > 0) {
+      setTransactions((prev) => prev.filter((t) => !selectedIds.has(t.id) || failures.includes(t.description)))
+    }
     setBatchProgress(null)
-    toast({ title: 'Klart', description: `${ids.length} transaktioner markerade som privat` })
+    if (failures.length === 0) {
+      toast({ title: 'Klart', description: `${successes} transaktioner borttagna` })
+    } else {
+      toast({
+        title: 'Delvis klart',
+        description: `${successes} borttagna, ${failures.length} misslyckades`,
+        variant: 'destructive',
+      })
+    }
     exitBatchMode()
   }
 
@@ -1218,22 +1318,6 @@ export default function TransactionsPage() {
     exitBatchMode()
   }
 
-  async function openSwipeView() {
-    try {
-      // Match invoices to transactions
-      await fetch('/api/transactions/batch-match-invoices', { method: 'POST' })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.matched > 0) fetchTransactions()
-        })
-    } catch {
-      // Non-critical
-    }
-    const uncatIds = uncategorizedTransactions.map((t) => t.id)
-    await fetchCategorySuggestions(uncatIds)
-    setShowSwipeView(true)
-  }
-
   function openMatchDialog(transaction: TransactionWithInvoice) {
     setSelectedTransaction(transaction)
     setMatchDialogOpen(true)
@@ -1242,13 +1326,6 @@ export default function TransactionsPage() {
   function openCategoryDialog(transaction: TransactionWithInvoice) {
     setTemplatePickerTransaction(transaction)
     setTemplatePickerOpen(true)
-  }
-
-  function handleOpenQuickReview(transaction: TransactionWithInvoice, suggestion: SuggestedCategory) {
-    const allCategories = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES]
-    const label = allCategories.find((c) => c.value === suggestion.category)?.label || suggestion.label
-    setQuickReview({ transaction, category: suggestion.category, label, template: null, templateId: undefined, linePattern: null })
-    setQuickReviewOpen(true)
   }
 
   function handleTemplateSelected(template: BookingTemplate) {
@@ -1413,35 +1490,48 @@ export default function TransactionsPage() {
     return journalEntryId
   }
 
-  // Swipe view
-  if (showSwipeView && uncategorizedTransactions.length > 0) {
-    return (
-      <SwipeCategorizationView
-        transactions={uncategorizedTransactions}
-        suggestions={categorySuggestions}
-        templateSuggestions={templateSuggestions}
-        onCategorize={handleCategorize}
-        onMatchInvoice={handleMatchInvoice}
-        onClose={() => setShowSwipeView(false)}
-        entityType={entityType as EntityType}
-      />
-    )
-  }
-
   return (
     <div className="space-y-6">
-      {/* Status bar with mode toggle */}
+      {/* Status bar */}
       <TransactionStatusBar
         uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
         invoiceMatchCount={transactionsWithMatches.length}
         mode={mode}
-        onModeChange={setMode}
-        onOpenSwipeView={openSwipeView}
         onOpenCreateDialog={() => setIsDialogOpen(true)}
-        isLoadingSuggestions={isLoadingSuggestions}
         isBatchMode={isBatchMode}
         onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
       />
+
+      {/* Search + view dropdown */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Sök transaktioner…"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="h-9 pl-10"
+          />
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-sm">
+              {mode === 'inbox'
+                ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
+                : 'Alla transaktioner'}
+              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[14rem]">
+            <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
+              <DropdownMenuRadioItem value="inbox">
+                {`Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`}
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="history">Alla transaktioner</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       {/* Content based on mode */}
       {isLoading ? (
@@ -1458,7 +1548,7 @@ export default function TransactionsPage() {
           ))}
         </DataList>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 ? (
+        inboxItems.length === 0 && !searchTerm ? (
           <InboxZeroState
             hasTransactions={transactions.length > 0 || skvRows.length > 0}
             onCreateTransaction={() => setIsDialogOpen(true)}
@@ -1500,14 +1590,18 @@ export default function TransactionsPage() {
                 </DropdownMenu>
               </DataListHeader>
             )}
+            {inboxItems.length === 0 && searchTerm ? (
+              <DataListEmpty
+                title="Inga träffar"
+                description={`Inga transaktioner matchar "${searchTerm}".`}
+              />
+            ) : null}
             <AnimatePresence mode="popLayout">
               {inboxItems.map(item =>
                 item.source === 'bank' ? (
                   <TransactionInboxCard
                     key={`bank-${item.data.id}`}
                     transaction={item.data}
-                    suggestions={categorySuggestions[item.data.id]}
-                    templateSuggestions={templateSuggestions[item.data.id]}
                     skvCounterpartDate={bankToSkvHints.get(item.data.id)}
                     processingId={processingId}
                     isBatchMode={isBatchMode}
@@ -1516,10 +1610,9 @@ export default function TransactionsPage() {
                     onCategorize={handleCategorize}
                     onMarkPrivate={handleMarkPrivate}
                     onOpenMatchDialog={openMatchDialog}
+                    onOpenMatchInvoicePicker={openInvoiceMatchPicker}
                     onOpenCategoryDialog={openCategoryDialog}
                     onDelete={handleDeleteTransaction}
-                    onOpenQuickReview={handleOpenQuickReview}
-                    onOpenTemplateReview={handleOpenTemplateReview}
                     onToggleSelect={toggleBatchSelect}
                   />
                 ) : (
@@ -1540,6 +1633,7 @@ export default function TransactionsPage() {
         <TransactionHistoryList
           transactions={transactions}
           skvRows={skvRows}
+          searchTerm={searchTerm}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
           onDelete={handleDeleteTransaction}
@@ -1570,8 +1664,14 @@ export default function TransactionsPage() {
                 <X className="mr-1 h-3 w-3" />
                 Avmarkera
               </Button>
-              <Button variant="outline" size="sm" onClick={handleBatchMarkPrivate}>
-                Markera som privat
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBatchDelete}
+                className="text-destructive hover:text-destructive"
+              >
+                <Trash2 className="mr-1 h-3 w-3" />
+                Ta bort
               </Button>
               <Button size="sm" onClick={() => setShowBatchSelector(true)}>
                 Bokför
@@ -1609,7 +1709,7 @@ export default function TransactionsPage() {
       <Dialog open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Välj mall</DialogTitle>
+            <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
             <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
@@ -1619,6 +1719,31 @@ export default function TransactionsPage() {
               </span>
             </div>
           )}
+          <div className="space-y-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={handleManualBooking}
+            >
+              Bokför manuellt…
+            </Button>
+            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  const tx = templatePickerTransaction
+                  setTemplatePickerOpen(false)
+                  setInvoicePickerTransaction(tx)
+                  setInvoicePickerOpen(true)
+                }}
+              >
+                Matcha med faktura…
+              </Button>
+            )}
+          </div>
           <TemplatePicker
             direction={templatePickerTransaction && templatePickerTransaction.amount < 0 ? 'expense' : 'income'}
             entityType={entityType as EntityType}
@@ -1630,26 +1755,6 @@ export default function TransactionsPage() {
               handleOpenTemplateReview(templatePickerTransaction, templateId)
             }}
           />
-          <div className="pt-2 border-t space-y-1">
-            {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full text-muted-foreground"
-                onClick={() => {
-                  const tx = templatePickerTransaction
-                  setTemplatePickerOpen(false)
-                  setInvoicePickerTransaction(tx)
-                  setInvoicePickerOpen(true)
-                }}
-              >
-                Matcha med faktura...
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={handleManualBooking}>
-              Ange konton manuellt...
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
 
@@ -1677,6 +1782,36 @@ export default function TransactionsPage() {
                 transaction={invoicePickerTransaction}
                 onSelect={handleSelectInvoiceFromPicker}
                 isProcessing={isMatchingFromPicker}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={supplierInvoicePickerOpen}
+        onOpenChange={(open) => {
+          if (isMatchingSupplierFromPicker) return
+          setSupplierInvoicePickerOpen(open)
+          if (!open) setSupplierInvoicePickerTransaction(null)
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Matcha med leverantörsfaktura</DialogTitle>
+          </DialogHeader>
+          {supplierInvoicePickerTransaction && (
+            <>
+              <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+                <span className="truncate text-muted-foreground">{supplierInvoicePickerTransaction.description}</span>
+                <span className="font-medium tabular-nums flex-shrink-0 ml-3">
+                  {formatCurrency(supplierInvoicePickerTransaction.amount, supplierInvoicePickerTransaction.currency)}
+                </span>
+              </div>
+              <SupplierInvoicePicker
+                transaction={supplierInvoicePickerTransaction}
+                onSelect={handleSelectSupplierInvoiceFromPicker}
+                isProcessing={isMatchingSupplierFromPicker}
               />
             </>
           )}
