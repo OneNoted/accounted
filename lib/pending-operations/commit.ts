@@ -1064,16 +1064,18 @@ async function commitAttachDocumentToTransaction(
   // a failure must not roll back the (compliant) attach. Mirrors the REST
   // route in app/api/transactions/[id]/attach-document/route.ts so MCP-staged
   // and REST attaches converge on the same inbox state.
-  try {
-    await supabase
-      .from('invoice_inbox_items')
-      .update({ matched_transaction_id: txId })
-      .eq('document_id', documentId)
-      .eq('company_id', companyId)
-      .is('matched_transaction_id', null)
-      .is('created_supplier_invoice_id', null)
-  } catch (linkErr) {
-    console.error('[commitAttach] Failed to link inbox item:', linkErr)
+  //
+  // The Supabase client resolves with { error } rather than rejecting on
+  // RLS/DB errors, so we destructure rather than try/catch.
+  const { error: inboxLinkErr } = await supabase
+    .from('invoice_inbox_items')
+    .update({ matched_transaction_id: txId })
+    .eq('document_id', documentId)
+    .eq('company_id', companyId)
+    .is('matched_transaction_id', null)
+    .is('created_supplier_invoice_id', null)
+  if (inboxLinkErr) {
+    console.error('[commitAttach] Failed to link inbox item:', inboxLinkErr)
   }
 
   const journalEntryId = postUpdate.journal_entry_id as string | null

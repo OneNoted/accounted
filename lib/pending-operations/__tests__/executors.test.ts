@@ -527,7 +527,9 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   it('still commits when the inbox-link best-effort update errors', async () => {
     // Inbox sync is best-effort — a failure to mark the inbox row as matched
     // must not roll back the (compliant) doc→tx attach. Mirrors the REST
-    // route's swallow-and-log behaviour.
+    // route's swallow-and-log behaviour. The Supabase client resolves with
+    // { error } rather than rejecting, so we both confirm the op commits AND
+    // that the error was actually inspected and logged (not silently dropped).
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
@@ -536,6 +538,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link — errors
     enqueue({ data: null, error: null }) // dispatcher commit update
 
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const result = await commitPendingOperation(
       supabase as never,
       'user-1',
@@ -543,6 +546,11 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
       makePendingOp(baseOp),
     )
     expect(result.status).toBe('committed')
+    expect(spy).toHaveBeenCalledWith(
+      '[commitAttach] Failed to link inbox item:',
+      expect.objectContaining({ message: 'inbox row missing or RLS-blocked' }),
+    )
+    spy.mockRestore()
   })
 
   it('touches the invoice_inbox_items table to sync matched_transaction_id', async () => {
