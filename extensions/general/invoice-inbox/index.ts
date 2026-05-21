@@ -25,6 +25,25 @@ import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
+import path from 'node:path'
+
+/**
+ * Defensive filename sanitisation for content arriving from .eml inner
+ * attachments and rejected-attachment metadata. The document-service already
+ * sanitises before storage paths are built (lib/core/documents/document-service.ts),
+ * so this is defense-in-depth: strip directory traversal sequences and exotic
+ * characters before they ever flow into DB columns or downstream consumers.
+ */
+function sanitiseFilename(raw: string | null | undefined, fallback: string): string {
+  const base = path.basename(String(raw ?? '').trim())
+  const cleaned = base.replace(/[^\w.-]/g, '_').slice(0, 200)
+  return cleaned || fallback
+}
+
+function sanitiseMime(raw: string | null | undefined): string {
+  const value = String(raw ?? '').trim().slice(0, 120)
+  return /^[\w./+-]+$/.test(value) ? value : 'application/octet-stream'
+}
 import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024
@@ -1128,6 +1147,10 @@ export const invoiceInboxExtension: Extension = {
           mime: string,
           reason: string,
         ) => {
+          // attachment_name and mime are attacker-controlled (they come from the
+          // forwarded email headers); sanitise before they land in the JSONB
+          // raw_email_payload column so they can't surface as injection or
+          // oversized values when read back into the UI / audit trails.
           try {
             await serviceSupabase.from('invoice_inbox_items').insert({
               company_id: inbox.company_id,
@@ -1140,8 +1163,12 @@ export const invoiceInboxExtension: Extension = {
               email_body_text: bodyText,
               resend_email_id: email_id,
               resend_attachment_id: attachmentId,
-              error_message: reason,
-              raw_email_payload: { messageId: message_id, attachment_name: attachmentName, mime },
+              error_message: reason.slice(0, 500),
+              raw_email_payload: {
+                messageId: message_id,
+                attachment_name: sanitiseFilename(attachmentName, 'unknown'),
+                mime: sanitiseMime(mime),
+              },
             })
           } catch (insertErr) {
             console.error('[invoice-inbox/inbound] Failed to log rejected attachment:', insertErr)
@@ -1178,8 +1205,8 @@ export const invoiceInboxExtension: Extension = {
               const innerSubject = parsed.subject || subject
               for (let i = 0; i < innerAttachments.length; i++) {
                 const inner = innerAttachments[i]
-                const innerType = inner.contentType || 'application/octet-stream'
-                const innerName = inner.filename || `attachment-${i}`
+                const innerType = sanitiseMime(inner.contentType)
+                const innerName = sanitiseFilename(inner.filename, `attachment-${i}`)
                 const innerBuffer = inner.content
                 if (!innerBuffer) continue
                 const innerId = `${att.id}#${i}`

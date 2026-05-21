@@ -23,9 +23,11 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
   const invoiceDate = data.invoice_date as string | undefined
   const customerName = data.customer_name as string | undefined
 
-  // BFL 5 kap 6§ requires the verifikation date to align with the
-  // affärshändelse date. Surface a quiet hint when the two dates differ by
-  // more than 31 days so the reviewer doesn't approve a stale match.
+  // BFL 5 kap 4§ requires bookings to be made "so soon as possible" relative
+  // to the affärshändelse, so a transaction and invoice that diverge by more
+  // than a calendar month deserve a second look before the reviewer approves
+  // the match. The threshold is editorial, not legislated — it just nudges
+  // the reviewer; it doesn't block.
   const showDateDriftHint =
     txDate &&
     invoiceDate &&
@@ -61,8 +63,8 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
 
       {showDateDriftHint && (
         <p className="text-xs text-muted-foreground">
-          Transaktionsdatum och fakturadatum skiljer sig med mer än 31 dagar — kontrollera att
-          matchningen avser rätt affärshändelse (BFL 5 kap 6§).
+          Transaktionsdatum och fakturadatum skiljer sig med mer än en månad — kontrollera att
+          matchningen avser rätt affärshändelse.
         </p>
       )}
     </div>

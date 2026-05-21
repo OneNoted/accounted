@@ -11,6 +11,8 @@ interface DocumentViewButtonProps {
   className?: string
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Opens a document's signed download URL in a new tab. The signed URL is
  * minted on demand via /api/documents/:id (60 min TTL), so we don't bake
@@ -21,6 +23,17 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
   const [loading, setLoading] = useState(false)
 
   const handleClick = async () => {
+    // documentId originates from staged preview_data (Record<string, unknown>);
+    // validate the shape before interpolating into the request URL so a malformed
+    // payload can't redirect the fetch at another internal endpoint.
+    if (!UUID_RE.test(documentId)) {
+      toast({
+        title: 'Ogiltigt dokument-ID',
+        description: 'Försök ladda om sidan eller kontakta support.',
+        variant: 'destructive',
+      })
+      return
+    }
     setLoading(true)
     try {
       const res = await fetch(`/api/documents/${documentId}`)

@@ -3463,8 +3463,8 @@ export const tools: McpTool[] = [
           transaction_amount: transaction.amount,
           transaction_currency: transaction.currency,
           // Surface both dates so the reviewer can spot a material mismatch
-          // before approving. Verifikationsdatum must align with affärshändelse
-          // date per BFL 5 kap 6§.
+          // between the payment and the invoice it's being matched against
+          // before approving.
           transaction_date: transaction.date,
           invoice_number: invoice.invoice_number,
           invoice_total: invoice.total,
