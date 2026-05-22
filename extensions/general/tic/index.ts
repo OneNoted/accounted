@@ -8,6 +8,11 @@ import {
   getPhones,
   getCompanyPurpose,
   getCompanyDocuments,
+  getFiscalYears,
+  getPayrolls,
+  getSignatory,
+  getRepresentatives,
+  getCompanyStatus,
 } from './lib/tic-client'
 import {
   startBankIdAuth,
@@ -330,12 +335,13 @@ export const ticExtension: Extension = {
 
           // Phase 2: Supplementary data (non-blocking)
           const companyId = doc.companyId
-          const [bankResult, industriesResult, emailResult, phoneResult] =
+          const [bankResult, industriesResult, emailResult, phoneResult, fiscalYearResult] =
             await Promise.allSettled([
               getBankAccounts(companyId),
               getIndustryCodes(companyId),
               getEmails(companyId),
               getPhones(companyId),
+              getFiscalYears(companyId),
             ])
 
           // v2 `/companies/{id}/bank-accounts` now returns Bankgirot only.
@@ -379,12 +385,26 @@ export const ticExtension: Extension = {
                   ?? null
               : null
 
+          // Pick the most recently updated fiscal-year row that still
+          // has both start and end month/day populated — older rows can
+          // be missing endMonthDay during Bolagsverket transitions.
+          const fiscalYear =
+            fiscalYearResult.status === 'fulfilled' && fiscalYearResult.value?.length
+              ? fiscalYearResult.value
+                  .filter((fy) => fy.startMonthDay && fy.endMonthDay)
+                  .sort((a, b) => (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? ''))[0]
+                  ?? null
+              : null
+
           // Log Phase 2 failures for debugging
           if (bankResult.status === 'rejected') {
             log.warn('[tic] bank accounts fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(bankResult.reason) })
           }
           if (industriesResult.status === 'rejected') {
             log.warn('[tic] industry codes fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(industriesResult.reason) })
+          }
+          if (fiscalYearResult.status === 'rejected') {
+            log.warn('[tic] fiscal years fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(fiscalYearResult.reason) })
           }
 
           const result: CompanyLookupResult = {
@@ -396,6 +416,12 @@ export const ticExtension: Extension = {
             email,
             phone,
             sniCodes,
+            fiscalYear: fiscalYear
+              ? {
+                  startMonthDay: fiscalYear.startMonthDay ?? null,
+                  endMonthDay: fiscalYear.endMonthDay ?? null,
+                }
+              : null,
           }
 
           return NextResponse.json({ data: result })
@@ -439,16 +465,34 @@ export const ticExtension: Extension = {
           const companyName = nameEntry?.nameOrIdentifier ?? ''
           const companyId = doc.companyId
 
-          // Phase 2: Supplementary data (non-blocking)
-          const [bankResult, industriesResult, emailResult, phoneResult, purposeResult, documentsResult] =
-            await Promise.allSettled([
-              getBankAccounts(companyId),
-              getIndustryCodes(companyId),
-              getEmails(companyId),
-              getPhones(companyId),
-              getCompanyPurpose(companyId),
-              getCompanyDocuments(companyId),
-            ])
+          // Phase 2: Supplementary data (non-blocking). Each row is its
+          // own Lens endpoint; we fire them in parallel and degrade
+          // gracefully when any one fails.
+          const [
+            bankResult,
+            industriesResult,
+            emailResult,
+            phoneResult,
+            purposeResult,
+            documentsResult,
+            fiscalYearResult,
+            payrollsResult,
+            signatoryResult,
+            representativesResult,
+            statusResult,
+          ] = await Promise.allSettled([
+            getBankAccounts(companyId),
+            getIndustryCodes(companyId),
+            getEmails(companyId),
+            getPhones(companyId),
+            getCompanyPurpose(companyId),
+            getCompanyDocuments(companyId),
+            getFiscalYears(companyId),
+            getPayrolls(companyId),
+            getSignatory(companyId),
+            getRepresentatives(companyId),
+            getCompanyStatus(companyId),
+          ])
 
           const bankAccounts =
             bankResult.status === 'fulfilled' && bankResult.value
@@ -499,6 +543,130 @@ export const ticExtension: Extension = {
               ? purposeResult.value[0].purpose
               : doc.mostRecentPurpose ?? null
 
+          // ── New v2 sections ─────────────────────────────────────────
+          // Fiscal years: pick most-recently-updated row with both
+          // start and end populated, plus a deduped history of distinct
+          // start/end pairs sorted newest first.
+          const fiscalYearRows =
+            fiscalYearResult.status === 'fulfilled' && fiscalYearResult.value
+              ? [...fiscalYearResult.value].sort((a, b) =>
+                  (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? '')
+                )
+              : []
+          const fiscalYearCurrent = fiscalYearRows.find(
+            (fy) => fy.startMonthDay && fy.endMonthDay
+          )
+          const fiscalYear = fiscalYearCurrent
+            ? {
+                startMonthDay: fiscalYearCurrent.startMonthDay ?? null,
+                endMonthDay: fiscalYearCurrent.endMonthDay ?? null,
+                description: fiscalYearCurrent.startEndDescription ?? null,
+              }
+            : null
+
+          const fiscalYearHistorySeen = new Set<string>()
+          const fiscalYearHistory: import('./lib/tic-types').TICProfileFiscalYear[] = []
+          for (const fy of fiscalYearRows) {
+            if (!fy.startMonthDay && !fy.endMonthDay) continue
+            const key = `${fy.startMonthDay ?? ''}|${fy.endMonthDay ?? ''}`
+            if (fiscalYearHistorySeen.has(key)) continue
+            fiscalYearHistorySeen.add(key)
+            fiscalYearHistory.push({
+              startMonthDay: fy.startMonthDay ?? null,
+              endMonthDay: fy.endMonthDay ?? null,
+              description: fy.startEndDescription ?? null,
+            })
+          }
+
+          // Signatory: free-form firmateckning descriptions
+          const signatory =
+            signatoryResult.status === 'fulfilled' && signatoryResult.value
+              ? signatoryResult.value
+                  .map((s) => (s.signatureDescription ?? '').trim())
+                  .filter((d) => d.length > 0)
+                  .map((d) => ({ description: d }))
+              : []
+
+          // Board summary: most recently updated row from
+          // representativeInformation
+          const reprInfoRows =
+            representativesResult.status === 'fulfilled' && representativesResult.value?.representativeInformation
+              ? [...representativesResult.value.representativeInformation].sort((a, b) =>
+                  (b.lastUpdatedAtUtc ?? '').localeCompare(a.lastUpdatedAtUtc ?? '')
+                )
+              : []
+          const reprInfo = reprInfoRows[0]
+          const board = reprInfo
+            ? {
+                numberOfBoardMembers: reprInfo.numberOfBoardMembers ?? null,
+                numberOfDeputyBoardMembers: reprInfo.numberOfDeputyBoardMembers ?? null,
+                hasVacancy: reprInfo.hasVacancy ?? null,
+                missingCEODate: reprInfo.missingCEODate ?? null,
+                missingAuditor: reprInfo.missingAuditor ?? null,
+                lastChangeDate: reprInfo.lastChangeDate ?? null,
+              }
+            : null
+
+          // Representatives: filter to currently-active positions
+          // (positionEnd null or in the future) sorted by start date desc
+          const nowIso = new Date().toISOString()
+          const representatives =
+            representativesResult.status === 'fulfilled' && representativesResult.value?.representatives
+              ? representativesResult.value.representatives
+                  .filter((p) => !p.positionEnd || p.positionEnd > nowIso)
+                  .sort((a, b) => (b.positionStart ?? '').localeCompare(a.positionStart ?? ''))
+                  .map((p) => ({
+                    name: p.roleByPersonName ?? null,
+                    positionType: p.positionType ?? null,
+                    positionDescription: p.positionDescription ?? null,
+                    positionStart: p.positionStart ?? null,
+                    positionEnd: p.positionEnd ?? null,
+                  }))
+              : []
+
+          // Payrolls: map the modern payroll2 array, newest first
+          const payrolls =
+            payrollsResult.status === 'fulfilled' && payrollsResult.value?.payroll2
+              ? [...payrollsResult.value.payroll2]
+                  .sort((a, b) => (b.periodEnd ?? '').localeCompare(a.periodEnd ?? ''))
+                  .map((p) => ({
+                    periodStart: p.periodStart ?? null,
+                    periodEnd: p.periodEnd ?? null,
+                    numberOfEmployees: p.numberOfEmployees ?? null,
+                    sumPayrollTax: p.sumPayrollTax ?? null,
+                    calculatedPersonnelCosts: p.calculatedPersonnelCosts ?? null,
+                    personnelCostsInAnnualReport: p.personnelCostsInAnnualReport ?? null,
+                    deviation: p.deviation ?? null,
+                    numberOfLateFeesForPeriod: p.numberOfLateFeesForPeriod ?? null,
+                  }))
+              : []
+
+          // Statuses: most recent first; map traffic-light color through
+          // unchanged so the UI can render a badge.
+          const statuses: import('./lib/tic-types').TICProfileStatus[] =
+            statusResult.status === 'fulfilled' && statusResult.value
+              ? [...statusResult.value]
+                  .sort((a, b) => (b.statusDate ?? '').localeCompare(a.statusDate ?? ''))
+                  .map((s) => {
+                    const color = s.statusColor
+                    const validColor: 'red' | 'yellow' | 'green' | 'neutral' | null =
+                      color === 'red' || color === 'yellow' || color === 'green' || color === 'neutral'
+                        ? color
+                        : null
+                    return {
+                      code: s.companyStatusDescription?.code ?? null,
+                      description:
+                        s.companyStatusDescription?.name_SE
+                          ?? s.statusDescription
+                          ?? s.companyStatusDescription?.name_EN
+                          ?? null,
+                      color: validColor,
+                      statusDate: s.statusDate ?? null,
+                      isCeased: s.companyStatusDescription?.isCeased ?? null,
+                    }
+                  })
+              : []
+
           // Log Phase 2 failures
           if (bankResult.status === 'rejected') {
             log.warn('[tic] profile: bank accounts fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(bankResult.reason) })
@@ -508,6 +676,21 @@ export const ticExtension: Extension = {
           }
           if (documentsResult.status === 'rejected') {
             log.warn('[tic] profile: documents fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(documentsResult.reason) })
+          }
+          if (fiscalYearResult.status === 'rejected') {
+            log.warn('[tic] profile: fiscal years fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(fiscalYearResult.reason) })
+          }
+          if (payrollsResult.status === 'rejected') {
+            log.warn('[tic] profile: payrolls fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(payrollsResult.reason) })
+          }
+          if (signatoryResult.status === 'rejected') {
+            log.warn('[tic] profile: signatory fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(signatoryResult.reason) })
+          }
+          if (representativesResult.status === 'rejected') {
+            log.warn('[tic] profile: representatives fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(representativesResult.reason) })
+          }
+          if (statusResult.status === 'rejected') {
+            log.warn('[tic] profile: status fetch failed', { orgNumber: cleanedOrgNumber, companyId, reason: String(statusResult.reason) })
           }
 
           const fin = doc.mostRecentFinancialSummary
@@ -561,6 +744,13 @@ export const ticExtension: Extension = {
             bankAccounts,
             financials,
             financialReports,
+            fiscalYear,
+            fiscalYearHistory,
+            signatory,
+            board,
+            representatives,
+            payrolls,
+            statuses,
             fetchedAt: new Date().toISOString(),
           }
 

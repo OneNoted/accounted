@@ -172,6 +172,206 @@ export interface TICFinancialReportSummary {
   auditOpinion?: string
 }
 
+/**
+ * v2 `/companies/{id}/fiscal-years` returns `CompanyFiscalYear_Dto[]`.
+ * Each row records a fiscal-year configuration the company has used.
+ * `startMonthDay` / `endMonthDay` are strings like "01-01" / "12-31".
+ */
+export interface TICFiscalYear {
+  companyFiscalYearId?: number
+  companyId?: number
+  startMonthDay?: string | null
+  endMonthDay?: string | null
+  startEndDescription?: string | null
+  firstSeenAtUtc?: string | null
+  lastUpdatedAtUtc?: string | null
+}
+
+/**
+ * v2 `/companies/{id}/accounting-periods` returns
+ * `CompanyAccountingPeriod_Dto[]` — history of period-end changes
+ * (e.g. shifted year-end). Useful as a "this company changed its books"
+ * indicator during onboarding.
+ */
+export interface TICAccountingPeriod {
+  companyAccountingPeriodId?: number
+  companyId?: number
+  endingDatePriorToChange?: string | null
+  endingDateAfterChange?: string | null
+  firstSeenAtUtc?: string | null
+  lastUpdatedAtUtc?: string | null
+}
+
+/**
+ * v2 `/companies/{id}/payrolls` returns a wrapper with two arrays.
+ * `payroll2` is the modern per-period breakdown with deviation vs the
+ * annual-report personnel-cost line; `payrolls` is the legacy
+ * Skatteverket MOMS/AG period totals.
+ */
+export interface TICPayroll2 {
+  companyPayroll2Id?: number
+  periodStart?: string | null
+  periodEnd?: string | null
+  payrollPeriods?: number | null
+  sumPayrollTax?: number | null
+  numberOfPeriods?: number | null
+  numberOfPeriodsWithZero?: number | null
+  personnelCostsInAnnualReport?: number | null
+  calculatedPersonnelCosts?: number | null
+  deviationInCosts?: number | null
+  deviationInCostsChange?: number | null
+  deviation?: number | null
+  numberOfEmployees?: number | null
+  numberOfLateFeesForPeriod?: number | null
+  taxSurchangeAmountForPeriod?: number | null
+  lastUpdatedAtUtc?: string | null
+}
+
+export interface TICPayrollMomsAg {
+  skatteverket_MOMS_AGId?: number
+  period?: number | null
+  belopp?: number | null
+  externtid?: number | null
+  forandring?: number | null
+  forandringProcent?: number | null
+}
+
+export interface TICPayrollSummary {
+  payroll2?: TICPayroll2[]
+  payrolls?: TICPayrollMomsAg[]
+}
+
+/**
+ * v2 `/companies/{id}/signatory` returns `CompanySignatory_Dto[]`.
+ * Each entry's `signatureDescription` is free-form Swedish text
+ * describing firmateckning rules ("Firman tecknas av styrelsen.
+ * Firman tecknas två i förening av ledamöterna.").
+ */
+export interface TICSignatory {
+  companySignatoryId?: number
+  companyId?: number
+  signatureDescription?: string | null
+  firstSeenAtUtc?: string | null
+  lastSeenAtUtc?: string | null
+  lastUpdatedAtUtc?: string | null
+}
+
+/**
+ * v2 `/companies/{id}/representatives` returns a wrapper with two
+ * arrays. `representativeInformation` is board-composition summary
+ * (counts, vacancies); `representatives` is the per-person list with
+ * positionType, dates, and (optionally) the person's name.
+ */
+export interface TICRepresentativeInfo {
+  companyRepresentativeInformationId?: number
+  numberOfBoardMembers?: number | null
+  numberOfDeputyBoardMembers?: number | null
+  hasVacancy?: boolean | null
+  boardFromDate?: string | null
+  missingCEODate?: string | null
+  missingAuditor?: string | null
+  boardNotFullyDate?: string | null
+  lastChangeDate?: string | null
+  lastUpdatedAtUtc?: string | null
+}
+
+export interface TICCompanyPerson {
+  companyPersonId?: number
+  positionType?: string | null
+  positionDescription?: string | null
+  positionStart?: string | null
+  positionEnd?: string | null
+  roleByPersonName?: string | null
+  roleByPersonalIdentityNumber?: string | null
+  roleByCompanyName?: string | null
+  roleByCompanyRegistrationNumber?: string | null
+  auditorTypeDescription?: string | null
+  residenceLocationTypeDescription?: string | null
+}
+
+export interface TICRepresentatives {
+  representativeInformation?: TICRepresentativeInfo[]
+  representatives?: TICCompanyPerson[]
+}
+
+/**
+ * v2 `/companies/{id}/status` returns `CompanyStatus_Dto[]` — current
+ * and historical status entries (active, in liquidation, struck off,
+ * etc.). Each entry has a `statusColor` (red/yellow/green/neutral) and
+ * a human-readable `statusDescription` we can surface directly.
+ */
+export interface TICCompanyStatusEntry {
+  companyStatusId?: number
+  companyId?: number
+  companyStatusType?: string
+  companyStatusDescription?: {
+    code?: string
+    name_EN?: string | null
+    name_SE?: string | null
+    isCeased?: boolean | null
+  }
+  statusDate?: string | null
+  statusDescription?: string | null
+  statusData?: string | null
+  statusDataDescription?: string | null
+  firstSeenAtUtc?: string | null
+  lastSeenAtUtc?: string | null
+  lastUpdatedAtUtc?: string | null
+  statusColor?: 'red' | 'yellow' | 'green' | 'neutral' | string
+}
+
+/** Normalized fiscal-year entry surfaced by /profile and /lookup. */
+export interface TICProfileFiscalYear {
+  startMonthDay: string | null
+  endMonthDay: string | null
+  description: string | null
+}
+
+/** Normalized signatory row surfaced by /profile. */
+export interface TICProfileSignatory {
+  description: string
+}
+
+/** Normalized representative row surfaced by /profile. */
+export interface TICProfileRepresentative {
+  name: string | null
+  positionType: string | null
+  positionDescription: string | null
+  positionStart: string | null
+  positionEnd: string | null
+}
+
+/** Normalized board-composition summary surfaced by /profile. */
+export interface TICProfileBoardSummary {
+  numberOfBoardMembers: number | null
+  numberOfDeputyBoardMembers: number | null
+  hasVacancy: boolean | null
+  missingCEODate: string | null
+  missingAuditor: string | null
+  lastChangeDate: string | null
+}
+
+/** Normalized payroll period surfaced by /profile. */
+export interface TICProfilePayrollPeriod {
+  periodStart: string | null
+  periodEnd: string | null
+  numberOfEmployees: number | null
+  sumPayrollTax: number | null
+  calculatedPersonnelCosts: number | null
+  personnelCostsInAnnualReport: number | null
+  deviation: number | null
+  numberOfLateFeesForPeriod: number | null
+}
+
+/** Normalized status entry surfaced by /profile and /lookup. */
+export interface TICProfileStatus {
+  code: string | null
+  description: string | null
+  color: 'red' | 'yellow' | 'green' | 'neutral' | null
+  statusDate: string | null
+  isCeased: boolean | null
+}
+
 /** Normalized company profile for workspace display */
 export interface TICCompanyProfile {
   companyId: number
@@ -202,6 +402,13 @@ export interface TICCompanyProfile {
     equityAssetsRatio: number | null
   } | null
   financialReports: TICFinancialReportSummary[]
+  fiscalYear: TICProfileFiscalYear | null
+  fiscalYearHistory: TICProfileFiscalYear[]
+  signatory: TICProfileSignatory[]
+  board: TICProfileBoardSummary | null
+  representatives: TICProfileRepresentative[]
+  payrolls: TICProfilePayrollPeriod[]
+  statuses: TICProfileStatus[]
   fetchedAt: string
 }
 

@@ -7,6 +7,12 @@ import type {
   TICPhone,
   TICCompanyPurpose,
   TICDocument,
+  TICFiscalYear,
+  TICAccountingPeriod,
+  TICPayrollSummary,
+  TICSignatory,
+  TICRepresentatives,
+  TICCompanyStatusEntry,
 } from './tic-types'
 import { TICAPIError } from './tic-types'
 
@@ -117,4 +123,68 @@ export async function getCompanyPurpose(companyId: number): Promise<TICCompanyPu
  */
 export async function getCompanyDocuments(companyId: number): Promise<TICDocument[] | null> {
   return ticApiFetch<TICDocument[]>(`/companies/${companyId}/documents`)
+}
+
+/**
+ * Get fiscal-year configurations for a company. v2 endpoint with no v1
+ * equivalent — used to auto-fill fiscal-year selection during gnubok
+ * onboarding so the user doesn't have to enter MM-DD manually.
+ */
+export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[] | null> {
+  return ticApiFetch<TICFiscalYear[]>(`/companies/${companyId}/fiscal-years`)
+}
+
+/**
+ * Get accounting-period change history for a company. v2 endpoint with
+ * no v1 equivalent — surfaces "this company has shifted its year-end"
+ * during onboarding/customer-setup.
+ */
+export async function getAccountingPeriods(
+  companyId: number
+): Promise<TICAccountingPeriod[] | null> {
+  return ticApiFetch<TICAccountingPeriod[]>(`/companies/${companyId}/accounting-periods`)
+}
+
+/**
+ * Get payroll summary for a company. v2 endpoint — restructured from
+ * v1's `/se/payroll`, returns `{ payroll2, payrolls }` where `payroll2`
+ * is the modern per-period breakdown and `payrolls` is the legacy
+ * Skatteverket MOMS/AG totals.
+ */
+export async function getPayrolls(companyId: number): Promise<TICPayrollSummary | null> {
+  return ticApiFetch<TICPayrollSummary>(`/companies/${companyId}/payrolls`)
+}
+
+/**
+ * Get firmateckning (signatory) rules for a company. v2 endpoint
+ * (renamed from v1 `/signatories`). Free-form Swedish descriptions of
+ * who can sign for the company; consumed by the AB invoice/årsredovisning
+ * signer-pick flows.
+ */
+export async function getSignatory(companyId: number): Promise<TICSignatory[] | null> {
+  return ticApiFetch<TICSignatory[]>(`/companies/${companyId}/signatory`)
+}
+
+/**
+ * Get representatives (board / CEO / auditor) for a company. v2 splits
+ * what v1 called `/parties` into `/representatives` (this endpoint) and
+ * `/beneficial-owners` (separate). Returns a wrapper with board-summary
+ * counts plus the per-person list.
+ */
+export async function getRepresentatives(
+  companyId: number
+): Promise<TICRepresentatives | null> {
+  return ticApiFetch<TICRepresentatives>(`/companies/${companyId}/representatives`)
+}
+
+/**
+ * Get current and historical status entries for a company (active, in
+ * liquidation, struck off, bankruptcy, etc.). v2 endpoint. Each entry
+ * carries a traffic-light `statusColor` (red/yellow/green/neutral) and
+ * an `isCeased` flag inside `companyStatusDescription`.
+ */
+export async function getCompanyStatus(
+  companyId: number
+): Promise<TICCompanyStatusEntry[] | null> {
+  return ticApiFetch<TICCompanyStatusEntry[]>(`/companies/${companyId}/status`)
 }

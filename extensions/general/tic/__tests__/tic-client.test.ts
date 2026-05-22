@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { ticApiFetch, searchCompanyByOrgNumber, getBankAccounts, getIndustryCodes } from '../lib/tic-client'
+import {
+  ticApiFetch,
+  searchCompanyByOrgNumber,
+  getBankAccounts,
+  getIndustryCodes,
+  getFiscalYears,
+  getPayrolls,
+  getSignatory,
+  getRepresentatives,
+  getCompanyStatus,
+} from '../lib/tic-client'
 import { TICAPIError } from '../lib/tic-types'
 
 const PROXY_URL = 'https://proxy.example.com/api/tic/proxy'
@@ -145,6 +155,69 @@ describe('tic-client', () => {
       expect(result).toEqual(codes)
       const calledUrl = mockFetch.mock.calls[0][0] as string
       expect(calledUrl).toContain(encodeURIComponent('/companies/123/industries'))
+    })
+  })
+
+  describe('getFiscalYears', () => {
+    it('hits /companies/{id}/fiscal-years', async () => {
+      const mockFetch = vi.mocked(fetch)
+      const rows = [{ startMonthDay: '01-01', endMonthDay: '12-31' }]
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(rows)))
+
+      const result = await getFiscalYears(123)
+      expect(result).toEqual(rows)
+      const calledUrl = mockFetch.mock.calls[0][0] as string
+      expect(calledUrl).toContain(encodeURIComponent('/companies/123/fiscal-years'))
+    })
+  })
+
+  describe('getPayrolls', () => {
+    it('hits /companies/{id}/payrolls and returns the wrapper object', async () => {
+      const mockFetch = vi.mocked(fetch)
+      const payload = { payroll2: [], payrolls: [] }
+      mockFetch.mockResolvedValue(new Response(JSON.stringify(payload)))
+
+      const result = await getPayrolls(123)
+      expect(result).toEqual(payload)
+      const calledUrl = mockFetch.mock.calls[0][0] as string
+      expect(calledUrl).toContain(encodeURIComponent('/companies/123/payrolls'))
+    })
+  })
+
+  describe('getSignatory', () => {
+    it('hits /companies/{id}/signatory (singular per v2)', async () => {
+      const mockFetch = vi.mocked(fetch)
+      mockFetch.mockResolvedValue(new Response(JSON.stringify([])))
+
+      await getSignatory(123)
+      const calledUrl = mockFetch.mock.calls[0][0] as string
+      expect(calledUrl).toContain(encodeURIComponent('/companies/123/signatory'))
+      // Guard against v1's plural path sneaking back in
+      expect(calledUrl).not.toContain(encodeURIComponent('/signatories'))
+    })
+  })
+
+  describe('getRepresentatives', () => {
+    it('hits /companies/{id}/representatives', async () => {
+      const mockFetch = vi.mocked(fetch)
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ representativeInformation: [], representatives: [] }))
+      )
+
+      await getRepresentatives(123)
+      const calledUrl = mockFetch.mock.calls[0][0] as string
+      expect(calledUrl).toContain(encodeURIComponent('/companies/123/representatives'))
+    })
+  })
+
+  describe('getCompanyStatus', () => {
+    it('hits /companies/{id}/status', async () => {
+      const mockFetch = vi.mocked(fetch)
+      mockFetch.mockResolvedValue(new Response(JSON.stringify([])))
+
+      await getCompanyStatus(123)
+      const calledUrl = mockFetch.mock.calls[0][0] as string
+      expect(calledUrl).toContain(encodeURIComponent('/companies/123/status'))
     })
   })
 })

@@ -7,6 +7,7 @@ vi.mock('../lib/tic-client', () => ({
   getIndustryCodes: vi.fn(),
   getEmails: vi.fn(),
   getPhones: vi.fn(),
+  getFiscalYears: vi.fn(),
 }))
 
 import { ticExtension } from '../index'
@@ -16,6 +17,7 @@ import {
   getIndustryCodes,
   getEmails,
   getPhones,
+  getFiscalYears,
 } from '../lib/tic-client'
 import { TICAPIError } from '../lib/tic-types'
 import type { TICCompanyDocument } from '../lib/tic-types'
@@ -25,6 +27,7 @@ const mockBank = vi.mocked(getBankAccounts)
 const mockIndustries = vi.mocked(getIndustryCodes)
 const mockEmails = vi.mocked(getEmails)
 const mockPhones = vi.mocked(getPhones)
+const mockFiscalYears = vi.mocked(getFiscalYears)
 
 function makeRequest(orgNumber?: string): Request {
   const url = orgNumber
@@ -82,6 +85,9 @@ describe('TIC lookup route', () => {
     ])
     mockEmails.mockResolvedValue([{ emailAddress: 'info@test.se' }])
     mockPhones.mockResolvedValue([{ phoneNumberFormatted: '08-1234567', e164PhoneNumber: '+4681234567' }])
+    mockFiscalYears.mockResolvedValue([
+      { startMonthDay: '01-01', endMonthDay: '12-31', lastUpdatedAtUtc: '2024-06-01T00:00:00Z' },
+    ])
 
     const res = await lookupHandler(makeRequest('556036-0793'))
     expect(res.status).toBe(200)
@@ -101,6 +107,38 @@ describe('TIC lookup route', () => {
     expect(data.sniCodes).toEqual([{ code: '62010', name: 'Dataprogrammering' }])
     expect(data.email).toBe('info@test.se')
     expect(data.phone).toBe('08-1234567')
+    expect(data.fiscalYear).toEqual({ startMonthDay: '01-01', endMonthDay: '12-31' })
+  })
+
+  it('auto-fills fiscal year from the most recently updated row', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    mockBank.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue(null)
+    mockEmails.mockResolvedValue(null)
+    mockPhones.mockResolvedValue(null)
+    mockFiscalYears.mockResolvedValue([
+      // Old row — should be ignored
+      { startMonthDay: '07-01', endMonthDay: '06-30', lastUpdatedAtUtc: '2020-01-01T00:00:00Z' },
+      // Newer row — should win
+      { startMonthDay: '01-01', endMonthDay: '12-31', lastUpdatedAtUtc: '2024-06-01T00:00:00Z' },
+    ])
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.fiscalYear).toEqual({ startMonthDay: '01-01', endMonthDay: '12-31' })
+  })
+
+  it('returns fiscalYear null when TIC has no fiscal-year rows', async () => {
+    mockSearch.mockResolvedValue(mockDoc)
+    mockBank.mockResolvedValue(null)
+    mockIndustries.mockResolvedValue(null)
+    mockEmails.mockResolvedValue(null)
+    mockPhones.mockResolvedValue(null)
+    mockFiscalYears.mockResolvedValue(null)
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.fiscalYear).toBeNull()
   })
 
   it('drops terminated bankgiro numbers', async () => {
