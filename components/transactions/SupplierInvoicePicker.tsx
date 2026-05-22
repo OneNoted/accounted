@@ -47,7 +47,33 @@ export default function SupplierInvoicePicker({
         .order('invoice_date', { ascending: false })
         .limit(200)
       if (cancelled) return
-      setInvoices(((data as OpenSupplierInvoice[]) || []))
+      const all = ((data as OpenSupplierInvoice[]) || [])
+
+      // Status-leak guard: if a supplier invoice still says 'approved'/'overdue'
+      // but already has a payment voucher attached, hide it. Partially-paid
+      // invoices intentionally pass through — they may take more payments.
+      // Mirrors the customer-side guard in InvoicePicker.
+      const fullIds = all
+        .filter((inv) => inv.status === 'approved' || inv.status === 'overdue')
+        .map((inv) => inv.id)
+      let visible = all
+      if (fullIds.length > 0) {
+        const { data: paid } = await supabase
+          .from('supplier_invoice_payments')
+          .select('supplier_invoice_id')
+          .eq('company_id', companyId)
+          .in('supplier_invoice_id', fullIds)
+          .not('journal_entry_id', 'is', null)
+        if (cancelled) return
+        const paidSet = new Set<string>(
+          ((paid as { supplier_invoice_id: string }[] | null) ?? []).map(
+            (r) => r.supplier_invoice_id,
+          ),
+        )
+        visible = all.filter((inv) => !paidSet.has(inv.id))
+      }
+
+      setInvoices(visible)
       setIsLoading(false)
     }
     load()

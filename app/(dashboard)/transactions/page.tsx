@@ -679,10 +679,6 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleMarkPrivate(id: string) {
-    await handleCategorize(id, false, 'private')
-  }
-
   async function handleMatchSuggestedInvoice(transactionId: string, invoiceId: string) {
     setCiMatchProcessing(true)
     try {
@@ -1624,7 +1620,6 @@ export default function TransactionsPage() {
                     isSelected={selectedIds.has(item.data.id)}
                     entityType={entityType}
                     onCategorize={handleCategorize}
-                    onMarkPrivate={handleMarkPrivate}
                     onOpenMatchDialog={openMatchDialog}
                     onOpenMatchInvoicePicker={openInvoiceMatchPicker}
                     onOpenCategoryDialog={openCategoryDialog}

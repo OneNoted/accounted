@@ -34,7 +34,6 @@ interface TransactionInboxCardProps {
   isSelected: boolean
   entityType?: string
   onCategorize: CategorizeHandler
-  onMarkPrivate: (id: string) => void
   /** Confirm an auto-detected invoice match (1-click shortcut). */
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   /** Open the manual picker — routes to customer or supplier picker by amount sign. */
