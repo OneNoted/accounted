@@ -15,7 +15,20 @@
 -- NULL is allowed (only required when applicable / user-provided).
 
 ALTER TABLE public.customers
-  ADD COLUMN personal_number TEXT
-  CHECK (personal_number IS NULL OR personal_number ~ '^(\d{6}|\d{8})[-+]?\d{4}$');
+  ADD COLUMN IF NOT EXISTS personal_number TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conrelid = 'public.customers'::regclass
+      AND conname = 'customers_personal_number_check'
+  ) THEN
+    ALTER TABLE public.customers
+      ADD CONSTRAINT customers_personal_number_check
+      CHECK (personal_number IS NULL OR personal_number ~ '^(\d{6}|\d{8})[-+]?\d{4}$');
+  END IF;
+END $$;
 
 NOTIFY pgrst, 'reload schema';
