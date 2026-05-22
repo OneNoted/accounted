@@ -1290,11 +1290,7 @@ async function commitCreateSupplierInvoiceFromInbox(
   const invoiceDate = params.invoice_date as string
   const dueDate = (params.due_date as string | null) ?? null
   const currency = (params.currency as string) || 'SEK'
-  const exchangeRate = (params.exchange_rate as number | null) ?? null
   const vatTreatment = (params.vat_treatment as string) || 'standard_25'
-  const subtotal = Number(params.subtotal) || 0
-  const vatAmount = Number(params.vat_amount) || 0
-  const total = Number(params.total) || 0
   const notes = (params.notes as string | null) ?? null
   const rawItems = (params.items as Array<Record<string, unknown>> | undefined) ?? []
 
@@ -1303,6 +1299,27 @@ async function commitCreateSupplierInvoiceFromInbox(
       error: 'inbox_item_id, supplier_id, supplier_invoice_number, invoice_date, and items are required',
       status: 400,
     }
+  }
+
+  // Reject tampered financial fields: Number(x) || 0 silently turns string
+  // junk and undefined into a zero-value invoice. Require a finite number on
+  // every monetary field, including the optional exchange_rate when present.
+  const finite = (raw: unknown): number | null =>
+    typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+  const subtotal = finite(params.subtotal)
+  const vatAmount = finite(params.vat_amount)
+  const total = finite(params.total)
+  if (subtotal === null || vatAmount === null || total === null) {
+    return {
+      error: 'subtotal, vat_amount, and total must be finite numbers',
+      status: 400,
+    }
+  }
+  const exchangeRate = params.exchange_rate === null || params.exchange_rate === undefined
+    ? null
+    : finite(params.exchange_rate)
+  if (params.exchange_rate !== null && params.exchange_rate !== undefined && exchangeRate === null) {
+    return { error: 'exchange_rate must be a finite number when provided', status: 400 }
   }
 
   // Idempotency: a re-fired commit (e.g. retry, double-click on the approval
@@ -1386,27 +1403,52 @@ async function commitCreateSupplierInvoiceFromInbox(
   if (invoiceErr || !invoice) {
     const pgErr = invoiceErr as { code?: string; message?: string } | null
     const isDuplicate = pgErr?.code === '23505'
-    return {
-      error: isDuplicate
-        ? `Leverantörsfaktura ${supplierInvoiceNumber} finns redan registrerad för ${supplier.name}.`
-        : `Failed to create supplier invoice: ${pgErr?.message ?? 'unknown'}`,
-      status: isDuplicate ? 409 : 500,
+    if (isDuplicate) {
+      // Generic 409 — supplier_invoice_number alone is already in the staged
+      // params the caller submitted; we just don't echo back the supplier's
+      // name or row id. The UI surface uses the supplier-side ledger, not
+      // this error.
+      log.warn('Duplicate supplier invoice number on inbox conversion', {
+        companyId,
+        supplierId,
+        supplierInvoiceNumber,
+      })
+      return {
+        error: `Leverantörsfaktura ${supplierInvoiceNumber} finns redan registrerad.`,
+        status: 409,
+      }
     }
+    log.error('Failed to insert supplier invoice from inbox', {
+      companyId,
+      inboxItemId,
+      supplierId,
+      error: pgErr?.message ?? 'unknown',
+    })
+    return { error: 'Failed to create supplier invoice', status: 500 }
   }
 
-  const itemInserts = rawItems.map((item, idx) => ({
-    supplier_invoice_id: invoice.id,
-    sort_order: idx,
-    description: String(item.description ?? `Position ${idx + 1}`),
-    quantity: Number(item.quantity) || 1,
-    unit: (item.unit as string | undefined) ?? 'st',
-    unit_price: Number(item.unit_price) || 0,
-    line_total: Number(item.line_total) || 0,
-    account_number: String(item.account_number ?? '4000'),
-    vat_code: null,
-    vat_rate: Number(item.vat_rate) || 0,
-    vat_amount: Number(item.vat_amount) || 0,
-  }))
+  // RC invariant: a reverse-charge supplier invoice never shows output VAT
+  // from the supplier. Zero any per-line VAT that slipped through staging so
+  // the registration JE's 2614/2645 self-assessed leg lines up with rutor
+  // 20–24 / 48 instead of double-counting input VAT into 2641. Tampered
+  // params can't smuggle non-zero VAT into the items table.
+  const itemInserts = rawItems.map((item, idx) => {
+    const vatRate = reverseCharge ? 0 : (typeof item.vat_rate === 'number' && Number.isFinite(item.vat_rate) ? item.vat_rate : 0)
+    const vatAmt = reverseCharge ? 0 : (typeof item.vat_amount === 'number' && Number.isFinite(item.vat_amount) ? item.vat_amount : 0)
+    return {
+      supplier_invoice_id: invoice.id,
+      sort_order: idx,
+      description: String(item.description ?? `Position ${idx + 1}`),
+      quantity: typeof item.quantity === 'number' && Number.isFinite(item.quantity) ? item.quantity : 1,
+      unit: (item.unit as string | undefined) ?? 'st',
+      unit_price: typeof item.unit_price === 'number' && Number.isFinite(item.unit_price) ? item.unit_price : 0,
+      line_total: typeof item.line_total === 'number' && Number.isFinite(item.line_total) ? item.line_total : 0,
+      account_number: String(item.account_number ?? '4000'),
+      vat_code: null,
+      vat_rate: vatRate,
+      vat_amount: vatAmt,
+    }
+  })
 
   const { error: itemsErr } = await supabase
     .from('supplier_invoice_items')
@@ -1417,7 +1459,12 @@ async function commitCreateSupplierInvoiceFromInbox(
     // line items the registration JE can't be built and the invoice would
     // be invisible in the supplier ledger anyway.
     await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
-    return { error: `Failed to insert supplier invoice items: ${itemsErr.message}`, status: 500 }
+    log.error('Failed to insert supplier invoice items, rolled back parent', {
+      companyId,
+      invoiceId: invoice.id,
+      error: itemsErr.message,
+    })
+    return { error: 'Failed to insert supplier invoice items', status: 500 }
   }
 
   const { data: settings } = await supabase
@@ -1467,11 +1514,38 @@ async function commitCreateSupplierInvoiceFromInbox(
     } catch (err) {
       // Roll back: orphan supplier_invoices row without its registration JE
       // understates leverantörsskuld (2440) + ingående moms (2641) on the
-      // momsdeklaration. Throwing keeps the BFL invariant intact.
-      await supabase.from('supplier_invoices').delete().eq('id', invoice.id).eq('company_id', companyId)
+      // momsdeklaration. Items must be deleted BEFORE the parent — the FK
+      // on supplier_invoice_items.supplier_invoice_id is ON DELETE NO ACTION
+      // (default), so a parent-first delete would be silently blocked and
+      // leave the doomed invoice in the supplier ledger.
+      await supabase
+        .from('supplier_invoice_items')
+        .delete()
+        .eq('supplier_invoice_id', invoice.id)
+      const { error: parentDeleteErr } = await supabase
+        .from('supplier_invoices')
+        .delete()
+        .eq('id', invoice.id)
+        .eq('company_id', companyId)
+      if (parentDeleteErr) {
+        // Hard inconsistency: items gone but parent stuck. Log loudly so an
+        // operator can clean up — this should not happen in practice.
+        log.error('Rollback partial: parent supplier_invoices delete failed after JE failure', {
+          companyId,
+          invoiceId: invoice.id,
+          parentDeleteError: parentDeleteErr.message,
+          originalError: err instanceof Error ? err.message : String(err),
+        })
+      }
       if (isBookkeepingError(err)) throw err
+      log.error('Failed to create registration journal entry; supplier invoice rolled back', {
+        companyId,
+        inboxItemId,
+        invoiceId: invoice.id,
+        error: err instanceof Error ? err.message : 'unknown',
+      })
       return {
-        error: `Failed to create registration journal entry: ${err instanceof Error ? err.message : 'unknown'}`,
+        error: 'Failed to create registration journal entry',
         status: 500,
       }
     }
@@ -2026,15 +2100,24 @@ async function commitCreateVoucher(
     const documentId = params.document_id as string | undefined
     let inboxLinked = false
     if (inboxItemId) {
-      // UNIQUE constraint on invoice_inbox_items.created_journal_entry_id
-      // (migration 20260515090000) makes a racing double-commit fail loudly
-      // at this update rather than silently linking two journal entries to
-      // one inbox item.
-      const { error: linkInboxErr } = await supabase
+      // Race guard: the UNIQUE constraint on
+      // invoice_inbox_items.created_journal_entry_id (migration 20260515090000)
+      // stops two inbox items from being linked to the same JE, but it does
+      // NOT stop two concurrent commits of different staged ops on the same
+      // inbox item from overwriting each other (the second UPDATE on the same
+      // row trivially satisfies UNIQUE). We add a `.is('created_journal_entry_id', null)`
+      // predicate so only the first commit succeeds; the loser sees a
+      // zero-rows-updated result and surfaces a structured warning. We also
+      // require .eq('created_supplier_invoice_id', null) so a concurrent
+      // create_supplier_invoice_from_inbox doesn't get clobbered either.
+      const { data: updatedRows, error: linkInboxErr } = await supabase
         .from('invoice_inbox_items')
         .update({ created_journal_entry_id: entry.id, status: 'confirmed' })
         .eq('id', inboxItemId)
         .eq('company_id', companyId)
+        .is('created_journal_entry_id', null)
+        .is('created_supplier_invoice_id', null)
+        .select('id')
 
       if (linkInboxErr) {
         log.warn('Failed to link inbox item to new voucher (voucher still posted)', {
@@ -2042,11 +2125,24 @@ async function commitCreateVoucher(
           journalEntryId: entry.id,
           error: linkInboxErr.message,
         })
+      } else if (!updatedRows || updatedRows.length === 0) {
+        // Race: another commit already claimed this inbox item (either as a
+        // journal entry or supplier invoice). The verifikat is already posted
+        // and immutable — we leave it; an operator can rättelse via storno
+        // if it's a true duplicate.
+        log.warn('Voucher posted but inbox item was already claimed by a concurrent commit', {
+          inboxItemId,
+          journalEntryId: entry.id,
+        })
       } else {
         inboxLinked = true
       }
 
-      if (documentId) {
+      // Only attach the OCR document when the inbox link succeeded — if a
+      // racing commit already owns the inbox row, the document already lives
+      // on its JE and re-attaching here would either fail noisily (UNIQUE on
+      // document_attachments.journal_entry_id, if any) or silently shift it.
+      if (documentId && inboxLinked) {
         try {
           await linkToJournalEntry(supabase, companyId, documentId, entry.id)
         } catch (linkDocErr) {

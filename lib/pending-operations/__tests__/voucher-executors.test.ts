@@ -327,7 +327,7 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -367,7 +367,7 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -401,7 +401,7 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: null, error: null }) // inbox update succeeds
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -422,6 +422,42 @@ describe('commitPendingOperation: create_voucher', () => {
 
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ journal_entry_id: 'je-link-fails', inbox_linked: true })
+  })
+
+  it('inbox-direct: zero-rows-updated (another commit already claimed the inbox) — voucher posted, inbox_linked=false, no doc attach', async () => {
+    // Race scenario the .is('created_journal_entry_id', null) predicate is
+    // designed to catch: two pending ops on the same inbox item commit in
+    // parallel, the loser sees 0 rows updated.
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-race-loser', voucher_number: 22 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: [], error: null }) // inbox update returned ZERO rows (race lost)
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'racy concurrent commit',
+        fiscal_period_id: 'fp-1',
+        inbox_item_id: 'inbox-1',
+        document_id: 'doc-1',
+        lines: [
+          { account_number: '5410', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ inbox_linked: false })
+    // Critical: document MUST NOT be linked to the racing loser JE — the
+    // inbox already points at the winner's JE.
+    expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
   it('inbox-direct: inbox update failure does NOT roll back the posted entry (inbox_linked=false)', async () => {

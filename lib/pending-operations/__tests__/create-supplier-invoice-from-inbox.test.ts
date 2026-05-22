@@ -311,6 +311,194 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(createSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })
 
+  it('returns 400 when subtotal/vat_amount/total are non-finite (tampered staged params)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          inbox_item_id: 'inbox-1',
+          supplier_id: 'supplier-1',
+          supplier_invoice_number: 'INV-100',
+          invoice_date: '2026-05-15',
+          currency: 'SEK',
+          // String values where numbers are required — Number(x) || 0 used to
+          // silently produce a zero-value invoice.
+          subtotal: 'not a number',
+          vat_amount: null,
+          total: undefined,
+          items: [{ description: 'x', line_total: 100, account_number: '6530' }],
+        },
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/finite numbers/)
+  })
+
+  it('zeroes per-line VAT when vat_treatment is reverse_charge (RC invariant)', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-rc', voucher_number: 9 })
+    )
+
+    let capturedItems: unknown = null
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // We intercept the supplier_invoice_items insert by overriding the .from
+    // handler on a per-table basis.
+    const originalFrom = supabase.from
+    ;(supabase as { from: unknown }).from = vi.fn().mockImplementation((table: string) => {
+      if (table === 'supplier_invoice_items') {
+        return {
+          insert: (rows: unknown) => {
+            capturedItems = rows
+            return Promise.resolve({ data: null, error: null })
+          },
+        }
+      }
+      return (originalFrom as (t: string) => unknown)(table)
+    })
+
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' },
+      error: null,
+    })
+    enqueue({ data: 50, error: null }) // arrival number
+    enqueue({
+      data: makeSupplierInvoice({
+        id: 'inv-rc',
+        supplier_invoice_number: 'INV-RC-1',
+        vat_treatment: 'reverse_charge',
+        reverse_charge: true,
+      }),
+      error: null,
+    })
+    // supplier_invoice_items.insert handled by the override above
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          inbox_item_id: 'inbox-1',
+          supplier_id: 'supplier-1',
+          document_id: null,
+          supplier_invoice_number: 'INV-RC-1',
+          invoice_date: '2026-05-15',
+          due_date: '2026-06-14',
+          currency: 'EUR',
+          exchange_rate: 11.5,
+          vat_treatment: 'reverse_charge',
+          subtotal: 1000,
+          vat_amount: 0,
+          total: 1000,
+          notes: null,
+          // Tampered: vat_rate and vat_amount set despite RC. Executor must
+          // zero these so the per-line VAT doesn't sneak into 2641.
+          items: [
+            {
+              line_number: 1,
+              description: 'Konsulttjänst EU',
+              quantity: 1,
+              unit: 'st',
+              unit_price: 1000,
+              line_total: 1000,
+              account_number: '4535',
+              vat_rate: 0.25,
+              vat_amount: 250,
+            },
+          ],
+        },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    const items = capturedItems as Array<{ vat_rate: number; vat_amount: number }>
+    expect(items[0].vat_rate).toBe(0)
+    expect(items[0].vat_amount).toBe(0)
+  })
+
+  it('JE-failure rollback deletes items BEFORE the parent invoice (FK ordering)', async () => {
+    // The parent has line items at this point — the rollback must reverse
+    // insertion order or the FK on supplier_invoice_items blocks the parent
+    // delete and we're left with an orphan understating leverantörsskuld.
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockRejectedValueOnce(
+      new Error('engine error: balance check failed')
+    )
+
+    const deleteCalls: string[] = []
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const originalFrom = supabase.from
+    ;(supabase as { from: unknown }).from = vi.fn().mockImplementation((table: string) => {
+      const chain = (originalFrom as (t: string) => unknown)(table) as {
+        delete?: () => unknown
+      } & Record<string, unknown>
+      if (table === 'supplier_invoice_items' || table === 'supplier_invoices') {
+        // Trap delete calls so we can assert order.
+        return new Proxy(chain, {
+          get(target, prop) {
+            if (prop === 'delete') {
+              return () => {
+                deleteCalls.push(table)
+                return target.delete!()
+              }
+            }
+            return (target as Record<string | symbol, unknown>)[prop]
+          },
+        })
+      }
+      return chain
+    })
+
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 42, error: null })
+    enqueue({
+      data: makeSupplierInvoice({ id: 'inv-rollback', supplier_invoice_number: 'INV-X' }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // items insert succeeds
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    // JE throws — rollback path runs
+    enqueue({ data: null, error: null }) // items delete
+    enqueue({ data: null, error: null }) // parent delete
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(500)
+    // Critical assertion: items BEFORE the parent.
+    expect(deleteCalls).toEqual(['supplier_invoice_items', 'supplier_invoices'])
+  })
+
   it('returns 400 when required staged params are missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
