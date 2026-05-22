@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { motion } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -38,13 +39,16 @@ export default function SkattekontoInboxCard({
   onMatch: (row: StoredSkattekontoTransaction) => void
   onAnimationComplete?: (id: string) => void
 }) {
+  const t = useTranslations('tx_skattekonto_card')
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
 
-  const voucherLabel =
+  const duplicateLabel =
     matchSuggestion?.voucher_series && matchSuggestion?.voucher_number
-      ? `${matchSuggestion.voucher_series}${matchSuggestion.voucher_number}`
-      : '(utkast)'
+      ? t('duplicate_title_with_voucher', {
+          label: `${matchSuggestion.voucher_series}${matchSuggestion.voucher_number}`,
+        })
+      : t('duplicate_title_draft')
 
   return (
     <motion.div
@@ -97,7 +101,7 @@ export default function SkattekontoInboxCard({
                   disabled={processing}
                 >
                   <Link2 className="mr-1 h-3 w-3" />
-                  Koppla
+                  {t('link_to_voucher')}
                 </Button>
                 <Button
                   size="sm"
@@ -107,7 +111,7 @@ export default function SkattekontoInboxCard({
                   disabled={processing}
                 >
                   {processing && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-                  Bokför ändå
+                  {t('book_anyway')}
                 </Button>
               </>
             ) : (
@@ -120,7 +124,7 @@ export default function SkattekontoInboxCard({
                   disabled={processing}
                 >
                   {processing && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-                  Bokför
+                  {t('book')}
                 </Button>
                 <Button
                   size="sm"
@@ -130,7 +134,7 @@ export default function SkattekontoInboxCard({
                   disabled={processing}
                 >
                   <Link2 className="mr-1 h-3 w-3" />
-                  Matcha
+                  {t('match_to_voucher')}
                 </Button>
               </>
             )}
@@ -145,14 +149,14 @@ export default function SkattekontoInboxCard({
           <DataListMetaSeparator />
           <Badge variant="outline" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
             <Landmark className="h-3 w-3" />
-            Skatteverket
+            {t('skv_badge')}
           </Badge>
           {matchSuggestion && (
             <>
               <DataListMetaSeparator />
               <Badge variant="warning" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
                 <AlertCircle className="h-3 w-3" />
-                Möjlig dublett av {voucherLabel}
+                {duplicateLabel}
               </Badge>
             </>
           )}

@@ -301,7 +301,7 @@ describe('gnubok_reverse_journal_entry — staging gates', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
-        id: 'je-1',
+        id: '11111111-1111-1111-1111-111111111111',
         status: 'draft',
         entry_date: '2026-05-12',
         description: 'Test',
@@ -314,7 +314,12 @@ describe('gnubok_reverse_journal_entry — staging gates', () => {
       error: null,
     })
     await expect(
-      reverseEntry.execute({ entry_id: 'je-1' }, 'company-1', 'user-1', supabase as never),
+      reverseEntry.execute(
+        { entry_id: '11111111-1111-1111-1111-111111111111' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
     ).rejects.toThrow(/posted entries can be reversed/i)
   })
 
@@ -322,7 +327,7 @@ describe('gnubok_reverse_journal_entry — staging gates', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: {
-        id: 'je-1',
+        id: '22222222-2222-2222-2222-222222222222',
         status: 'posted',
         entry_date: '2025-12-31',
         description: 'Test',
@@ -335,7 +340,120 @@ describe('gnubok_reverse_journal_entry — staging gates', () => {
       error: null,
     })
     await expect(
-      reverseEntry.execute({ entry_id: 'je-1' }, 'company-1', 'user-1', supabase as never),
+      reverseEntry.execute(
+        { entry_id: '22222222-2222-2222-2222-222222222222' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
     ).rejects.toThrow(/closed/i)
+  })
+})
+
+describe('entry_id resolution — voucher refs and hallucinated UUIDs', () => {
+  // These tests cover the resolveJournalEntryRef helper as exercised through
+  // gnubok_correct_entry. The same resolution path is wired into
+  // gnubok_reverse_journal_entry, so one tool is enough to lock the behaviour.
+
+  const balancedCorrection = [
+    { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+    { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+  ]
+
+  it('resolves a voucher ref like "A-113" to its UUID before the lookup', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const resolvedId = '33333333-3333-3333-3333-333333333333'
+
+    // 1) resolveJournalEntryRef -> single match by (series, number)
+    enqueue({
+      data: [{ id: resolvedId, entry_date: '2026-03-06', description: 'Cursor 2' }],
+      error: null,
+    })
+    // 2) original journal_entries lookup, but the period is closed so we
+    //    short-circuit before staging. That's enough to confirm the helper
+    //    resolved the ref and passed the UUID through to the next query.
+    enqueue({
+      data: {
+        id: resolvedId,
+        status: 'posted',
+        entry_date: '2026-03-06',
+        description: 'Cursor 2',
+        voucher_number: 113,
+        voucher_series: 'A',
+        fiscal_period_id: 'fp-closed',
+        fiscal_periods: { name: '2026', is_closed: true, locked_at: null },
+        lines: [],
+      },
+      error: null,
+    })
+
+    await expect(
+      correctEntry.execute(
+        { entry_id: 'A-113', lines: balancedCorrection },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/locked or closed/i)
+  })
+
+  it('errors when a voucher ref matches multiple entries across fiscal periods', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', entry_date: '2026-03-06', description: 'Cursor 2' },
+        { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', entry_date: '2025-03-06', description: 'Cursor 1' },
+      ],
+      error: null,
+    })
+    await expect(
+      correctEntry.execute(
+        { entry_id: 'A-113', lines: balancedCorrection },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/matches multiple entries/i)
+  })
+
+  it('errors when a voucher ref matches nothing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [], error: null })
+    await expect(
+      correctEntry.execute(
+        { entry_id: 'Z-999', lines: balancedCorrection },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/no journal entry found for voucher "z-999"/i)
+  })
+
+  it('errors with a parse hint when the ref is neither a UUID nor a voucher format', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      correctEntry.execute(
+        { entry_id: 'not-an-id-at-all', lines: balancedCorrection },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/could not parse entry reference/i)
+  })
+
+  it('surfaces the supplied UUID in not-found errors so hallucinated IDs are debuggable', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const hallucinated = 'a71a11ae-b8e2-450f-aaa6-a227d03b0c94'
+    // UUID passes through resolution unchanged → straight to the original
+    // lookup, which returns no row.
+    enqueue({ data: null, error: null })
+    await expect(
+      correctEntry.execute(
+        { entry_id: hallucinated, lines: balancedCorrection },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(new RegExp(`id=${hallucinated}`))
   })
 })

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,7 +19,7 @@ function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   registered: 'secondary',
   approved: 'default',
   paid: 'success',
@@ -29,18 +30,19 @@ const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warn
   reversed: 'secondary',
 }
 
-const statusLabels: Record<string, string> = {
-  registered: 'Registrerad',
-  approved: 'Godkänd',
-  paid: 'Betald',
-  partially_paid: 'Delbetald',
-  overdue: 'Förfallen',
-  disputed: 'Tvist',
-  credited: 'Krediterad',
-  reversed: 'Makulerad',
+const STATUS_LABEL_KEYS: Record<string, string> = {
+  registered: 'status_registered',
+  approved: 'status_approved',
+  paid: 'status_paid',
+  partially_paid: 'status_partially_paid',
+  overdue: 'status_overdue',
+  disputed: 'status_disputed',
+  credited: 'status_credited',
+  reversed: 'status_reversed',
 }
 
 export default function SupplierInvoicesPage() {
+  const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -71,22 +73,22 @@ export default function SupplierInvoicesPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Leverantörsfakturor"
+        title={t('title')}
         action={
           canWrite ? (
             <Link href="/supplier-invoices/new">
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
-                Registrera faktura
+                {t('register_invoice')}
               </Button>
             </Link>
           ) : (
             <Button
               disabled
-              title="Du har endast läsbehörighet i detta företag"
+              title={t('viewer_disabled_tooltip')}
             >
               <Lock className="mr-2 h-4 w-4" />
-              Registrera faktura
+              {t('register_invoice')}
             </Button>
           )
         }
@@ -95,11 +97,11 @@ export default function SupplierInvoicesPage() {
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="all">Alla</TabsTrigger>
-          <TabsTrigger value="registered">Registrerade</TabsTrigger>
-          <TabsTrigger value="approved">Godkända</TabsTrigger>
-          <TabsTrigger value="to_pay">Att betala</TabsTrigger>
-          <TabsTrigger value="paid">Betalda</TabsTrigger>
+          <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
+          <TabsTrigger value="registered">{t('tab_registered')}</TabsTrigger>
+          <TabsTrigger value="approved">{t('tab_approved')}</TabsTrigger>
+          <TabsTrigger value="to_pay">{t('tab_to_pay')}</TabsTrigger>
+          <TabsTrigger value="paid">{t('tab_paid')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value={activeTab}>
@@ -124,16 +126,16 @@ export default function SupplierInvoicesPage() {
             ) : filteredInvoices.length === 0 ? (
               <DataListEmpty
                 icon={<FileInput className="h-6 w-6" />}
-                title="Inga fakturor"
+                title={t('empty_title')}
                 description={
                   activeTab === 'all'
-                    ? 'Registrera leverantörsfakturor för att hålla koll på inköp och betalningar.'
-                    : 'Inga fakturor i denna kategori.'
+                    ? t('empty_description_all')
+                    : t('empty_description_category')
                 }
                 action={
                   activeTab === 'all' && canWrite ? (
                     <Button asChild>
-                      <Link href="/supplier-invoices/new">Registrera faktura</Link>
+                      <Link href="/supplier-invoices/new">{t('register_invoice')}</Link>
                     </Button>
                   ) : undefined
                 }
@@ -142,14 +144,14 @@ export default function SupplierInvoicesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Ankomst</TableHead>
-                    <TableHead>Leverantör</TableHead>
-                    <TableHead>Fakturanr</TableHead>
-                    <TableHead>Fakturadatum</TableHead>
-                    <TableHead>Förfaller</TableHead>
-                    <TableHead className="text-right">Belopp</TableHead>
-                    <TableHead className="text-right">Kvar att betala</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>{t('th_arrival')}</TableHead>
+                    <TableHead>{t('th_supplier')}</TableHead>
+                    <TableHead>{t('th_invoice_number')}</TableHead>
+                    <TableHead>{t('th_invoice_date')}</TableHead>
+                    <TableHead>{t('th_due_date')}</TableHead>
+                    <TableHead className="text-right">{t('th_amount')}</TableHead>
+                    <TableHead className="text-right">{t('th_remaining')}</TableHead>
+                    <TableHead>{t('th_status')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -171,8 +173,8 @@ export default function SupplierInvoicesPage() {
                       <TableCell className="text-right tabular-nums">{formatAmount(inv.total)}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
                       <TableCell>
-                        <Badge variant={statusVariants[inv.status] || 'secondary'}>
-                          {statusLabels[inv.status] || inv.status}
+                        <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
+                          {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
                         </Badge>
                       </TableCell>
                     </TableRow>

@@ -289,6 +289,80 @@ async function stagePendingOperation(
   return response
 }
 
+// ── Journal entry reference resolution ────────────────────────
+
+/**
+ * Resolve a journal entry reference to a journal_entries.id UUID.
+ *
+ * Accepts either a raw UUID (returned as-is) or a voucher reference like
+ * "A-113" / "A113" / "A/113" (resolved by voucher_series + voucher_number
+ * scoped to the company).
+ *
+ * Voucher refs are the preferred input shape for LLM-driven callers: short,
+ * semantically meaningful, and resistant to UUID hallucination — a failure
+ * mode where the agent reproduces the first 8 hex chars correctly but
+ * fabricates the remaining 24, so a downstream lookup rejects the ID even
+ * though the entry exists.
+ */
+async function resolveJournalEntryRef(
+  supabase: SupabaseClient,
+  companyId: string,
+  ref: string
+): Promise<string> {
+  const trimmed = ref.trim()
+
+  // UUIDs pass through. If the UUID was hallucinated, the caller's own
+  // lookup surfaces the "not found" diagnostic with the supplied value.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return trimmed
+  }
+
+  // Voucher ref: letters (series) + optional separator + digits (number).
+  const match = trimmed.match(/^([A-Za-z]+)\s*[-:/ ]?\s*(\d+)$/)
+  if (!match) {
+    throw new Error(
+      `Could not parse entry reference "${ref}". Expected a UUID or a voucher ref like "A-113".`
+    )
+  }
+  const series = match[1].toUpperCase()
+  const number = parseInt(match[2], 10)
+
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, entry_date, description')
+    .eq('company_id', companyId)
+    .eq('voucher_series', series)
+    .eq('voucher_number', number)
+    .order('entry_date', { ascending: false })
+
+  if (error) {
+    throw new Error(`Database error resolving voucher "${series}-${number}": ${error.message}`)
+  }
+
+  const matches = (data ?? []) as Array<{ id: string; entry_date: string; description: string }>
+
+  if (matches.length === 0) {
+    throw new Error(
+      `No journal entry found for voucher "${series}-${number}" in this company. ` +
+      `Verify the series and number, or supply the full UUID.`
+    )
+  }
+
+  // Voucher numbers reset per fiscal period. The same (series, number) pair
+  // can therefore appear in multiple years — refuse to guess.
+  if (matches.length > 1) {
+    const summary = matches
+      .map((m) => `${m.entry_date} "${m.description}" (id=${m.id})`)
+      .join('; ')
+    throw new Error(
+      `Voucher "${series}-${number}" matches multiple entries across fiscal periods: ${summary}. ` +
+      `Supply the specific UUID instead.`
+    )
+  }
+
+  return matches[0].id
+}
+
 // ── Shared categorization logic ──────────────────────────────
 
 async function categorizeTransactionCore(
@@ -5850,7 +5924,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        entry_id: { type: 'string', description: 'UUID of the posted journal entry to correct' },
+        entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
         lines: {
           type: 'array',
           description: 'Replacement lines (≥ 2, balanced). Use the same accounts as the original where unchanged.',
@@ -5877,10 +5951,10 @@ export const tools: McpTool[] = [
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
-      const entryId = args.entry_id as string
+      const entryRef = args.entry_id as string
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
 
-      if (!entryId || !Array.isArray(rawLines) || rawLines.length < 2) {
+      if (!entryRef || !Array.isArray(rawLines) || rawLines.length < 2) {
         throw new Error('entry_id and at least two lines are required')
       }
 
@@ -5904,6 +5978,8 @@ export const tools: McpTool[] = [
           'Both must be positive and equal.'
         )
       }
+
+      const entryId = await resolveJournalEntryRef(supabase, companyId, entryRef)
 
       // Pre-flight: the executor checks again, but failing fast here gives the
       // agent a clearer error message than waiting until commit-time.
@@ -5936,7 +6012,16 @@ export const tools: McpTool[] = [
         .maybeSingle()
       const original = data as OriginalRow | null
 
-      if (origErr || !original) throw new Error('Journal entry not found')
+      if (origErr) {
+        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+      }
+      if (!original) {
+        throw new Error(
+          `Journal entry not found: id=${entryId}. ` +
+          `If this UUID came from an earlier tool result, re-fetch via gnubok_query_journal — ` +
+          `UUIDs are frequently hallucinated when reused across turns. You can also pass a voucher ref like "A-113".`
+        )
+      }
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be corrected. Current status: ${original.status}.`)
       }
@@ -5997,7 +6082,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        entry_id: { type: 'string', description: 'UUID of the posted journal entry to reverse' },
+        entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
         reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
         reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason — shown in pending_operations review. Not stored on the storno itself. Max 500 chars.' },
       },
@@ -6006,11 +6091,11 @@ export const tools: McpTool[] = [
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
-      const entryId = args.entry_id as string
+      const entryRef = args.entry_id as string
       const reversalDate = typeof args.reversal_date === 'string' ? args.reversal_date : undefined
       const reason = typeof args.reason === 'string' ? args.reason : undefined
 
-      if (!entryId) {
+      if (!entryRef) {
         throw new Error('entry_id is required')
       }
       // Belt-and-braces runtime check: inputSchema declares the pattern, but the
@@ -6022,6 +6107,8 @@ export const tools: McpTool[] = [
       if (reason !== undefined && reason.length > 500) {
         throw new Error('reason must be 500 characters or fewer')
       }
+
+      const entryId = await resolveJournalEntryRef(supabase, companyId, entryRef)
 
       // Pre-flight mirrors commitReverseEntry: posted + period not closed/locked.
       // Failing fast gives a clearer Swedish error than waiting until commit-time.
@@ -6056,7 +6143,16 @@ export const tools: McpTool[] = [
         .maybeSingle()
       const original = data as OriginalRow | null
 
-      if (origErr || !original) throw new Error('Journal entry not found')
+      if (origErr) {
+        throw new Error(`Database error looking up journal entry ${entryId}: ${origErr.message}`)
+      }
+      if (!original) {
+        throw new Error(
+          `Journal entry not found: id=${entryId}. ` +
+          `If this UUID came from an earlier tool result, re-fetch via gnubok_query_journal — ` +
+          `UUIDs are frequently hallucinated when reused across turns. You can also pass a voucher ref like "A-113".`
+        )
+      }
       if (original.status !== 'posted') {
         throw new Error(`Only posted entries can be reversed. Current status: ${original.status}.`)
       }

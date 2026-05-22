@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -26,32 +27,6 @@ import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
 import type { Customer, Currency } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 
-const itemSchema = z.object({
-  description: z.string().min(1, 'Beskrivning krävs'),
-  quantity: z.number().min(0.01, 'Minst 0.01'),
-  unit: z.string().min(1, 'Enhet krävs'),
-  unit_price: z.number(),
-  vat_rate: z
-    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
-    .nullable()
-    .optional(),
-})
-
-const schema = z.object({
-  customer_id: z.string().uuid('Välj en kund'),
-  name: z.string().min(1, 'Namn krävs'),
-  day_of_month: z.number().int().min(1).max(31),
-  payment_terms_days: z.number().int().min(0).max(90),
-  currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
-  auto_send: z.boolean(),
-  your_reference: z.string().optional(),
-  our_reference: z.string().optional(),
-  notes: z.string().optional(),
-  items: z.array(itemSchema).min(1, 'Minst en rad krävs'),
-})
-
-type FormData = z.infer<typeof schema>
-
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
 
@@ -60,8 +35,36 @@ export default function NewRecurringSchedulePage() {
   const { toast } = useToast()
   const { company } = useCompany()
   const supabase = createClient()
+  const t = useTranslations('invoice_recurring_new')
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const schema = useMemo(() => {
+    const itemSchema = z.object({
+      description: z.string().min(1, t('validation_description_required')),
+      quantity: z.number().min(0.01, t('validation_quantity_min')),
+      unit: z.string().min(1, t('validation_unit_required')),
+      unit_price: z.number(),
+      vat_rate: z
+        .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+        .nullable()
+        .optional(),
+    })
+    return z.object({
+      customer_id: z.string().uuid(t('validation_customer_required')),
+      name: z.string().min(1, t('validation_name_required')),
+      day_of_month: z.number().int().min(1).max(31),
+      payment_terms_days: z.number().int().min(0).max(90),
+      currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+      auto_send: z.boolean(),
+      your_reference: z.string().optional(),
+      our_reference: z.string().optional(),
+      notes: z.string().optional(),
+      items: z.array(itemSchema).min(1, t('validation_min_one_row')),
+    })
+  }, [t])
+
+  type FormData = z.infer<typeof schema>
 
   const {
     register,
@@ -104,13 +107,13 @@ export default function NewRecurringSchedulePage() {
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte skapa schema')
+        throw new Error(body.error || t('create_failed_fallback'))
       }
-      toast({ title: 'Schema skapat' })
+      toast({ title: t('created_title') })
       router.push('/invoices/recurring')
     } catch (err) {
       toast({
-        title: 'Kunde inte skapa schema',
+        title: t('create_failed_title'),
         description: err instanceof Error ? err.message : undefined,
         variant: 'destructive',
       })
@@ -135,22 +138,22 @@ export default function NewRecurringSchedulePage() {
         className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="h-4 w-4 mr-1" />
-        Tillbaka
+        {t('back')}
       </Link>
 
-      <PageHeader title="Nytt återkommande schema" />
+      <PageHeader title={t('title')} />
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Schema</CardTitle>
+            <CardTitle className="text-base">{t('schedule_card_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <Label htmlFor="name">Namn</Label>
+              <Label htmlFor="name">{t('name_label')}</Label>
               <Input
                 id="name"
-                placeholder="t.ex. Månadsretainer Acme AB"
+                placeholder={t('name_placeholder')}
                 {...register('name')}
               />
               {errors.name && (
@@ -159,14 +162,14 @@ export default function NewRecurringSchedulePage() {
             </div>
 
             <div>
-              <Label htmlFor="customer_id">Kund</Label>
+              <Label htmlFor="customer_id">{t('customer_label')}</Label>
               <Controller
                 control={control}
                 name="customer_id"
                 render={({ field }) => (
                   <Select value={field.value} onValueChange={field.onChange}>
                     <SelectTrigger id="customer_id">
-                      <SelectValue placeholder="Välj kund" />
+                      <SelectValue placeholder={t('customer_placeholder')} />
                     </SelectTrigger>
                     <SelectContent>
                       {customers.map((c) => (
@@ -185,7 +188,7 @@ export default function NewRecurringSchedulePage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <Label htmlFor="day_of_month">Dag i månaden</Label>
+                <Label htmlFor="day_of_month">{t('day_label')}</Label>
                 <Input
                   id="day_of_month"
                   type="number"
@@ -195,11 +198,11 @@ export default function NewRecurringSchedulePage() {
                   {...register('day_of_month', { valueAsNumber: true })}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  29-31 körs sista dagen i kortare månader.
+                  {t('day_hint')}
                 </p>
               </div>
               <div>
-                <Label htmlFor="payment_terms_days">Betalningsvillkor (dagar)</Label>
+                <Label htmlFor="payment_terms_days">{t('payment_terms_label')}</Label>
                 <Input
                   id="payment_terms_days"
                   type="number"
@@ -210,7 +213,7 @@ export default function NewRecurringSchedulePage() {
                 />
               </div>
               <div>
-                <Label htmlFor="currency">Valuta</Label>
+                <Label htmlFor="currency">{t('currency_label')}</Label>
                 <Controller
                   control={control}
                   name="currency"
@@ -249,11 +252,10 @@ export default function NewRecurringSchedulePage() {
                 />
                 <div className="flex-1">
                   <Label htmlFor="auto_send" className="font-medium">
-                    Skapa och skicka automatiskt
+                    {t('auto_send_label')}
                   </Label>
                   <p className="text-sm text-muted-foreground mt-1">
-                    När markerad: fakturan skickas med e-post till kunden direkt vid
-                    skapande. Annars skapas den som utkast för manuell granskning.
+                    {t('auto_send_description')}
                   </p>
                 </div>
               </div>
@@ -263,7 +265,7 @@ export default function NewRecurringSchedulePage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Rader</CardTitle>
+            <CardTitle className="text-base">{t('items_card_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             {fields.map((field, index) => (
@@ -273,7 +275,7 @@ export default function NewRecurringSchedulePage() {
               >
                 <div className="col-span-12 sm:col-span-5">
                   <Input
-                    placeholder="Beskrivning"
+                    placeholder={t('description_placeholder')}
                     {...register(`items.${index}.description`)}
                   />
                 </div>
@@ -281,7 +283,7 @@ export default function NewRecurringSchedulePage() {
                   <Input
                     type="number"
                     step="0.01"
-                    placeholder="Antal"
+                    placeholder={t('quantity_placeholder')}
                     className="tabular-nums"
                     {...register(`items.${index}.quantity`, { valueAsNumber: true })}
                   />
@@ -310,7 +312,7 @@ export default function NewRecurringSchedulePage() {
                   <Input
                     type="number"
                     step="0.01"
-                    placeholder="à-pris"
+                    placeholder={t('unit_price_placeholder')}
                     className="tabular-nums"
                     {...register(`items.${index}.unit_price`, { valueAsNumber: true })}
                   />
@@ -321,7 +323,7 @@ export default function NewRecurringSchedulePage() {
                     variant="ghost"
                     size="icon"
                     onClick={() => fields.length > 1 && remove(index)}
-                    aria-label="Ta bort rad"
+                    aria-label={t('remove_row')}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -337,31 +339,31 @@ export default function NewRecurringSchedulePage() {
               }
             >
               <Plus className="mr-2 h-4 w-4" />
-              Lägg till rad
+              {t('add_row')}
             </Button>
             <div className="pt-2 text-sm text-muted-foreground tabular-nums">
-              Delsumma exkl. moms: {formatCurrency(subtotal, watchCurrency)}
+              {t('subtotal_ex_vat', { amount: formatCurrency(subtotal, watchCurrency) })}
             </div>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Övrigt</CardTitle>
+            <CardTitle className="text-base">{t('other_card_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="your_reference">Er referens</Label>
+                <Label htmlFor="your_reference">{t('your_reference_label')}</Label>
                 <Input id="your_reference" {...register('your_reference')} />
               </div>
               <div>
-                <Label htmlFor="our_reference">Vår referens</Label>
+                <Label htmlFor="our_reference">{t('our_reference_label')}</Label>
                 <Input id="our_reference" {...register('our_reference')} />
               </div>
             </div>
             <div>
-              <Label htmlFor="notes">Anteckningar (skrivs på varje faktura)</Label>
+              <Label htmlFor="notes">{t('notes_label')}</Label>
               <Textarea id="notes" rows={3} {...register('notes')} />
             </div>
           </CardContent>
@@ -370,11 +372,11 @@ export default function NewRecurringSchedulePage() {
         <div className="flex justify-end gap-2">
           <Link href="/invoices/recurring">
             <Button type="button" variant="secondary">
-              Avbryt
+              {t('cancel')}
             </Button>
           </Link>
           <Button type="submit" disabled={isSubmitting}>
-            {isSubmitting ? 'Skapar...' : 'Skapa schema'}
+            {isSubmitting ? t('creating') : t('create_schedule')}
           </Button>
         </div>
       </form>

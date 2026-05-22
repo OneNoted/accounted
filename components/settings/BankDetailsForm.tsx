@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,6 +15,7 @@ interface BankDetailsFormProps {
 }
 
 export function BankDetailsForm({ settings }: BankDetailsFormProps) {
+  const t = useTranslations('settings_bank_details_form')
   const [bankgiroError, setBankgiroError] = useState<string | null>(null)
   const [clearingError, setClearingError] = useState<string | null>(null)
   const [accountNumberError, setAccountNumberError] = useState<string | null>(null)
@@ -23,22 +25,22 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Bankuppgifter
+        {t('heading')}
       </h2>
       <p className="text-xs text-muted-foreground -mt-2">
-        Visas på dina fakturor
+        {t('subheading')}
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="space-y-2">
-          <Label>Bank</Label>
+          <Label>{t('bank_label')}</Label>
           <BankNameCombobox
             defaultValue={settings.bank_name || ''}
             enableBankingEnabled={hasBankingExtension}
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="clearing_number">Clearing</Label>
+          <Label htmlFor="clearing_number">{t('clearing_label')}</Label>
           <Input
             id="clearing_number"
             name="clearing_number"
@@ -52,13 +54,13 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
             onBlur={(e) => {
               const val = e.target.value.trim()
               if (!val) { setClearingError(null); return }
-              setClearingError(!/^\d{4,5}$/.test(val) ? 'Måste vara 4-5 siffror' : null)
+              setClearingError(!/^\d{4,5}$/.test(val) ? t('clearing_error') : null)
             }}
           />
           {clearingError && <p className="text-xs text-destructive">{clearingError}</p>}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="account_number">Kontonummer</Label>
+          <Label htmlFor="account_number">{t('account_number_label')}</Label>
           <Input
             id="account_number"
             name="account_number"
@@ -72,7 +74,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
             onBlur={(e) => {
               const val = e.target.value.trim()
               if (!val) { setAccountNumberError(null); return }
-              setAccountNumberError(!/^\d{6,12}$/.test(val) ? 'Måste vara 6-12 siffror' : null)
+              setAccountNumberError(!/^\d{6,12}$/.test(val) ? t('account_number_error') : null)
             }}
           />
           {accountNumberError && <p className="text-xs text-destructive">{accountNumberError}</p>}
@@ -81,7 +83,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="bankgiro">Bankgiro</Label>
+          <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
           <Input
             id="bankgiro"
             name="bankgiro"
@@ -94,7 +96,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
                 e.target.value = formatBankgiroNumber(val)
                 setBankgiroError(null)
               } else {
-                setBankgiroError('Ogiltigt bankgironummer')
+                setBankgiroError(t('bankgiro_error'))
               }
             }}
           />
@@ -102,11 +104,11 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="swish">Swish</Label>
+          <Label htmlFor="swish">{t('swish_label')}</Label>
           <Input
             id="swish"
             name="swish"
-            placeholder="123 XXX XX XX eller 07X XXX XX XX"
+            placeholder={t('swish_placeholder')}
             defaultValue={settings.swish || ''}
             onBlur={(e) => {
               const val = normaliseSwish(e.target.value)
@@ -115,7 +117,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
                 e.target.value = val
                 setSwishError(null)
               } else {
-                setSwishError('Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)')
+                setSwishError(t('swish_error'))
               }
             }}
           />

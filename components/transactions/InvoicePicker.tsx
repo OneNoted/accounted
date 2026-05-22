@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -18,6 +19,7 @@ interface InvoicePickerProps {
 }
 
 export default function InvoicePicker({ transaction, onSelect, isProcessing }: InvoicePickerProps) {
+  const t = useTranslations('tx_invoice_picker')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
   const [invoices, setInvoices] = useState<OpenInvoice[]>([])
@@ -110,7 +112,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
-        Laddar fakturor...
+        {t('loading')}
       </div>
     )
   }
@@ -118,7 +120,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
   if (invoices.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        <p className="text-sm">Inga öppna fakturor att matcha mot.</p>
+        <p className="text-sm">{t('empty')}</p>
       </div>
     )
   }
@@ -128,7 +130,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Sök fakturanummer eller kund..."
+          placeholder={t('search_placeholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -167,22 +169,21 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
                   <div className="flex items-center gap-2">
                     <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                     <span className="font-medium text-sm">
-                      {invoice.invoice_number ?? '(utan nummer)'}
+                      {invoice.invoice_number ?? t('no_number')}
                     </span>
                     {invoice.status === 'overdue' && (
                       <span className="text-[10px] uppercase tracking-wide text-destructive">
-                        Förfallen
+                        {t('status_overdue')}
                       </span>
                     )}
                     {invoice.status === 'partially_paid' && (
                       <span className="text-[10px] uppercase tracking-wide text-warning-foreground">
-                        Delbetald
+                        {t('status_partially_paid')}
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                    {invoice.customer?.name || 'Okänd kund'} · Förfaller{' '}
-                    {formatDate(invoice.due_date)}
+                    {invoice.customer?.name || t('unknown_customer')} · {t('due_short', { date: formatDate(invoice.due_date) })}
                   </p>
                 </div>
                 <div className="text-right flex-shrink-0">
@@ -194,7 +195,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
                   >
                     {formatCurrency(remaining, invoice.currency)}
                   </p>
-                  {exact && <p className="text-[10px] text-success">Exakt match</p>}
+                  {exact && <p className="text-[10px] text-success">{t('exact_match')}</p>}
                 </div>
               </div>
             </button>
@@ -202,7 +203,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
         })}
         {sorted.length === 0 && (
           <p className="text-center text-sm text-muted-foreground py-4">
-            Ingen faktura matchar &quot;{search}&quot;
+            {t('no_search_results', { term: search })}
           </p>
         )}
       </div>

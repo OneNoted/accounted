@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -32,6 +33,7 @@ export default function RecurringInvoicesPage() {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const router = useRouter()
+  const t = useTranslations('invoice_recurring')
 
   async function fetchSchedules() {
     setIsLoading(true)
@@ -42,8 +44,8 @@ export default function RecurringInvoicesPage() {
       setSchedules(json.data ?? [])
     } catch {
       toast({
-        title: 'Kunde inte ladda återkommande fakturor',
-        description: 'Kontrollera din anslutning och försök igen.',
+        title: t('load_failed_title'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
     }
@@ -63,46 +65,46 @@ export default function RecurringInvoicesPage() {
     })
     if (res.ok) {
       toast({
-        title: next === 'paused' ? 'Schema pausat' : 'Schema återaktiverat',
+        title: next === 'paused' ? t('schedule_paused_title') : t('schedule_resumed_title'),
       })
       fetchSchedules()
     } else {
       toast({
-        title: 'Kunde inte uppdatera schema',
+        title: t('schedule_update_failed_title'),
         variant: 'destructive',
       })
     }
   }
 
   async function deleteSchedule(s: ScheduleRow) {
-    if (!confirm(`Ta bort schemat "${s.name}"? Redan skapade fakturor påverkas inte.`)) {
+    if (!confirm(t('delete_confirm', { name: s.name }))) {
       return
     }
     const res = await fetch(`/api/invoices/recurring/${s.id}`, { method: 'DELETE' })
     if (res.ok) {
-      toast({ title: 'Schema borttaget' })
+      toast({ title: t('schedule_deleted_title') })
       fetchSchedules()
     } else {
-      toast({ title: 'Kunde inte ta bort schema', variant: 'destructive' })
+      toast({ title: t('schedule_delete_failed_title'), variant: 'destructive' })
     }
   }
 
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Återkommande fakturor"
+        title={t('title')}
         action={
           canWrite ? (
             <Link href="/invoices/recurring/new">
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
-                Nytt schema
+                {t('new_schedule')}
               </Button>
             </Link>
           ) : (
-            <Button disabled title="Du har endast läsbehörighet i detta företag">
+            <Button disabled title={t('viewer_disabled_tooltip')}>
               <Lock className="mr-2 h-4 w-4" />
-              Nytt schema
+              {t('new_schedule')}
             </Button>
           )
         }
@@ -111,7 +113,7 @@ export default function RecurringInvoicesPage() {
       {isLoading ? (
         <Card>
           <CardContent className="py-12 text-center text-sm text-muted-foreground">
-            Laddar...
+            {t('loading')}
           </CardContent>
         </Card>
       ) : schedules.length === 0 ? (
@@ -119,9 +121,9 @@ export default function RecurringInvoicesPage() {
           <CardContent className="p-0">
             <EmptyState
               icon={Repeat}
-              title="Inga återkommande fakturor"
-              description="Skapa ett schema för att automatiskt fakturera kunder på en bestämd dag varje månad."
-              actionLabel={canWrite ? 'Nytt schema' : undefined}
+              title={t('empty_title')}
+              description={t('empty_description')}
+              actionLabel={canWrite ? t('new_schedule') : undefined}
               actionHref={canWrite ? '/invoices/recurring/new' : undefined}
             />
           </CardContent>
@@ -132,13 +134,13 @@ export default function RecurringInvoicesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Namn</TableHead>
-                  <TableHead>Kund</TableHead>
-                  <TableHead className="tabular-nums">Dag</TableHead>
-                  <TableHead className="tabular-nums">Nästa körning</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="tabular-nums text-right">Skapade</TableHead>
-                  <TableHead className="text-right">Åtgärder</TableHead>
+                  <TableHead>{t('th_name')}</TableHead>
+                  <TableHead>{t('th_customer')}</TableHead>
+                  <TableHead className="tabular-nums">{t('th_day')}</TableHead>
+                  <TableHead className="tabular-nums">{t('th_next_run')}</TableHead>
+                  <TableHead>{t('th_status')}</TableHead>
+                  <TableHead className="tabular-nums text-right">{t('th_generated')}</TableHead>
+                  <TableHead className="text-right">{t('th_actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -166,9 +168,9 @@ export default function RecurringInvoicesPage() {
                     <TableCell className="tabular-nums">{formatDate(s.next_run_date)}</TableCell>
                     <TableCell>
                       {s.status === 'active' ? (
-                        <Badge variant="success">Aktiv</Badge>
+                        <Badge variant="success">{t('status_active')}</Badge>
                       ) : (
-                        <Badge variant="secondary">Pausad</Badge>
+                        <Badge variant="secondary">{t('status_paused')}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="tabular-nums text-right">
@@ -186,14 +188,14 @@ export default function RecurringInvoicesPage() {
                               size="sm"
                               onClick={() => togglePause(s)}
                             >
-                              {s.status === 'active' ? 'Pausa' : 'Aktivera'}
+                              {s.status === 'active' ? t('pause') : t('resume')}
                             </Button>
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => deleteSchedule(s)}
                             >
-                              Ta bort
+                              {t('delete')}
                             </Button>
                           </>
                         )}

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -34,22 +35,12 @@ const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warn
   reversed: 'secondary',
 }
 
-const statusLabels: Record<string, string> = {
-  registered: 'Registrerad',
-  approved: 'Godkänd',
-  paid: 'Betald',
-  partially_paid: 'Delbetald',
-  overdue: 'Förfallen',
-  disputed: 'Tvist',
-  credited: 'Krediterad',
-  reversed: 'Makulerad',
-}
-
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
+  const t = useTranslations('supplier_invoice_detail')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
@@ -67,12 +58,23 @@ export default function SupplierInvoiceDetailPage() {
   >(null)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
+  const statusLabels = useMemo<Record<string, string>>(() => ({
+    registered: t('status_registered'),
+    approved: t('status_approved'),
+    paid: t('status_paid'),
+    partially_paid: t('status_partially_paid'),
+    overdue: t('status_overdue'),
+    disputed: t('status_disputed'),
+    credited: t('status_credited'),
+    reversed: t('status_reversed'),
+  }), [t])
+
   async function fetchInvoice() {
     setIsLoading(true)
     const res = await fetch(`/api/supplier-invoices/${params.id}`)
     const { data, error } = await res.json()
     if (error) {
-      toast({ title: 'Kunde inte ladda leverantörsfaktura', description: error, variant: 'destructive' })
+      toast({ title: t('load_failed_title'), description: error, variant: 'destructive' })
     } else {
       setInvoice(data)
       setPayAmount(String(data.remaining_amount))
@@ -90,9 +92,9 @@ export default function SupplierInvoiceDetailPage() {
     const res = await fetch(`/api/supplier-invoices/${params.id}/approve`, { method: 'POST' })
     const result = await res.json()
     if (!res.ok) {
-      toast({ title: 'Godkännande misslyckades', description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
     } else {
-      toast({ title: 'Godkänd', description: 'Fakturan har godkänts' })
+      toast({ title: t('approved_title'), description: t('approved_description') })
       fetchInvoice()
     }
     setIsProcessing(false)
@@ -111,12 +113,12 @@ export default function SupplierInvoiceDetailPage() {
         setDuplicateCandidates(result.error.details.candidates)
         setIsPayDialogOpen(false)
       } else {
-        toast({ title: 'Betalning misslyckades', description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        toast({ title: t('payment_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
       }
     } else {
       toast({
-        title: result.status === 'paid' ? 'Betald' : 'Delbetalning registrerad',
-        description: `${formatAmount(parseFloat(payAmount))} kr registrerat`,
+        title: result.status === 'paid' ? t('paid_title') : t('partial_payment_title'),
+        description: t('amount_registered_description', { amount: formatAmount(parseFloat(payAmount)) }),
       })
       setIsPayDialogOpen(false)
       setDuplicateCandidates(null)
@@ -127,9 +129,9 @@ export default function SupplierInvoiceDetailPage() {
 
   async function handleCredit() {
     const ok = await confirmAction({
-      title: 'Registrera kreditfaktura',
-      description: 'En kreditfaktura skapas som reverserar den ursprungliga fakturan. Denna åtgärd kan inte ångras.',
-      confirmLabel: 'Registrera kreditfaktura',
+      title: t('credit_confirm_title'),
+      description: t('credit_confirm_description'),
+      confirmLabel: t('credit_confirm_label'),
       variant: 'warning',
     })
     if (!ok) return
@@ -137,9 +139,9 @@ export default function SupplierInvoiceDetailPage() {
     const res = await fetch(`/api/supplier-invoices/${params.id}/credit`, { method: 'POST' })
     const result = await res.json()
     if (!res.ok) {
-      toast({ title: 'Kreditering misslyckades', description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      toast({ title: t('credit_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
     } else {
-      toast({ title: 'Kreditfaktura registrerad' })
+      toast({ title: t('credit_success_title') })
       fetchInvoice()
     }
     setIsProcessing(false)
@@ -147,28 +149,27 @@ export default function SupplierInvoiceDetailPage() {
 
   async function handleDelete() {
     const ok = await confirmAction({
-      title: 'Ta bort faktura',
-      description: 'Fakturan och tillhörande data tas bort permanent. Denna åtgärd kan inte ångras.',
-      confirmLabel: 'Ta bort',
+      title: t('delete_confirm_title'),
+      description: t('delete_confirm_description'),
+      confirmLabel: t('delete_confirm_label'),
       variant: 'destructive',
     })
     if (!ok) return
     const res = await fetch(`/api/supplier-invoices/${params.id}`, { method: 'DELETE' })
     const result = await res.json()
     if (!res.ok) {
-      toast({ title: 'Kunde inte ta bort faktura', description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      toast({ title: t('delete_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
     } else {
-      toast({ title: 'Borttagen' })
+      toast({ title: t('deleted_title') })
       router.push('/supplier-invoices')
     }
   }
 
   async function handleUncredit() {
     const ok = await confirmAction({
-      title: 'Ångra kreditering',
-      description:
-        'Kreditfakturan tas bort och dess verifikation makuleras (storno). Originalfakturan återställs så att fakturanumret blir ledigt igen.',
-      confirmLabel: 'Ångra kreditering',
+      title: t('uncredit_confirm_title'),
+      description: t('uncredit_confirm_description'),
+      confirmLabel: t('uncredit_confirm_label'),
       variant: 'warning',
     })
     if (!ok) return
@@ -177,14 +178,14 @@ export default function SupplierInvoiceDetailPage() {
     const result = await res.json()
     if (!res.ok) {
       toast({
-        title: 'Kunde inte ångra kreditering',
+        title: t('uncredit_failed_title'),
         description: getErrorMessage(result, { context: 'supplier_invoice' }),
         variant: 'destructive',
       })
     } else {
       toast({
-        title: 'Kreditering ångrad',
-        description: 'Originalfakturan är återställd och numret är ledigt.',
+        title: t('uncredit_success_title'),
+        description: t('uncredit_success_description'),
       })
       fetchInvoice()
     }
@@ -203,9 +204,9 @@ export default function SupplierInvoiceDetailPage() {
   if (!invoice) {
     return (
       <div className="text-center py-12">
-        <p className="text-muted-foreground">Fakturan hittades inte</p>
+        <p className="text-muted-foreground">{t('not_found')}</p>
         <Button variant="outline" className="mt-4" onClick={() => router.push('/supplier-invoices')}>
-          Tillbaka
+          {t('back')}
         </Button>
       </div>
     )
@@ -219,20 +220,23 @@ export default function SupplierInvoiceDetailPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label="Tillbaka till leverantörsfakturor">
+          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label={t('back_aria')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className="font-display text-2xl sm:text-3xl font-medium tracking-tight">
-                Ankomst #{invoice.arrival_number}
+                {t('arrival_header', { number: invoice.arrival_number })}
               </h1>
               <Badge variant={statusVariants[invoice.status] || 'secondary'}>
                 {statusLabels[invoice.status] || invoice.status}
               </Badge>
             </div>
             <p className="text-muted-foreground text-sm sm:text-base truncate">
-              {invoice.supplier?.name} | Faktura {invoice.supplier_invoice_number}
+              {t('header_subtitle', {
+                supplier: invoice.supplier?.name ?? '',
+                number: invoice.supplier_invoice_number,
+              })}
             </p>
           </div>
         </div>
@@ -244,17 +248,18 @@ export default function SupplierInvoiceDetailPage() {
               <Button
                 onClick={handleApprove}
                 disabled={isProcessing || !canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                Godkänn
+                {t('approve')}
               </Button>
               <Button
                 variant="destructive"
                 size="icon"
                 onClick={handleDelete}
                 disabled={isProcessing || !canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+                aria-label={t('delete_confirm_label')}
               >
                 {canWrite ? <Trash2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
               </Button>
@@ -265,20 +270,20 @@ export default function SupplierInvoiceDetailPage() {
               <Button
                 onClick={() => setIsPayDialogOpen(true)}
                 disabled={isProcessing || !canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <CreditCard className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                Markera betald
+                {t('mark_paid')}
               </Button>
               {invoice.status !== 'partially_paid' && (
                 <Button
                   variant="outline"
                   onClick={handleCredit}
                   disabled={isProcessing || !canWrite}
-                  title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
                 >
                   {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                  Kreditfaktura
+                  {t('credit_note_button')}
                 </Button>
               )}
             </>
@@ -288,10 +293,10 @@ export default function SupplierInvoiceDetailPage() {
               variant="outline"
               onClick={handleUncredit}
               disabled={isProcessing || !canWrite}
-              title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {canWrite ? <Undo2 className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-              Ångra kreditering
+              {t('uncredit_button')}
             </Button>
           )}
         </div>
@@ -302,20 +307,20 @@ export default function SupplierInvoiceDetailPage() {
         <div className="rounded-lg border bg-muted/40 p-4 flex gap-3 text-sm">
           <Info className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />
           <div className="space-y-1">
-            <p className="font-medium">Detta är en kreditfaktura</p>
+            <p className="font-medium">{t('credit_note_banner_title')}</p>
             <p className="text-muted-foreground">
-              Den är kopplad till{' '}
+              {t('credit_note_banner_prefix')}{' '}
               {(invoice as SupplierInvoice & { credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original ? (
                 <Link
                   href={`/supplier-invoices/${(invoice as SupplierInvoice & { credited_original: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original.id}`}
                   className="text-primary hover:underline font-medium"
                 >
-                  faktura {(invoice as SupplierInvoice & { credited_original: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original.supplier_invoice_number}
+                  {t('credit_note_banner_link', { number: (invoice as SupplierInvoice & { credited_original: { id: string; supplier_invoice_number: string; arrival_number: number } }).credited_original.supplier_invoice_number })}
                 </Link>
               ) : (
-                <span>originalfakturan</span>
+                <span>{t('credit_note_banner_original_fallback')}</span>
               )}
-              . För att ta bort kreditfakturan och frigöra fakturanumret, gå till originalet och välj &quot;Ångra kreditering&quot;.
+              {t('credit_note_banner_suffix')}
             </p>
           </div>
         </div>
@@ -325,40 +330,40 @@ export default function SupplierInvoiceDetailPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Fakturainformation</CardTitle>
+            <CardTitle className="text-lg">{t('invoice_info_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Ankomstnummer</span>
+              <span className="text-muted-foreground">{t('arrival_number_label')}</span>
               <span className="font-mono">{invoice.arrival_number}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Fakturanummer</span>
+              <span className="text-muted-foreground">{t('invoice_number_label')}</span>
               <span>{invoice.supplier_invoice_number}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Fakturadatum</span>
+              <span className="text-muted-foreground">{t('invoice_date_label')}</span>
               <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Förfallodatum</span>
+              <span className="text-muted-foreground">{t('due_date_label')}</span>
               <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
             </div>
             {invoice.delivery_date && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Leveransdatum</span>
+                <span className="text-muted-foreground">{t('delivery_date_label')}</span>
                 <span>{invoice.delivery_date}</span>
               </div>
             )}
             {invoice.payment_reference && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">OCR/referens</span>
+                <span className="text-muted-foreground">{t('ocr_reference_label')}</span>
                 <span className="font-mono">{invoice.payment_reference}</span>
               </div>
             )}
             {invoice.reverse_charge && (
               <div className="mt-2">
-                <Badge variant="warning">Omvänd skattskyldighet</Badge>
+                <Badge variant="warning">{t('reverse_charge_badge')}</Badge>
               </div>
             )}
           </CardContent>
@@ -366,27 +371,27 @@ export default function SupplierInvoiceDetailPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Belopp</CardTitle>
+            <CardTitle className="text-lg">{t('amounts_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Netto (exkl. moms)</span>
+              <span className="text-muted-foreground">{t('net_excl_vat')}</span>
               <span className="font-mono">{formatAmount(invoice.subtotal)} {invoice.currency}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Moms</span>
+              <span className="text-muted-foreground">{t('vat_label')}</span>
               <span className="font-mono">{formatAmount(invoice.vat_amount)} {invoice.currency}</span>
             </div>
             <div className="flex justify-between font-bold text-base pt-2 border-t">
-              <span>Totalt</span>
+              <span>{t('total_label')}</span>
               <span className="font-mono">{formatAmount(invoice.total)} {invoice.currency}</span>
             </div>
             <div className="flex justify-between pt-2">
-              <span className="text-muted-foreground">Betalt</span>
+              <span className="text-muted-foreground">{t('paid_label')}</span>
               <span className="font-mono text-success">{formatAmount(invoice.paid_amount)} {invoice.currency}</span>
             </div>
             <div className="flex justify-between font-semibold">
-              <span>Kvar att betala</span>
+              <span>{t('remaining_label')}</span>
               <span className="font-mono">{formatAmount(invoice.remaining_amount)} {invoice.currency}</span>
             </div>
           </CardContent>
@@ -397,14 +402,14 @@ export default function SupplierInvoiceDetailPage() {
       {invoice.supplier && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Leverantör</CardTitle>
+            <CardTitle className="text-lg">{t('supplier_section_title')}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
             <Link href={`/suppliers/${invoice.supplier.id}`} className="text-primary hover:underline font-medium">
               {invoice.supplier.name}
             </Link>
             <div className="text-muted-foreground mt-1">
-              {invoice.supplier.org_number && <span>Org.nr: {invoice.supplier.org_number} | </span>}
+              {invoice.supplier.org_number && <span>{t('org_number_inline', { number: invoice.supplier.org_number })}</span>}
               {invoice.supplier.email}
             </div>
           </CardContent>
@@ -414,7 +419,7 @@ export default function SupplierInvoiceDetailPage() {
       {/* Line items */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Rader</CardTitle>
+          <CardTitle className="text-lg">{t('rows_title')}</CardTitle>
         </CardHeader>
         <CardContent>
           {/* Desktop table */}
@@ -422,14 +427,14 @@ export default function SupplierInvoiceDetailPage() {
             <table className="w-full text-sm">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
-                  <th className="pb-2">Beskrivning</th>
-                  <th className="pb-2 w-16 text-right">Antal</th>
-                  <th className="pb-2 w-16">Enhet</th>
-                  <th className="pb-2 w-28 text-right">À-pris</th>
-                  <th className="pb-2 w-20">Konto</th>
-                  <th className="pb-2 w-16 text-right">Moms%</th>
-                  <th className="pb-2 w-28 text-right">Belopp</th>
-                  <th className="pb-2 w-24 text-right">Moms</th>
+                  <th className="pb-2">{t('col_description')}</th>
+                  <th className="pb-2 w-16 text-right">{t('col_quantity')}</th>
+                  <th className="pb-2 w-16">{t('col_unit')}</th>
+                  <th className="pb-2 w-28 text-right">{t('col_unit_price')}</th>
+                  <th className="pb-2 w-20">{t('col_account')}</th>
+                  <th className="pb-2 w-16 text-right">{t('col_vat_rate')}</th>
+                  <th className="pb-2 w-28 text-right">{t('col_amount')}</th>
+                  <th className="pb-2 w-24 text-right">{t('col_vat')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -458,8 +463,8 @@ export default function SupplierInvoiceDetailPage() {
                   <span className="font-mono">{formatAmount(item.line_total)} kr</span>
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span><AccountNumber number={item.account_number} /> · {Math.round(item.vat_rate * 100)}% moms</span>
-                  <span className="font-mono">moms {formatAmount(item.vat_amount)}</span>
+                  <span><AccountNumber number={item.account_number} /> · {t('vat_inline', { rate: Math.round(item.vat_rate * 100) })}</span>
+                  <span className="font-mono">{t('vat_amount_inline', { amount: formatAmount(item.vat_amount) })}</span>
                 </div>
               </div>
             ))}
@@ -471,7 +476,7 @@ export default function SupplierInvoiceDetailPage() {
       {payments.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Betalningshistorik</CardTitle>
+            <CardTitle className="text-lg">{t('payment_history_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             {/* Desktop table */}
@@ -479,10 +484,10 @@ export default function SupplierInvoiceDetailPage() {
               <table className="w-full text-sm">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                   <tr className="border-b text-left">
-                    <th className="pb-2">Datum</th>
-                    <th className="pb-2 text-right">Belopp</th>
-                    <th className="pb-2">Verifikation</th>
-                    <th className="pb-2">Anteckning</th>
+                    <th className="pb-2">{t('col_date')}</th>
+                    <th className="pb-2 text-right">{t('col_amount_short')}</th>
+                    <th className="pb-2">{t('col_voucher')}</th>
+                    <th className="pb-2">{t('col_note')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -529,12 +534,12 @@ export default function SupplierInvoiceDetailPage() {
       {/* Journal entries (sambandskrav) */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Verifikationer (sambandskrav)</CardTitle>
+          <CardTitle className="text-lg">{t('vouchers_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           {invoice.registration_journal_entry_id ? (
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Registreringsverifikation</span>
+              <span className="text-muted-foreground">{t('registration_voucher')}</span>
               <Link
                 href={`/bookkeeping/${invoice.registration_journal_entry_id}`}
                 className="text-primary hover:underline font-mono"
@@ -543,11 +548,11 @@ export default function SupplierInvoiceDetailPage() {
               </Link>
             </div>
           ) : (
-            <p className="text-muted-foreground">Ingen registreringsverifikation (kontantmetoden)</p>
+            <p className="text-muted-foreground">{t('no_registration_voucher')}</p>
           )}
           {invoice.payment_journal_entry_id && (
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Betalningsverifikation</span>
+              <span className="text-muted-foreground">{t('payment_voucher')}</span>
               <Link
                 href={`/bookkeeping/${invoice.payment_journal_entry_id}`}
                 className="text-primary hover:underline font-mono"
@@ -563,7 +568,7 @@ export default function SupplierInvoiceDetailPage() {
       {invoice.notes && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Anteckningar</CardTitle>
+            <CardTitle className="text-lg">{t('notes_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{invoice.notes}</p>
@@ -577,11 +582,11 @@ export default function SupplierInvoiceDetailPage() {
       <Dialog open={isPayDialogOpen} onOpenChange={setIsPayDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Markera som betald</DialogTitle>
+            <DialogTitle>{t('pay_dialog_title')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="payment-date">Betalningsdatum</Label>
+              <Label htmlFor="payment-date">{t('payment_date_label')}</Label>
               <Input
                 id="payment-date"
                 type="date"
@@ -592,7 +597,7 @@ export default function SupplierInvoiceDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="payment-amount">Belopp att betala</Label>
+              <Label htmlFor="payment-amount">{t('payment_amount_label')}</Label>
               <Input
                 id="payment-amount"
                 type="number"
@@ -601,15 +606,15 @@ export default function SupplierInvoiceDetailPage() {
                 onChange={(e) => setPayAmount(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Kvar att betala: {formatAmount(invoice.remaining_amount)} {invoice.currency}
+                {t('remaining_to_pay', { amount: formatAmount(invoice.remaining_amount), currency: invoice.currency })}
               </p>
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setIsPayDialogOpen(false)}>
-                Avbryt
+                {t('cancel')}
               </Button>
               <Button onClick={() => handleMarkPaid(false)} disabled={isProcessing}>
-                {isProcessing ? 'Bearbetar...' : 'Registrera betalning'}
+                {isProcessing ? t('processing') : t('register_payment')}
               </Button>
             </div>
           </div>
@@ -625,13 +630,13 @@ export default function SupplierInvoiceDetailPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Möjlig dubbelbetalning</DialogTitle>
+            <DialogTitle>{t('duplicate_payment_title')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Vi hittade {duplicateCandidates?.length === 1 ? 'en banktransaktion' : 'banktransaktioner'} som
-              verkar matcha denna betalning. Länka den befintliga transaktionen istället för att skapa en ny
-              verifikation.
+              {duplicateCandidates?.length === 1
+                ? t('duplicate_payment_description_one')
+                : t('duplicate_payment_description_many')}
             </p>
             <div className="space-y-2 rounded-md border bg-muted/30 p-3">
               {duplicateCandidates?.map((c) => (
@@ -639,7 +644,7 @@ export default function SupplierInvoiceDetailPage() {
                   <div className="min-w-0">
                     <div className="font-medium tabular-nums">{formatDate(c.date)}</div>
                     <div className="truncate text-xs text-muted-foreground">
-                      {c.merchant_name || c.description || 'Banktransaktion'}
+                      {c.merchant_name || c.description || t('bank_transaction_fallback')}
                     </div>
                   </div>
                   <div className="tabular-nums font-medium">
@@ -650,21 +655,21 @@ export default function SupplierInvoiceDetailPage() {
                     size="sm"
                     onClick={() => router.push(`/transactions?highlight=${c.id}`)}
                   >
-                    Gå till
+                    {t('go_to')}
                   </Button>
                 </div>
               ))}
             </div>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setDuplicateCandidates(null)}>
-                Avbryt
+                {t('cancel')}
               </Button>
               <Button
                 variant="outline"
                 onClick={() => handleMarkPaid(true)}
                 disabled={isProcessing}
               >
-                {isProcessing ? 'Bearbetar...' : 'Skapa ny verifikation ändå'}
+                {isProcessing ? t('processing') : t('create_voucher_anyway')}
               </Button>
             </div>
           </div>

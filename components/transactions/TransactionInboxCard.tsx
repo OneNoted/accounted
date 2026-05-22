@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { motion } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -57,6 +58,7 @@ export default function TransactionInboxCard({
   onToggleSelect,
   onAnimationComplete,
 }: TransactionInboxCardProps) {
+  const t = useTranslations('tx_inbox_card')
   const isProcessing = processingId === transaction.id
   const isDisabled = processingId !== null && processingId !== transaction.id
   const isIncome = transaction.amount > 0
@@ -87,7 +89,9 @@ export default function TransactionInboxCard({
           ) : (
             <FileText className="mr-1.5 h-3.5 w-3.5" />
           )}
-          Matcha {transaction.potential_invoice!.invoice_number}
+          {t('match_invoice_btn', {
+            number: transaction.potential_invoice!.invoice_number ?? '',
+          })}
         </Button>
       )
     }
@@ -108,7 +112,9 @@ export default function TransactionInboxCard({
           ) : (
             <FileText className="mr-1.5 h-3.5 w-3.5" />
           )}
-          Matcha {transaction.potential_supplier_invoice!.supplier_invoice_number}
+          {t('match_supplier_invoice_btn', {
+            number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '',
+          })}
         </Button>
       )
     }
@@ -132,6 +138,10 @@ export default function TransactionInboxCard({
   // already shown as the primary button — having both makes the row noisy.
   const showInvoiceMatchButton =
     isDeletable && !hasInvoiceMatch && !hasSupplierInvoiceMatch
+
+  const invoiceMatchLabel = isIncome
+    ? 'Matcha mot kundfaktura'
+    : 'Matcha mot leverantörsfaktura'
 
   return (
     <motion.div
@@ -205,16 +215,8 @@ export default function TransactionInboxCard({
                       e.stopPropagation()
                       onOpenMatchInvoicePicker(transaction)
                     }}
-                    aria-label={
-                      isIncome
-                        ? 'Matcha mot kundfaktura'
-                        : 'Matcha mot leverantörsfaktura'
-                    }
-                    title={
-                      isIncome
-                        ? 'Matcha mot kundfaktura'
-                        : 'Matcha mot leverantörsfaktura'
-                    }
+                    aria-label={invoiceMatchLabel}
+                    title={invoiceMatchLabel}
                     disabled={isProcessing || isDisabled}
                   >
                     <Link2 className="h-4 w-4" />
@@ -229,7 +231,7 @@ export default function TransactionInboxCard({
                       e.stopPropagation()
                       onDelete(transaction.id)
                     }}
-                    aria-label="Ta bort transaktion"
+                    aria-label={t('delete_aria')}
                     disabled={isProcessing || isDisabled}
                   >
                     <Trash2 className="h-4 w-4" />

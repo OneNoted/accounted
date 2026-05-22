@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -80,18 +81,19 @@ export default function TransactionHistoryList({
   isLoadingMore,
   onLoadMore,
 }: TransactionHistoryListProps) {
+  const t = useTranslations('tx_history')
   const [filter, setFilter] = useState<HistoryFilter>('all')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   // The bank/private filter doesn't apply to SKV rows — they have no
   // is_business flag. So when the filter is 'business' or 'private' we
   // implicitly hide SKV.
-  const bankFiltered = transactions.filter((t) => {
-    const matchesSearch = t.description.toLowerCase().includes(searchTerm.toLowerCase())
+  const bankFiltered = transactions.filter((tx) => {
+    const matchesSearch = tx.description.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesFilter =
       filter === 'all' ||
-      (filter === 'business' && t.is_business === true) ||
-      (filter === 'private' && t.is_business === false)
+      (filter === 'business' && tx.is_business === true) ||
+      (filter === 'private' && tx.is_business === false)
     return matchesSearch && matchesFilter
   })
 
@@ -102,8 +104,8 @@ export default function TransactionHistoryList({
 
   const merged: HistoryRow[] = []
   if (sourceFilter !== 'skatteverket') {
-    for (const t of bankFiltered) {
-      merged.push({ source: 'bank', date: t.date, data: t })
+    for (const tx of bankFiltered) {
+      merged.push({ source: 'bank', date: tx.date, data: tx })
     }
   }
   if (sourceFilter !== 'bank') {
@@ -125,9 +127,9 @@ export default function TransactionHistoryList({
       {/* Business/private tabs */}
       <Tabs value={filter} onValueChange={(v) => setFilter(v as HistoryFilter)}>
         <TabsList>
-          <TabsTrigger value="all">Alla</TabsTrigger>
-          <TabsTrigger value="business">Företag</TabsTrigger>
-          <TabsTrigger value="private">Privat</TabsTrigger>
+          <TabsTrigger value="all">{t('filter_all')}</TabsTrigger>
+          <TabsTrigger value="business">{t('filter_business')}</TabsTrigger>
+          <TabsTrigger value="private">{t('filter_private')}</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -135,16 +137,16 @@ export default function TransactionHistoryList({
         {showHeader && (
           <DataListHeader>
             <span className="text-xs uppercase tracking-wider text-muted-foreground">
-              Källa
+              {t('source_label')}
             </span>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
                   {sourceFilter === 'all'
-                    ? 'Alla'
+                    ? t('source_all')
                     : sourceFilter === 'bank'
-                      ? 'Bank'
-                      : 'Skatteverket'}
+                      ? t('source_bank')
+                      : t('source_skatteverket')}
                   <ChevronDown className="h-3 w-3 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
@@ -153,9 +155,9 @@ export default function TransactionHistoryList({
                   value={sourceFilter}
                   onValueChange={(v) => setSourceFilter(v as SourceFilter)}
                 >
-                  <DropdownMenuRadioItem value="all">Alla</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="bank">Bank</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="skatteverket">Skatteverket</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="all">{t('source_all')}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="bank">{t('source_bank')}</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="skatteverket">{t('source_skatteverket')}</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -165,12 +167,8 @@ export default function TransactionHistoryList({
         {filtered.length === 0 ? (
           <DataListEmpty
             icon={<ArrowLeftRight className="h-6 w-6" />}
-            title="Inga transaktioner"
-            description={
-              searchTerm
-                ? 'Inga transaktioner matchar din sökning.'
-                : 'Inga transaktioner att visa med valt filter.'
-            }
+            title={t('empty_title')}
+            description={searchTerm ? t('empty_search') : t('empty_filter')}
           />
         ) : (
           filtered.map((item) =>
@@ -200,10 +198,10 @@ export default function TransactionHistoryList({
             {isLoadingMore ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Laddar...
+                {t('loading_more')}
               </>
             ) : (
-              'Ladda fler'
+              t('load_more')
             )}
           </Button>
         </div>
@@ -223,6 +221,7 @@ function BankHistoryRow({
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
 }) {
+  const t = useTranslations('tx_history')
   // Viewers must not see write affordances. CorrectionAffordance opens a
   // dialog that stages a storno + correction journal entry; the API path
   // already 403s for viewers but rendering the trigger creates a confusing
@@ -240,13 +239,13 @@ function BankHistoryRow({
       return (
         <Badge variant="success" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
           <Check className="h-3 w-3" />
-          Bokförd
+          {t('posted')}
         </Badge>
       )
     }
     return (
       <Badge variant="warning" className="h-4 px-1.5 py-0 text-[10px]">
-        Ej bokförd
+        {t('not_posted')}
       </Badge>
     )
   })()
@@ -260,7 +259,7 @@ function BankHistoryRow({
     )
       ? transaction.is_business
         ? getCategoryDisplayName(transaction.category)
-        : 'Privat'
+        : t('private_badge')
       : null
 
   return (
@@ -306,12 +305,14 @@ function BankHistoryRow({
               className="h-8 px-3 text-xs"
               onClick={() => onOpenCategoryDialog(transaction)}
             >
-              Bokför
+              {t('book')}
             </Button>
           )}
           {isBooked && (
             <Button asChild size="sm" variant="ghost" className="h-8 px-3 text-xs">
-              <Link href={`/bookkeeping/${transaction.journal_entry_id}`}>Visa</Link>
+              <Link href={`/bookkeeping/${transaction.journal_entry_id}`}>
+                {t('view_voucher_short')}
+              </Link>
             </Button>
           )}
           {(hasInvoiceMatch || (!isBooked && onDelete) || (isBooked && canWrite)) && (
@@ -330,14 +331,16 @@ function BankHistoryRow({
                 {hasInvoiceMatch && (
                   <DropdownMenuItem onSelect={() => onOpenMatchDialog(transaction)}>
                     <FileText className="h-3.5 w-3.5" />
-                    Matcha faktura {transaction.potential_invoice!.invoice_number}
+                    {t('possible_match_invoice', {
+                      number: transaction.potential_invoice!.invoice_number ?? '',
+                    })}
                   </DropdownMenuItem>
                 )}
                 {isBooked && canWrite && transaction.journal_entry_id && (
                   <CorrectionAffordance journalEntryId={transaction.journal_entry_id}>
                     {({ open, isLoading }) => (
                       <DropdownMenuItem onSelect={() => open()} disabled={isLoading}>
-                        {isLoading ? 'Hämtar…' : 'Skapa ändringsverifikation'}
+                        {isLoading ? t('fetching') : t('create_correction')}
                       </DropdownMenuItem>
                     )}
                   </CorrectionAffordance>
@@ -350,7 +353,7 @@ function BankHistoryRow({
                       className="text-destructive focus:text-destructive"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
-                      Ta bort
+                      {t('delete')}
                     </DropdownMenuItem>
                   </>
                 )}
@@ -379,7 +382,7 @@ function BankHistoryRow({
             <DataListMetaSeparator />
             <span className="inline-flex items-center gap-1">
               <Link2 className="h-3 w-3" />
-              Faktura
+              {t('linked_to_invoice')}
             </span>
           </>
         )}
@@ -388,7 +391,9 @@ function BankHistoryRow({
             <DataListMetaSeparator />
             <span className="inline-flex items-center gap-1 text-primary">
               <FileText className="h-3 w-3" />
-              Match: {transaction.potential_invoice!.invoice_number}
+              {t('possible_match_invoice', {
+                number: transaction.potential_invoice!.invoice_number ?? '',
+              })}
             </span>
           </>
         )}
@@ -406,6 +411,7 @@ function SkattekontoHistoryRow({
   onBokfor?: (row: StoredSkattekontoTransaction) => void
   onMatch?: (row: StoredSkattekontoTransaction) => void
 }) {
+  const t = useTranslations('tx_history')
   const amount = Number(row.belopp_skatteverket)
   const isIncome = amount > 0
   const isBooked = !!row.journal_entry_id
@@ -415,20 +421,20 @@ function SkattekontoHistoryRow({
       return (
         <Badge variant="success" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
           <Check className="h-3 w-3" />
-          Bokförd
+          {t('posted')}
         </Badge>
       )
     }
     if (row.match_suggestion) {
       return (
         <Badge variant="warning" className="h-4 px-1.5 py-0 text-[10px]">
-          Möjlig dublett
+          {t('possible_duplicate')}
         </Badge>
       )
     }
     return (
       <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
-        Ej bokförd
+        {t('not_posted')}
       </Badge>
     )
   })()
@@ -471,7 +477,7 @@ function SkattekontoHistoryRow({
               onClick={() => onMatch(row)}
             >
               <Link2 className="mr-1 h-3 w-3" />
-              {row.match_suggestion ? 'Koppla' : 'Matcha'}
+              {row.match_suggestion ? t('link') : t('match')}
             </Button>
           )}
           {!isBooked && !row.match_suggestion && onBokfor && (
@@ -481,12 +487,14 @@ function SkattekontoHistoryRow({
               className="h-8 px-3 text-xs"
               onClick={() => onBokfor(row)}
             >
-              Bokför
+              {t('book')}
             </Button>
           )}
           {isBooked && (
             <Button asChild size="sm" variant="ghost" className="h-8 px-3 text-xs">
-              <Link href={`/bookkeeping/${row.journal_entry_id}`}>Visa</Link>
+              <Link href={`/bookkeeping/${row.journal_entry_id}`}>
+                {t('view_voucher_short')}
+              </Link>
             </Button>
           )}
         </>
@@ -498,7 +506,7 @@ function SkattekontoHistoryRow({
         <DataListMetaSeparator />
         <span className="inline-flex items-center gap-1">
           <Landmark className="h-3 w-3" />
-          Skatteverket
+          {t('skv_badge')}
         </span>
         <DataListMetaSeparator />
         {statusBadge}

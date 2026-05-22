@@ -2,6 +2,7 @@
 
 import * as React from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -32,7 +33,7 @@ interface EmptyStateProps {
 }
 
 /**
- * EmptyState - Visar ett vänligt meddelande när det inte finns någon data
+ * EmptyState — friendly placeholder shown when there is no data.
  */
 export function EmptyState({
   icon: Icon,
@@ -47,6 +48,7 @@ export function EmptyState({
   className,
   children,
 }: EmptyStateProps) {
+  const t = useTranslations('empty')
   return (
     <div className={cn('flex flex-col items-center justify-center py-12 px-4 text-center', className)}>
       {Icon && (
@@ -61,8 +63,8 @@ export function EmptyState({
 
       {supportHint && (
         <div className="mb-6">
-          <SupportLink variant="muted" subject="Behöver hjälp att komma igång">
-            Behöver du hjälp? Kontakta support
+          <SupportLink variant="muted" subject={t('support_hint_subject')}>
+            {t('support_hint_label')}
           </SupportLink>
         </div>
       )}
@@ -95,27 +97,29 @@ export function EmptyState({
   )
 }
 
-// Förkonfigurerade tomma tillstånd för vanliga sidor
+// Preset empty states for common pages
 
 export function EmptyInvoices() {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={Receipt}
-      title="Inga fakturor ännu"
-      description="Skapa din första faktura på under 60 sekunder. Vi fyller i dina uppgifter automatiskt."
-      actionLabel="Skapa faktura"
+      title={t('preset_invoices_title')}
+      description={t('preset_invoices_description')}
+      actionLabel={t('preset_invoices_action')}
       actionHref="/invoices/new"
     />
   )
 }
 
 export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={Users}
-      title="Inga kunder ännu"
-      description="Lägg till dina kunder för att enkelt skapa fakturor och hålla koll på betalningar."
-      actionLabel="Lägg till kund"
+      title={t('preset_customers_title')}
+      description={t('preset_customers_description')}
+      actionLabel={t('preset_customers_action')}
       actionHref={onAction ? undefined : '/customers/new'}
       onAction={onAction}
     />
@@ -123,12 +127,13 @@ export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
 }
 
 export function EmptyTransactions() {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={ArrowLeftRight}
-      title="Inga transaktioner"
-      description="Importera kontoutdrag från din bank för att automatiskt bokföra och få koll på ekonomin."
-      actionLabel="Importera transaktioner"
+      title={t('preset_transactions_title')}
+      description={t('preset_transactions_description')}
+      actionLabel={t('preset_transactions_action')}
       actionHref="/import"
       supportHint
     />
@@ -136,34 +141,37 @@ export function EmptyTransactions() {
 }
 
 export function EmptyReceipts() {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={Camera}
-      title="Inga kvitton"
-      description="Ta en bild på ett kvitto för automatisk avläsning och bokföring. Vi sköter resten!"
-      actionLabel="Skanna kvitto"
+      title={t('preset_receipts_title')}
+      description={t('preset_receipts_description')}
+      actionLabel={t('preset_receipts_action')}
       actionHref="/receipts/scan"
     />
   )
 }
 
 export function EmptyDeadlines() {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={Calendar}
-      title="Inga kommande deadlines"
-      description="Bra jobbat! Du har inga omedelbara deadlines att ta hand om."
+      title={t('preset_deadlines_title')}
+      description={t('preset_deadlines_description')}
     />
   )
 }
 
 export function NoBankConnected() {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={Building2}
-      title="Inga transaktioner importerade"
-      description="Importera kontoutdrag från din bank för att automatiskt bokföra och få bättre koll på ekonomin."
-      actionLabel="Importera transaktioner"
+      title={t('preset_no_bank_title')}
+      description={t('preset_no_bank_description')}
+      actionLabel={t('preset_no_bank_action')}
       actionHref="/import"
       supportHint
     />
@@ -171,14 +179,15 @@ export function NoBankConnected() {
 }
 
 export function EmptyReports() {
+  const t = useTranslations('empty')
   return (
     <EmptyState
       icon={FileText}
-      title="Inga rapporter tillgängliga"
-      description="Rapporter genereras automatiskt när du har tillräckligt med data. Börja med att skapa fakturor eller importera transaktioner."
-      actionLabel="Skapa faktura"
+      title={t('preset_reports_title')}
+      description={t('preset_reports_description')}
+      actionLabel={t('preset_reports_action')}
       actionHref="/invoices/new"
-      secondaryActionLabel="Importera transaktioner"
+      secondaryActionLabel={t('preset_reports_secondary')}
       secondaryActionHref="/import"
     />
   )
