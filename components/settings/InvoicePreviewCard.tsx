@@ -36,11 +36,19 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
 
   useEffect(() => {
     if (!open || !company?.id) return
+    const companyId = company.id
 
     let cancelled = false
     const controller = new AbortController()
 
-    ;(async () => {
+    // Debounce so rapid settings toggles (PDF print options on the invoicing
+    // page) don't burst-fire requests at /api/invoices/preview-pdf while the
+    // dialog is open. AbortController still cancels any in-flight fetch.
+    const timer = setTimeout(() => {
+      run()
+    }, 500)
+
+    async function run() {
       setIsLoading(true)
       setError(null)
       setNoCustomers(false)
@@ -50,7 +58,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         const { data: customer, error: customerError } = await supabase
           .from('customers')
           .select('id')
-          .eq('company_id', company.id)
+          .eq('company_id', companyId)
           .limit(1)
           .maybeSingle()
 
@@ -102,10 +110,11 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         setError(getErrorMessage(err, { locale, context: 'invoice' }))
         setIsLoading(false)
       }
-    })()
+    }
 
     return () => {
       cancelled = true
+      clearTimeout(timer)
       controller.abort()
     }
   }, [open, settings, company?.id, sampleItemDescription, locale])

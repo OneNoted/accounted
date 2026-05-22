@@ -60,7 +60,9 @@ const LABELS = {
     sincerely: 'Kind regards,',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
-    fSkatt: 'Approved for F-tax (Swedish business tax certificate)',
+    // Statutory Swedish phrase — kept verbatim in both locales. F-skatt is a
+    // Swedish tax-authority designation; translating it has no legal standing.
+    fSkatt: 'Innehar F-skattsedel',
     documentSummary: (doc: string) => `${doc} summary:`,
     subjectFrom: (doc: string, num: string, sender: string) => `${doc} ${num} from ${sender}`,
   },

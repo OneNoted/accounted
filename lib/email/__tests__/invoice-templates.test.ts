@@ -74,7 +74,8 @@ describe('invoice email templates', () => {
       expect(html).toContain('Payment information')
       expect(html).toContain('Hi Jane,')
       expect(html).toContain('Kind regards,')
-      expect(html).toContain('Approved for F-tax')
+      // F-skatt is statutory and stays Swedish in both locales.
+      expect(html).toContain('Innehar F-skattsedel')
     })
 
     it('renders the total with explicit SEK code in English digit grouping', () => {

@@ -128,7 +128,10 @@ const LABELS = {
     ocr: 'Reference:',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
-    fSkatt: 'Approved for F-tax',
+    // Statutory Swedish phrase — kept verbatim in both locales. Peppol SE-R-005
+    // and Skatteverket's F-skatt notation expect "Godkänd för F-skatt"; an
+    // English translation has no legal standing.
+    fSkatt: 'Godkänd för F-skatt',
   },
 } as const
 
@@ -414,12 +417,10 @@ function formatCurrency(amount: number, currency: string = 'SEK', language: PdfL
 
 // Format date as ISO yyyy-MM-dd in both locales — universally unambiguous and
 // matches the project's formatDate() convention (lib/utils.ts).
+// Input is already a YYYY-MM-DD string from the DB, so slice avoids the
+// new Date() + local-getter timezone hazard.
 function formatDate(date: string): string {
-  const d = new Date(date)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  return date.slice(0, 10)
 }
 
 // Format org number
