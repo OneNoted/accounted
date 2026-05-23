@@ -2692,6 +2692,8 @@
     "col_description": "Beskrivning",
     "col_debit": "Debet",
     "col_credit": "Kredit",
+    "col_saldo": "Saldo",
+    "saldo_label": "Saldo",
     "line_description_placeholder": "Radtext...",
     "sum": "Summa",
     "sum_d": "D: {amount}",

@@ -675,6 +675,14 @@ export const ReportPeriodQuerySchema = z.object({
   month: z.coerce.number().int().min(1).max(12).optional(),
 })
 
+export const AccountBalancesQuerySchema = z.object({
+  accounts: z
+    .string()
+    .transform((s) => s.split(',').map((a) => a.trim()).filter(Boolean))
+    .pipe(z.array(accountNumber).min(1).max(50)),
+  as_of: isoDate,
+})
+
 // ============================================================
 // VAT validation schemas
 // ============================================================
