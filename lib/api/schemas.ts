@@ -680,7 +680,12 @@ export const AccountBalancesQuerySchema = z.object({
     .string()
     .transform((s) => s.split(',').map((a) => a.trim()).filter(Boolean))
     .pipe(z.array(accountNumber).min(1).max(50)),
-  as_of: isoDate,
+  // Reject future dates — a saldo "as of tomorrow" would include unposted
+  // future entries (if any) and mislead the bookkeeper about the true
+  // pre-entry state of the ledger.
+  as_of: isoDate.refine((d) => d <= new Date().toISOString().slice(0, 10), {
+    message: 'as_of cannot be in the future',
+  }),
 })
 
 // ============================================================

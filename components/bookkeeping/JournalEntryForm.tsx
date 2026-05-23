@@ -251,7 +251,21 @@ export default function JournalEntryForm({
       try {
         const qs = new URLSearchParams({ accounts: accountsKey, as_of: entryDate })
         const res = await fetch(`/api/bookkeeping/account-balances?${qs}`)
-        if (!res.ok) return
+        if (!res.ok) {
+          // 4xx (e.g. future entryDate rejected by Zod) or 5xx: collapse the
+          // loading skeleton so the column doesn't get stuck. Saldo is a
+          // reference value, not authoritative — showing 0 here is preferable
+          // to an indefinite spinner.
+          if (cancelled) return
+          setAccountBalances((prev) => {
+            const next = { ...prev }
+            for (const a of accountList) {
+              if (next[a] == null) next[a] = 0
+            }
+            return next
+          })
+          return
+        }
         const body = (await res.json()) as {
           data: Array<{ account_number: string; balance: number }>
         }
