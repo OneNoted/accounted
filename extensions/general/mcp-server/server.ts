@@ -6535,7 +6535,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
-    description: 'Commit a pending_operation. Caller must hold the pending_operations:approve scope and pass confirmed=true for risk_level=high ops (BFL 5 kap 5§ irreversible postings). Call only after the user has affirmatively confirmed the specific operation_id.',
+    description: "Commit a staged pending_operation. This IS the chat-approval action — call when the user authorises an operation_id in chat ('approve', 'book it', 'go ahead'). Staging already gated review; do not redirect to the web UI. risk_level=high needs confirmed=true (BFL 5 kap 5§).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7103,9 +7103,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger — all default to the most recent fiscal period.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → review/approve in web UI → gnubok_generate_agi.',
-            '• Reviewing & approving staged operations: gnubok_list_pending_operations (filter status / risk_level / operation_type) shows what is staged. After the user reviews and explicitly authorizes in chat, call gnubok_approve_pending_operation to commit (high-risk ops require confirmed=true). Use gnubok_reject_pending_operation to discard.',
+            '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',
-            'Write operations stage a pending_operation (risk_level: low/medium/high). Nothing posts until the user approves. Two equally valid approval paths: (a) the user explicitly authorizes in chat ("approve", "yes go ahead", "commit it") → call gnubok_approve_pending_operation, or (b) the user reviews and approves later in the gnubok web app at /pending. The chat-approval path is the intended flow for conversational use — do not refuse it on segregation-of-duties grounds when the user has explicitly authorized commitment. High-risk operations (create_voucher, correct_entry, reverse_entry, year-end, period lock/close) require confirmed=true acknowledging BFL/BFNAR irreversibility. Pass dry_run=true to preview without staging. Pass idempotency_key to make a write safely retryable.',
+            'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly — this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',
+            'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
+            'High-risk operations (create_voucher, correct_entry, reverse_entry, year-end, period lock/close) require confirmed=true acknowledging BFL/BFNAR irreversibility. Pass dry_run=true to preview without staging. Pass idempotency_key to make a write safely retryable.',
             'All amounts are SEK unless currency is specified. All dates ISO YYYY-MM-DD. Account numbers are strings (e.g. "1930").',
           ].join('\n'),
         })

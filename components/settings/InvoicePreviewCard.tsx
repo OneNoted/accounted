@@ -29,7 +29,6 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [noCustomers, setNoCustomers] = useState(false)
   const currentUrlRef = useRef<string | null>(null)
 
   const sampleItemDescription = t('sample_item_description')
@@ -51,7 +50,6 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
     async function run() {
       setIsLoading(true)
       setError(null)
-      setNoCustomers(false)
 
       try {
         const supabase = createClient()
@@ -65,18 +63,15 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (customerError) throw customerError
         if (cancelled) return
 
-        if (!customer) {
-          setNoCustomers(true)
-          setIsLoading(false)
-          return
-        }
+        const useMockCustomer = !customer
 
         const response = await fetch('/api/invoices/preview-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
           body: JSON.stringify({
-            customer_id: customer.id,
+            customer_id: useMockCustomer ? undefined : customer.id,
+            mock_customer: useMockCustomer,
             currency: 'SEK',
             document_type: 'invoice',
             items: [
@@ -148,19 +143,13 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           </div>
         )}
 
-        {!isLoading && noCustomers && (
-          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 px-6 text-center">
-            <p className="text-sm text-muted-foreground">{t('no_customers')}</p>
-          </div>
-        )}
-
         {!isLoading && error && (
           <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 px-6 text-center">
             <p className="text-sm text-destructive">{t('error')}: {error}</p>
           </div>
         )}
 
-        {!isLoading && !error && !noCustomers && blobUrl && (
+        {!isLoading && !error && blobUrl && (
           <iframe
             src={blobUrl}
             title={t('iframe_title')}

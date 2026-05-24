@@ -952,7 +952,6 @@
     "preview_button": "Preview invoice",
     "loading": "Generating preview...",
     "error": "Could not load preview",
-    "no_customers": "Add a customer to see a preview of your invoice.",
     "sample_item_description": "Sample line",
     "iframe_title": "Invoice PDF preview"
   },

@@ -24,22 +24,57 @@ export async function POST(request: Request) {
   const companyId = await requireCompanyId(supabase, user.id)
 
   const body = await request.json()
-  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number } = body
+  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number, mock_customer } = body
 
-  if (!customer_id || !items || items.length === 0) {
-    return NextResponse.json({ error: 'Kunduppgifter och rader krävs' }, { status: 400 })
+  if (!items || items.length === 0) {
+    return NextResponse.json({ error: 'Rader krävs' }, { status: 400 })
   }
 
-  // Fetch customer
-  const { data: customer, error: customerError } = await supabase
-    .from('customers')
-    .select('*')
-    .eq('id', customer_id)
-    .eq('company_id', companyId)
-    .single()
+  if (!mock_customer && !customer_id) {
+    return NextResponse.json({ error: 'Kunduppgifter krävs' }, { status: 400 })
+  }
 
-  if (customerError || !customer) {
-    return NextResponse.json({ error: 'Kunden hittades inte' }, { status: 404 })
+  // Fetch customer (or build a mock one for the settings preview when the
+  // company has no real customers yet).
+  let customer: Customer
+  if (mock_customer) {
+    const nowIso = new Date().toISOString()
+    customer = {
+      id: 'preview-customer',
+      user_id: user.id,
+      company_id: companyId,
+      name: 'Exempel AB',
+      customer_type: 'swedish_business',
+      email: 'kund@exempel.se',
+      phone: null,
+      address_line1: 'Storgatan 1',
+      address_line2: null,
+      postal_code: '111 22',
+      city: 'Stockholm',
+      country: 'SE',
+      org_number: '556677-8899',
+      vat_number: null,
+      vat_number_validated: false,
+      vat_number_validated_at: null,
+      personal_number: null,
+      language: 'sv',
+      default_payment_terms: 30,
+      notes: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    }
+  } else {
+    const { data, error: customerError } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('id', customer_id)
+      .eq('company_id', companyId)
+      .single()
+
+    if (customerError || !data) {
+      return NextResponse.json({ error: 'Kunden hittades inte' }, { status: 404 })
+    }
+    customer = data as Customer
   }
 
   // Fetch company settings
@@ -89,8 +124,10 @@ export async function POST(request: Request) {
   const previewInvoice = {
     id: 'preview',
     user_id: user.id,
-    customer_id,
-    invoice_number: typeof invoice_number === 'string' && invoice_number.trim() ? invoice_number : null,
+    customer_id: customer_id || (mock_customer ? 'preview-customer' : ''),
+    invoice_number: typeof invoice_number === 'string' && invoice_number.trim()
+      ? invoice_number
+      : mock_customer ? '1' : null,
     invoice_date: invoice_date || new Date().toISOString().split('T')[0],
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,
@@ -124,7 +161,7 @@ export async function POST(request: Request) {
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: previewInvoice,
-        customer: customer as Customer,
+        customer,
         items: invoiceItems,
         company: company as CompanySettings,
         isPreview: true,

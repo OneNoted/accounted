@@ -952,7 +952,6 @@
     "preview_button": "Förhandsvisa faktura",
     "loading": "Genererar förhandsvisning...",
     "error": "Kunde inte ladda förhandsvisning",
-    "no_customers": "Lägg till en kund för att se en förhandsvisning av din faktura.",
     "sample_item_description": "Exempelrad",
     "iframe_title": "PDF-förhandsvisning av faktura"
   },
