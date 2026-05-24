@@ -24,25 +24,34 @@ export async function POST(request: Request) {
   const companyId = await requireCompanyId(supabase, user.id)
 
   const body = await request.json()
-  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number, mock_customer } = body
+  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number } = body
 
   if (!items || items.length === 0) {
     return NextResponse.json({ error: 'Rader krävs' }, { status: 400 })
   }
 
-  if (!mock_customer && !customer_id) {
-    return NextResponse.json({ error: 'Kunduppgifter krävs' }, { status: 400 })
-  }
+  // When customer_id is omitted, only allow the synthetic preview if the
+  // company has no real customers — this is the settings-preview dead-end
+  // case. Derived server-side so a client can't bypass the ownership check
+  // by passing a flag.
+  const isMockCustomer = !customer_id
 
-  // Fetch customer (or build a mock one for the settings preview when the
-  // company has no real customers yet).
   let customer: Customer
-  if (mock_customer) {
+  if (isMockCustomer) {
+    const { count, error: countError } = await supabase
+      .from('customers')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+
+    if (countError || (count ?? 0) > 0) {
+      return NextResponse.json({ error: 'Kunduppgifter krävs' }, { status: 400 })
+    }
+
     const nowIso = new Date().toISOString()
     customer = {
       id: 'preview-customer',
-      user_id: user.id,
-      company_id: companyId,
+      user_id: 'preview-user',
+      company_id: 'preview-company',
       name: 'Exempel AB',
       customer_type: 'swedish_business',
       email: 'kund@exempel.se',
@@ -123,11 +132,11 @@ export async function POST(request: Request) {
   // Construct a temporary Invoice-like object
   const previewInvoice = {
     id: 'preview',
-    user_id: user.id,
-    customer_id: customer_id || (mock_customer ? 'preview-customer' : ''),
+    user_id: isMockCustomer ? 'preview-user' : user.id,
+    customer_id: customer.id,
     invoice_number: typeof invoice_number === 'string' && invoice_number.trim()
       ? invoice_number
-      : mock_customer ? '1' : null,
+      : isMockCustomer ? '1' : null,
     invoice_date: invoice_date || new Date().toISOString().split('T')[0],
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,

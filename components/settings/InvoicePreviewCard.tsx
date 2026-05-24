@@ -63,15 +63,12 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (customerError) throw customerError
         if (cancelled) return
 
-        const useMockCustomer = !customer
-
         const response = await fetch('/api/invoices/preview-pdf', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
           body: JSON.stringify({
-            customer_id: useMockCustomer ? undefined : customer.id,
-            mock_customer: useMockCustomer,
+            customer_id: customer?.id,
             currency: 'SEK',
             document_type: 'invoice',
             items: [

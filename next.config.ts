@@ -61,7 +61,7 @@ const nextConfig: NextConfig = {
     // document preview Sheet.
     return [
       {
-        source: "/((?!api/documents/.+/inline$).*)",
+        source: "/((?!api/documents/[^/]+/inline$).*)",
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -113,8 +113,12 @@ const nextConfig: NextConfig = {
             value: "strict-origin-when-cross-origin",
           },
           {
+            key: "Permissions-Policy",
+            value: "camera=(), microphone=(), geolocation=(), payment=()",
+          },
+          {
             key: "Content-Security-Policy",
-            value: "frame-ancestors 'self'",
+            value: "default-src 'none'; script-src 'none'; object-src 'none'; frame-ancestors 'self'",
           },
         ],
       },
