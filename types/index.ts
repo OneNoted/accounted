@@ -1387,6 +1387,13 @@ export interface SIEExportOptions {
   company_name: string
   org_number: string | null
   program_name?: string
+  /**
+   * When true, omit year-end closing verifikat (source_type = 'year_end')
+   * from #VER and from #RES/#UB calculations. Use when handing the file
+   * to systems (e.g. eDeklarera) that do their own closing — including
+   * our closing entry would zero out the P&L accounts.
+   */
+  exclude_year_end_closing?: boolean
 }
 
 // Input types for creating entries

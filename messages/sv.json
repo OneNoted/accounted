@@ -3179,6 +3179,7 @@
     "export_sie_period_label": "Räkenskapsår",
     "export_sie_button": "Ladda ner SIE",
     "export_sie_no_period": "Välj ett räkenskapsår för att exportera.",
+    "export_sie_exclude_closing_label": "Exkludera bokslutsverifikat (rekommenderas för eDeklarera och system som gör eget bokslut)",
     "export_cloud_title": "Säkerhetskopia till Google Drive"
   },
   "empty": {

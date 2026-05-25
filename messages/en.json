@@ -3179,6 +3179,7 @@
     "export_sie_period_label": "Fiscal year",
     "export_sie_button": "Download SIE",
     "export_sie_no_period": "Select a fiscal year to export.",
+    "export_sie_exclude_closing_label": "Exclude year-end closing voucher (recommended for eDeklarera and systems that do their own year-end closing)",
     "export_cloud_title": "Cloud backup to Google Drive"
   },
   "empty": {

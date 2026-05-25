@@ -57,13 +57,19 @@ export async function generateSIEExport(
   )
 
   // Fetch all posted journal entries with lines
-  const { data: entries } = await supabase
+  let entriesQuery = supabase
     .from('journal_entries')
     .select('*, lines:journal_entry_lines(*)')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', options.fiscal_period_id)
     .in('status', ['posted', 'reversed'])
     .order('voucher_number')
+
+  if (options.exclude_year_end_closing) {
+    entriesQuery = entriesQuery.neq('source_type', 'year_end')
+  }
+
+  const { data: entries } = await entriesQuery
 
   // Fetch cost centers and projects for dimension records
   const { data: costCenters } = await supabase

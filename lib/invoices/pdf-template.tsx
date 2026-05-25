@@ -73,6 +73,7 @@ const LABELS = {
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
     ocr: 'OCR/Referens:',
+    paymentReference: 'Betalningsreferens:',
     // Footer
     orgNoLong: 'Org.nr:',
     vatRegNo: 'Momsreg.nr:',
@@ -126,6 +127,7 @@ const LABELS = {
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
     ocr: 'Reference:',
+    paymentReference: 'Payment reference:',
     orgNoLong: 'Reg. no.:',
     vatRegNo: 'VAT reg. no.:',
     // Statutory Swedish phrase — kept verbatim in both locales. Peppol SE-R-005
@@ -765,10 +767,16 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               <Text style={styles.paymentLabel}>{L.dueDate}</Text>
               <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{formatDate(invoice.due_date)}</Text>
             </View>
-            {(company.invoice_show_ocr ?? true) && (
+            {(company.invoice_show_ocr ?? true) && (company.bankgiro || company.plusgiro) && lang === 'sv' && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.ocr}</Text>
                 <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number ? generateOcrReference(invoice.invoice_number) : '—'}</Text>
+              </View>
+            )}
+            {lang !== 'sv' && invoice.invoice_number && (
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{L.paymentReference}</Text>
+                <Text style={[styles.paymentValue, { fontWeight: 'bold' }]}>{invoice.invoice_number}</Text>
               </View>
             )}
           </View>

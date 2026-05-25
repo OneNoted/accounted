@@ -1735,6 +1735,7 @@ export default function ImportPage() {
   const [userId, setUserId] = useState('')
   const [isSandbox, setIsSandbox] = useState(false)
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
+  const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
   const t = useTranslations('import')
   const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
@@ -2042,10 +2043,21 @@ export default function ImportPage() {
                         hideFuturePeriods
                         label={t('export_sie_period_label')}
                       />
+                      <label className="flex items-start gap-2 text-sm text-muted-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 rounded border-border"
+                          checked={exportExcludeClosing}
+                          onChange={(e) => setExportExcludeClosing(e.target.checked)}
+                        />
+                        <span>{t('export_sie_exclude_closing_label')}</span>
+                      </label>
                       <Button
                         onClick={() => {
                           if (exportPeriodId) {
-                            window.open(`/api/reports/sie-export?period_id=${exportPeriodId}`, '_blank')
+                            const params = new URLSearchParams({ period_id: exportPeriodId })
+                            if (exportExcludeClosing) params.set('exclude_closing', 'true')
+                            window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
                           }
                         }}
                         disabled={!exportPeriodId || isSandbox}
