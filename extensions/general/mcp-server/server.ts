@@ -601,15 +601,7 @@ const STAGED_OPERATION_SCHEMA = {
     dry_run: { type: 'boolean' },
     idempotency_replay: { type: 'boolean' },
     message: { type: 'string' },
-    approve: {
-      type: 'object',
-      description: 'Pre-filled call to commit this staged operation. Invoke this tool with these args when the user authorises in chat — equivalent to clicking Approve in the web UI.',
-      properties: {
-        tool: { type: 'string', enum: ['gnubok_approve_pending_operation'] },
-        args: { type: 'object' },
-      },
-      required: ['tool', 'args'],
-    },
+    approve: { type: 'object' },
     preview: { type: 'object' },
     period_status: {
       type: 'object',
