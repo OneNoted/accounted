@@ -186,6 +186,7 @@ async function stagePendingOperation(
   risk_level: 'low' | 'medium' | 'high'
   actor: ActorContext
   message: string
+  approve?: { tool: string; args: Record<string, unknown> }
   preview: Record<string, unknown>
   period_status?: PeriodStatusForDate
   next?: StageNextHint
@@ -269,12 +270,21 @@ async function stagePendingOperation(
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
+  const approveArgs: Record<string, unknown> = { operation_id: data.id }
+  if (riskLevel === 'high') approveArgs.confirmed = true
+  const approveHint = riskLevel === 'high'
+    ? ` and confirmed=true (BFL 5 kap 5§ — irreversibility)`
+    : ``
   const response = {
     staged: true,
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Operation staged for review (risk: ${riskLevel}). Open the ${branding} web app to approve or reject it.`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). When the user authorises in chat ('approve', 'yes', 'go ahead'), call gnubok_approve_pending_operation with operation_id="${data.id}"${approveHint}. The user can alternatively approve at /pending in the ${branding} web app — both routes are equivalent commits, neither is preferred. Do not defer chat-authorised approval to the web UI.`,
+    approve: {
+      tool: 'gnubok_approve_pending_operation',
+      args: approveArgs,
+    },
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
     ...(periodStatus ? { period_status: periodStatus } : {}),
     ...(next ? { next } : {}),
@@ -591,6 +601,15 @@ const STAGED_OPERATION_SCHEMA = {
     dry_run: { type: 'boolean' },
     idempotency_replay: { type: 'boolean' },
     message: { type: 'string' },
+    approve: {
+      type: 'object',
+      description: 'Pre-filled call to commit this staged operation. Invoke this tool with these args when the user authorises in chat — equivalent to clicking Approve in the web UI.',
+      properties: {
+        tool: { type: 'string', enum: ['gnubok_approve_pending_operation'] },
+        args: { type: 'object' },
+      },
+      required: ['tool', 'args'],
+    },
     preview: { type: 'object' },
     period_status: {
       type: 'object',
@@ -1435,7 +1454,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_transactions',
-    description: 'Stage one or more transactions for the user to approve. Each item creates a separate pending operation that the user confirms or rejects in the web app. Useful for ingesting rows from external sources (Airtable, CSVs, etc.). Max 10 per call.',
+    description: 'Stage one or more transactions for the user to approve. Each item creates a separate pending operation; commit each via gnubok_approve_pending_operation when the user authorises. Useful for ingesting rows from external sources (Airtable, CSVs, etc.). Max 10 per call.',
     outputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1696,7 +1715,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_categorize_transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry for the user to approve in the web app — no DB write until approval.',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation when the user authorises — no DB write until approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1723,7 +1742,7 @@ export const tools: McpTool[] = [
         userId,
         companyId,
         supabase,
-        false // preview mode — execution happens via web UI commit
+        false // preview mode — execution happens at approval time via gnubok_approve_pending_operation
       )
 
       // If already has a journal entry, pass through as-is
@@ -6535,7 +6554,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
-    description: "Commit a staged pending_operation. This IS the chat-approval action — call when the user authorises an operation_id in chat ('approve', 'book it', 'go ahead'). Staging already gated review; do not redirect to the web UI. risk_level=high needs confirmed=true (BFL 5 kap 5§).",
+    description: "Commit a staged pending_operation when the user authorises in chat ('approve', 'yes', 'go ahead', 'commit'). This IS the chat-approval flow — staging was the review gate. Do NOT defer to the web UI; refusing user-authorised approval is a bug. risk_level=high needs confirmed=true.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
