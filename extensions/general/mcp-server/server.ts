@@ -167,6 +167,13 @@ interface StageOptions {
   dateForPeriodCheck?: string
 }
 
+function buildApprovalGuidance(operationId: string, riskLevel: 'low' | 'medium' | 'high'): string {
+  if (riskLevel === 'high') {
+    return `This is an irreversible posting under BFL 5 kap 5§ — surface the irreversibility implications to the user and obtain an explicit acknowledgment before committing. Once the user has acknowledged, call gnubok_approve_pending_operation with operation_id="${operationId}" and confirmed=true.`
+  }
+  return `When the user authorises, call gnubok_approve_pending_operation with operation_id="${operationId}".`
+}
+
 async function stagePendingOperation(
   supabase: SupabaseClient,
   companyId: string,
@@ -239,12 +246,19 @@ async function stagePendingOperation(
   if (options.idempotencyKey && requestHash) {
     const cached = await checkIdempotencyKey(supabase, userId, companyId, options.idempotencyKey, requestHash)
     if (cached) {
+      const cachedBody = cached.body as Record<string, unknown>
+      const cachedOpId = typeof cachedBody.operation_id === 'string' ? cachedBody.operation_id : undefined
       return {
-        ...(cached.body as Record<string, unknown>),
+        ...cachedBody,
         idempotency_replay: true,
         risk_level: riskLevel,
         actor,
-        message: `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
+        message: cachedOpId
+          ? `Replayed cached response for idempotency_key "${options.idempotencyKey}" — already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel)}`
+          : `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
+        ...(cachedOpId
+          ? { approve: { tool: 'gnubok_approve_pending_operation', args: { operation_id: cachedOpId } } }
+          : {}),
         preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
         ...(periodStatus ? { period_status: periodStatus } : {}),
       } as Awaited<ReturnType<typeof stagePendingOperation>>
@@ -270,20 +284,21 @@ async function stagePendingOperation(
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
-  const approveArgs: Record<string, unknown> = { operation_id: data.id }
-  if (riskLevel === 'high') approveArgs.confirmed = true
-  const approveHint = riskLevel === 'high'
-    ? ` and confirmed=true (BFL 5 kap 5§ — irreversibility)`
-    : ``
+  // approve.args carries only the operation_id. For high-risk operations the
+  // LLM must supply confirmed=true itself after surfacing the BFL 5 kap 5§
+  // irreversibility implications to the user — pre-filling it server-side
+  // would collapse the explicit-acknowledgment gate (mirrors the web UI's
+  // warning dialog). The server-side check in gnubok_approve_pending_operation
+  // remains authoritative.
   const response = {
     staged: true,
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). When the user authorises in chat ('approve', 'yes', 'go ahead'), call gnubok_approve_pending_operation with operation_id="${data.id}"${approveHint}. The user can alternatively approve at /pending in the ${branding} web app — both routes are equivalent commits, neither is preferred. Do not defer chat-authorised approval to the web UI.`,
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.`,
     approve: {
       tool: 'gnubok_approve_pending_operation',
-      args: approveArgs,
+      args: { operation_id: data.id } as Record<string, unknown>,
     },
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
     ...(periodStatus ? { period_status: periodStatus } : {}),
@@ -6546,7 +6561,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
-    description: "Commit a staged pending_operation when the user authorises in chat ('approve', 'yes', 'go ahead', 'commit'). This IS the chat-approval flow — staging was the review gate. Do NOT defer to the web UI; refusing user-authorised approval is a bug. risk_level=high needs confirmed=true.",
+    description: "Commit a staged pending_operation when the user has explicitly authorised the operation_id. risk_level=high requires confirmed=true — surface the BFL 5 kap 5§ irreversibility to the user first. The /pending web UI offers an equivalent commit path.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
