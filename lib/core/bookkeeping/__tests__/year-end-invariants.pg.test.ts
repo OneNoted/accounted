@@ -47,7 +47,7 @@ describe('year-end invariants (pg-real)', () => {
     // trigger must fire and the RPC must fail.
     const pool = getPool()
     await expect(
-      pool.query(`SELECT commit_journal_entry($1, $2)`, [entryId, 'A']),
+      pool.query(`SELECT commit_journal_entry($1, $2)`, [companyId, entryId]),
     ).rejects.toThrow()
 
     // DB state unchanged: entry still draft, no voucher assigned.
@@ -77,7 +77,7 @@ describe('year-end invariants (pg-real)', () => {
               ($1, '3001', 0, 5000.00)`,
       [revenueId],
     )
-    await getPool().query(`SELECT commit_journal_entry($1, $2)`, [revenueId, 'A'])
+    await getPool().query(`SELECT commit_journal_entry($1, $2)`, [companyId, revenueId])
 
     // Step 2: the closing entry — debit 3001, credit 2099.
     const closeId = await insertDraftJournalEntry({
@@ -94,7 +94,7 @@ describe('year-end invariants (pg-real)', () => {
               ($1, '2099', 0, 5000.00)`,
       [closeId],
     )
-    await getPool().query(`SELECT commit_journal_entry($1, $2)`, [closeId, 'A'])
+    await getPool().query(`SELECT commit_journal_entry($1, $2)`, [companyId, closeId])
 
     // Class-3 net across posted lines in this period must be 0 to the öre.
     const { rows } = await getPool().query<{ net: string }>(
@@ -131,7 +131,7 @@ describe('year-end invariants (pg-real)', () => {
     )
 
     await expect(
-      getPool().query(`SELECT commit_journal_entry($1, $2)`, [ibId, 'A']),
+      getPool().query(`SELECT commit_journal_entry($1, $2)`, [companyId, ibId]),
     ).rejects.toThrow()
 
     const { rows } = await getPool().query<{ status: string }>(

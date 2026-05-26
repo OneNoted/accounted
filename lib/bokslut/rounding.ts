@@ -13,12 +13,19 @@
 /**
  * Round a SEK amount to the nearest öre (two decimal places).
  *
- * Uses `Math.round(x * 100) / 100`. The multiply-then-divide pattern
- * is intentionally identical to the historical inline usage so that
- * this is a drop-in replacement at every legacy site.
+ * Naive `Math.round(x * 100) / 100` fails on exact-half values like 1.005
+ * because IEEE-754 stores 1.005 as 1.00499999…, so multiplying by 100
+ * yields 100.49999… and Math.round drops it to 100 instead of 101.
+ *
+ * The Number.EPSILON nudge bridges the IEEE gap for double-precision
+ * values near unit magnitude — large enough to push 100.49999… across
+ * the half-integer boundary, small enough to leave well-formed decimals
+ * (1.234, 1.235, etc.) untouched. Zero is special-cased so negative-zero
+ * inputs preserve their sign through the round trip.
  */
 export function roundOre(n: number): number {
-  return Math.round(n * 100) / 100
+  if (n === 0) return n
+  return Math.round((n + Number.EPSILON) * 100) / 100
 }
 
 /**

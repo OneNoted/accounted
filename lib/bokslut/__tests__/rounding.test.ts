@@ -39,6 +39,11 @@ describe('roundOre', () => {
       [1_000_000.01, 2_000_000.02, 3_000_000.03],
     ]
 
+    // Half-up rounding doesn't preserve sums exactly: each part can shift
+    // by up to half an öre, so cumulative drift over N parts is bounded by
+    // N * ORE_TOLERANCE. The pathological case is [1.005, 2.005, 3.005] —
+    // three exact-half values that all round up to .01, drifting the sum
+    // by one öre versus summing then rounding.
     for (const parts of cases) {
       const summedThenRounded = roundOre(parts.reduce((a, b) => a + b, 0))
       const roundedThenSummed = roundOre(
@@ -47,7 +52,7 @@ describe('roundOre', () => {
       expect(
         Math.abs(summedThenRounded - roundedThenSummed),
         `parts=${JSON.stringify(parts)}`
-      ).toBeLessThanOrEqual(ORE_TOLERANCE)
+      ).toBeLessThanOrEqual(ORE_TOLERANCE * parts.length)
     }
   })
 
