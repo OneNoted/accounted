@@ -17,6 +17,13 @@ const cspDirectives = [
   "img-src 'self' data: blob: https:",
   "font-src 'self'",
   "worker-src 'self' blob:",
+  // object-src must explicitly allow blob: — Chrome's built-in PDF viewer
+  // renders inline PDFs via an internal <embed>, which falls under
+  // object-src. Without this, blob:-URL invoice previews (created via
+  // URL.createObjectURL on /api/invoices/preview-pdf responses) show
+  // "Det här innehållet har blockerats" in Chrome. Firefox uses PDF.js and
+  // Edge uses its own viewer, so neither hits this. See crbug.com/271452.
+  "object-src 'self' blob:",
   `frame-src 'self' blob: ${supabaseUrl}${activepiecesUrl ? ` ${activepiecesUrl}` : ""}`,
   "frame-ancestors 'none'",
 ].join("; ");
@@ -54,11 +61,9 @@ const nextConfig: NextConfig = {
   async headers() {
     // The catch-all excludes /api/documents/:id/inline so the strict
     // X-Frame-Options: DENY + frame-ancestors 'none' don't conflict with
-    // the embeddable override below. Multiple matching header rules in
-    // Next.js can end up sending duplicate header values to the browser
-    // (Chrome/Firefox then fall back to the most restrictive), which was
-    // showing up as "Det här innehållet har blockerats" in the verifikat
-    // document preview Sheet.
+    // the embeddable override below — Next.js applies every matching
+    // header rule, and duplicate X-Frame-Options/CSP values trigger
+    // "Det här innehållet har blockerats" in Chromium browsers.
     return [
       {
         source: "/((?!api/documents/[^/]+/inline$).*)",

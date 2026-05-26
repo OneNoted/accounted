@@ -2578,14 +2578,29 @@
     "title": "Attachments",
     "empty": "No attachments",
     "open_in_new_tab": "Open in new tab",
-    "not_previewable": "Preview is not available for this file type."
+    "not_previewable": "Preview is not available for this file type.",
+    "remove": "Remove",
+    "replace": "Replace with new version"
   },
   "journal_attachments": {
     "loading": "Loading documents...",
     "title": "Documents",
     "add": "Add document",
     "empty": "No documents attached.",
-    "download": "Download"
+    "download": "Download",
+    "remove": "Remove",
+    "replace": "Replace with new version",
+    "remove_confirm_title": "Remove document",
+    "remove_confirm_body": "Remove {file}? This cannot be undone.",
+    "remove_confirm_cta": "Remove",
+    "remove_blocked_title": "Document cannot be removed",
+    "remove_blocked_body": "This document is attached to a verifikation and constitutes räkenskapsinformation under the Swedish Bookkeeping Act (BFL 7 kap 2§). Räkenskapsinformation must be retained for at least 7 years and cannot be deleted.",
+    "remove_blocked_hint": "If the document needs correction, upload a new version. The existing one is preserved in the version history.",
+    "remove_blocked_replace_cta": "Upload new version",
+    "remove_blocked_cancel_cta": "Close",
+    "replace_uploading": "Replacing...",
+    "remove_failed": "Could not remove the document.",
+    "replace_failed": "Could not upload new version."
   },
   "journal_status": {
     "status_draft": "Draft",
