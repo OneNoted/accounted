@@ -168,10 +168,7 @@ export async function POST(request: Request) {
   } as Invoice
 
   try {
-    const { branding, swishQrDataUrl } = await prepareInvoicePdfRender(
-      previewInvoice,
-      company as CompanySettings,
-    )
+    const { branding } = prepareInvoicePdfRender(company as CompanySettings)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: previewInvoice,
@@ -180,7 +177,6 @@ export async function POST(request: Request) {
         company: company as CompanySettings,
         isPreview: true,
         branding,
-        swishQrDataUrl,
       })
     )
 

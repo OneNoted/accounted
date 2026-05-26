@@ -669,10 +669,7 @@ async function commitSendInvoice(
   // after email delivery (line ~625); rendering with the stale 'draft' status
   // would stamp the customer's PDF with "UTKAST – inte en giltig faktura".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
-  const { branding, swishQrDataUrl } = await prepareInvoicePdfRender(
-    renderableInvoice,
-    company as CompanySettings,
-  )
+  const { branding } = prepareInvoicePdfRender(company as CompanySettings)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -681,7 +678,6 @@ async function commitSendInvoice(
       company: company as CompanySettings,
       originalInvoiceNumber,
       branding,
-      swishQrDataUrl,
     })
   )
 

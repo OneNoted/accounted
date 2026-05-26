@@ -78,7 +78,6 @@ const LABELS = {
     bankgiro: 'Bankgiro:',
     plusgiro: 'Plusgiro:',
     swish: 'Swish:',
-    swishQrCaption: 'Skanna med Swish-appen för att betala',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
     ocr: 'OCR/Referens:',
@@ -141,7 +140,6 @@ const LABELS = {
     bankgiro: 'Bankgiro:',
     plusgiro: 'Plusgiro:',
     swish: 'Swish:',
-    swishQrCaption: 'Scan with the Swish app to pay',
     iban: 'IBAN:',
     bic: 'BIC/SWIFT:',
     ocr: 'Reference:',
@@ -404,26 +402,6 @@ function createStyles(branding?: InvoiceBranding) {
     paymentValue: {
       flex: 1,
     },
-    // Swish QR sits in the right-hand gutter of the payment section. 80×80 pt
-    // is the smallest size the Swish merchant guide endorses for printed
-    // material (gives ~2 mm modules at 80% scale on standard mobile cameras).
-    swishQrRow: {
-      flexDirection: 'row',
-      marginTop: 8,
-      alignItems: 'flex-start',
-    },
-    swishQrImage: {
-      width: 80,
-      height: 80,
-      marginLeft: 100, // align with paymentValue column for visual harmony
-    },
-    swishQrCaption: {
-      fontSize: 8,
-      marginLeft: 8,
-      maxWidth: 120,
-      color: b.accentColor,
-      alignSelf: 'center',
-    },
     reverseChargeBox: {
       marginTop: 20,
       padding: 12,
@@ -642,19 +620,9 @@ interface InvoicePDFProps {
    * suite and for callers that haven't yet been migrated to forward branding.
    */
   branding?: InvoiceBranding
-  /**
-   * Pre-encoded Swish QR as a base64 `data:image/png;base64,...` URL. Pass
-   * `null` (or omit) to suppress the QR block — the template renders the
-   * Swish payment line on its own in that case.
-   *
-   * Generated server-side via `buildSwishQrDataUrl()` (lib/invoices/swish-qr)
-   * because `qrcode` returns a Promise; React-PDF components themselves are
-   * synchronous, so the encoding must happen before the InvoicePDF call.
-   */
-  swishQrDataUrl?: string | null
 }
 
-export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding, swishQrDataUrl }: InvoicePDFProps) {
+export function InvoicePDF({ invoice, customer, items, company, originalInvoiceNumber, isPreview, language, branding }: InvoicePDFProps) {
   const lang: PdfLang = language ?? customer.language ?? 'sv'
   const L = LABELS[lang]
   // Build the stylesheet per-render so each invoice picks up its company's
@@ -1036,27 +1004,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <Text style={styles.paymentValue}>{company.plusgiro}</Text>
               </View>
             )}
-            {company.swish && (company.invoice_show_swish ?? true) && (
+            {company.swish && (company.invoice_show_swish ?? false) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.swish}</Text>
                 <Text style={styles.paymentValue}>{company.swish}</Text>
-              </View>
-            )}
-            {/* Swish QR — rendered only when:
-                  - the company has a Swish number (otherwise we'd encode
-                    garbage)
-                  - invoice_show_swish is true (settings switch already
-                    suppresses the Swish line, so the QR follows suit)
-                  - the data URL was generated upstream (caller decides; e.g.
-                    skipped for proforma/delivery_note/credit-note, which the
-                    outer paymentSection branch also suppresses entirely)
-                The outer `!isCreditNote && !isProforma && !isDeliveryNote`
-                guard a few lines up handles document_type filtering — by the
-                time we reach this node, we're inside a real invoice render. */}
-            {swishQrDataUrl && company.swish && (company.invoice_show_swish ?? true) && (
-              <View style={styles.swishQrRow}>
-                <Image src={swishQrDataUrl} style={styles.swishQrImage} />
-                <Text style={styles.swishQrCaption}>{L.swishQrCaption}</Text>
               </View>
             )}
             {company.iban && (

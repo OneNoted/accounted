@@ -184,7 +184,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
             <p className="text-xs text-muted-foreground">{t('show_swish_help')}</p>
           </div>
           <Switch
-            checked={settings.invoice_show_swish ?? true}
+            checked={settings.invoice_show_swish ?? false}
             onCheckedChange={(v) => saveToggle('invoice_show_swish', v)}
           />
         </div>

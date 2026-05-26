@@ -265,10 +265,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(
-          { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
-          settings,
-        )
+        const preflight = prepareInvoicePdfRender(settings)
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
@@ -277,7 +274,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             company: settings,
             originalInvoiceNumber,
             branding: preflight.branding,
-            swishQrDataUrl: preflight.swishQrDataUrl,
           }),
         )
       } catch (err) {
@@ -359,10 +355,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let pdfBuffer: Buffer
     try {
-      const { branding, swishQrDataUrl } = await prepareInvoicePdfRender(
-        renderableInvoice,
-        settings,
-      )
+      const { branding } = prepareInvoicePdfRender(settings)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -371,7 +364,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           company: settings,
           originalInvoiceNumber,
           branding,
-          swishQrDataUrl,
         }),
       )
     } catch (err) {
