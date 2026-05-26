@@ -46,6 +46,19 @@ export const GET = withRouteContext(
   },
 )
 
+// Defense-in-depth on caller-supplied account numbers. The wizard sends
+// accounts from a closed template list, but the API accepts them as plain
+// strings so we constrain the BAS class per accrual kind:
+//   - cost accounts (5xxx-8xxx) for expense legs
+//   - revenue accounts (3xxx) for revenue legs
+//   - 17xx for förutbetalda kostnader (prepaid)
+//   - 29xx for upplupna poster (accrued / deferred)
+// Anything outside these ranges is rejected with 400 before reaching the
+// engine — keeps a compromised browser session from posting arbitrary
+// balance-sheet hits.
+const EXPENSE_ACCOUNT_RE = /^[5-8]\d{3}$/
+const REVENUE_ACCOUNT_RE = /^3\d{3}$/
+
 const PostItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('vacation_liability_change') }),
   z.object({
@@ -56,35 +69,35 @@ const PostItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('manual_prepaid_expense'),
     amount: z.number().positive(),
-    expense_account: z.string().regex(/^\d{4}$/),
+    expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     prepaid_account: z.string().regex(/^17\d{2}$/),
     description: z.string().min(1),
   }),
   z.object({
     kind: z.literal('manual_accrued_expense'),
     amount: z.number().positive(),
-    expense_account: z.string().regex(/^\d{4}$/),
+    expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     accrued_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
   }),
   z.object({
     kind: z.literal('deferred_revenue'),
     amount: z.number().positive(),
-    revenue_account: z.string().regex(/^\d{4}$/),
+    revenue_account: z.string().regex(REVENUE_ACCOUNT_RE),
     deferred_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
   }),
   z.object({
     kind: z.literal('accrued_interest'),
     amount: z.number().positive(),
-    expense_account: z.string().regex(/^\d{4}$/),
+    expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     accrued_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
   }),
   z.object({
     kind: z.literal('accrued_utility'),
     amount: z.number().positive(),
-    expense_account: z.string().regex(/^\d{4}$/),
+    expense_account: z.string().regex(EXPENSE_ACCOUNT_RE),
     accrued_account: z.string().regex(/^29\d{2}$/),
     description: z.string().min(1),
   }),

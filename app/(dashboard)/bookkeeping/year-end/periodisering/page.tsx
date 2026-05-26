@@ -14,6 +14,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency } from '@/lib/utils'
 import {
   PERIODISERING_TEMPLATES,
@@ -90,6 +91,7 @@ function confidenceLabel(c: PeriodiseringConfidence): string {
 export default function PeriodiseringWizardPage() {
   const searchParams = useSearchParams()
   const { toast } = useToast()
+  const { canWrite } = useCanWrite()
 
   const [periods, setPeriods] = useState<PeriodOption[] | null>(null)
   const [periodsError, setPeriodsError] = useState<string | null>(null)
@@ -481,6 +483,7 @@ export default function PeriodiseringWizardPage() {
               postError={postError}
               postSummary={postSummary}
               posting={posting}
+              canWrite={canWrite}
               onBack={() => setStep('manual')}
               onPost={handlePost}
             />
@@ -861,6 +864,7 @@ function ReviewStep({
   postError,
   postSummary,
   posting,
+  canWrite,
   onBack,
   onPost,
 }: {
@@ -873,6 +877,7 @@ function ReviewStep({
   postError: string | null
   postSummary: { created: number; skipped: number } | null
   posting: boolean
+  canWrite: boolean
   onBack: () => void
   onPost: () => void
 }) {
@@ -957,8 +962,16 @@ function ReviewStep({
         <Button variant="outline" onClick={onBack} disabled={posting}>
           Tillbaka
         </Button>
-        <Button onClick={onPost} disabled={posting || totalCount === 0 || postSummary !== null}>
-          {posting ? (
+        <Button
+          onClick={onPost}
+          disabled={!canWrite || posting || totalCount === 0 || postSummary !== null}
+          title={!canWrite ? 'Endast användare med skrivrättigheter kan posta periodiseringar.' : undefined}
+        >
+          {!canWrite ? (
+            <>
+              <Lock className="mr-2 h-4 w-4" /> Posta alla
+            </>
+          ) : posting ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
             </>

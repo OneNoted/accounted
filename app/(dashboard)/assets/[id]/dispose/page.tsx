@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Lock } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -55,6 +56,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const { id } = use(params)
   const router = useRouter()
   const { toast } = useToast()
+  const { canWrite } = useCanWrite()
 
   const [asset, setAsset] = useState<Asset | null>(null)
   const [periods, setPeriods] = useState<PeriodOption[]>([])
@@ -553,13 +555,16 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         <Button
           onClick={handleSubmit}
           disabled={
+            !canWrite ||
             submitting ||
             !periodId ||
             periodLocked ||
             proceedsNum < 0 ||
             (proceeds !== '' && Number.isNaN(proceedsNum))
           }
+          title={!canWrite ? 'Endast användare med skrivrättigheter kan avyttra tillgångar.' : undefined}
         >
+          {!canWrite && <Lock className="mr-1 h-4 w-4" />}
           {submitting && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
           Avyttra
         </Button>

@@ -421,11 +421,37 @@ export default function NewInvoicePage() {
     if (!pendingData) return
     setIsSubmitting(true)
 
+    // Privacy by default: ROT/RUT line fields and the invoice-level
+    // personnummer / housing designation are only sent to the API when the
+    // user actually claims a deduction. Defaults are pre-instantiated as
+    // null in the form state, but null personal-data fields shouldn't ride
+    // along on every regular invoice.
+    const anyDeduction = pendingData.items.some((i) => i.deduction_type)
+    const sanitizedItems = pendingData.items.map((item) => {
+      if (item.deduction_type) return item
+      const {
+        deduction_type: _dt,
+        labor_hours: _lh,
+        work_type: _wt,
+        housing_designation: _hd,
+        apartment_number: _an,
+        ...rest
+      } = item
+      return rest
+    })
+    const sanitizedPayload: CreateInvoiceInput = {
+      ...(pendingData as CreateInvoiceInput),
+      items: sanitizedItems as CreateInvoiceInput['items'],
+      ...(anyDeduction
+        ? {}
+        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
+    }
+
     try {
       const response = await fetch('/api/invoices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(pendingData as CreateInvoiceInput),
+        body: JSON.stringify(sanitizedPayload),
       })
 
       const result = await response.json()
