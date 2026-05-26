@@ -14,12 +14,6 @@ import {
   Trash2,
 } from 'lucide-react'
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -159,14 +153,11 @@ export default function AttachmentPreviewSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="w-full overflow-y-auto sm:max-w-[560px]"
-      >
-        <SheetHeader>
-          <SheetTitle>{t('title')}</SheetTitle>
-        </SheetHeader>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] w-[95vw] max-w-4xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{t('title')}</DialogTitle>
+        </DialogHeader>
 
         <input
           ref={replaceFileInputRef}
@@ -253,11 +244,35 @@ export default function AttachmentPreviewSheet({
                   </div>
 
                   {isPdfType(doc.mime_type) && (
-                    <iframe
-                      src={inlineSrc}
-                      title={doc.file_name}
+                    // <object> + type="application/pdf" invokes Chrome's PDF
+                    // plugin directly. <iframe> went through Chrome's frame
+                    // pipeline first and intermittently surfaced
+                    // "Det här innehållet har blockerats" even with a
+                    // permissive CSP. Firefox/Edge handled both fine; Chrome
+                    // is the odd one. See crbug.com/271452.
+                    <object
+                      data={inlineSrc}
+                      type="application/pdf"
+                      aria-label={doc.file_name}
                       className="h-[70vh] w-full rounded-lg border border-border"
-                    />
+                    >
+                      <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                        {t('not_previewable')}
+                        {doc.download_url && (
+                          <>
+                            {' — '}
+                            <a
+                              href={doc.download_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline"
+                            >
+                              {t('open_in_new_tab')}
+                            </a>
+                          </>
+                        )}
+                      </div>
+                    </object>
                   )}
 
                   {isImageType(doc.mime_type) && (
@@ -329,7 +344,7 @@ export default function AttachmentPreviewSheet({
             </DialogFooter>
           </DialogContent>
         </Dialog>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }
