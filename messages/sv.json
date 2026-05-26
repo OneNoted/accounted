@@ -131,6 +131,8 @@
     "email_sent_body_login": "Vi har skickat en inloggningslänk till <strong>{email}</strong>",
     "email_sent_hint_reset": "Klicka på länken i e-posten för att återställa ditt lösenord. Länken är giltig i 1 timme.",
     "email_sent_hint_login": "Klicka på länken i e-posten för att logga in. Länken är giltig i 1 timme.",
+    "open_webmail_search": "Hitta e-posten i {provider}",
+    "open_webmail_inbox": "Öppna {provider}",
     "back_to_login": "Tillbaka till inloggning",
     "callback_error_title": "Återställningslänken fungerade inte",
     "callback_error_body": "Länken har gått ut eller använts redan.",
@@ -392,6 +394,8 @@
     "confirm_email_title": "Bekräfta din e-post",
     "confirm_email_body": "Vi har skickat en bekräftelselänk till <strong>{email}</strong>",
     "confirm_email_hint": "Klicka på länken i e-posten för att aktivera ditt konto. Länken är giltig i 24 timmar.",
+    "open_webmail_search": "Hitta e-posten i {provider}",
+    "open_webmail_inbox": "Öppna {provider}",
     "back_to_login": "Tillbaka till inloggning"
   },
   "mfa": {
