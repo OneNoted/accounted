@@ -93,6 +93,17 @@ const nextConfig: NextConfig = {
       // iframes (used by the verifikat document preview Sheet). Excluded
       // from the catch-all above so these values aren't shadowed by the
       // stricter defaults.
+      //
+      // CSP is intentionally minimal: only `frame-ancestors 'self'`
+      // prevents cross-origin clickjacking on the user's documents.
+      // Adding `object-src 'none'` (or `default-src 'none'`) here breaks
+      // Chrome's built-in PDF viewer — Chrome renders inline PDFs through
+      // an internal <embed>, which the directive forbids, surfacing as
+      // "Det här innehållet har blockerats" in the document preview Sheet.
+      // Firefox uses PDF.js and Edge uses its own viewer, so neither hits
+      // this. See crbug.com/271452. X-Content-Type-Options: nosniff plus
+      // the explicit Content-Type from the route handler already prevent
+      // MIME-confusion abuse.
       {
         source: "/api/documents/:id/inline",
         headers: [
@@ -118,7 +129,7 @@ const nextConfig: NextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            value: "default-src 'none'; script-src 'none'; object-src 'none'; frame-ancestors 'self'",
+            value: "frame-ancestors 'self'",
           },
         ],
       },
