@@ -101,8 +101,10 @@ export async function POST(request: Request) {
   // Match the creation API: a non-VAT-registered seller may not charge VAT
   // (ML 1 kap. 1§). Coerce instead of rejecting so the preview always renders
   // — the form may still be carrying a stale 25% selection while the user
-  // hasn't yet noticed the rate picker locked itself.
-  const vatRegistered = (company as CompanySettings).vat_registered ?? false
+  // hasn't yet noticed the rate picker locked itself. Default `true` mirrors
+  // the API and getVatRules' own default — a NULL column must not silently
+  // strip VAT from a preview the seller is about to send.
+  const vatRegistered = (company as CompanySettings).vat_registered ?? true
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, vatRegistered)
 
   const docType: InvoiceDocumentType = document_type || 'invoice'

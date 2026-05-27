@@ -200,7 +200,9 @@ export default function NewInvoicePage() {
       setOreRounding(data.ore_rounding)
     }
     setLogoUrl(data?.logo_url ?? null)
-    setVatRegistered(data?.vat_registered ?? false)
+    if (typeof data?.vat_registered === 'boolean') {
+      setVatRegistered(data.vat_registered)
+    }
   }
 
   // First-invoice detection (issue #520): captured at page load so the

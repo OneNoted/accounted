@@ -123,12 +123,15 @@ export const POST = withRouteContext(
     // We pull vat_registered from company_settings and feed it into the rule
     // helpers so the allowed-rates set collapses to {0} and any non-zero rate
     // submitted from the client fails INVOICE_CREATE_VAT_RULE_VIOLATION below.
+    // Default to true when the settings row is absent or the column is NULL
+    // — matches the prior implicit behavior (getVatRules' own default) so a
+    // missing settings row never silently blocks legitimate VAT invoices.
     const { data: companySettings } = await supabase
       .from('company_settings')
       .select('vat_registered')
       .eq('company_id', companyId!)
       .single()
-    const vatRegistered = companySettings?.vat_registered ?? false
+    const vatRegistered = companySettings?.vat_registered ?? true
 
     const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, vatRegistered)
     const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated, vatRegistered)

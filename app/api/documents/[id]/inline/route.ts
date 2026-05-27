@@ -95,6 +95,11 @@ export async function GET(
       'Content-Type': resolveContentType(doc.file_name, doc.mime_type),
       'Content-Disposition': `inline; filename="${safeFileName}"`,
       'Cache-Control': 'private, max-age=300',
+      // Block MIME sniffing — Content-Type is derived from DB metadata
+      // (with extension fallback for legacy rows), never from response
+      // content. Without nosniff a tampered file_name extension could
+      // serve a stored document under an attacker-chosen MIME type.
+      'X-Content-Type-Options': 'nosniff',
     },
   })
 }

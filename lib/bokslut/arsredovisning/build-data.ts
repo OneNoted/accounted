@@ -521,6 +521,9 @@ async function buildK2Noter(
   // Medelantal anställda — FTE-weighted average per ÅRL 5:20 §. We fetch the
   // full employment-window data because the column 'is_active' doesn't exist
   // on the employees table; a count() filtered by it would always return 0.
+  // ÅRL 5:20 § requires the note for AB regardless of value — "0" must be
+  // disclosed as "Inga anställda". For enskild firma the disclosure is
+  // discretionary, so we still skip when medelantal === 0 there.
   const { data: employeeRows } = await supabase
     .from('employees')
     .select('employment_start, employment_end, employment_degree')
@@ -534,11 +537,14 @@ async function buildK2Noter(
     periodStart,
     periodEnd,
   )
-  if (medelantal > 0) {
+  if (medelantal > 0 || entityType === 'aktiebolag') {
     notes.push({
       number: notes.length + 1,
       title: 'Medelantal anställda',
-      body: `Under räkenskapsåret har medeltalet anställda uppgått till ${medelantal}.`,
+      body:
+        medelantal > 0
+          ? `Under räkenskapsåret har medeltalet anställda uppgått till ${medelantal}.`
+          : 'Bolaget har inte haft några anställda under räkenskapsåret.',
     })
   }
 
@@ -776,7 +782,9 @@ async function buildK3Noter(
     )
   }
 
-  // 5. Medelantal anställda — FTE-weighted average per ÅRL 5:20 §.
+  // 5. Medelantal anställda — FTE-weighted average per ÅRL 5:20 §. The note is
+  // statutory for AB regardless of value (disclose "0" explicitly); for non-AB
+  // entities we still skip when there are no employees.
   const { data: employeeRows } = await supabase
     .from('employees')
     .select('employment_start, employment_end, employment_degree')
@@ -790,11 +798,14 @@ async function buildK3Noter(
     periodStartIso,
     periodEndIso,
   )
-  if (medelantal > 0) {
+  if (medelantal > 0 || entityType === 'aktiebolag') {
     notes.push({
       number: notes.length + 1,
       title: 'Medelantal anställda',
-      body: `Under räkenskapsåret har medeltalet anställda uppgått till ${medelantal}.`,
+      body:
+        medelantal > 0
+          ? `Under räkenskapsåret har medeltalet anställda uppgått till ${medelantal}.`
+          : 'Bolaget har inte haft några anställda under räkenskapsåret.',
     })
   }
 

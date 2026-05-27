@@ -792,7 +792,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               {customer.customer_type !== 'individual' && customer.org_number && (
                 <Text style={{ marginTop: 6 }}>{L.orgNo} {customer.org_number}</Text>
               )}
-              {customer.vat_number && <Text>{L.vat} {customer.vat_number}</Text>}
+              {/* Same data-minimisation guard as org_number above — for a
+                  private customer a VAT number functions as a personal tax
+                  identifier in some EU jurisdictions and is not required by
+                  ML 17 kap 24§ on a B2C invoice. */}
+              {customer.customer_type !== 'individual' && customer.vat_number && (
+                <Text>{L.vat} {customer.vat_number}</Text>
+              )}
             </View>
           </View>
         </View>
