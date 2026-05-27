@@ -628,6 +628,11 @@ export async function createSupplierCreditNoteEntry(
  * for partial-deductible cases (bilförmån 50%, representation 300 kr-tak),
  * foreign-currency rounding, and supplier POS rounding.
  *
+ * Fallback to line_total × rate when vat_amount is null/0 but rate > 0 —
+ * legacy import paths (SIE, CSV, demo seed) sometimes leave vat_amount at
+ * the column DEFAULT of 0. Silently dropping input VAT to 2641 would
+ * understate ruta 48 in the momsdeklaration.
+ *
  * Reverse-charge fiktiv moms doesn't use this — see groupBaseByRate, which
  * derives the basis directly so fiktiv VAT is always base × statutory rate.
  */
@@ -640,7 +645,12 @@ function groupVatByRate(
   const vatByRate = new Map<number, number>()
   for (const item of items) {
     const rate = item.vat_rate ?? 0.25
-    let vatSek = resolveSekAmount(item.vat_amount ?? 0, null, currency, exchangeRate)
+    const storedVat = item.vat_amount ?? 0
+    const computedVat = rate > 0
+      ? Math.round((item.line_total ?? 0) * rate * 100) / 100
+      : 0
+    const sourceVat = storedVat > 0 ? storedVat : computedVat
+    let vatSek = resolveSekAmount(sourceVat, null, currency, exchangeRate)
     if (useAbsoluteValues) vatSek = Math.abs(vatSek)
     vatByRate.set(rate, (vatByRate.get(rate) || 0) + vatSek)
   }

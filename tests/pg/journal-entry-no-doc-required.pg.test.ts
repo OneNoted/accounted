@@ -84,8 +84,21 @@ describe('journal_entry_no_doc_required.pg', () => {
 
     await insertExemption(getPool(), { journalEntryId: entryId, companyId, userId })
 
-    // Delete the draft entry — exempt row should cascade away.
-    await getPool().query(`DELETE FROM public.journal_entries WHERE id = $1`, [entryId])
+    // enforce_journal_entry_immutability blocks DELETE unconditionally; the
+    // delete_last_voucher RPC sets gnubok.allow_delete='true' before deleting.
+    // Mirror that here so the cascade can fire.
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('gnubok.allow_delete', 'true', true)`)
+      await client.query(`DELETE FROM public.journal_entries WHERE id = $1`, [entryId])
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
 
     const res = await getPool().query<{ count: string }>(
       `SELECT COUNT(*)::text as count FROM public.journal_entry_no_doc_required

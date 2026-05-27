@@ -39,7 +39,11 @@ export default function NoDocRequiredToggle({
   const [saving, setSaving] = useState(false)
   const [editingReason, setEditingReason] = useState(false)
 
-  const persistExempt = async (nextExempt: boolean, nextReason: string | null) => {
+  const persistExempt = async (
+    nextExempt: boolean,
+    nextReason: string | null,
+    previousReason: string,
+  ) => {
     setSaving(true)
     try {
       const res = nextExempt
@@ -59,8 +63,10 @@ export default function NoDocRequiredToggle({
           description: body.error,
           variant: 'destructive',
         })
-        // Roll back UI state on failure
+        // Roll back UI state on failure — both the toggle AND the reason so
+        // the rendered state matches the DB row we failed to mutate.
         setExempt(!nextExempt)
+        setReason(previousReason)
         return
       }
 
@@ -68,23 +74,25 @@ export default function NoDocRequiredToggle({
     } catch {
       toast({ title: t('no_doc_required_save_failed'), variant: 'destructive' })
       setExempt(!nextExempt)
+      setReason(previousReason)
     } finally {
       setSaving(false)
     }
   }
 
   const handleToggle = (checked: boolean) => {
+    const previousReason = reason
     setExempt(checked)
     if (!checked) {
       setReason('')
       setEditingReason(false)
     }
-    persistExempt(checked, checked ? (reason.trim() || null) : null)
+    persistExempt(checked, checked ? (reason.trim() || null) : null, previousReason)
   }
 
   const handleSaveReason = () => {
     setEditingReason(false)
-    persistExempt(true, reason.trim() || null)
+    persistExempt(true, reason.trim() || null, reason)
   }
 
   return (

@@ -218,6 +218,31 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     assertBalanced(input)
   })
 
+  it('recomputes 2641 from line_total × rate when stored vat_amount is 0 (legacy/import path)', async () => {
+    // Schema default is vat_amount=0; SIE imports and demo seeders sometimes
+    // leave it that way. Silently posting 0 to 2641 would understate ruta 48
+    // in the momsdeklaration. The engine recovers by recomputing from the
+    // base when the stored amount is missing.
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+    })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '5410', vat_rate: 0.25, vat_amount: 0 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const debit2641 = findByAccount(input.lines, '2641')
+    expect(debit2641).toHaveLength(1)
+    expect(debit2641[0].debit_amount).toBe(2500)
+    assertBalanced(input)
+  })
+
   it('aggregates manual VAT overrides per rate group on mixed-rate invoice', async () => {
     // Restaurangkvitto med två olika momsöverskridningar pga representation-
     // tak och egen avrundning. 25%-raden får manuell 100 kr, 12%-raden får

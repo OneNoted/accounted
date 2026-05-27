@@ -359,7 +359,23 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   quantity: z.number().optional(),
   unit: z.string().optional(),
   unit_price: z.number().optional(),
-})
+}).refine(
+  (item) => {
+    if (item.vat_amount == null) return true
+    const lineTotal = item.amount != null
+      ? item.amount
+      : (item.quantity ?? 1) * (item.unit_price ?? 0)
+    const vatRate = item.vat_rate ?? 0.25
+    const maxVat = Math.round(lineTotal * vatRate * 100) / 100
+    // 1-öre tolerance covers POS rounding; anything beyond is an upstream bug
+    // or a client trying to inflate 2641 debit beyond the statutory ceiling.
+    return item.vat_amount <= maxVat + 0.01
+  },
+  {
+    message: 'vat_amount cannot exceed line_total × vat_rate',
+    path: ['vat_amount'],
+  },
+)
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,

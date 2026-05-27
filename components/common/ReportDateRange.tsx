@@ -30,7 +30,14 @@ const STORAGE_KEY_PREFIX = 'gnubok:report-range-preset:'
 const PRESETS: Preset[] = ['full_year', 'ytd', 'this_month', 'last_month', 'this_quarter', 'custom']
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  // Local calendar date — using toISOString() returns UTC, which falls a day
+  // behind for Swedish users between midnight and 01:00/02:00 local time and
+  // would silently truncate "today" from YTD / this-month / this-quarter.
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 function clampToPeriod(date: string, periodStart: string, periodEnd: string): string {
@@ -63,11 +70,16 @@ function resolvePreset(
   }
 
   const ref = new Date(reference)
+  // Same UTC pitfall as todayIso(): Date.toISOString() returns UTC, so a
+  // local Date constructed via `new Date(y, m, d)` round-trips to the wrong
+  // calendar day in any timezone west of UTC. Use the local components.
+  const toLocalIso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   if (preset === 'this_month') {
     const y = ref.getFullYear()
     const m = ref.getMonth()
     const start = `${y}-${String(m + 1).padStart(2, '0')}-01`
-    const end = new Date(y, m + 1, 0).toISOString().slice(0, 10)
+    const end = toLocalIso(new Date(y, m + 1, 0))
     return {
       fromDate: clampToPeriod(start, periodStart, periodEnd),
       toDate: clampToPeriod(end, periodStart, periodEnd),
@@ -76,8 +88,8 @@ function resolvePreset(
   if (preset === 'last_month') {
     const y = ref.getFullYear()
     const m = ref.getMonth() - 1
-    const start = new Date(y, m, 1).toISOString().slice(0, 10)
-    const end = new Date(y, m + 1, 0).toISOString().slice(0, 10)
+    const start = toLocalIso(new Date(y, m, 1))
+    const end = toLocalIso(new Date(y, m + 1, 0))
     return {
       fromDate: clampToPeriod(start, periodStart, periodEnd),
       toDate: clampToPeriod(end, periodStart, periodEnd),
@@ -87,7 +99,7 @@ function resolvePreset(
     const y = ref.getFullYear()
     const q = Math.floor(ref.getMonth() / 3)
     const start = `${y}-${String(q * 3 + 1).padStart(2, '0')}-01`
-    const end = new Date(y, q * 3 + 3, 0).toISOString().slice(0, 10)
+    const end = toLocalIso(new Date(y, q * 3 + 3, 0))
     return {
       fromDate: clampToPeriod(start, periodStart, periodEnd),
       toDate: clampToPeriod(end, periodStart, periodEnd),
