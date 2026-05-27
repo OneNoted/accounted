@@ -1063,14 +1063,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         )}
 
         {/* Reverse charge / export / exempt / not-registered notice.
-            "Not VAT-registered" trumps the others — when the seller is
-            outside the VAT system entirely (vat_registered=false in
-            company_settings), reverse-charge and ML 3 kap. exempt notices
-            don't apply, and a single dedicated notice is clearer for the
-            customer than reusing the exempt notice (which implies the sale
-            specifically is exempt while the seller is otherwise within the
-            VAT system). */}
-        {company.vat_registered === false ? (
+            "Not VAT-registered" trumps the others ONLY when the invoice
+            actually carries no VAT — a non-registered seller who chose to
+            state VAT on the invoice (warned at create time per ML 16 kap.
+            23 §) gets the normal reverse-charge / exempt notices instead,
+            since the "ej momsregistrerad" line would contradict the VAT
+            shown in the totals block. */}
+        {company.vat_registered === false && invoice.vat_amount === 0 ? (
           <View style={styles.reverseChargeBox}>
             <Text style={styles.reverseChargeText}>{L.notVatRegisteredNotice}</Text>
           </View>

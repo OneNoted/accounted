@@ -67,25 +67,14 @@ describe('getAvailableVatRates', () => {
     expect(rates).toHaveLength(4)
   })
 
-  it('collapses to single 0% exempt option when seller is NOT VAT-registered', () => {
-    // ML 1 kap. 1§ — a non-skattskyldig seller may not charge VAT, so the
-    // picker must offer 0% only, regardless of customer type.
-    for (const ct of ['individual', 'swedish_business', 'eu_business', 'non_eu_business'] as const) {
-      const rates = getAvailableVatRates(ct, true, false)
-      expect(rates).toHaveLength(1)
-      expect(rates[0]).toEqual({
-        rate: 0,
-        label: '0% (ej momsregistrerad)',
-        treatment: 'exempt',
-      })
-    }
-  })
-
-  it('defaults vatRegistered to true (current behavior preserved)', () => {
-    // Existing callers omit the third arg — they must still see the full
-    // rate set for Swedish customers.
+  it('does not gate on seller VAT-registration status', () => {
+    // ML 16 kap. 23 § (faktureringsmoms): the picker offers the full
+    // customer-type-based rate set regardless of whether the seller is
+    // momsregistrerad. The invoice form surfaces a warning at submit time
+    // when a non-registered seller picks a non-zero rate.
     const rates = getAvailableVatRates('swedish_business')
     expect(rates).toHaveLength(4)
+    expect(rates.map((r) => r.rate)).toEqual([25, 12, 6, 0])
   })
 })
 
@@ -177,25 +166,14 @@ describe('getVatRules', () => {
     })
   })
 
-  it('short-circuits to exempt/0/empty momsRuta when seller is NOT VAT-registered', () => {
-    // ML 1 kap. 1§ — no output VAT, no momsdeklaration row, regardless of
-    // customer type. Verified for all four customer types.
-    for (const ct of ['individual', 'swedish_business', 'eu_business', 'non_eu_business'] as const) {
-      const rules = getVatRules(ct, true, false)
-      expect(rules).toEqual({
-        treatment: 'exempt',
-        rate: 0,
-        momsRuta: '',
-      })
-    }
-  })
-
-  it('defaults vatRegistered to true (current behavior preserved)', () => {
-    // Existing callers omit the third arg — they must still see standard_25
-    // for Swedish customers.
+  it('does not gate on seller VAT-registration status', () => {
+    // ML 16 kap. 23 § (faktureringsmoms): a non-registered seller who states
+    // VAT still owes it. The rule output reflects the customer-type rate so
+    // the booking is consistent with what the buyer sees on the invoice.
     const rules = getVatRules('swedish_business')
     expect(rules.rate).toBe(25)
     expect(rules.treatment).toBe('standard_25')
+    expect(rules.momsRuta).toBe('05')
   })
 })
 
