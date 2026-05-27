@@ -65,6 +65,7 @@ export default function AttachmentPreviewSheet({
   const { toast } = useToast()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(false)
+  const [integrity, setIntegrity] = useState<Record<string, boolean>>({})
 
   const [blockedDoc, setBlockedDoc] = useState<DocumentRecord | null>(null)
   const [replacingDocId, setReplacingDocId] = useState<string | null>(null)
@@ -97,8 +98,28 @@ export default function AttachmentPreviewSheet({
         })
       )
       setDocuments(enriched)
+
+      // Probe storage bytes for PDFs in parallel — legacy MCP uploads from
+      // before magic-byte validation can have non-PDF bytes stored under
+      // mime_type='application/pdf'. The browser's PDF viewer surfaces this
+      // as "Failed to load PDF document" only after the user tries to view
+      // the file; this probe lets us show a clearer warning up front.
+      const pdfs = enriched.filter((d) => d.mime_type === 'application/pdf')
+      const results = await Promise.all(
+        pdfs.map(async (doc) => {
+          try {
+            const r = await fetch(`/api/documents/${doc.id}/integrity`)
+            const { data } = await r.json()
+            return [doc.id, data?.valid !== false] as const
+          } catch {
+            return [doc.id, true] as const
+          }
+        })
+      )
+      setIntegrity(Object.fromEntries(results))
     } catch {
       setDocuments([])
+      setIntegrity({})
     } finally {
       setLoading(false)
     }
@@ -109,6 +130,7 @@ export default function AttachmentPreviewSheet({
       fetchAttachments(entryId)
     } else if (!open) {
       setDocuments([])
+      setIntegrity({})
       setBlockedDoc(null)
     }
   }, [open, entryId, fetchAttachments])
@@ -243,7 +265,32 @@ export default function AttachmentPreviewSheet({
                     </div>
                   </div>
 
-                  {isPdfType(doc.mime_type) && (
+                  {isPdfType(doc.mime_type) && integrity[doc.id] === false && (
+                    <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-border bg-muted/30 p-6 text-center">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15">
+                        <AlertTriangle className="h-5 w-5 text-warning-foreground" />
+                      </div>
+                      <div className="max-w-md space-y-2">
+                        <p className="text-sm font-medium">{t('corrupt_title')}</p>
+                        <p className="text-sm text-muted-foreground">{t('corrupt_body')}</p>
+                      </div>
+                      <Button
+                        onClick={() => handleOpenReplacePicker(doc.id)}
+                        disabled={isReplacing}
+                      >
+                        {isReplacing ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            {tj('replace_uploading')}
+                          </>
+                        ) : (
+                          t('corrupt_replace_cta')
+                        )}
+                      </Button>
+                    </div>
+                  )}
+
+                  {isPdfType(doc.mime_type) && integrity[doc.id] !== false && (
                     // <object> + type="application/pdf" invokes Chrome's PDF
                     // plugin directly. <iframe> went through Chrome's frame
                     // pipeline first and intermittently surfaced

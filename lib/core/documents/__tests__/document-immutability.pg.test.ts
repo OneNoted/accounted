@@ -231,3 +231,127 @@ describe('document-immutability.pg — BFL retention bypass guards', () => {
     }
   })
 })
+
+// The supersession flow needs to flip the OLD row from is_current_version=true
+// to false. The metadata-immutability trigger blocks that change for docs
+// linked to posted entries unless the gnubok.allow_supersede GUC is set —
+// which create_document_version sets before its UPDATE. Without this, users
+// have no way to replace a corrupt underlag (e.g. a bad PDF uploaded via the
+// MCP server before magic-byte validation).
+describe('document-immutability.pg — version supersession on posted entries', () => {
+  it('allows create_document_version on a doc linked to a posted entry', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertEntryAtStatus({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
+
+    const result = await getPool().query<{ new_id: string }>(
+      `SELECT public.create_document_version(
+         $1::uuid, $2::uuid, $3::text, $4::text, $5::bigint, $6::text, $7::text
+       ) AS new_id`,
+      [
+        userId,
+        docId,
+        `documents/${userId}/replacement.pdf`,
+        'replacement.pdf',
+        2048,
+        'application/pdf',
+        'b'.repeat(64),
+      ],
+    )
+
+    const newId = result.rows[0]!.new_id
+    expect(newId).toBeDefined()
+
+    const oldRow = await getPool().query<{
+      is_current_version: boolean
+      superseded_by_id: string | null
+      journal_entry_id: string | null
+    }>(
+      `SELECT is_current_version, superseded_by_id, journal_entry_id
+       FROM public.document_attachments WHERE id = $1`,
+      [docId],
+    )
+    expect(oldRow.rows[0]!.is_current_version).toBe(false)
+    expect(oldRow.rows[0]!.superseded_by_id).toBe(newId)
+    expect(oldRow.rows[0]!.journal_entry_id).toBe(entryId)
+
+    const newRow = await getPool().query<{
+      is_current_version: boolean
+      version: number
+      journal_entry_id: string | null
+      prev_version_hash: string | null
+    }>(
+      `SELECT is_current_version, version, journal_entry_id, prev_version_hash
+       FROM public.document_attachments WHERE id = $1`,
+      [newId],
+    )
+    expect(newRow.rows[0]!.is_current_version).toBe(true)
+    expect(newRow.rows[0]!.version).toBe(2)
+    expect(newRow.rows[0]!.journal_entry_id).toBe(entryId)
+    expect(newRow.rows[0]!.prev_version_hash).toBe('a'.repeat(64))
+  })
+
+  it('allows create_document_version on a doc linked to a reversed entry', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertEntryAtStatus({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, status: 'reversed',
+    })
+    const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
+
+    await expect(
+      getPool().query(
+        `SELECT public.create_document_version(
+           $1::uuid, $2::uuid, $3::text, $4::text, $5::bigint, $6::text, $7::text
+         )`,
+        [
+          userId, docId,
+          `documents/${userId}/replacement.pdf`,
+          'replacement.pdf', 2048, 'application/pdf', 'c'.repeat(64),
+        ],
+      ),
+    ).resolves.toBeDefined()
+  })
+
+  it('rejects direct UPDATE flipping is_current_version without the GUC', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertEntryAtStatus({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.document_attachments SET is_current_version = false WHERE id = $1`,
+        [docId],
+      ),
+    ).rejects.toThrow(BFL_RETENTION_ERROR)
+  })
+
+  it('respects gnubok.allow_supersede bypass on direct UPDATE', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertEntryAtStatus({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+    })
+    const docId = await insertDocument({ userId, companyId, journalEntryId: entryId })
+
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('gnubok.allow_supersede', 'true', true)`)
+      await client.query(
+        `UPDATE public.document_attachments SET is_current_version = false WHERE id = $1`,
+        [docId],
+      )
+      const after = await client.query<{ is_current_version: boolean }>(
+        `SELECT is_current_version FROM public.document_attachments WHERE id = $1`,
+        [docId],
+      )
+      expect(after.rows[0]!.is_current_version).toBe(false)
+      await client.query('ROLLBACK')
+    } finally {
+      client.release()
+    }
+  })
+})
