@@ -275,6 +275,58 @@ export async function createNextPeriod(
 }
 
 /**
+ * Look up the next fiscal period after the given one without creating it.
+ *
+ * Used by year-end closing to handle the common case where the next period
+ * was already created (e.g. by SIE import, manual creation, or a previous
+ * partial year-end run). Returns null when no such period exists.
+ *
+ * Matches first on previous_period_id chain, then falls back to a
+ * period_start = (current.period_end + 1 day) lookup so periods created
+ * before the chain was wired up are still recognised.
+ */
+export async function findNextPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  currentPeriodId: string
+): Promise<FiscalPeriod | null> {
+  const { data: current, error: fetchError } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('id', currentPeriodId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !current) {
+    return null
+  }
+
+  const { data: chained } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('previous_period_id', currentPeriodId)
+    .maybeSingle()
+
+  if (chained) {
+    return chained as FiscalPeriod
+  }
+
+  const expectedStart = new Date(current.period_end)
+  expectedStart.setDate(expectedStart.getDate() + 1)
+  const expectedStartStr = expectedStart.toISOString().split('T')[0]
+
+  const { data: byDate } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('period_start', expectedStartStr)
+    .maybeSingle()
+
+  return (byDate as FiscalPeriod | null) ?? null
+}
+
+/**
  * Create a previous fiscal period before the given one.
  * Computes a 12-month period ending the day before the given period starts.
  * Updates previous_period_id chain so the given period points to the new one.

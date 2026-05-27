@@ -171,7 +171,9 @@ export default function YearEndPage() {
       })
       const body = await res.json()
       if (!res.ok) {
-        setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
+        const base = body?.error?.message ?? 'Bokslutet kunde inte verkställas'
+        const reason = body?.error?.details?.reason
+        setExecuteError(reason ? `${base} (${reason})` : base)
         return
       }
       setResult(body.data as YearEndResult)

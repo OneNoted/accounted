@@ -7,7 +7,7 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('year-end-service')
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { lockPeriod, closePeriod, createNextPeriod } from './period-service'
+import { lockPeriod, closePeriod, createNextPeriod, findNextPeriod } from './period-service'
 import {
   previewCurrencyRevaluation,
   executeCurrencyRevaluation,
@@ -251,6 +251,23 @@ export async function validateYearEndReadiness(
   // Check: continuity_verified flag from prior year-end
   if (period.continuity_verified === false) {
     errors.push('Opening balance continuity check failed for this period — resolve discrepancies before closing')
+  }
+
+  // Check: next period state. A pre-existing next period (from SIE import,
+  // manual creation, or a prior partial run) is fine — we'll reuse it — but
+  // one with opening balances already booked blocks closing because we
+  // can't post a second IB on top.
+  const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
+  if (nextPeriod) {
+    if (nextPeriod.opening_balance_entry_id) {
+      errors.push(
+        `Next fiscal period "${nextPeriod.name}" already has opening balances posted`
+      )
+    } else {
+      warnings.push(
+        `Next fiscal period "${nextPeriod.name}" already exists — opening balances will be booked into it`
+      )
+    }
   }
 
   return {
@@ -515,8 +532,25 @@ export async function executeYearEndClosing(
   // 7. Close the period
   await closePeriod(supabase, companyId, userId, fiscalPeriodId)
 
-  // 8. Create next period
-  const nextPeriod = await createNextPeriod(supabase, companyId, userId, fiscalPeriodId)
+  // 8. Reuse existing next period if present, else create a new one.
+  //    Pre-existing next periods are common — they're auto-created by SIE
+  //    imports, manual UI creation, or prior partial year-end runs. As long
+  //    as no IB has been booked in it yet we can adopt it. Without this
+  //    fallback the unconditional createNextPeriod call throws after the
+  //    period has already been closed (irreversible per BFL), leaving the
+  //    books in a half-closed state.
+  const existingNextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
+  let nextPeriod
+  if (existingNextPeriod) {
+    if (existingNextPeriod.opening_balance_entry_id) {
+      throw new Error(
+        `Nästa räkenskapsperiod (${existingNextPeriod.name}) har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.`
+      )
+    }
+    nextPeriod = existingNextPeriod
+  } else {
+    nextPeriod = await createNextPeriod(supabase, companyId, userId, fiscalPeriodId)
+  }
 
   // 9. Generate opening balances in next period
   const openingBalanceEntry = await generateOpeningBalances(
