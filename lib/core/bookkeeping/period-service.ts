@@ -215,20 +215,22 @@ export async function createNextPeriod(
     throw new Error('Current fiscal period not found')
   }
 
-  // Compute next period start (day after current end)
-  const nextStart = new Date(current.period_end)
-  nextStart.setDate(nextStart.getDate() + 1)
+  // Compute next period start (day after current end) in pure UTC — see
+  // findNextPeriod for the DST off-by-one rationale.
+  const nextStart = new Date(current.period_end + 'T00:00:00Z')
+  nextStart.setUTCDate(nextStart.getUTCDate() + 1)
 
   // After a broken first fiscal year, subsequent years should always be
   // 12 months (standard fiscal year). The first year is the only one that
   // can be longer/shorter than 12 months per BFL 3 kap.
   const nextEnd = new Date(nextStart)
-  nextEnd.setMonth(nextEnd.getMonth() + 12)
-  // Go to last day of that month
-  nextEnd.setDate(0)
+  nextEnd.setUTCMonth(nextEnd.getUTCMonth() + 12)
+  // Go to last day of the previous month — setUTCDate(0) rolls back into
+  // the prior month's last day.
+  nextEnd.setUTCDate(0)
 
-  const nextStartStr = nextStart.toISOString().split('T')[0]
-  const nextEndStr = nextEnd.toISOString().split('T')[0]
+  const nextStartStr = nextStart.toISOString().slice(0, 10)
+  const nextEndStr = nextEnd.toISOString().slice(0, 10)
 
   // Validate period duration — subsequent periods always start on 1st of month
   const durationError = validatePeriodDuration(nextStartStr, nextEndStr, { isFirstPeriod: false })
@@ -250,8 +252,8 @@ export async function createNextPeriod(
   }
 
   // Generate name: e.g. "FY 2025" or "FY 2025/2026"
-  const startYear = nextStart.getFullYear()
-  const endYear = nextEnd.getFullYear()
+  const startYear = nextStart.getUTCFullYear()
+  const endYear = nextEnd.getUTCFullYear()
   const name = startYear === endYear ? `FY ${startYear}` : `FY ${startYear}/${endYear}`
 
   const { data: newPeriod, error: insertError } = await supabase
@@ -312,9 +314,12 @@ export async function findNextPeriod(
     return chained as FiscalPeriod
   }
 
-  const expectedStart = new Date(current.period_end)
-  expectedStart.setDate(expectedStart.getDate() + 1)
-  const expectedStartStr = expectedStart.toISOString().split('T')[0]
+  // UTC-only arithmetic: anchor the date string at UTC midnight, then
+  // advance via setUTCDate. Using Date(string) + setDate/getDate causes an
+  // off-by-one on servers in TZ+ when the day after period_end crosses a
+  // DST spring-forward, because setDate(local) writes local-time fields
+  // and toISOString() converts back through the shifted offset.
+  const expectedStartStr = addDaysUTC(current.period_end, 1)
 
   const { data: byDate } = await supabase
     .from('fiscal_periods')
@@ -324,6 +329,13 @@ export async function findNextPeriod(
     .maybeSingle()
 
   return (byDate as FiscalPeriod | null) ?? null
+}
+
+/** Add `days` to a YYYY-MM-DD string in pure UTC and return YYYY-MM-DD. */
+function addDaysUTC(isoDate: string, days: number): string {
+  const d = new Date(isoDate + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 /**
@@ -518,10 +530,7 @@ export async function getPeriodStatus(
     .eq('fiscal_period_id', fiscalPeriodId)
     .eq('status', 'draft')
 
-  // Check if next period exists
-  const nextStart = new Date(period.period_end)
-  nextStart.setDate(nextStart.getDate() + 1)
-
+  // Check if next period exists via the chain pointer
   const { data: nextPeriod } = await supabase
     .from('fiscal_periods')
     .select('id')

@@ -368,7 +368,10 @@ describe('validateYearEndReadiness', () => {
     const supabase = makeClient()
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(true)
-    expect(result.warnings.some((w: string) => w.includes('Next fiscal period') && w.includes('FY 2025'))).toBe(true)
+    // Period name intentionally not interpolated into the warning — see
+    // year-end-service for rationale. We assert on the stable English
+    // substring instead.
+    expect(result.warnings.some((w: string) => w.includes('Next fiscal period already exists'))).toBe(true)
   })
 
   it('blocks when next period already has opening balances posted', async () => {

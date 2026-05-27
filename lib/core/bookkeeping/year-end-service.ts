@@ -257,16 +257,18 @@ export async function validateYearEndReadiness(
   // manual creation, or a prior partial run) is fine — we'll reuse it — but
   // one with opening balances already booked blocks closing because we
   // can't post a second IB on top.
+  //
+  // The period name is not interpolated into the message — although the
+  // name is user-supplied at create time and confined to the company,
+  // surfacing DB-sourced strings through error paths is the kind of
+  // injection footgun we'd rather close at the source than rely on the UI
+  // to escape (text rendering and aria-label propagation differ).
   const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
   if (nextPeriod) {
     if (nextPeriod.opening_balance_entry_id) {
-      errors.push(
-        `Next fiscal period "${nextPeriod.name}" already has opening balances posted`
-      )
+      errors.push('Next fiscal period already has opening balances posted')
     } else {
-      warnings.push(
-        `Next fiscal period "${nextPeriod.name}" already exists — opening balances will be booked into it`
-      )
+      warnings.push('Next fiscal period already exists — opening balances will be booked into it')
     }
   }
 
@@ -414,12 +416,15 @@ export async function previewYearEndClosing(
  * Execute year-end closing for a fiscal period.
  *
  * 1. Validate readiness
- * 2. Create closing entry (zeros class 3-8 accounts)
- * 3. Set closing_entry_id on the period
- * 4. Lock the period
- * 5. Close the period
- * 6. Create next fiscal period
- * 7. Generate opening balances in next period
+ * 2. Run currency revaluation (FX gains/losses to 3960/7960)
+ * 3. Generate closing preview and check öre balance
+ * 4. Create closing entry (zeros class 3-8 accounts)
+ * 5. Set closing_entry_id on the period
+ * 6. Resolve next fiscal period (reuse existing or create new)
+ * 7. Lock the period
+ * 8. Close the period (irreversible — every guard must run before this)
+ * 9. Generate opening balances in next period
+ * 10. Validate IB/UB continuity
  */
 export async function executeYearEndClosing(
   supabase: SupabaseClient,
@@ -526,31 +531,36 @@ export async function executeYearEndClosing(
     throw new Error(`Failed to set closing_entry_id: ${updateError.message}`)
   }
 
-  // 6. Lock the period
-  await lockPeriod(supabase, companyId, userId, fiscalPeriodId)
-
-  // 7. Close the period
-  await closePeriod(supabase, companyId, userId, fiscalPeriodId)
-
-  // 8. Reuse existing next period if present, else create a new one.
-  //    Pre-existing next periods are common — they're auto-created by SIE
-  //    imports, manual UI creation, or prior partial year-end runs. As long
-  //    as no IB has been booked in it yet we can adopt it. Without this
-  //    fallback the unconditional createNextPeriod call throws after the
-  //    period has already been closed (irreversible per BFL), leaving the
-  //    books in a half-closed state.
+  // 6. Resolve the next period BEFORE locking/closing this one. A pre-existing
+  //    next period is common (SIE import, manual creation, prior partial
+  //    year-end run); reusing it is fine as long as no IB has been booked
+  //    into it. Doing this check after closePeriod would leave the books in
+  //    a half-closed state if a concurrent process posted IB into the next
+  //    period between validateYearEndReadiness and step 8 (TOCTOU race).
+  //
+  //    The thrown error is intentionally a stable English string with no
+  //    DB-sourced data interpolated — the route layer maps it to a
+  //    structured error code, and the next period name (if any) is surfaced
+  //    only through the structured details payload after explicit checks.
   const existingNextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
   let nextPeriod
   if (existingNextPeriod) {
     if (existingNextPeriod.opening_balance_entry_id) {
       throw new Error(
-        `Nästa räkenskapsperiod (${existingNextPeriod.name}) har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.`
+        'Next fiscal period already has opening balance entry posted; reverse it before re-running year-end'
       )
     }
     nextPeriod = existingNextPeriod
   } else {
     nextPeriod = await createNextPeriod(supabase, companyId, userId, fiscalPeriodId)
   }
+
+  // 7. Lock the period
+  await lockPeriod(supabase, companyId, userId, fiscalPeriodId)
+
+  // 8. Close the period — irreversible per BFL. Every guard that can fail
+  //    on prior state must run before this point.
+  await closePeriod(supabase, companyId, userId, fiscalPeriodId)
 
   // 9. Generate opening balances in next period
   const openingBalanceEntry = await generateOpeningBalances(
