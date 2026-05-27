@@ -4,7 +4,6 @@ import { headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
-import { RecaptIdentify } from '@/components/RecaptIdentify'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
@@ -225,13 +224,6 @@ export default async function DashboardLayout({
         <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
           <MainContainer companyId={companyId}>{children}</MainContainer>
         </main>
-        {!isSandbox && (
-          <RecaptIdentify
-            userId={user.id}
-            email={user.email}
-            displayName={settings?.company_name || undefined}
-          />
-        )}
       </div>
     </CompanyProvider>
   )

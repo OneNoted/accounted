@@ -35,7 +35,6 @@ import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import { SupportLink } from '@/components/ui/support-link'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import { useCompany } from '@/contexts/CompanyContext'
-import { clearRecaptIdentity } from '@/lib/recapt'
 import type { EntityType } from '@/types'
 
 void _ENABLED_EXTENSION_IDS
@@ -153,7 +152,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, un
   }
 
   const handleLogout = async () => {
-    clearRecaptIdentity()
     await supabase.auth.signOut()
     router.push(isSandbox ? '/sandbox' : '/login')
   }
