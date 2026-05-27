@@ -349,6 +349,12 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   amount: z.number().optional(),
   account_number: accountNumber,
   vat_rate: z.number().min(0).max(100).optional(),
+  // Manual VAT override. When provided, the engine books this exact amount to
+  // 2641/2645 instead of recomputing line_total × vat_rate. Use for partial-
+  // deductible cases (bilförmån 50%, representation 300 kr-tak), foreign-
+  // currency rounding, or POS receipts where supplier-side rounding makes the
+  // VAT off by öre.
+  vat_amount: z.number().min(0).optional(),
   vat_code: z.string().optional(),
   quantity: z.number().optional(),
   unit: z.string().optional(),
