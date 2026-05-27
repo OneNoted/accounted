@@ -29,6 +29,15 @@ const PostSchema = z.object({
     )
     .nullable()
     .optional(),
+  // Disclosure fields per ÅRL 5:13-15 § + BFNAR koncernförhållanden. All
+  // optional; null clears the override and the builder falls back to
+  // boilerplate ("Inga." / "Inga skulder förfaller efter mer än fem år.").
+  long_term_debt_over_five_years: z.number().min(0).nullable().optional(),
+  securities_pledged: z.string().max(4000).nullable().optional(),
+  contingent_liabilities: z.string().max(4000).nullable().optional(),
+  parent_company_name: z.string().max(200).nullable().optional(),
+  parent_company_org_number: z.string().max(20).nullable().optional(),
+  parent_company_city: z.string().max(100).nullable().optional(),
 })
 
 export const GET = withRouteContext(
