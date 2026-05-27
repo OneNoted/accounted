@@ -1,5 +1,6 @@
 -- Restore document version supersession on posted entries.
 --
+
 -- Background: 20260506150000 extended enforce_document_metadata_immutability
 -- to also block changes to journal_entry_id, journal_entry_line_id, AND
 -- is_current_version when the document is linked to a posted/reversed entry.
