@@ -174,19 +174,21 @@ export default function SalaryRunEmployeeDetailPage({
               {employee.personnummer} · Lönespecifikation {periodLabel}
             </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCalculate}
-            disabled={calculating || readOnly}
-          >
-            {calculating ? (
-              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Calculator className="mr-1.5 h-3.5 w-3.5" />
-            )}
-            Beräkna
-          </Button>
+          {run.status === 'draft' && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCalculate}
+              disabled={calculating}
+            >
+              {calculating ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Calculator className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Beräkna
+            </Button>
+          )}
         </div>
       </div>
 

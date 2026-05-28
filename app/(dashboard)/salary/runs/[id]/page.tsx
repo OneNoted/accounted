@@ -292,15 +292,29 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         </Badge>
       </div>
 
-      {/* Summary cards */}
+      {/* Summary cards — recompute from per-employee rows so manual overrides
+          (avancerat läge) are reflected immediately, without relying on
+          run.total_* columns which are frozen at calculate-time. */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {[
-          { label: 'Brutto', value: run.total_gross },
-          { label: 'Skatt', value: run.total_tax },
-          { label: 'Netto', value: run.total_net, accent: true },
-          { label: 'Avgifter', value: run.total_avgifter },
-          { label: 'Total kostnad', value: run.total_employer_cost },
-        ].map(({ label, value, accent }) => (
+        {(() => {
+          const effTax = employees.reduce((s, e) => s + (e.tax_withheld_override ?? e.tax_withheld), 0)
+          const effAvgifter = employees.reduce((s, e) => s + (e.avgifter_amount_override ?? e.avgifter_amount), 0)
+          const effNet = employees.reduce(
+            (s, e) => s + (e.net_salary + (e.tax_withheld - (e.tax_withheld_override ?? e.tax_withheld))),
+            0,
+          )
+          const effEmployerCost = employees.reduce(
+            (s, e) => s + e.gross_salary + (e.avgifter_amount_override ?? e.avgifter_amount) + e.vacation_accrual + e.vacation_accrual_avgifter,
+            0,
+          )
+          return [
+            { label: 'Brutto', value: run.total_gross },
+            { label: 'Skatt', value: effTax },
+            { label: 'Netto', value: effNet, accent: true },
+            { label: 'Avgifter', value: effAvgifter },
+            { label: 'Total kostnad', value: effEmployerCost },
+          ]
+        })().map(({ label, value, accent }) => (
           <Card key={label}>
             <CardContent className="p-4">
               <p className="text-xs text-muted-foreground mb-2">{label}</p>
@@ -399,7 +413,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.gross_salary)}</TableCell>
                       <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(taxValue)}</TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">{formatCurrency(sre.net_salary)}</TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">{formatCurrency(sre.net_salary + (sre.tax_withheld - taxValue))}</TableCell>
                       <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(avgifterValue)}</TableCell>
                       <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.vacation_accrual)}</TableCell>
                       <TableCell className="text-right">
@@ -409,10 +423,10 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                           rel="noopener noreferrer"
                           onClick={(e) => e.stopPropagation()}
                           className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          title="Ladda ner lönespecifikation"
+                          title="Visa lönespecifikation"
                         >
                           <FileDown className="h-3.5 w-3.5" />
-                          PDF
+                          Visa PDF
                         </a>
                       </TableCell>
                     </TableRow>

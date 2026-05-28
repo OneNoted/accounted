@@ -628,17 +628,20 @@ function SIEImportWizard() {
       const data = await res.json()
 
       if (!res.ok) {
-        if (data.error === 'duplicate') {
-          setError(data.message || 'Denna fil har redan importerats')
-          toast({ title: 'Filen har redan importerats', description: data.message, variant: 'destructive' })
+        const code = data?.error?.code as string | undefined
+        const message = getErrorMessage(data)
+        const failedResult = data?.error?.details?.result as typeof data.result | undefined
+
+        if (code === 'SIE_DUPLICATE_FILE' || code === 'SIE_DUPLICATE_PERIOD') {
+          setError(message)
+          toast({ title: 'Filen har redan importerats', description: message, variant: 'destructive' })
           return
         }
-        if (data.result) {
-          setImportResult(data.result)
+        if (failedResult) {
+          setImportResult(failedResult)
         } else {
-          const msg = data.message || data.error || 'Importen misslyckades.'
-          setError(msg)
-          toast({ title: 'Import misslyckades', description: msg, variant: 'destructive' })
+          setError(message)
+          toast({ title: 'Import misslyckades', description: message, variant: 'destructive' })
           return
         }
       } else {

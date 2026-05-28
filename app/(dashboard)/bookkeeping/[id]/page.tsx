@@ -41,7 +41,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
-  const [isEditRecreating, setIsEditRecreating] = useState(false)
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -106,31 +105,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setIsCommitting(false)
     }
   }, [id, toast, fetchData, t])
-
-  const handleEditRecreate = useCallback(async () => {
-    setIsEditRecreating(true)
-    try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/edit-recreate`, { method: 'POST' })
-      const result = await res.json()
-      if (res.ok) {
-        toast({
-          title: t('toast_edit_recreated_title'),
-          description: t('toast_edit_recreated_description'),
-        })
-        router.push(`/bookkeeping/${result.data.draftId}`)
-      } else {
-        toast({
-          title: t('toast_edit_recreate_failed'),
-          description: getErrorMessage(result, { context: 'journal_entry' }),
-          variant: 'destructive',
-        })
-      }
-    } catch {
-      toast({ title: t('toast_edit_recreate_failed'), variant: 'destructive' })
-    } finally {
-      setIsEditRecreating(false)
-    }
-  }, [id, router, toast, t])
 
   const handleDelete = useCallback(async () => {
     setIsDeleting(true)
@@ -249,19 +223,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 {t('post')}
               </Button>
             )}
-            {entry.status === 'posted' && isLastInSeries && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
-                onClick={handleEditRecreate}
-                disabled={!canWrite || isEditRecreating}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isEditRecreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pencil className="mr-2 h-4 w-4" />}
-                {t('edit_entry')}
-              </Button>
-            )}
             {(entry.status === 'draft' || isLastInSeries) && (
               <Button
                 variant="destructive"
@@ -284,8 +245,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 disabled={!canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
-                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-                {t('create_correction')}
+                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                {t('edit_entry')}
               </Button>
             )}
             {entry.status === 'posted' && (
