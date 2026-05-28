@@ -17,9 +17,13 @@ export const GET = withRouteContext(
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
 
+    // Project only the fields the matcher actually reads. Avoids leaking the
+    // full customer row (address, contact, etc.) into the API response.
     const { data: invoice, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers(*)')
+      .select(
+        'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+      )
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -35,7 +39,10 @@ export const GET = withRouteContext(
     const candidates = await findMatchingVouchersForInvoice(
       supabase,
       companyId,
-      invoice as Invoice & { customer?: Customer }
+      // Narrow projection above means TS infers `customer` as `{ id, name }[]`
+      // from the join shorthand. The matcher only reads `customer?.name`, so
+      // cast through unknown to the runtime shape it expects.
+      invoice as unknown as Invoice & { customer?: Customer }
     )
 
     return NextResponse.json({ data: { candidates } })

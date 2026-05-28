@@ -17,6 +17,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
+import { createLogger } from '@/lib/logger'
 import {
   CONFIDENCE,
   amountsMatchExact,
@@ -24,6 +25,8 @@ import {
   customerNameMatches,
 } from './invoice-matching'
 import type { Invoice, Customer } from '@/types'
+
+const log = createLogger('voucher-matching')
 
 /** AR account range. Default 1510 (Kundfordringar) — covers all 151x. */
 const AR_ACCOUNT_PREFIX = '151'
@@ -338,6 +341,7 @@ export type VoucherLinkErrorCode =
   | 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING'
   | 'LINK_VOUCHER_CURRENCY_MISMATCH'
   | 'LINK_VOUCHER_INVOICE_FULLY_PAID'
+  | 'LINK_VOUCHER_DB_ERROR'
 
 /**
  * Validate that a journal entry can be linked as payment for an invoice.
@@ -519,7 +523,9 @@ export async function linkInvoiceToVoucher(
     .select('id')
 
   if (updateInvError) {
-    return { ok: false, code: 'LINK_VOUCHER_VOUCHER_NOT_FOUND', details: { reason: updateInvError.message } }
+    // Real DB failure (RLS, network, constraint) — distinct from "voucher not
+    // found" so the pending-op dispatcher retries instead of auto-rejecting.
+    return { ok: false, code: 'LINK_VOUCHER_DB_ERROR', details: { reason: updateInvError.message } }
   }
   if (!updatedRows || updatedRows.length === 0) {
     return { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID' }
@@ -546,7 +552,7 @@ export async function linkInvoiceToVoucher(
     // Roll back the invoice update so we don't leave the row in a half-linked
     // state. The partial unique index raises 23505 if another linker won the
     // race between validation and insert.
-    await supabase
+    const { error: rollbackError } = await supabase
       .from('invoices')
       .update({
         status: invoice.status,
@@ -557,12 +563,26 @@ export async function linkInvoiceToVoucher(
       .eq('id', params.invoiceId)
       .eq('company_id', companyId)
 
+    if (rollbackError) {
+      // Rollback failed — the invoice is stuck advanced with no payment row.
+      // Surface loudly so ops can reconcile manually; the insert error code
+      // below still goes back to the caller for the original failure cause.
+      log.error('voucher link rollback failed — invoice left in advanced state without payment row', {
+        companyId,
+        userId,
+        invoiceId: params.invoiceId,
+        journalEntryId: params.journalEntryId,
+        insertError: insertError.message,
+        rollbackError: rollbackError.message,
+      })
+    }
+
     if (insertError.code === '23505') {
       return { ok: false, code: 'LINK_VOUCHER_ALREADY_LINKED' }
     }
     return {
       ok: false,
-      code: 'LINK_VOUCHER_VOUCHER_NOT_FOUND',
+      code: 'LINK_VOUCHER_DB_ERROR',
       details: { reason: insertError.message },
     }
   }

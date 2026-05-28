@@ -4358,7 +4358,9 @@ export const tools: McpTool[] = [
 
       const { data: invoice, error } = await supabase
         .from('invoices')
-        .select('*, customer:customers(*)')
+        .select(
+          'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+        )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
@@ -4416,7 +4418,9 @@ export const tools: McpTool[] = [
 
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
-        .select('*, customer:customers(*)')
+        .select(
+          'id, invoice_number, status, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+        )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
@@ -4459,7 +4463,7 @@ export const tools: McpTool[] = [
           payment_amount: validation.paymentAmount,
           will_be_fully_paid: validation.isFullyPaid,
           remaining_after: validation.remainingAfter,
-          customer_name: (invoice.customer as Record<string, unknown>)?.name as string ?? null,
+          customer_name: (invoice.customer as unknown as { name?: string } | null)?.name ?? null,
         },
         actor,
         {

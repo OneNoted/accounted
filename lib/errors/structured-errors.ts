@@ -1718,6 +1718,11 @@ const LINK_INVOICE_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan har redan slutbetalats. Inget mer behöver länkas.',
     message_en: 'Invoice is already fully paid.',
   },
+  LINK_VOUCHER_DB_ERROR: {
+    httpStatus: 500,
+    message_sv: 'Databasfel under länkning. Försök igen.',
+    message_en: 'Database error while linking the voucher. Please retry.',
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

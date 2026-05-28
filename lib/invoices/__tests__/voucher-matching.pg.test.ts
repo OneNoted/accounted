@@ -210,14 +210,19 @@ describe('link_invoice_voucher pg-real guards', () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     await insertCompanyMember({ companyId, userId })
-    const fiscalPeriodId = await insertFiscalPeriod({
-      userId,
-      companyId,
-      isClosed: true,
-    })
+    // Period must be open while we seed the voucher — enforce_period_lock
+    // fires on INSERT, so close it only after the JE rows exist.
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
     const customerId = await seedCustomer({ userId, companyId })
     const invoiceId = await seedInvoice({ userId, companyId, customerId })
     const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId })
+
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+         SET is_closed = true, closed_at = now()
+       WHERE id = $1`,
+      [fiscalPeriodId],
+    )
 
     // No journal_entries write happens in the link flow — only
     // invoice_payments + invoices, neither of which is gated by

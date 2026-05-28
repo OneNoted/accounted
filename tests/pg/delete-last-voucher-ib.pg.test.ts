@@ -42,7 +42,7 @@ async function commitPostedEntryAsIB(params: {
   // delete RPC's FOR UPDATE lookup succeeds.
   await getPool().query(
     `UPDATE public.journal_entries
-       SET status = 'posted', posted_at = now()
+       SET status = 'posted'
      WHERE id = $1`,
     [entryId],
   )

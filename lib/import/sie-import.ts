@@ -766,14 +766,12 @@ export async function resyncNextPeriodOpeningBalance(
     }
   }
 
-  // Storno the old IB inside the next period.
-  const storno = await reverseEntry(
-    supabase,
-    companyId,
-    userId,
-    nextPeriod.opening_balance_entry_id,
-    nextPeriod.period_start as string,
-  )
+  // Ordering note: create the new IB FIRST, then storno the old one. If we
+  // stornoed first and the createJournalEntry call failed, the next period
+  // would be left with a reversed IB and nothing to replace it — and
+  // executeSIEImport swallows our error as a non-fatal warning. By creating
+  // first we guarantee the worst case is "new IB exists but not yet linked",
+  // which getOpeningBalances() can still reason about.
 
   // Build the new IB entry on the next period.
   const newEntry = await createJournalEntry(supabase, companyId, userId, {
@@ -796,6 +794,17 @@ export async function resyncNextPeriodOpeningBalance(
   if (relinkError) {
     throw new Error(`Failed to relink opening balance on next period: ${relinkError.message}`)
   }
+
+  // Now that the period points at the new IB, storno the old one. If this
+  // throws, the period is already on the correct entry — the orphaned old
+  // entry shows up as a stray verifikat but the FK stays consistent.
+  const storno = await reverseEntry(
+    supabase,
+    companyId,
+    userId,
+    nextPeriod.opening_balance_entry_id,
+    nextPeriod.period_start as string,
+  )
 
   return {
     resynced: true,

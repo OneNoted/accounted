@@ -1438,11 +1438,16 @@ export const UpdateShiftPremiumRuleSchema = z
  * any non-null override is being applied — the DB CHECK constraint
  * enforces this at the storage layer too.
  */
+// Upper bound on per-employee override values. 10 MSEK is well above any
+// plausible single-period gross/tax/avgifter figure for a salary run and
+// catches typos (e.g. an extra zero) before they reach the ledger or AGI.
+const SALARY_OVERRIDE_MAX = 10_000_000
+
 export const SalaryEmployeeOverrideSchema = z
   .object({
-    tax_withheld_override: z.number().nonnegative().nullable().optional(),
-    avgifter_amount_override: z.number().nonnegative().nullable().optional(),
-    avgifter_basis_override: z.number().nonnegative().nullable().optional(),
+    tax_withheld_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
+    avgifter_amount_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
+    avgifter_basis_override: z.number().nonnegative().max(SALARY_OVERRIDE_MAX).nullable().optional(),
     reason: z.string().min(1).max(500).nullable().optional(),
   })
   .refine(
