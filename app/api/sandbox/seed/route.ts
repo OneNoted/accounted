@@ -638,13 +638,11 @@ export async function POST(request: Request) {
     const sevenDaysFromNow = new Date(today)
     sevenDaysFromNow.setDate(today.getDate() + 7)
 
-    const { data: arrival1 } = await supabase.rpc('get_next_arrival_number', {
-      p_company_id: companyId,
-    })
-    const { data: arrival2 } = await supabase.rpc('get_next_arrival_number', {
-      p_company_id: companyId,
-    })
-
+    // Hardcode 1 and 2 — get_next_arrival_number is MAX+1 against the same
+    // table we're about to insert into, so calling it twice before the first
+    // insert lands gives the same value for both rows and violates the
+    // (company_id, arrival_number) unique index. The company is brand new
+    // here, so 1 and 2 are guaranteed to be free.
     const { data: supInvoices, error: supInvError } = await supabase
       .from('supplier_invoices')
       .insert([
@@ -652,7 +650,7 @@ export async function POST(request: Request) {
           user_id: userId,
           company_id: companyId,
           supplier_id: supplierMap['Telia Sverige AB'],
-          arrival_number: arrival1 ?? 1,
+          arrival_number: 1,
           supplier_invoice_number: '4711-2026-03',
           invoice_date: toDateStr(thirtyDaysAgo),
           due_date: toDateStr(today),
@@ -670,7 +668,7 @@ export async function POST(request: Request) {
           user_id: userId,
           company_id: companyId,
           supplier_id: supplierMap['Espresso House AB'],
-          arrival_number: arrival2 ?? 2,
+          arrival_number: 2,
           supplier_invoice_number: '88245',
           invoice_date: toDateStr(fiveDaysAgo),
           due_date: toDateStr(sevenDaysFromNow),
