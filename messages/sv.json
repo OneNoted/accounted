@@ -1273,7 +1273,13 @@
     "debit_label": "Debet",
     "credit_label": "Kredit",
     "add_line": "Lägg till rad",
-    "create_button": "Skapa mall"
+    "create_button": "Skapa mall",
+    "vat_rate_label": "Momssats",
+    "vat_rate_25": "25 %",
+    "vat_rate_12": "12 %",
+    "vat_rate_6": "6 %",
+    "unconvertible_hint": "Den här mallen kan inte väljas direkt vid bokföring av en transaktion — den används från ett verifikat. För att visas i transaktionslistan krävs exakt en kostnads-/intäktsrad och en betalningsrad på motsatt sida.",
+    "unconvertible_badge": "Endast i verifikat"
   },
   "settings_counterparty_templates": {
     "title": "Bokföringsmallar",
