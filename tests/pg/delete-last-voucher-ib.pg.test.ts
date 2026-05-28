@@ -86,41 +86,40 @@ describe('delete_last_voucher with IB link', () => {
     expect(pre.rows[0]!.ob_id).toBe(ibEntryId)
     expect(pre.rows[0]!.ob_set).toBe(true)
 
-    const result = await withUserContext(userId, async (client) => {
+    // withUserContext rolls back at the end, so all assertions about the
+    // RPC's effects must be observed inside the same transaction — a fresh
+    // getPool() connection would only see pre-RPC state.
+    await withUserContext(userId, async (client) => {
       const r = await client.query<{ delete_last_voucher: { deleted: boolean; was_period_ib: boolean } }>(
         `SELECT delete_last_voucher($1, $2)`,
         [companyId, ibEntryId],
       )
-      return r.rows[0]!.delete_last_voucher
+      const result = r.rows[0]!.delete_last_voucher
+      expect(result.deleted).toBe(true)
+      expect(result.was_period_ib).toBe(true)
+
+      const after = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM public.journal_entries WHERE id = $1`,
+        [ibEntryId],
+      )
+      expect(after.rows[0]!.count).toBe('0')
+
+      const post = await client.query<{ ob_id: string | null; ob_set: boolean }>(
+        `SELECT opening_balance_entry_id AS ob_id, opening_balances_set AS ob_set
+           FROM public.fiscal_periods WHERE id = $1`,
+        [fiscalPeriodId],
+      )
+      expect(post.rows[0]!.ob_id).toBeNull()
+      expect(post.rows[0]!.ob_set).toBe(false)
+
+      const audit = await client.query<{ description: string }>(
+        `SELECT description FROM public.audit_log
+           WHERE table_name = 'journal_entries' AND record_id = $1 AND action = 'DELETE'
+           ORDER BY created_at DESC LIMIT 1`,
+        [ibEntryId],
+      )
+      expect(audit.rows[0]!.description).toMatch(/was period IB/)
     })
-
-    expect(result.deleted).toBe(true)
-    expect(result.was_period_ib).toBe(true)
-
-    // Entry gone
-    const after = await getPool().query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM public.journal_entries WHERE id = $1`,
-      [ibEntryId],
-    )
-    expect(after.rows[0]!.count).toBe('0')
-
-    // Period FK cleared, opening_balances_set flipped
-    const post = await getPool().query<{ ob_id: string | null; ob_set: boolean }>(
-      `SELECT opening_balance_entry_id AS ob_id, opening_balances_set AS ob_set
-         FROM public.fiscal_periods WHERE id = $1`,
-      [fiscalPeriodId],
-    )
-    expect(post.rows[0]!.ob_id).toBeNull()
-    expect(post.rows[0]!.ob_set).toBe(false)
-
-    // Audit log entry written with the IB marker
-    const audit = await getPool().query<{ description: string }>(
-      `SELECT description FROM public.audit_log
-         WHERE table_name = 'journal_entries' AND record_id = $1 AND action = 'DELETE'
-         ORDER BY created_at DESC LIMIT 1`,
-      [ibEntryId],
-    )
-    expect(audit.rows[0]!.description).toMatch(/was period IB/)
   })
 
   it('also clears sie_imports.opening_balance_entry_id when present', async () => {
@@ -135,20 +134,20 @@ describe('delete_last_voucher with IB link', () => {
     const importId = randomUUID()
     await getPool().query(
       `INSERT INTO public.sie_imports
-         (id, user_id, company_id, file_name, file_hash, fiscal_period_id,
+         (id, user_id, company_id, filename, file_hash, sie_type, fiscal_period_id,
           opening_balance_entry_id, status, transactions_count)
-       VALUES ($1, $2, $3, 'test.se', $4, $5, $6, 'completed', 0)`,
+       VALUES ($1, $2, $3, 'test.se', $4, 4, $5, $6, 'completed', 0)`,
       [importId, userId, companyId, randomUUID().replace(/-/g, ''), fiscalPeriodId, ibEntryId],
     )
 
-    await withUserContext(userId, (client) =>
-      client.query(`SELECT delete_last_voucher($1, $2)`, [companyId, ibEntryId]),
-    )
-
-    const imp = await getPool().query<{ ob_id: string | null }>(
-      `SELECT opening_balance_entry_id AS ob_id FROM public.sie_imports WHERE id = $1`,
-      [importId],
-    )
-    expect(imp.rows[0]!.ob_id).toBeNull()
+    // Same caveat as the previous test — assert inside the tx, not after.
+    await withUserContext(userId, async (client) => {
+      await client.query(`SELECT delete_last_voucher($1, $2)`, [companyId, ibEntryId])
+      const imp = await client.query<{ ob_id: string | null }>(
+        `SELECT opening_balance_entry_id AS ob_id FROM public.sie_imports WHERE id = $1`,
+        [importId],
+      )
+      expect(imp.rows[0]!.ob_id).toBeNull()
+    })
   })
 })
