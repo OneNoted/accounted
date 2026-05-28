@@ -780,6 +780,9 @@ export async function POST(request: Request) {
     // These are the kind of operation the AI agent would stage; pre-seeded
     // here so the user can see the approval queue UI (preview, period
     // status, risk level) without having to invoke the disabled AI.
+    // actor_type='agent_chat' + risk_level on the row itself is required by
+    // pending_operations_chat_insert (the only RLS policy that lets a
+    // user-scoped client INSERT into this table).
     const { error: pendOpsError } = await supabase
       .from('pending_operations')
       .insert([
@@ -788,6 +791,8 @@ export async function POST(request: Request) {
           company_id: companyId,
           operation_type: 'create_supplier_invoice_from_inbox',
           status: 'pending',
+          actor_type: 'agent_chat',
+          risk_level: 'low',
           title: 'Registrera leverantörsfaktura — Espresso House (representation)',
           params: {
             supplier_id: supplierMap['Espresso House AB'],
@@ -799,7 +804,6 @@ export async function POST(request: Request) {
             account_number: '5810',
           },
           preview_data: {
-            risk_level: 'low',
             preview_lines: [
               { account: '5810', description: 'Representation (avdragsgill, 6% moms)', debit: 60, credit: 0 },
               { account: '5811', description: 'Representation (ej avdragsgill)', debit: 180, credit: 0 },
@@ -813,6 +817,8 @@ export async function POST(request: Request) {
           company_id: companyId,
           operation_type: 'categorize_transaction',
           status: 'pending',
+          actor_type: 'agent_chat',
+          risk_level: 'low',
           title: 'Bokför insättning — bankgiro',
           params: {
             account_number: '3001',
@@ -820,7 +826,6 @@ export async function POST(request: Request) {
             vat_treatment: 'standard_25',
           },
           preview_data: {
-            risk_level: 'low',
             preview_lines: [
               { account: '1930', description: 'Företagskonto', debit: 1200, credit: 0 },
               { account: '2611', description: 'Utgående moms 25%', debit: 0, credit: 240 },
