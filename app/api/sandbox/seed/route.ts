@@ -781,10 +781,14 @@ export async function POST(request: Request) {
           status: 'pending',
           actor_type: 'agent_chat',
           risk_level: 'low',
-          title: 'Registrera leverantörsfaktura — Demokafé (representation)',
+          // Uses a distinct supplier_invoice_number so approving this
+          // pending operation creates a NEW supplier_invoices row instead
+          // of colliding with the Demokafé '88245' already booked above
+          // (BFL 5 kap — each affärshändelse must be recorded exactly once).
+          title: 'Registrera leverantörsfaktura — Demokafé (representation, nytt underlag)',
           params: {
             supplier_id: supplierMap['Demokafé AB'],
-            supplier_invoice_number: '88245',
+            supplier_invoice_number: 'INKOMMANDE-2026-001',
             invoice_date: toDateStr(fiveDaysAgo),
             due_date: toDateStr(sevenDaysFromNow),
             total: 268.80,
@@ -793,12 +797,12 @@ export async function POST(request: Request) {
           },
           preview_data: {
             // Representation @ 12% VAT (café meal), 240 SEK excl. VAT for
-            // a single attendee. The full amount is under the 300 SEK / person
-            // avdragsgill cap (ML 8 kap), so input VAT is fully deductible
-            // and the cost lands in 5810 — no split needed. Matches the
-            // supplier_invoice_items row 1:1.
+            // a single attendee. The avdragsrätt cap is 25% × 300 SEK ×
+            // antal_personer = 75 SEK / person (ML 8 kap. 9 §); since the
+            // VAT here is 28.80 SEK the full amount is deductible and the
+            // cost lands in 5810 — no split needed.
             preview_lines: [
-              { account: '5810', description: 'Representation (12% moms, ≤ 300 SEK/pers)', debit: 240, credit: 0 },
+              { account: '5810', description: 'Representation (12% moms, ≤ 75 SEK moms/pers)', debit: 240, credit: 0 },
               { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
               { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: 268.80 },
             ],
