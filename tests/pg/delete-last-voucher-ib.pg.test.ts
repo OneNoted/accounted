@@ -48,11 +48,11 @@ async function commitPostedEntryAsIB(params: {
   )
   await getPool().query(
     `INSERT INTO public.voucher_sequences
-       (company_id, fiscal_period_id, voucher_series, last_number)
-     VALUES ($1, $2, $3, 1)
+       (company_id, user_id, fiscal_period_id, voucher_series, last_number)
+     VALUES ($1, $2, $3, $4, 1)
      ON CONFLICT (company_id, fiscal_period_id, voucher_series) DO UPDATE
        SET last_number = EXCLUDED.last_number`,
-    [params.companyId, params.fiscalPeriodId, series],
+    [params.companyId, params.userId, params.fiscalPeriodId, series],
   )
   return entryId
 }
