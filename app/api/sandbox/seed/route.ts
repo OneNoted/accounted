@@ -678,6 +678,11 @@ export async function POST(request: Request) {
           subtotal: 240,
           vat_amount: 28.80,
           total: 268.80,
+          // Must be set explicitly: PostgREST normalizes columns across
+          // rows in a bulk insert, so omitting paid_amount here while the
+          // first row sets it sends null instead of falling through to the
+          // schema default (0), violating the NOT NULL constraint.
+          paid_amount: 0,
         },
       ])
       .select('id, supplier_invoice_number')
