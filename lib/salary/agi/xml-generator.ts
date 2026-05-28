@@ -48,6 +48,13 @@ import { decryptPersonnummer } from '../personnummer'
 const INSTANS_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1'
 const KOMPONENT_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/komponent/schema/1.1'
 
+// Programnamn — software identifier embedded in every AGI submission.
+// Free-text per Skatteverket's schema (no vendor registry), but kept stable
+// across visual rebrands so the value the tax authority sees never churns.
+// Bump only if Skatteverket ever introduces a formal vendor registration
+// and 'accounted' is the registered name there.
+const AGI_PROGRAMNAMN = 'gnubok'
+
 /**
  * One absence event for AGI Frånvarouppgift emission. Loaded from
  * salary_absence_days (per-day records). Sick days are NOT included — they
@@ -367,12 +374,7 @@ export function generateAGIXml(
 
   // ── Avsandare (komponent namespace) ──────────────────────────
   lines.push('  <gem:Avsandare>')
-  // Programnamn is the software identifier Skatteverket uses to track the
-  // submitting tool — pinned to 'gnubok' regardless of the (potentially
-  // rebranded) appName so the visual rebrand doesn't churn the value the
-  // tax authority sees. Same rule as the /api/v1 health endpoint's
-  // `service: 'gnubok'` literal.
-  lines.push(`    <gem:Programnamn>gnubok</gem:Programnamn>`)
+  lines.push(`    <gem:Programnamn>${AGI_PROGRAMNAMN}</gem:Programnamn>`)
   lines.push(`    <gem:Organisationsnummer>${orgIdentitet}</gem:Organisationsnummer>`)
   lines.push('    <gem:TekniskKontaktperson>')
   lines.push(`      <gem:Namn>${escapeXml(company.contactName)}</gem:Namn>`)

@@ -792,16 +792,14 @@ export async function POST(request: Request) {
             account_number: '5810',
           },
           preview_data: {
-            // Representation @ 12% VAT (café meal). Input VAT is only
-            // deductible on the avdragsgill portion (≤ 300 SEK excl. VAT
-            // per person per occasion); the rest is expensed to 5811.
-            // Numbers below are illustrative; the real categorizer
-            // pro-rates per-person.
+            // Representation @ 12% VAT (café meal), 240 SEK excl. VAT for
+            // a single attendee. The full amount is under the 300 SEK / person
+            // avdragsgill cap (ML 8 kap), so input VAT is fully deductible
+            // and the cost lands in 5810 — no split needed. Matches the
+            // supplier_invoice_items row 1:1.
             preview_lines: [
-              { account: '5810', description: 'Representation (avdragsgill, 12% moms)', debit: 60, credit: 0 },
-              { account: '5811', description: 'Representation (ej avdragsgill)', debit: 180, credit: 0 },
-              { account: '2641', description: 'Ingående moms (avdragsgill del)', debit: 7.20, credit: 0 },
-              { account: '5811', description: 'Moms på ej avdragsgill del', debit: 21.60, credit: 0 },
+              { account: '5810', description: 'Representation (12% moms, ≤ 300 SEK/pers)', debit: 240, credit: 0 },
+              { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
               { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: 268.80 },
             ],
           },
