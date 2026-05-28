@@ -1,31 +1,23 @@
-'use client'
-
-import Script from 'next/script'
-
 /**
- * Loads the Recapt SDK for authenticated dashboard users only.
+ * Loads the Recapt SDK globally.
  *
- * Privacy guard rails:
- * - Mounted inside the dashboard layout, so the script never loads on
- *   public pages (login, register, privacy policy, marketing). This
- *   prevents pre-consent IP/fingerprint collection on those routes.
- * - The public key is sourced from NEXT_PUBLIC_RECAPT_PUBLIC_KEY so
- *   hosted and self-hosted deployments can each supply their own key
- *   (or disable Recapt entirely by leaving it unset).
- * - data-persist / data-enable-user-comments are intentionally omitted
- *   from the default tag. Persistent cross-session tracking and
- *   unstructured free-text capture are opt-in product decisions, not
- *   defaults (GDPR Art. 25 — privacy by default).
+ * Renders a plain <script> tag (not next/script) so it lands in <head> and
+ * runs as early as possible — that's what the SDK needs to capture full
+ * session replays. The public key is sourced from NEXT_PUBLIC_RECAPT_PUBLIC_KEY
+ * so hosted and self-hosted deployments can each supply their own key (or
+ * disable Recapt entirely by leaving it unset).
  */
 export function RecaptLoader() {
   const publicKey = process.env.NEXT_PUBLIC_RECAPT_PUBLIC_KEY
   if (!publicKey) return null
 
   return (
-    <Script
+    <script
       src="https://cdn.recapt.app/browser/glimt.js"
-      strategy="afterInteractive"
+      async
       data-public-key={publicKey}
+      data-persist=""
+      data-enable-user-comments=""
     />
   )
 }
