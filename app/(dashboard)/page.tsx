@@ -129,7 +129,7 @@ export default async function DashboardPage() {
   // sees a verified profile and treats the sandbox as fully set up.
   let effectiveAgentVerified = agentProfile?.verified_at ?? null
   if (settings?.is_sandbox === true && !effectiveAgentVerified) {
-    await ensureSandboxAgentProfile(supabase, user.id, companyId)
+    await ensureSandboxAgentProfile(supabase, companyId)
     const { data: refreshed } = await supabase
       .from('agent_profiles')
       .select('verified_at')

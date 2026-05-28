@@ -15,12 +15,14 @@ export async function GET(request: Request) {
   }
 
   const companyId = await getActiveCompanyId(supabase, user.id)
-  if (companyId) {
-    // Riksbanken's open API is rate-limited per source IP — block the
-    // demo from sharing that budget with paying users.
-    const blocked = await guardSandbox(supabase, companyId)
-    if (blocked) return blocked
+  // Refuse the request when no active company resolves rather than letting
+  // a session without one slip past the sandbox guard. Riksbanken's open
+  // API is IP rate-limited; we don't want demo traffic eating that budget.
+  if (!companyId) {
+    return NextResponse.json({ error: 'No active company' }, { status: 400 })
   }
+  const blocked = await guardSandbox(supabase, companyId)
+  if (blocked) return blocked
 
   const { searchParams } = new URL(request.url)
   const currency = searchParams.get('currency') as Currency | null

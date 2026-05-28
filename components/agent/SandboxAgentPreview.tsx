@@ -28,7 +28,14 @@ export default function SandboxAgentPreview({
 
   async function handleCreateAccount() {
     const supabase = createClient()
-    await supabase.auth.signOut()
+    // Sign-out is best-effort — a transient Supabase failure shouldn't
+    // strand the user on a dead button; navigate to /register either way
+    // and let the registration flow re-init auth state.
+    try {
+      await supabase.auth.signOut()
+    } catch {
+      // Intentionally swallowed — see comment above.
+    }
     router.push('/register')
   }
 

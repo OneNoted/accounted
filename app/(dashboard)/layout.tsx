@@ -218,7 +218,7 @@ export default async function DashboardLayout({
   // even if the insert fails.
   let resolvedAgentIdentity = agentProfileIdentity
   if (isSandbox && !agentProfileIdentity?.verified_at) {
-    await ensureSandboxAgentProfile(supabase, user.id, companyId)
+    await ensureSandboxAgentProfile(supabase, companyId)
     const { data: refreshed } = await supabase
       .from('agent_profiles')
       .select('display_name, avatar_id, verified_at')

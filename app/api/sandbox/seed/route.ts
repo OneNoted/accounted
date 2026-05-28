@@ -1,10 +1,12 @@
 import crypto from 'crypto'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger } from '@/lib/logger'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
+import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -93,7 +95,7 @@ export async function POST(request: Request) {
 
   if (existing) {
     try {
-      await topUpSandboxAdditions(supabase, user.id, companyId)
+      await topUpSandboxAdditions(supabase, companyId)
       return NextResponse.json({ seeded: false, topped_up: true })
     } catch (err) {
       log.error('failed to top up sandbox additions', { error: err, userId: user.id, companyId })
@@ -596,34 +598,37 @@ export async function POST(request: Request) {
     // bank transactions; without them the /suppliers and /supplier-invoices
     // pages render the empty state and the demo loses a big chunk of the
     // accounts-payable story.
+    // Supplier names use the "Demo" prefix and the documentation-reserved
+    // 5559... org-number range so the seeded rows cannot be confused with
+    // production data should they ever leak into a real environment.
     const { data: suppliers, error: supError } = await supabase
       .from('suppliers')
       .insert([
         {
           user_id: userId,
           company_id: companyId,
-          name: 'Telia Sverige AB',
+          name: 'Demo Telekom AB',
           supplier_type: 'swedish_business',
-          org_number: '5560008080',
-          vat_number: 'SE556000808001',
-          email: 'fakturor@telia.se',
-          bankgiro: '467-3866',
-          address_line1: 'Stjärntorget 1',
-          postal_code: '169 79',
-          city: 'Solna',
+          org_number: '5559000001',
+          vat_number: 'SE555900000101',
+          email: 'demo+telekom@example.com',
+          bankgiro: '5559-0001',
+          address_line1: 'Demovägen 10',
+          postal_code: '111 22',
+          city: 'Stockholm',
           country: 'SE',
           default_payment_terms: 30,
         },
         {
           user_id: userId,
           company_id: companyId,
-          name: 'Espresso House AB',
+          name: 'Demokafé AB',
           supplier_type: 'swedish_business',
-          org_number: '5566884747',
-          vat_number: 'SE556688474701',
-          bankgiro: '5050-1929',
-          address_line1: 'Sveavägen 9',
-          postal_code: '111 57',
+          org_number: '5559000002',
+          vat_number: 'SE555900000201',
+          bankgiro: '5559-0002',
+          address_line1: 'Demovägen 11',
+          postal_code: '111 22',
           city: 'Stockholm',
           country: 'SE',
           default_payment_terms: 15,
@@ -649,7 +654,7 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           company_id: companyId,
-          supplier_id: supplierMap['Telia Sverige AB'],
+          supplier_id: supplierMap['Demo Telekom AB'],
           arrival_number: 1,
           supplier_invoice_number: '4711-2026-03',
           invoice_date: toDateStr(thirtyDaysAgo),
@@ -667,7 +672,7 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           company_id: companyId,
-          supplier_id: supplierMap['Espresso House AB'],
+          supplier_id: supplierMap['Demokafé AB'],
           arrival_number: 2,
           supplier_invoice_number: '88245',
           invoice_date: toDateStr(fiveDaysAgo),
@@ -711,7 +716,7 @@ export async function POST(request: Request) {
         },
         {
           supplier_invoice_id: supInvoiceMap['88245'],
-          description: 'Kundmöte Espresso House (representation)',
+          description: 'Kundmöte Demokafé (representation)',
           quantity: 1,
           unit_price: 240,
           line_total: 240,
@@ -725,7 +730,10 @@ export async function POST(request: Request) {
 
     // 14. Add one fully-depreciable asset (laptop) so /assets shows
     // something other than a Package empty state. Acquired 18 months ago,
-    // 60-month linear depreciation — half-life under K2 schablon.
+    // 60-month linear depreciation. Cost set above the 2026
+    // förbrukningsinventarier threshold (half prisbasbelopp ≈ 29 600 SEK)
+    // so the demo unambiguously illustrates capitalization rather than
+    // direct expensing.
     const eighteenMonthsAgo = new Date(today)
     eighteenMonthsAgo.setMonth(today.getMonth() - 18)
     const { error: assetError } = await supabase
@@ -733,10 +741,10 @@ export async function POST(request: Request) {
       .insert({
         user_id: userId,
         company_id: companyId,
-        name: 'MacBook Pro 14"',
+        name: 'Demo-laptop',
         category: 'computer',
         acquisition_date: toDateStr(eighteenMonthsAgo),
-        acquisition_cost: 24000,
+        acquisition_cost: 35000,
         salvage_value: 0,
         useful_life_months: 60,
         depreciation_method: 'linear',
@@ -751,30 +759,10 @@ export async function POST(request: Request) {
     // 15. Pre-built, verified agent_profile so the assistant chrome (FAB,
     // /chat surface, agent identity in nav) renders without firing a
     // composer run. The chat itself is server-gated by guardSandbox().
-    // We just ship the *appearance* of a finished assistant so the user
-    // can see what they'd get post-signup.
-    const { error: agentError } = await supabase
-      .from('agent_profiles')
-      .insert({
-        company_id: companyId,
-        display_name: 'Anna',
-        avatar_id: 'notionists-3',
-        horizontal_atoms: ['horizontal/swedish-vat', 'horizontal/swedish-accounting-compliance'],
-        vertical_atoms: ['vertical/consulting'],
-        modifier_atoms: [],
-        profile_summary:
-          'Du är Anna, en revisorsassistent för en svensk enskild firma som tillhandahåller IT-konsulttjänster i Stockholm. Företaget är momsregistrerat (kvartalsvis), använder kontantmetoden och fakturerar både svenska och utländska kunder.',
-        source_signals: { is_sandbox: true },
-        field_overrides: {},
-        composer_model: 'sandbox-demo',
-        composer_version: 1,
-        composed_at: new Date().toISOString(),
-        verified_at: new Date().toISOString(),
-        verified_by_user_id: userId,
-        intake_completed_at: new Date().toISOString(),
-      })
-
-    if (agentError) throw agentError
+    // Delegated to ensureSandboxAgentProfile so the persona lives in one
+    // place (this seed, the dashboard/chat layout backfill, and the seed
+    // top-up path all use the same helper).
+    await ensureSandboxAgentProfile(supabase, companyId)
 
     // 16. Pre-staged pending_operations so /pending isn't empty.
     // These are the kind of operation the AI agent would stage; pre-seeded
@@ -793,9 +781,9 @@ export async function POST(request: Request) {
           status: 'pending',
           actor_type: 'agent_chat',
           risk_level: 'low',
-          title: 'Registrera leverantörsfaktura — Espresso House (representation)',
+          title: 'Registrera leverantörsfaktura — Demokafé (representation)',
           params: {
-            supplier_id: supplierMap['Espresso House AB'],
+            supplier_id: supplierMap['Demokafé AB'],
             supplier_invoice_number: '88245',
             invoice_date: toDateStr(fiveDaysAgo),
             due_date: toDateStr(sevenDaysFromNow),
@@ -804,10 +792,16 @@ export async function POST(request: Request) {
             account_number: '5810',
           },
           preview_data: {
+            // Representation @ 12% VAT (café meal). Input VAT is only
+            // deductible on the avdragsgill portion (≤ 300 SEK excl. VAT
+            // per person per occasion); the rest is expensed to 5811.
+            // Numbers below are illustrative; the real categorizer
+            // pro-rates per-person.
             preview_lines: [
-              { account: '5810', description: 'Representation (avdragsgill, 6% moms)', debit: 60, credit: 0 },
+              { account: '5810', description: 'Representation (avdragsgill, 12% moms)', debit: 60, credit: 0 },
               { account: '5811', description: 'Representation (ej avdragsgill)', debit: 180, credit: 0 },
-              { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
+              { account: '2641', description: 'Ingående moms (avdragsgill del)', debit: 7.20, credit: 0 },
+              { account: '5811', description: 'Moms på ej avdragsgill del', debit: 21.60, credit: 0 },
               { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: 268.80 },
             ],
           },
@@ -848,49 +842,15 @@ export async function POST(request: Request) {
 }
 
 /**
- * Idempotent top-up for sandboxes that pre-date the agent_profile/suppliers/
- * asset additions to the seed. Re-running the seed on those old sandboxes
- * short-circuits at the company_settings idempotency check above, so they
- * never get the new bits without this. Each section only inserts when its
- * own table is empty for the company — safe to run on every sandbox boot.
+ * Idempotent top-up for sandboxes that pre-date the agent_profile addition
+ * to the seed. Re-running the seed on those older sandboxes short-circuits
+ * at the company_settings idempotency check above, so they never get the
+ * agent_profile without this hook. Delegates to ensureSandboxAgentProfile
+ * so the profile data stays in exactly one place.
  */
 async function topUpSandboxAdditions(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  supabase: any,
-  userId: string,
+  supabase: SupabaseClient,
   companyId: string,
 ): Promise<void> {
-  // Always ensure a verified agent_profile exists. This is the most
-  // important top-up — without it the dashboard hero shows "Bygg din
-  // bokföringsassistent" and the NewUserChecklist links into the
-  // (server-gated) build flow.
-  const { data: existingAgent } = await supabase
-    .from('agent_profiles')
-    .select('id')
-    .eq('company_id', companyId)
-    .maybeSingle()
-
-  if (!existingAgent) {
-    await supabase.from('agent_profiles').insert({
-      company_id: companyId,
-      display_name: 'Anna',
-      avatar_id: 'notionists-3',
-      horizontal_atoms: [
-        'horizontal/swedish-vat',
-        'horizontal/swedish-accounting-compliance',
-      ],
-      vertical_atoms: ['vertical/consulting'],
-      modifier_atoms: [],
-      profile_summary:
-        'Du är Anna, en revisorsassistent för en svensk enskild firma som tillhandahåller IT-konsulttjänster i Stockholm. Företaget är momsregistrerat (kvartalsvis), använder kontantmetoden och fakturerar både svenska och utländska kunder.',
-      source_signals: { is_sandbox: true },
-      field_overrides: {},
-      composer_model: 'sandbox-demo',
-      composer_version: 1,
-      composed_at: new Date().toISOString(),
-      verified_at: new Date().toISOString(),
-      verified_by_user_id: userId,
-      intake_completed_at: new Date().toISOString(),
-    })
-  }
+  await ensureSandboxAgentProfile(supabase, companyId)
 }

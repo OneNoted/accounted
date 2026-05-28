@@ -1,5 +1,4 @@
 import { decryptPersonnummer } from '../personnummer'
-import { getBranding } from '@/lib/branding/service'
 
 /**
  * AGI XML generator — Arbetsgivardeklaration på individnivå.
@@ -368,7 +367,12 @@ export function generateAGIXml(
 
   // ── Avsandare (komponent namespace) ──────────────────────────
   lines.push('  <gem:Avsandare>')
-  lines.push(`    <gem:Programnamn>${escapeXml(getBranding().appName.toLowerCase())}</gem:Programnamn>`)
+  // Programnamn is the software identifier Skatteverket uses to track the
+  // submitting tool — pinned to 'gnubok' regardless of the (potentially
+  // rebranded) appName so the visual rebrand doesn't churn the value the
+  // tax authority sees. Same rule as the /api/v1 health endpoint's
+  // `service: 'gnubok'` literal.
+  lines.push(`    <gem:Programnamn>gnubok</gem:Programnamn>`)
   lines.push(`    <gem:Organisationsnummer>${orgIdentitet}</gem:Organisationsnummer>`)
   lines.push('    <gem:TekniskKontaktperson>')
   lines.push(`      <gem:Namn>${escapeXml(company.contactName)}</gem:Namn>`)

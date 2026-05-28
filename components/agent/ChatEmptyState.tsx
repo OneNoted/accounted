@@ -42,7 +42,13 @@ export default function ChatEmptyState() {
   if (isSandbox) {
     const handleCreateAccount = async () => {
       const supabase = createClient()
-      await supabase.auth.signOut()
+      // Sign-out is best-effort — navigate even if Supabase is unreachable
+      // so the button never looks dead.
+      try {
+        await supabase.auth.signOut()
+      } catch {
+        // Intentionally swallowed.
+      }
       router.push('/register')
     }
     return (

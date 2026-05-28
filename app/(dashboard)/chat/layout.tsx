@@ -37,7 +37,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
       .eq('company_id', companyId)
       .maybeSingle()
     if (settings?.is_sandbox) {
-      await ensureSandboxAgentProfile(supabase, user.id, companyId)
+      await ensureSandboxAgentProfile(supabase, companyId)
       const refresh = await supabase
         .from('agent_profiles')
         .select('verified_at')
