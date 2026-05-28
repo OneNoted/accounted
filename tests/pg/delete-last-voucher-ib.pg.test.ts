@@ -112,13 +112,17 @@ describe('delete_last_voucher with IB link', () => {
       expect(post.rows[0]!.ob_id).toBeNull()
       expect(post.rows[0]!.ob_set).toBe(false)
 
-      const audit = await client.query<{ description: string }>(
-        `SELECT description FROM public.audit_log
+      // Two audit rows land on the DELETE: the generic one from the
+      // write_audit_log() trigger and the RPC's explicit "was period IB"
+      // entry. They share statement_timestamp(), so ordering by created_at
+      // is non-deterministic — assert against the specific marker directly.
+      const audit = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM public.audit_log
            WHERE table_name = 'journal_entries' AND record_id = $1 AND action = 'DELETE'
-           ORDER BY created_at DESC LIMIT 1`,
+             AND description LIKE '%was period IB%'`,
         [ibEntryId],
       )
-      expect(audit.rows[0]!.description).toMatch(/was period IB/)
+      expect(Number(audit.rows[0]!.count)).toBeGreaterThanOrEqual(1)
     })
   })
 
