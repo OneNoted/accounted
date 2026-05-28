@@ -80,7 +80,11 @@ export async function POST(request: Request) {
     companyId = newCompanyId as string
   }
 
-  // Idempotency: if already seeded, return early
+  // Idempotency: if the core seed already ran (company_settings exists), skip
+  // the bulk insert path. We still TOP UP the newer surfaces (agent_profile,
+  // suppliers, asset, pending operations) afterwards so an old sandbox session
+  // — created before those were added to the seed — picks them up on the next
+  // call instead of being stuck without a verified assistant.
   const { data: existing } = await supabase
     .from('company_settings')
     .select('id')
@@ -88,7 +92,13 @@ export async function POST(request: Request) {
     .maybeSingle()
 
   if (existing) {
-    return NextResponse.json({ seeded: false })
+    try {
+      await topUpSandboxAdditions(supabase, user.id, companyId)
+      return NextResponse.json({ seeded: false, topped_up: true })
+    } catch (err) {
+      log.error('failed to top up sandbox additions', { error: err, userId: user.id, companyId })
+      return NextResponse.json({ seeded: false, topped_up: false })
+    }
   }
 
   try {
@@ -581,6 +591,244 @@ export async function POST(request: Request) {
 
     if (dlError) throw dlError
 
+    // 13. Seed suppliers + one registered supplier invoice + one paid one.
+    // Supplier invoices are arguably the second-most-used surface after
+    // bank transactions; without them the /suppliers and /supplier-invoices
+    // pages render the empty state and the demo loses a big chunk of the
+    // accounts-payable story.
+    const { data: suppliers, error: supError } = await supabase
+      .from('suppliers')
+      .insert([
+        {
+          user_id: userId,
+          company_id: companyId,
+          name: 'Telia Sverige AB',
+          supplier_type: 'swedish_business',
+          org_number: '5560008080',
+          vat_number: 'SE556000808001',
+          email: 'fakturor@telia.se',
+          bankgiro: '467-3866',
+          address_line1: 'Stjärntorget 1',
+          postal_code: '169 79',
+          city: 'Solna',
+          country: 'SE',
+          default_payment_terms: 30,
+        },
+        {
+          user_id: userId,
+          company_id: companyId,
+          name: 'Espresso House AB',
+          supplier_type: 'swedish_business',
+          org_number: '5566884747',
+          vat_number: 'SE556688474701',
+          bankgiro: '5050-1929',
+          address_line1: 'Sveavägen 9',
+          postal_code: '111 57',
+          city: 'Stockholm',
+          country: 'SE',
+          default_payment_terms: 15,
+        },
+      ])
+      .select('id, name')
+
+    if (supError) throw supError
+    const supplierMap = Object.fromEntries(suppliers.map(s => [s.name, s.id]))
+
+    // Supplier invoice #1 — Telia, paid 15 days ago (mobile + bredband, 25% VAT).
+    const sevenDaysFromNow = new Date(today)
+    sevenDaysFromNow.setDate(today.getDate() + 7)
+
+    const { data: arrival1 } = await supabase.rpc('get_next_arrival_number', {
+      p_company_id: companyId,
+    })
+    const { data: arrival2 } = await supabase.rpc('get_next_arrival_number', {
+      p_company_id: companyId,
+    })
+
+    const { data: supInvoices, error: supInvError } = await supabase
+      .from('supplier_invoices')
+      .insert([
+        {
+          user_id: userId,
+          company_id: companyId,
+          supplier_id: supplierMap['Telia Sverige AB'],
+          arrival_number: arrival1 ?? 1,
+          supplier_invoice_number: '4711-2026-03',
+          invoice_date: toDateStr(thirtyDaysAgo),
+          due_date: toDateStr(today),
+          received_date: toDateStr(thirtyDaysAgo),
+          status: 'paid',
+          currency: 'SEK',
+          subtotal: 480,
+          vat_amount: 120,
+          total: 600,
+          payment_reference: '47112026031',
+          paid_at: toDateStr(fifteenDaysAgo),
+          paid_amount: 600,
+        },
+        {
+          user_id: userId,
+          company_id: companyId,
+          supplier_id: supplierMap['Espresso House AB'],
+          arrival_number: arrival2 ?? 2,
+          supplier_invoice_number: '88245',
+          invoice_date: toDateStr(fiveDaysAgo),
+          due_date: toDateStr(sevenDaysFromNow),
+          received_date: toDateStr(fiveDaysAgo),
+          status: 'registered',
+          currency: 'SEK',
+          subtotal: 240,
+          vat_amount: 28.80,
+          total: 268.80,
+        },
+      ])
+      .select('id, supplier_invoice_number')
+
+    if (supInvError) throw supInvError
+    const supInvoiceMap = Object.fromEntries(
+      supInvoices.map(s => [s.supplier_invoice_number, s.id])
+    )
+
+    // Supplier invoice line items. Note: supplier_invoice_items.vat_rate is
+    // stored as a decimal (0.25 = 25%); invoice_items.vat_rate above uses
+    // integer percent (25). Two different conventions inherited from earlier
+    // migrations — don't try to "fix" it here.
+    const { error: supItemsError } = await supabase
+      .from('supplier_invoice_items')
+      .insert([
+        {
+          supplier_invoice_id: supInvoiceMap['4711-2026-03'],
+          description: 'Mobil + bredband — mars',
+          quantity: 1,
+          unit_price: 480,
+          line_total: 480,
+          vat_rate: 0.25,
+          vat_amount: 120,
+          account_number: '6212',
+        },
+        {
+          supplier_invoice_id: supInvoiceMap['88245'],
+          description: 'Kundmöte Espresso House (representation)',
+          quantity: 1,
+          unit_price: 240,
+          line_total: 240,
+          vat_rate: 0.12,
+          vat_amount: 28.80,
+          account_number: '5810',
+        },
+      ])
+
+    if (supItemsError) throw supItemsError
+
+    // 14. Add one fully-depreciable asset (laptop) so /assets shows
+    // something other than a Package empty state. Acquired 18 months ago,
+    // 60-month linear depreciation — half-life under K2 schablon.
+    const eighteenMonthsAgo = new Date(today)
+    eighteenMonthsAgo.setMonth(today.getMonth() - 18)
+    const { error: assetError } = await supabase
+      .from('assets')
+      .insert({
+        user_id: userId,
+        company_id: companyId,
+        name: 'MacBook Pro 14"',
+        category: 'computer',
+        acquisition_date: toDateStr(eighteenMonthsAgo),
+        acquisition_cost: 24000,
+        salvage_value: 0,
+        useful_life_months: 60,
+        depreciation_method: 'linear',
+        bas_asset_account: '1250',
+        bas_accumulated_account: '1259',
+        bas_expense_account: '7831',
+        notes: 'Demo-tillgång — visar planenlig avskrivning över 5 år.',
+      })
+
+    if (assetError) throw assetError
+
+    // 15. Pre-built, verified agent_profile so the assistant chrome (FAB,
+    // /chat surface, agent identity in nav) renders without firing a
+    // composer run. The chat itself is server-gated by guardSandbox().
+    // We just ship the *appearance* of a finished assistant so the user
+    // can see what they'd get post-signup.
+    const { error: agentError } = await supabase
+      .from('agent_profiles')
+      .insert({
+        company_id: companyId,
+        display_name: 'Anna',
+        avatar_id: 'notionists-3',
+        horizontal_atoms: ['horizontal/swedish-vat', 'horizontal/swedish-accounting-compliance'],
+        vertical_atoms: ['vertical/consulting'],
+        modifier_atoms: [],
+        profile_summary:
+          'Du är Anna, en revisorsassistent för en svensk enskild firma som tillhandahåller IT-konsulttjänster i Stockholm. Företaget är momsregistrerat (kvartalsvis), använder kontantmetoden och fakturerar både svenska och utländska kunder.',
+        source_signals: { is_sandbox: true },
+        field_overrides: {},
+        composer_model: 'sandbox-demo',
+        composer_version: 1,
+        composed_at: new Date().toISOString(),
+        verified_at: new Date().toISOString(),
+        verified_by_user_id: userId,
+        intake_completed_at: new Date().toISOString(),
+      })
+
+    if (agentError) throw agentError
+
+    // 16. Pre-staged pending_operations so /pending isn't empty.
+    // These are the kind of operation the AI agent would stage; pre-seeded
+    // here so the user can see the approval queue UI (preview, period
+    // status, risk level) without having to invoke the disabled AI.
+    const { error: pendOpsError } = await supabase
+      .from('pending_operations')
+      .insert([
+        {
+          user_id: userId,
+          company_id: companyId,
+          operation_type: 'create_supplier_invoice_from_inbox',
+          status: 'pending',
+          title: 'Registrera leverantörsfaktura — Espresso House (representation)',
+          params: {
+            supplier_id: supplierMap['Espresso House AB'],
+            supplier_invoice_number: '88245',
+            invoice_date: toDateStr(fiveDaysAgo),
+            due_date: toDateStr(sevenDaysFromNow),
+            total: 268.80,
+            vat_amount: 28.80,
+            account_number: '5810',
+          },
+          preview_data: {
+            risk_level: 'low',
+            preview_lines: [
+              { account: '5810', description: 'Representation (avdragsgill, 6% moms)', debit: 60, credit: 0 },
+              { account: '5811', description: 'Representation (ej avdragsgill)', debit: 180, credit: 0 },
+              { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
+              { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: 268.80 },
+            ],
+          },
+        },
+        {
+          user_id: userId,
+          company_id: companyId,
+          operation_type: 'categorize_transaction',
+          status: 'pending',
+          title: 'Bokför insättning — bankgiro',
+          params: {
+            account_number: '3001',
+            is_business: true,
+            vat_treatment: 'standard_25',
+          },
+          preview_data: {
+            risk_level: 'low',
+            preview_lines: [
+              { account: '1930', description: 'Företagskonto', debit: 1200, credit: 0 },
+              { account: '2611', description: 'Utgående moms 25%', debit: 0, credit: 240 },
+              { account: '3001', description: 'Försäljning 25% moms', debit: 0, credit: 960 },
+            ],
+          },
+        },
+      ])
+
+    if (pendOpsError) throw pendOpsError
+
     return NextResponse.json({ seeded: true })
   } catch (err) {
     log.error('failed to seed sandbox data', { error: err, userId: user.id, companyId })
@@ -588,5 +836,53 @@ export async function POST(request: Request) {
       { error: 'Failed to seed sandbox data', requestId },
       { status: 500 }
     )
+  }
+}
+
+/**
+ * Idempotent top-up for sandboxes that pre-date the agent_profile/suppliers/
+ * asset additions to the seed. Re-running the seed on those old sandboxes
+ * short-circuits at the company_settings idempotency check above, so they
+ * never get the new bits without this. Each section only inserts when its
+ * own table is empty for the company — safe to run on every sandbox boot.
+ */
+async function topUpSandboxAdditions(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  userId: string,
+  companyId: string,
+): Promise<void> {
+  // Always ensure a verified agent_profile exists. This is the most
+  // important top-up — without it the dashboard hero shows "Bygg din
+  // bokföringsassistent" and the NewUserChecklist links into the
+  // (server-gated) build flow.
+  const { data: existingAgent } = await supabase
+    .from('agent_profiles')
+    .select('id')
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (!existingAgent) {
+    await supabase.from('agent_profiles').insert({
+      company_id: companyId,
+      display_name: 'Anna',
+      avatar_id: 'notionists-3',
+      horizontal_atoms: [
+        'horizontal/swedish-vat',
+        'horizontal/swedish-accounting-compliance',
+      ],
+      vertical_atoms: ['vertical/consulting'],
+      modifier_atoms: [],
+      profile_summary:
+        'Du är Anna, en revisorsassistent för en svensk enskild firma som tillhandahåller IT-konsulttjänster i Stockholm. Företaget är momsregistrerat (kvartalsvis), använder kontantmetoden och fakturerar både svenska och utländska kunder.',
+      source_signals: { is_sandbox: true },
+      field_overrides: {},
+      composer_model: 'sandbox-demo',
+      composer_version: 1,
+      composed_at: new Date().toISOString(),
+      verified_at: new Date().toISOString(),
+      verified_by_user_id: userId,
+      intake_completed_at: new Date().toISOString(),
+    })
   }
 }
