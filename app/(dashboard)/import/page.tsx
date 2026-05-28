@@ -462,6 +462,43 @@ function SIEImportWizard() {
     }
   }, [toast])
 
+  const handleUndo = useCallback(async (importId: string) => {
+    setIsLoading(true)
+    try {
+      const res = await fetch(`/api/import/sie/${importId}/undo`, { method: 'DELETE' })
+      const data = await res.json()
+
+      if (!res.ok) {
+        toast({ title: 'Kunde inte ångra import', description: getErrorMessage(data), variant: 'destructive' })
+        return
+      }
+
+      toast({
+        title: 'Import ångrad',
+        description: `${data.deletedEntries} verifikation${data.deletedEntries === 1 ? '' : 'er'} raderades.`,
+      })
+
+      // Reset wizard to upload step so the user can re-import a corrected file
+      setStep('upload')
+      setFile(null)
+      setParsed(null)
+      setMappings([])
+      setPreview(null)
+      setIssues([])
+      setImportResult(null)
+      setError(null)
+      setErrorType(undefined)
+      setValidationErrors([])
+      setValidationWarnings([])
+      setDuplicateImportId(null)
+      setSieAccounts([])
+    } catch {
+      toast({ title: 'Anslutningsfel', description: 'Kunde inte nå servern.', variant: 'destructive' })
+    } finally {
+      setIsLoading(false)
+    }
+  }, [toast])
+
   const handleReplace = useCallback(async (importId: string) => {
     if (!file) return
 
@@ -683,7 +720,7 @@ function SIEImportWizard() {
         <ImportReviewStep preview={preview} mappings={mappings}
           onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading} />
       )}
-      {step === 'result' && importResult && <ImportResultStep result={importResult} onNewImport={handleNewImport} />}
+      {step === 'result' && importResult && <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo} />}
     </div>
   )
 }

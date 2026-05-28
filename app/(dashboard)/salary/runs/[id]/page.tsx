@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ArrowLeft, Calculator, Eye, Check, CreditCard, BookOpen,
-  ArrowLeftCircle, Loader2, Download,
+  ArrowLeftCircle, Loader2, Download, FileDown,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -181,6 +181,49 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     setActionLoading(null)
   }
 
+  async function handleBulkPayslipDownload() {
+    setActionLoading('bulk_payslip')
+    try {
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
+      const periodLabel = `${run!.period_year}-${String(run!.period_month).padStart(2, '0')}`
+      let added = 0
+      for (const sre of employees) {
+        const employee = (sre as SalaryRunEmployee & { employee?: { first_name: string; last_name: string } }).employee
+        const res = await fetch(`/api/salary/runs/${id}/payslips/${sre.employee_id}/pdf`)
+        if (!res.ok) continue
+        const blob = await res.blob()
+        const name = employee
+          ? `${employee.last_name}_${employee.first_name}`.replace(/[^A-Za-z0-9_-]/g, '_')
+          : sre.employee_id.slice(0, 8)
+        zip.file(`Lonespec_${periodLabel}_${name}.pdf`, blob)
+        added++
+      }
+      if (added === 0) {
+        toast({ title: 'Inga lönespecifikationer kunde laddas ner', variant: 'destructive' })
+        return
+      }
+      const archive = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(archive)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Lonespec_${periodLabel}.zip`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast({ title: 'Lönespecifikationer nedladdade', description: `${added} stycken i zip-arkiv.` })
+    } catch (err) {
+      toast({
+        title: 'Kunde inte skapa zip-fil',
+        description: err instanceof Error ? err.message : 'Okänt fel',
+        variant: 'destructive',
+      })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   async function handleDownloadAgi() {
     setActionLoading('agi-download')
     const res = await fetch(`/api/salary/runs/${id}/agi/xml`)
@@ -273,24 +316,42 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Anställda ({employees.length})</CardTitle>
-          {run.status === 'draft' && canWrite && notAdded.length > 0 && (
-            <Select
-              key={addEmployeeKey}
-              onValueChange={(value) => {
-                handleAddEmployee(value)
-                setAddEmployeeKey(k => k + 1)
-              }}
-            >
-              <SelectTrigger className="w-[200px] h-8 text-sm">
-                <SelectValue placeholder="Lägg till anställd..." />
-              </SelectTrigger>
-              <SelectContent>
-                {notAdded.map(emp => (
-                  <SelectItem key={emp.id} value={emp.id}>{emp.first_name} {emp.last_name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
+          <div className="flex items-center gap-2">
+            {employees.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBulkPayslipDownload}
+                disabled={actionLoading === 'bulk_payslip'}
+                className="h-8 text-sm"
+              >
+                {actionLoading === 'bulk_payslip' ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <FileDown className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Ladda ner alla
+              </Button>
+            )}
+            {run.status === 'draft' && canWrite && notAdded.length > 0 && (
+              <Select
+                key={addEmployeeKey}
+                onValueChange={(value) => {
+                  handleAddEmployee(value)
+                  setAddEmployeeKey(k => k + 1)
+                }}
+              >
+                <SelectTrigger className="w-[200px] h-8 text-sm">
+                  <SelectValue placeholder="Lägg till anställd..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {notAdded.map(emp => (
+                    <SelectItem key={emp.id} value={emp.id}>{emp.first_name} {emp.last_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {employees.length === 0 ? (
@@ -307,6 +368,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                   <TableHead className="text-right">Netto</TableHead>
                   <TableHead className="hidden lg:table-cell text-right">Avgifter</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Semester</TableHead>
+                  <TableHead className="text-right w-[80px]">Lönespec</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -315,6 +377,8 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                   const name = employee
                     ? `${employee.first_name} ${employee.last_name}`
                     : `Anställd ${sre.employee_id.slice(0, 8)}...`
+                  const taxValue = sre.tax_withheld_override ?? sre.tax_withheld
+                  const avgifterValue = sre.avgifter_amount_override ?? sre.avgifter_amount
                   return (
                     <TableRow
                       key={sre.id}
@@ -334,10 +398,23 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                         </span>
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.gross_salary)}</TableCell>
-                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(sre.tax_withheld)}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(taxValue)}</TableCell>
                       <TableCell className="text-right tabular-nums font-medium">{formatCurrency(sre.net_salary)}</TableCell>
-                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(sre.avgifter_amount)}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums">{formatCurrency(avgifterValue)}</TableCell>
                       <TableCell className="hidden md:table-cell text-right tabular-nums">{formatCurrency(sre.vacation_accrual)}</TableCell>
+                      <TableCell className="text-right">
+                        <a
+                          href={`/api/salary/runs/${id}/payslips/${sre.employee_id}/pdf`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                          title="Ladda ner lönespecifikation"
+                        >
+                          <FileDown className="h-3.5 w-3.5" />
+                          PDF
+                        </a>
+                      </TableCell>
                     </TableRow>
                   )
                 })}

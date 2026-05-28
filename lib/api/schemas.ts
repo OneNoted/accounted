@@ -498,6 +498,16 @@ export const MatchInvoiceSchema = z
     path: ['expected_journal_entry_id'],
   })
 
+/**
+ * Link an existing posted verifikat as payment for an invoice. No new
+ * journal entry is created — only an invoice_payments row pointing at the
+ * supplied journal_entry_id, plus the invoice's paid/remaining are advanced.
+ */
+export const LinkInvoiceToVoucherSchema = z.object({
+  journal_entry_id: uuid,
+  notes: z.string().max(2000).optional(),
+})
+
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
   // Optional invoice to settle alongside the link. When provided, the
@@ -1417,6 +1427,38 @@ export const UpdateShiftPremiumRuleSchema = z
     {
       message: 'Välj minst en anställd när regeln inte gäller alla',
       path: ['applies_to_employee_ids'],
+    },
+  )
+
+/**
+ * Per-employee override on a salary run (advanced mode).
+ *
+ * Each field is independently nullable. `null` clears a previously-set
+ * override; `undefined` leaves it unchanged. `reason` is required whenever
+ * any non-null override is being applied — the DB CHECK constraint
+ * enforces this at the storage layer too.
+ */
+export const SalaryEmployeeOverrideSchema = z
+  .object({
+    tax_withheld_override: z.number().nonnegative().nullable().optional(),
+    avgifter_amount_override: z.number().nonnegative().nullable().optional(),
+    avgifter_basis_override: z.number().nonnegative().nullable().optional(),
+    reason: z.string().min(1).max(500).nullable().optional(),
+  })
+  .refine(
+    (data) => {
+      const hasOverride =
+        (data.tax_withheld_override !== undefined && data.tax_withheld_override !== null) ||
+        (data.avgifter_amount_override !== undefined && data.avgifter_amount_override !== null) ||
+        (data.avgifter_basis_override !== undefined && data.avgifter_basis_override !== null)
+      if (hasOverride && (data.reason === undefined || data.reason === null || data.reason.trim() === '')) {
+        return false
+      }
+      return true
+    },
+    {
+      message: 'Ange en anledning till justeringen (krävs av BFL för manuella skattejusteringar)',
+      path: ['reason'],
     },
   )
 
