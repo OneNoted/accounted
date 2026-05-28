@@ -347,15 +347,18 @@ export default function TemplatePicker({
 
   // Click a raw library card. Convertible → fast QuickReview path via onSelect.
   // Non-convertible → route to manual booking dialog pre-filled via the new
-  // onPickLibraryTemplate callback.
+  // onPickLibraryTemplate callback. MRU is only bumped after we confirm the
+  // click will actually do something — otherwise consumers that omit the
+  // callback would corrupt MRU ordering for templates the user never applied.
   const handleSelectLibraryRaw = (raw: BookingTemplateLibrary) => {
-    bumpLibraryMru(raw.id)
     const converted = convertedById.get(raw.id) ?? null
     if (converted) {
+      bumpLibraryMru(raw.id)
       onSelect(converted)
       return
     }
     if (onPickLibraryTemplate) {
+      bumpLibraryMru(raw.id)
       onPickLibraryTemplate(raw)
     }
   }

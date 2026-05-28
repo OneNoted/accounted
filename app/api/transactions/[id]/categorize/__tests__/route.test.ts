@@ -729,12 +729,16 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
-    // chart_of_accounts lookup for '4535' — not in the company's chart.
+    // chart_of_accounts lookup for '5420' — not in the company's chart.
+    // Using a plain expense account (Programvaror) avoids the implication
+    // that 4535 (Inköp av varor från annat EU-land, reverse-charge) would
+    // be a valid override on a domestic transaction without its paired
+    // moms legs (2614/2645) — see the Swedish compliance review note.
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
-      body: { is_business: true, category: 'expense_software', account_override: '4535' },
+      body: { is_business: true, category: 'expense_software', account_override: '5420' },
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse<{
@@ -743,7 +747,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('TX_CATEGORIZE_INVALID_ACCOUNT')
-    expect(body.error.details.accountNumber).toBe('4535')
+    expect(body.error.details.accountNumber).toBe('5420')
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
 })

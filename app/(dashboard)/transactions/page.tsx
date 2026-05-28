@@ -548,7 +548,14 @@ export default function TransactionsPage() {
           // Mirror the ACCOUNTS_NOT_IN_CHART flow with a one-click
           // "Aktivera och bokför" — pull the BAS name if known so the
           // toast carries real context.
-          const accountNumber: string | undefined = result.error.details?.accountNumber
+          // Validate the BAS account number is a plain 4-digit string before
+          // embedding it in any fetch URL/body — the value comes from the
+          // server error envelope but defense-in-depth.
+          const rawAccountNumber: unknown = result.error.details?.accountNumber
+          const accountNumber: string | undefined =
+            typeof rawAccountNumber === 'string' && /^\d{4}$/.test(rawAccountNumber)
+              ? rawAccountNumber
+              : undefined
           let displayName = accountNumber ?? ''
           if (accountNumber) {
             try {

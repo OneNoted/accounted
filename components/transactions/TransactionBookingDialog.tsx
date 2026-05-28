@@ -72,7 +72,23 @@ function buildInitialLinesFromTemplate(
     transaction.currency,
     transaction.exchange_rate
   )) * 100) / 100
-  return applyTemplate(template.lines, sekAmount)
+  const lines = applyTemplate(template.lines, sekAmount)
+
+  // Match buildInitialLines's foreign-currency handling: attach original
+  // currency/amount/exchange_rate metadata to the settlement (bank/cash) legs
+  // so the journal entry retains the foreign-currency annotation. Without
+  // this the entry is silently recorded in SEK only.
+  const isForeign = !!transaction.currency && transaction.currency !== 'SEK'
+  if (!isForeign) return lines
+  const currencyMeta = buildCurrencyMetadata(
+    transaction.currency,
+    Math.abs(transaction.amount),
+    transaction.exchange_rate
+  )
+  return lines.map((line, i) => {
+    const raw = template.lines[i]
+    return raw?.type === 'settlement' ? { ...line, ...currencyMeta } : line
+  })
 }
 
 export default function TransactionBookingDialog({

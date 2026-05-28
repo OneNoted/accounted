@@ -168,10 +168,16 @@ export async function upsertFromPsd2(
   }
 
   if (seedRow) {
-    const { error: promoteError } = await supabase
+    // .select() so we can detect a 0-row UPDATE — Supabase's update().eq() returns
+    // { error: null, data: [] } if the row was deleted between the SELECT above
+    // and this UPDATE (rare but theoretically possible under concurrent ops).
+    // If that happens, fall through to the normal upsert path instead of
+    // silently returning success without persisting anything.
+    const { data: promoted, error: promoteError } = await supabase
       .from('cash_accounts')
       .update(payload)
       .eq('id', seedRow.id)
+      .select('id')
     if (promoteError) {
       log.error('upsertFromPsd2 promote-seed failed', {
         companyId,
@@ -181,7 +187,10 @@ export async function upsertFromPsd2(
       })
       throw new Error(`cash_accounts upsert failed: ${promoteError.message}`)
     }
-    return
+    if (promoted && promoted.length > 0) {
+      return
+    }
+    // Seed row vanished between SELECT and UPDATE — fall through to upsert.
   }
 
   const { error } = await supabase
