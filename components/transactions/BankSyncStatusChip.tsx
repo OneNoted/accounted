@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -12,18 +13,23 @@ interface ConnectionRow {
   last_synced_at: string | null
 }
 
-function formatAge(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime()
-  const min = Math.floor(ms / 60000)
-  if (min < 1) return 'just nu'
-  if (min < 60) return `${min} min sedan`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `${h} tim sedan`
-  const d = Math.floor(h / 24)
-  return `${d} d sedan`
+function useAgeFormatter() {
+  const t = useTranslations('transactions')
+  return (iso: string): string => {
+    const ms = Date.now() - new Date(iso).getTime()
+    const min = Math.floor(ms / 60000)
+    if (min < 1) return t('bank_sync_age_just_now')
+    if (min < 60) return t('bank_sync_age_minutes', { count: min })
+    const h = Math.floor(min / 60)
+    if (h < 24) return t('bank_sync_age_hours', { count: h })
+    const d = Math.floor(h / 24)
+    return t('bank_sync_age_days', { count: d })
+  }
 }
 
 export default function BankSyncStatusChip() {
+  const t = useTranslations('transactions')
+  const formatAge = useAgeFormatter()
   const { company } = useCompany()
   const [rows, setRows] = useState<ConnectionRow[] | null>(null)
 
@@ -58,8 +64,8 @@ export default function BankSyncStatusChip() {
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
           {needsAttention.length === 1
-            ? '1 bankanslutning behöver förnyas'
-            : `${needsAttention.length} bankanslutningar behöver förnyas`}
+            ? t('bank_sync_attention_one')
+            : t('bank_sync_attention_many', { count: needsAttention.length })}
         </span>
       </Link>
     )
@@ -75,10 +81,10 @@ export default function BankSyncStatusChip() {
     <div className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
       <RefreshCw className="h-3.5 w-3.5" />
       <span>
-        Synkas automatiskt varje natt
+        {t('bank_sync_auto_nightly')}
         {mostRecent && (
           <>
-            {' · senast '}
+            {t('bank_sync_last_separator')}
             <span className="tabular-nums">{formatAge(mostRecent)}</span>
           </>
         )}

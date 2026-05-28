@@ -5,6 +5,8 @@ import DashboardNav from '@/components/dashboard/DashboardNav'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import { RecaptIdentify } from '@/components/RecaptIdentify'
+import { RecaptLoader } from '@/components/RecaptLoader'
+import { RecaptHideWidget } from '@/components/RecaptHideWidget'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
 import CommandPalette from '@/components/common/CommandPalette'
@@ -262,11 +264,15 @@ export default async function DashboardLayout({
           <CommandPalette />
         </div>
         {!isSandbox && (
-          <RecaptIdentify
-            userId={user.id}
-            email={user.email}
-            displayName={settings?.company_name || undefined}
-          />
+          <>
+            <RecaptLoader />
+            <RecaptHideWidget />
+            <RecaptIdentify
+              userId={user.id}
+              email={user.email}
+              displayName={settings?.company_name || undefined}
+            />
+          </>
         )}
       </AgentSheetProvider>
     </CompanyProvider>

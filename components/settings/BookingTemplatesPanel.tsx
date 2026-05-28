@@ -529,6 +529,7 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
                     <SelectItem value="0.25">{t('vat_rate_25')}</SelectItem>
                     <SelectItem value="0.12">{t('vat_rate_12')}</SelectItem>
                     <SelectItem value="0.06">{t('vat_rate_6')}</SelectItem>
+                    <SelectItem value="0">{t('vat_rate_0')}</SelectItem>
                   </SelectContent>
                 </Select>
               )}
