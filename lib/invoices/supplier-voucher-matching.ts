@@ -28,9 +28,13 @@ import type { SupplierInvoice, Supplier } from '@/types'
 
 const log = createLogger('supplier-voucher-matching')
 
-/** AP account. BAS standard reserves 2440 for Leverantörsskulder; the supplier
- *  sub-ledger lives in the supplier_invoices table, not in per-supplier accounts. */
-const AP_ACCOUNT = '2440'
+/** AP account class. BAS 2026 reserves 2440–2449 for Leverantörsskulder
+ *  (2440 SEK, 2441 utländsk valuta, 2443 Skuldfakturor, 2448 övriga). The
+ *  supplier sub-ledger lives in the supplier_invoices table, not in per-
+ *  supplier accounts. A samlingsverifikat that pays mixed SEK + EUR
+ *  suppliers will legitimately debit both 2440 and 2441 — summing across
+ *  the 244x range catches that. PR #602 Swedish-compliance fix. */
+const AP_ACCOUNT_PREFIX = '244'
 
 /** ±90 days from the invoice's due_date as the default search window. */
 const DEFAULT_DATE_WINDOW_DAYS = 90
@@ -141,7 +145,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     )
     .eq('journal_entries.company_id', companyId)
     .eq('journal_entries.status', 'posted')
-    .eq('account_number', AP_ACCOUNT)
+    .like('account_number', `${AP_ACCOUNT_PREFIX}%`)
     .gt('debit_amount', 0)
     .gte('journal_entries.entry_date', dateFrom.toISOString().slice(0, 10))
     .lte('journal_entries.entry_date', dateTo.toISOString().slice(0, 10))
@@ -405,7 +409,7 @@ export async function validateVoucherForSupplierInvoiceLink(
       credit_amount: number | null
       currency: string | null
     }
-    if (line.account_number !== AP_ACCOUNT) continue
+    if (!line.account_number?.startsWith(AP_ACCOUNT_PREFIX)) continue
     const debit = Number(line.debit_amount ?? 0)
     if (debit <= 0) continue
     apDebitTotal += debit
@@ -552,6 +556,13 @@ export async function linkSupplierInvoiceToVoucher(
 
   // Fetch the now-updated invoice for event emission. Lightweight; the RPC
   // committed before this read so the row reflects post-link state.
+  // select('*') is intentional — the supplier_invoice.paid event payload is
+  // typed as `supplierInvoice: SupplierInvoice` in lib/events/types.ts, so
+  // narrowing here would either break the subscriber contract or require a
+  // separate event payload type. The event stays in-process (eventBus is a
+  // module-level singleton) and any consumer subscribing to this event
+  // legitimately needs the full invoice context for downstream reminders
+  // and audit-log routing. PR #602 compliance review note documented.
   const { data: invoice } = await supabase
     .from('supplier_invoices')
     .select('*')
@@ -570,8 +581,16 @@ export async function linkSupplierInvoiceToVoucher(
           companyId,
         },
       })
-    } catch {
-      /* non-critical */
+    } catch (err) {
+      // Event emission failure must not block the response, but should leave
+      // an audit trail (ISO 27001:2022 A.8.15 / OWASP V16). Logged at warn
+      // because the link itself succeeded — the downstream reminder/audit
+      // subscriber will need separate intervention.
+      log.warn('supplier_invoice.paid event emission failed', {
+        err,
+        supplierInvoiceId: params.supplierInvoiceId,
+        journalEntryId: params.journalEntryId,
+      })
     }
   }
 

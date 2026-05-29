@@ -1763,12 +1763,12 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
   LINK_SI_VOUCHER_NO_AP_DEBIT: {
     httpStatus: 400,
     message_sv:
-      'Verifikationen debiterar inte leverantörsskuldskontot (2440). Rätta bokföringen först med en stornoverifikation som debiterar 2440, t.ex. via gnubok_correct_entry.',
+      'Verifikationen debiterar inget leverantörsskuldskonto (244x). Rätta bokföringen först med en stornoverifikation som debiterar t.ex. 2440 (SEK) eller 2441 (utländsk valuta), via gnubok_correct_entry.',
     message_en:
-      'The journal entry does not debit the accounts-payable account (2440). Correct the booking first via a storno+correction (gnubok_correct_entry) that debits 2440.',
+      'The journal entry does not debit any accounts-payable account in the 244x range (e.g. 2440 SEK, 2441 foreign currency). Correct the booking first via a storno+correction (gnubok_correct_entry).',
     remediation: {
       description:
-        'Use gnubok_correct_entry to storno the existing voucher and re-book the payment as Dr 2440 / Cr 1930, then link the corrected voucher.',
+        'Use gnubok_correct_entry to storno the existing voucher and re-book the payment as Dr 244x / Cr 1930, then link the corrected voucher.',
       tool: 'gnubok_correct_entry',
     },
   },
