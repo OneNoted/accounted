@@ -326,7 +326,7 @@ export function getDefaultAccountForCategory(
   }
 
   if (category.startsWith('income_')) {
-    return INCOME_ACCOUNTS[category] || '3900'
+    return INCOME_ACCOUNTS[category] || '3999'
   }
 
   // uncategorized

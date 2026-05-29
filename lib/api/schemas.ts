@@ -531,12 +531,15 @@ export const MatchBatchSchema = z
           z.object({
             kind: z.literal('customer_invoice'),
             invoice_id: uuid,
-            amount: nonNegativeAmount,
+            // Strictly positive — zero or negative is rejected at the schema
+            // layer (PR #603 review) so the RPC's BATCH_INVALID_AMOUNT path
+            // is only reachable from non-HTTP callers.
+            amount: z.number().positive('Allocation amount must be greater than 0'),
           }),
           z.object({
             kind: z.literal('supplier_invoice'),
             supplier_invoice_id: uuid,
-            amount: nonNegativeAmount,
+            amount: z.number().positive('Allocation amount must be greater than 0'),
           }),
         ]),
       )

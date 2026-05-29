@@ -1834,6 +1834,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fördelningens belopp måste vara positivt.',
     message_en: 'Allocation amount must be positive.',
   },
+  BATCH_DUPLICATE_ALLOCATION: {
+    httpStatus: 400,
+    message_sv:
+      'Samma faktura förekommer två gånger i fördelningen. Slå ihop beloppen eller ta bort dubbletten.',
+    message_en:
+      'The same invoice appears twice in the allocations. Merge the amounts or remove the duplicate.',
+  },
   BATCH_INVALID_KIND: {
     httpStatus: 400,
     message_sv:

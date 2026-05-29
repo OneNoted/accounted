@@ -78,7 +78,10 @@ export default function MatchAllocationDialog({
   const t = useTranslations('tx_match_allocation')
 
   const kind: 'customer_invoice' | 'supplier_invoice' = useMemo(() => {
-    return transaction && transaction.amount >= 0 ? 'customer_invoice' : 'supplier_invoice'
+    // Strict > 0 (was >= 0): a zero-amount tx would otherwise load customer
+    // candidates and the RPC would reject with BATCH_TX_ZERO_AMOUNT after
+    // the user has already filled in allocations. PR #603 review fix.
+    return transaction && transaction.amount > 0 ? 'customer_invoice' : 'supplier_invoice'
   }, [transaction])
 
   const [candidates, setCandidates] = useState<AllocationCandidate[]>([])

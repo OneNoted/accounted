@@ -333,6 +333,33 @@ describe('match_batch_allocate', () => {
     expect(result.code).toBe('BATCH_DIRECTION_MISMATCH')
   })
 
+  it('rejects BATCH_DUPLICATE_ALLOCATION when the same supplier invoice appears twice', async () => {
+    const { userId, companyId } = await seedTenant()
+    const supplier = await insertSupplier({ userId, companyId })
+    const si = await insertSupplierInvoice({
+      userId, companyId, supplierId: supplier, total: 1000,
+    })
+    const txId = await insertTransaction({ userId, companyId, amount: -800 })
+
+    // Same supplier_invoice_id listed twice. Per-allocation amounts (400 each)
+    // do not individually overshoot the 1 000 remaining, but their sum would
+    // insert two payment rows for one invoice. The dedupe guard catches
+    // this in the validation loop before any write.
+    const allocations = [
+      { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 400 },
+      { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 400 },
+    ]
+
+    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
+      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+      [txId, JSON.stringify(allocations), userId, companyId],
+    )
+    const result = r.rows[0]!.match_batch_allocate
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('BATCH_DUPLICATE_ALLOCATION')
+    expect(result.details?.id).toBe(si)
+  })
+
   it('rejects BATCH_MIXED_KINDS_UNSUPPORTED on customer + supplier in same batch', async () => {
     const { userId, companyId } = await seedTenant()
     const supplier = await insertSupplier({ userId, companyId })
