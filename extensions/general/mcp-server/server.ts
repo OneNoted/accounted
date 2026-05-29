@@ -4110,17 +4110,56 @@ export const tools: McpTool[] = [
       const text = (args.text as string | undefined)?.trim()
       let data: LineRow[] = []
       let dbMatched = 0
+      // True when at least one text-search leg filled its per-leg fetch
+      // window — i.e. more matches probably exist on the DB side that didn't
+      // make it into the merge. Drives the `truncated` signal honestly even
+      // when the merged distinct set fits inside `limit`.
+      let legCapHit = false
 
       if (text) {
+        // Length guard — defence in depth against pathological inputs even
+        // though .ilike() parameterises the value (compliance A.8.28).
+        if (text.length > 200) {
+          throw new Error('text filter must be 200 characters or shorter')
+        }
+
+        // LIKE wildcards `%` and `_` are escaped so a search for "2_441"
+        // matches the literal string. Comma stripping is intentionally NOT
+        // applied here: the previous implementation needed it because the
+        // value was interpolated into PostgREST's OR DSL where `,` is the
+        // separator. The .ilike() path passes the pattern as a parameterised
+        // filter operand where `,` is a literal — stripping would mangle
+        // searches for real commas in line descriptions.
         const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
         const pattern = `%${escaped}%`
 
+        // Fetch up to 2× limit per leg to reduce global-ordering loss when
+        // one leg is much more selective than the other (e.g. 150 line
+        // matches vs 5 entry matches with limit=100). The final post-merge
+        // slice still caps at `limit`; the wider per-leg window just gives
+        // the merge a better tail to choose from.
+        const legLimit = limit * 2
+
+        const buildLeg = (column: 'line_description' | 'journal_entries.description') =>
+          buildBaseQuery()
+            .ilike(column, pattern)
+            .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+            .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+            .order('sort_order', { ascending: true })
+            .limit(legLimit)
+
         const [byLine, byEntry] = await Promise.all([
-          applyOrderAndLimit(buildBaseQuery().ilike('line_description', pattern)),
-          applyOrderAndLimit(buildBaseQuery().ilike('journal_entries.description', pattern)),
+          buildLeg('line_description'),
+          buildLeg('journal_entries.description'),
         ])
-        if (byLine.error) throw new Error(`Database error: ${byLine.error.message}`)
-        if (byEntry.error) throw new Error(`Database error: ${byEntry.error.message}`)
+        if (byLine.error || byEntry.error) {
+          log.warn('query_journal text-search failed', {
+            companyId,
+            byLine: byLine.error?.message ?? null,
+            byEntry: byEntry.error?.message ?? null,
+          })
+          throw new Error('Database error while running text search')
+        }
 
         const merged = new Map<string, LineRow>()
         for (const row of (byLine.data ?? []) as unknown as LineRow[]) merged.set(row.id, row)
@@ -4139,13 +4178,19 @@ export const tools: McpTool[] = [
           })
           .slice(0, limit)
 
-        // Conservative upper bound on distinct matches across both legs.
-        // Overstating drives the agent to narrow the query rather than trust
-        // an undercount.
-        dbMatched = (byLine.count ?? 0) + (byEntry.count ?? 0)
+        // Honest distinct-row count among what we fetched. If a leg hit its
+        // window cap, more distinct matches may exist; `legCapHit` carries
+        // that signal downstream so `truncated` isn't faked false.
+        dbMatched = merged.size
+        legCapHit =
+          (byLine.data?.length ?? 0) >= legLimit ||
+          (byEntry.data?.length ?? 0) >= legLimit
       } else {
         const res = await applyOrderAndLimit(buildBaseQuery())
-        if (res.error) throw new Error(`Database error: ${res.error.message}`)
+        if (res.error) {
+          log.warn('query_journal failed', { companyId, error: res.error.message })
+          throw new Error('Database error while running journal query')
+        }
         data = (res.data ?? []) as unknown as LineRow[]
         dbMatched = res.count ?? data.length
       }
@@ -4202,7 +4247,7 @@ export const tools: McpTool[] = [
       const total_lines = amountFilterApplied ? lines.length : dbMatched
       const truncated = amountFilterApplied
         ? data.length >= limit && lines.length === limit
-        : dbMatched > lines.length
+        : dbMatched > lines.length || legCapHit
       return {
         lines,
         truncated,

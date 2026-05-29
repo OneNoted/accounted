@@ -321,4 +321,106 @@ describe('gnubok_query_journal — free-text search', () => {
     expect(new Set(ilikeCalls.map((c) => c.pattern)).size).toBe(1)
     expect(ilikeCalls[0].pattern).toBe('%2\\_441\\%foo%')
   })
+
+  it('does NOT flag truncated when an overlap row is hit by both legs and merged set fits limit', async () => {
+    // Greptile / Compliance V2.3 regression: previously, dbMatched = sum of
+    // leg counts and a row matching both legs would inflate the count and
+    // force truncated=true even though every distinct match was returned.
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const dupHit = makeLineRow({
+      id: 'LDUP',
+      line_description: 'Google Cloud',
+      entry_description: 'Google Cloud invoice',
+    })
+
+    const { supabase } = makeQueueMock([
+      { data: [dupHit], count: 1 },
+      { data: [dupHit], count: 1 },
+    ])
+
+    const result = (await tool.execute(
+      { text: 'Google', limit: 50 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { lines: unknown[]; truncated: boolean; total_lines: number; returned_lines: number }
+
+    expect(result.returned_lines).toBe(1)
+    expect(result.total_lines).toBe(1)
+    expect(result.truncated).toBe(false)
+  })
+
+  it('flags truncated when a leg fills its per-leg fetch window', async () => {
+    // Per-leg cap is limit*2. With limit=2 → legLimit=4. Returning 4 rows on
+    // one leg signals "this leg's window filled, more may exist DB-side".
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const fullLeg = [
+      makeLineRow({ id: 'L1', entry_date: '2026-05-10', voucher_number: 4 }),
+      makeLineRow({ id: 'L2', entry_date: '2026-05-09', voucher_number: 3 }),
+      makeLineRow({ id: 'L3', entry_date: '2026-05-08', voucher_number: 2 }),
+      makeLineRow({ id: 'L4', entry_date: '2026-05-07', voucher_number: 1 }),
+    ]
+
+    const { supabase } = makeQueueMock([
+      { data: fullLeg, count: 4 },
+      { data: [], count: 0 },
+    ])
+
+    const result = (await tool.execute(
+      { text: 'Google', limit: 2 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { returned_lines: number; truncated: boolean }
+
+    expect(result.returned_lines).toBe(2)
+    expect(result.truncated).toBe(true)
+  })
+
+  it('rejects text longer than 200 characters', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase } = makeQueueMock([])
+    const oversized = 'x'.repeat(201)
+
+    await expect(
+      tool.execute({ text: oversized, limit: 50 }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/200 characters or shorter/)
+  })
+
+  it('does not surface raw PostgREST error text on text-search failure', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+
+    // Custom mock that returns an error from the first leg.
+    const supabase = {
+      from: vi.fn().mockImplementation(() => {
+        const result = {
+          data: null,
+          error: { message: 'relation "journal_entries" does not exist in schema "private_internal"' },
+          count: null,
+        }
+        const buildChain = (): unknown =>
+          new Proxy(
+            {},
+            {
+              get(_t, prop) {
+                if (prop === 'then') {
+                  return (resolve: (v: unknown) => void) => resolve(result)
+                }
+                return () => buildChain()
+              },
+            },
+          )
+        return buildChain()
+      }),
+    } as never
+
+    await expect(
+      tool.execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/Database error while running text search/)
+
+    // And the schema-leak text never reaches the caller.
+    await expect(
+      tool.execute({ text: 'Google', limit: 50 }, 'company-1', 'user-1', supabase),
+    ).rejects.not.toThrow(/private_internal/)
+  })
 })
