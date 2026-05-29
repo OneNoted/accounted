@@ -301,7 +301,6 @@ describe('match_batch_allocate', () => {
         [
           txId,
           JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
-          outsiderId,
           companyId,
         ],
       )
