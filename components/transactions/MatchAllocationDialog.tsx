@@ -35,6 +35,11 @@ interface MatchAllocationDialogProps {
  * supplier invoices to the same shape so the row renderer + tally math stay
  * a single code path. The `kind` discriminator drives the underlying API
  * payload at submit time.
+ *
+ * `remaining` is in the invoice's own `currency` (USD, EUR, etc.).
+ * `exchangeRate` is the invoice's SEK-per-foreign-unit at invoicing time
+ * — used to compute the default SEK amount for cross-currency rows so the
+ * user doesn't have to mental-math the FX (PR #607).
  */
 interface AllocationCandidate {
   kind: 'customer_invoice' | 'supplier_invoice'
@@ -44,6 +49,7 @@ interface AllocationCandidate {
   remaining: number
   total: number
   currency: string
+  exchangeRate: number | null
   dueDate: string
 }
 
@@ -120,6 +126,7 @@ export default function MatchAllocationDialog({
               remaining: Number(r.remaining_amount ?? r.total ?? 0),
               total: Number(r.total ?? 0),
               currency: r.currency,
+              exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
               dueDate: r.due_date,
             })),
           )
@@ -142,6 +149,7 @@ export default function MatchAllocationDialog({
               remaining: Number(r.remaining_amount ?? r.total ?? 0),
               total: Number(r.total ?? 0),
               currency: r.currency,
+              exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
               dueDate: r.due_date,
             })),
           )
@@ -165,14 +173,29 @@ export default function MatchAllocationDialog({
   }, [open])
 
   const txAmountAbs = transaction ? Math.abs(transaction.amount) : 0
+  const txCurrency = transaction?.currency ?? 'SEK'
 
+  // Each draft's `amount` is the allocation in TRANSACTION currency (SEK
+  // for a Swedish bank import, etc.). For cross-currency invoices the user
+  // sees the invoice's own-currency remaining as a reference, but the
+  // input + tally + RPC all speak tx currency. This avoids the
+  // "1 USD + 1 SEK = 2 kr" tally bug from the original implementation
+  // (PR #607 fix).
   const allocated = useMemo(() => {
     return Object.values(drafts).reduce((sum, d) => sum + parseAmount(d.amount), 0)
   }, [drafts])
 
   const leftover = round2(txAmountAbs - allocated)
-  const overshoot = leftover < -0.005
-  const balanced = Math.abs(leftover) < 0.005 && Object.keys(drafts).length > 0
+
+  // FX rounding from the bank's side can easily produce a 1-2 SEK delta on
+  // a cross-currency payment; 0.5 öre tolerance is far too strict. Use the
+  // greater of 1 SEK or 0.5% of the tx amount so a 100 000 SEK transfer
+  // gets 500 SEK headroom and a 200 SEK Swish receipt still gets 1 SEK.
+  // (PR #607 widening.)
+  const overshootTolerance = Math.max(1, txAmountAbs * 0.005)
+  const overshoot = leftover < -overshootTolerance
+  const balanced =
+    Math.abs(leftover) < overshootTolerance && Object.keys(drafts).length > 0
 
   const filteredCandidates = useMemo(() => {
     const selectedIds = new Set(Object.keys(drafts))
@@ -194,7 +217,23 @@ export default function MatchAllocationDialog({
     setDrafts((prev) => {
       if (prev[candidate.id]) return prev
       const remainingTxBudget = Math.max(0, round2(txAmountAbs - allocated))
-      const defaultAmount = Math.min(candidate.remaining, remainingTxBudget)
+      // For cross-currency invoices, the user wants to allocate SEK from
+      // the bank tx — not the invoice's own-currency amount. Default to
+      // remaining × exchange_rate when available so they don't have to
+      // mental-math the FX. Falls back to the same-currency convention
+      // when no rate is on file. (PR #607 fix.)
+      const sameCurrency = candidate.currency === txCurrency
+      let candidateInTxCurrency: number
+      if (sameCurrency) {
+        candidateInTxCurrency = candidate.remaining
+      } else if (candidate.exchangeRate && candidate.exchangeRate > 0) {
+        candidateInTxCurrency = round2(candidate.remaining * candidate.exchangeRate)
+      } else {
+        // No FX rate available — fall back to remaining and let the user
+        // adjust manually. The widened tolerance covers the rounding.
+        candidateInTxCurrency = candidate.remaining
+      }
+      const defaultAmount = Math.min(candidateInTxCurrency, remainingTxBudget)
       return {
         ...prev,
         [candidate.id]: {
@@ -384,24 +423,38 @@ export default function MatchAllocationDialog({
                         </p>
                       </div>
                       {isSelected ? (
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="text"
-                            inputMode="decimal"
-                            value={draft.amount}
-                            onChange={(e) => setDraftAmount(c.id, e.target.value)}
-                            className="h-9 w-28 font-mono text-right tabular-nums"
-                            aria-label={t('amount_input_aria', { label: c.label })}
-                          />
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => removeAllocation(c.id)}
-                            aria-label={t('remove_aria', { label: c.label })}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={draft.amount}
+                              onChange={(e) => setDraftAmount(c.id, e.target.value)}
+                              className="h-9 w-28 font-mono text-right tabular-nums"
+                              aria-label={t('amount_input_aria', { label: c.label })}
+                            />
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => removeAllocation(c.id)}
+                              aria-label={t('remove_aria', { label: c.label })}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          {/* FX hint — appears only for cross-currency rows
+                              so the user can see what their tx-currency
+                              input translates to in invoice currency.
+                              Computed from the invoice's stored rate; if
+                              missing, show only the static currency label. */}
+                          {c.currency !== txCurrency && (
+                            <p className="text-[11px] tabular-nums text-muted-foreground">
+                              {c.exchangeRate && c.exchangeRate > 0
+                                ? `≈ ${formatCurrency(parseAmount(draft.amount) / c.exchangeRate, c.currency)}`
+                                : `(${c.currency})`}
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <Button
@@ -450,7 +503,7 @@ export default function MatchAllocationDialog({
                 <Check className="h-4 w-4 flex-shrink-0" />
                 <p>{t('balanced_message')}</p>
               </div>
-            ) : leftover > 0.005 && Object.keys(drafts).length > 0 ? (
+            ) : leftover > overshootTolerance && Object.keys(drafts).length > 0 ? (
               <p className="text-xs text-muted-foreground">
                 {t('leftover_note', {
                   amount: formatCurrency(leftover, transaction.currency),
