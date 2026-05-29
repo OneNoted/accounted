@@ -66,9 +66,15 @@ function makeChainMock(lines: unknown[], count: number) {
  */
 function makeQueueMock(results: Array<{ data: unknown[]; count: number }>) {
   const ilikeCalls: Array<{ column: string; pattern: string }> = []
+  // Each entry is one leg's recorded .eq calls. Index lines up with
+  // .from() invocation order, so tests can assert per-leg tenant scoping.
+  const eqCallsByLeg: Array<Array<{ column: string; value: unknown }>> = []
   let callIndex = 0
 
-  const buildChain = (result: { data: unknown[]; error: null; count: number }): unknown => {
+  const buildChain = (
+    result: { data: unknown[]; error: null; count: number },
+    legEqCalls: Array<{ column: string; value: unknown }>,
+  ): unknown => {
     return new Proxy(
       {},
       {
@@ -79,10 +85,16 @@ function makeQueueMock(results: Array<{ data: unknown[]; count: number }>) {
           if (prop === 'ilike') {
             return (column: string, pattern: string) => {
               ilikeCalls.push({ column, pattern })
-              return buildChain(result)
+              return buildChain(result, legEqCalls)
             }
           }
-          return () => buildChain(result)
+          if (prop === 'eq') {
+            return (column: string, value: unknown) => {
+              legEqCalls.push({ column, value })
+              return buildChain(result, legEqCalls)
+            }
+          }
+          return () => buildChain(result, legEqCalls)
         },
       },
     )
@@ -92,11 +104,13 @@ function makeQueueMock(results: Array<{ data: unknown[]; count: number }>) {
     from: vi.fn().mockImplementation(() => {
       const next = results[callIndex] ?? { data: [], count: 0 }
       callIndex += 1
-      return buildChain({ data: next.data, error: null, count: next.count })
+      const legEqCalls: Array<{ column: string; value: unknown }> = []
+      eqCallsByLeg.push(legEqCalls)
+      return buildChain({ data: next.data, error: null, count: next.count }, legEqCalls)
     }),
   } as never
 
-  return { supabase, ilikeCalls, callCount: () => callIndex }
+  return { supabase, ilikeCalls, eqCallsByLeg, callCount: () => callIndex }
 }
 
 /** Build a LineRow fixture inline — keeps the per-test data dense and readable. */
@@ -375,6 +389,33 @@ describe('gnubok_query_journal — free-text search', () => {
 
     expect(result.returned_lines).toBe(2)
     expect(result.truncated).toBe(true)
+  })
+
+  it('scopes BOTH parallel legs to the caller company_id (tenant isolation)', async () => {
+    // Defence-in-depth against a future refactor that splits the legs and
+    // accidentally drops .eq('journal_entries.company_id', companyId) from
+    // one of them. RLS would still block cross-tenant reads, but losing the
+    // app-level filter would mean a wider scan than intended.
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase, eqCallsByLeg, callCount } = makeQueueMock([
+      { data: [], count: 0 },
+      { data: [], count: 0 },
+    ])
+
+    await tool.execute(
+      { text: 'Google', limit: 50 },
+      'company-xyz',
+      'user-1',
+      supabase,
+    )
+
+    expect(callCount()).toBe(2)
+    for (const legEqs of eqCallsByLeg) {
+      const scoped = legEqs.some(
+        (c) => c.column === 'journal_entries.company_id' && c.value === 'company-xyz',
+      )
+      expect(scoped).toBe(true)
+    }
   })
 
   it('rejects text longer than 200 characters', async () => {

@@ -3974,7 +3974,7 @@ export const tools: McpTool[] = [
         date_to: { type: 'string', description: 'Latest entry date (YYYY-MM-DD, inclusive)' },
         amount_min: { type: 'number', description: 'Minimum line amount (absolute value of debit OR credit)' },
         amount_max: { type: 'number', description: 'Maximum line amount (absolute value)' },
-        text: { type: 'string', description: 'Free-text search in entry description and line description' },
+        text: { type: 'string', maxLength: 200, description: 'Free-text search in entry description and line description (max 200 chars)' },
         voucher_series: { type: 'string', description: 'Filter by voucher series (e.g. "A")' },
         voucher_number_from: { type: 'number', description: 'Lowest voucher number (inclusive)' },
         voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
@@ -3982,7 +3982,7 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
         project: { type: 'string', description: 'Filter by project code' },
         cost_center: { type: 'string', description: 'Filter by cost center' },
-        limit: { type: 'number', description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
       },
     },
     outputSchema: {
@@ -4013,7 +4013,7 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args, companyId, _userId, supabase) {
+    async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
       const status = (args.status as string) || 'posted'
       const accounts = args.accounts as string[] | undefined
@@ -4135,10 +4135,12 @@ export const tools: McpTool[] = [
 
         // Fetch up to 2× limit per leg to reduce global-ordering loss when
         // one leg is much more selective than the other (e.g. 150 line
-        // matches vs 5 entry matches with limit=100). The final post-merge
+        // matches vs 5 entry matches with limit=100). Hard-capped at 500
+        // rows per leg so a caller-supplied `limit` near its own ceiling
+        // can't fan out to 2× very large queries. The final post-merge
         // slice still caps at `limit`; the wider per-leg window just gives
         // the merge a better tail to choose from.
-        const legLimit = limit * 2
+        const legLimit = Math.min(limit * 2, 500)
 
         const buildLeg = (column: 'line_description' | 'journal_entries.description') =>
           buildBaseQuery()
@@ -4155,6 +4157,7 @@ export const tools: McpTool[] = [
         if (byLine.error || byEntry.error) {
           log.warn('query_journal text-search failed', {
             companyId,
+            userId,
             byLine: byLine.error?.message ?? null,
             byEntry: byEntry.error?.message ?? null,
           })
@@ -4188,7 +4191,7 @@ export const tools: McpTool[] = [
       } else {
         const res = await applyOrderAndLimit(buildBaseQuery())
         if (res.error) {
-          log.warn('query_journal failed', { companyId, error: res.error.message })
+          log.warn('query_journal failed', { companyId, userId, error: res.error.message })
           throw new Error('Database error while running journal query')
         }
         data = (res.data ?? []) as unknown as LineRow[]
