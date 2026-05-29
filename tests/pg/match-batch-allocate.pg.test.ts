@@ -6,7 +6,7 @@ import {
   insertCompanyMember,
   insertFiscalPeriod,
 } from '@/tests/pg/fixtures'
-import { getPool } from '@/tests/pg/setup'
+import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
  * Covers 20260529120100_match_batch_allocate:
@@ -160,73 +160,88 @@ describe('match_batch_allocate', () => {
       { kind: 'supplier_invoice', supplier_invoice_id: si3, amount: 1500 },
     ]
 
-    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
-      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-      [txId, JSON.stringify(allocations), userId, companyId],
-    )
-    const result = r.rows[0]!.match_batch_allocate
+    // withUserContext sets request.jwt.claim.sub so the RPC's auth.uid()
+    // membership check (PR #603 round 2) resolves the seeded owner.
+    // ALL assertions about post-RPC state must run inside this block since
+    // it rolls back at the end.
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [txId, JSON.stringify(allocations), userId, companyId],
+      )
+      const result = r.rows[0]!.match_batch_allocate
 
-    expect(result.ok).toBe(true)
-    expect(result.journal_entry_id).toBeTruthy()
-    expect(result.voucher_number).toBeGreaterThan(0)
-    expect(result.total_allocated).toBe(6500)
-    expect(result.leftover).toBe(0)
-    expect(result.allocations).toHaveLength(3)
+      expect(result.ok).toBe(true)
+      expect(result.journal_entry_id).toBeTruthy()
+      expect(result.voucher_number).toBeGreaterThan(0)
+      expect(result.total_allocated).toBe(6500)
+      expect(result.leftover).toBe(0)
+      expect(result.allocations).toHaveLength(3)
 
-    // Verify one verifikat with N+1 lines (3 × Dr 2440 + 1 × Cr 1930).
-    const lines = await getPool().query<{
-      account_number: string
-      debit_amount: string
-      credit_amount: string
-    }>(
-      `SELECT account_number, debit_amount, credit_amount
-         FROM public.journal_entry_lines
-        WHERE journal_entry_id = $1
-        ORDER BY sort_order`,
-      [result.journal_entry_id],
-    )
-    expect(lines.rows).toHaveLength(4)
-    const apLines = lines.rows.filter((l) => l.account_number === '2440')
-    const bankLines = lines.rows.filter((l) => l.account_number === '1930')
-    expect(apLines).toHaveLength(3)
-    expect(bankLines).toHaveLength(1)
-    expect(Number(bankLines[0]!.credit_amount)).toBe(6500)
-    const apSum = apLines.reduce((s, l) => s + Number(l.debit_amount), 0)
-    expect(apSum).toBe(6500)
+      // Verify one verifikat with N+1 lines (3 × Dr 2440 + 1 × Cr 1930).
+      const lines = await client.query<{
+        account_number: string
+        debit_amount: string
+        credit_amount: string
+      }>(
+        `SELECT account_number, debit_amount, credit_amount
+           FROM public.journal_entry_lines
+          WHERE journal_entry_id = $1
+          ORDER BY sort_order`,
+        [result.journal_entry_id],
+      )
+      expect(lines.rows).toHaveLength(4)
+      const apLines = lines.rows.filter((l) => l.account_number === '2440')
+      const bankLines = lines.rows.filter((l) => l.account_number === '1930')
+      expect(apLines).toHaveLength(3)
+      expect(bankLines).toHaveLength(1)
+      expect(Number(bankLines[0]!.credit_amount)).toBe(6500)
+      const apSum = apLines.reduce((s, l) => s + Number(l.debit_amount), 0)
+      expect(apSum).toBe(6500)
 
-    // Verify all 3 supplier invoices flipped to 'paid'.
-    const inv1 = await getPool().query<{ status: string; paid_amount: string; remaining_amount: string }>(
-      `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
-      [si1],
-    )
-    expect(inv1.rows[0]!.status).toBe('paid')
-    expect(Number(inv1.rows[0]!.paid_amount)).toBe(2000)
-    expect(Number(inv1.rows[0]!.remaining_amount)).toBe(0)
+      // Verify all 3 supplier invoices flipped to 'paid'.
+      const inv1 = await client.query<{ status: string; paid_amount: string; remaining_amount: string }>(
+        `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+        [si1],
+      )
+      expect(inv1.rows[0]!.status).toBe('paid')
+      expect(Number(inv1.rows[0]!.paid_amount)).toBe(2000)
+      expect(Number(inv1.rows[0]!.remaining_amount)).toBe(0)
 
-    // Verify 3 supplier_invoice_payments rows all reference the same JE.
-    const payments = await getPool().query<{ journal_entry_id: string; supplier_invoice_id: string }>(
-      `SELECT journal_entry_id, supplier_invoice_id
-         FROM public.supplier_invoice_payments WHERE transaction_id = $1`,
-      [txId],
-    )
-    expect(payments.rows).toHaveLength(3)
-    const jeIds = new Set(payments.rows.map((p) => p.journal_entry_id))
-    expect(jeIds.size).toBe(1)
-    expect(jeIds.has(result.journal_entry_id!)).toBe(true)
+      // Verify 3 supplier_invoice_payments rows all reference the same JE.
+      const payments = await client.query<{ journal_entry_id: string; supplier_invoice_id: string }>(
+        `SELECT journal_entry_id, supplier_invoice_id
+           FROM public.supplier_invoice_payments WHERE transaction_id = $1`,
+        [txId],
+      )
+      expect(payments.rows).toHaveLength(3)
+      const jeIds = new Set(payments.rows.map((p) => p.journal_entry_id))
+      expect(jeIds.size).toBe(1)
+      expect(jeIds.has(result.journal_entry_id!)).toBe(true)
 
-    // Verify tx.journal_entry_id is set + supplier_invoice_id left NULL (multi).
-    const txRow = await getPool().query<{
-      journal_entry_id: string | null
-      supplier_invoice_id: string | null
-      is_business: boolean
-    }>(
-      `SELECT journal_entry_id, supplier_invoice_id, is_business
-         FROM public.transactions WHERE id = $1`,
-      [txId],
-    )
-    expect(txRow.rows[0]!.journal_entry_id).toBe(result.journal_entry_id)
-    expect(txRow.rows[0]!.supplier_invoice_id).toBeNull()
-    expect(txRow.rows[0]!.is_business).toBe(true)
+      // Verify tx.journal_entry_id is set + supplier_invoice_id left NULL (multi).
+      const txRow = await client.query<{
+        journal_entry_id: string | null
+        supplier_invoice_id: string | null
+        is_business: boolean
+      }>(
+        `SELECT journal_entry_id, supplier_invoice_id, is_business
+           FROM public.transactions WHERE id = $1`,
+        [txId],
+      )
+      expect(txRow.rows[0]!.journal_entry_id).toBe(result.journal_entry_id)
+      expect(txRow.rows[0]!.supplier_invoice_id).toBeNull()
+      expect(txRow.rows[0]!.is_business).toBe(true)
+
+      // Verify samlingsverifikat carries the supplier-side source_type
+      // (PR #603 compliance fix — was previously 'invoice_paid' for both
+      // directions which mis-routed behandlingshistorik filters).
+      const je = await client.query<{ source_type: string }>(
+        `SELECT source_type FROM public.journal_entries WHERE id = $1`,
+        [result.journal_entry_id],
+      )
+      expect(je.rows[0]!.source_type).toBe('supplier_invoice_paid')
+    })
   })
 
   it('rejects with BATCH_OVERSHOOT when allocation exceeds invoice remaining', async () => {
@@ -241,30 +256,59 @@ describe('match_batch_allocate', () => {
       { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 5000 },
     ]
 
-    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
-      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-      [txId, JSON.stringify(allocations), userId, companyId],
-    )
-    const result = r.rows[0]!.match_batch_allocate
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [txId, JSON.stringify(allocations), userId, companyId],
+      )
+      const result = r.rows[0]!.match_batch_allocate
 
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('BATCH_OVERSHOOT')
-    expect(result.details).toMatchObject({ supplier_invoice_id: si, requested: 5000 })
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_OVERSHOOT')
+      expect(result.details).toMatchObject({ supplier_invoice_id: si, requested: 5000 })
 
-    // No journal entry should have been created (validation runs before any writes).
-    const txRow = await getPool().query<{ journal_entry_id: string | null }>(
-      `SELECT journal_entry_id FROM public.transactions WHERE id = $1`,
-      [txId],
-    )
-    expect(txRow.rows[0]!.journal_entry_id).toBeNull()
+      // No journal entry should have been created.
+      const txRow = await client.query<{ journal_entry_id: string | null }>(
+        `SELECT journal_entry_id FROM public.transactions WHERE id = $1`,
+        [txId],
+      )
+      expect(txRow.rows[0]!.journal_entry_id).toBeNull()
 
-    // Invoice paid_amount/remaining unchanged.
-    const inv = await getPool().query<{ paid_amount: string; remaining_amount: string }>(
-      `SELECT paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
-      [si],
-    )
-    expect(Number(inv.rows[0]!.paid_amount)).toBe(0)
-    expect(Number(inv.rows[0]!.remaining_amount)).toBe(1000)
+      const inv = await client.query<{ paid_amount: string; remaining_amount: string }>(
+        `SELECT paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+        [si],
+      )
+      expect(Number(inv.rows[0]!.paid_amount)).toBe(0)
+      expect(Number(inv.rows[0]!.remaining_amount)).toBe(1000)
+    })
+  })
+
+  it('rejects with BATCH_UNAUTHORIZED when caller is not a member of the company', async () => {
+    const { userId, companyId } = await seedTenant()
+    const supplier = await insertSupplier({ userId, companyId })
+    const si = await insertSupplierInvoice({
+      userId, companyId, supplierId: supplier, total: 1000,
+    })
+    const txId = await insertTransaction({ userId, companyId, amount: -1000 })
+
+    // Different user — never added to company_members for companyId. The
+    // SECURITY DEFINER check (PR #603 compliance) refuses any access.
+    const outsiderId = await insertAuthUser()
+
+    await withUserContext(outsiderId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [
+          txId,
+          JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
+          outsiderId,
+          companyId,
+        ],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_UNAUTHORIZED')
+    })
   })
 
   it('rejects with BATCH_TX_ALREADY_BOOKED when tx already has a JE', async () => {
@@ -300,13 +344,15 @@ describe('match_batch_allocate', () => {
       { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
     ]
 
-    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
-      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-      [txId, JSON.stringify(allocations), userId, companyId],
-    )
-    const result = r.rows[0]!.match_batch_allocate
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('BATCH_TX_ALREADY_BOOKED')
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [txId, JSON.stringify(allocations), userId, companyId],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_TX_ALREADY_BOOKED')
+    })
   })
 
   it('rejects with BATCH_DIRECTION_MISMATCH for supplier allocation against income tx', async () => {
@@ -319,18 +365,20 @@ describe('match_batch_allocate', () => {
     // Positive tx (income) — wrong direction for supplier_invoice allocation.
     const txId = await insertTransaction({ userId, companyId, amount: 1000 })
 
-    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
-      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-      [
-        txId,
-        JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
-        userId,
-        companyId,
-      ],
-    )
-    const result = r.rows[0]!.match_batch_allocate
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('BATCH_DIRECTION_MISMATCH')
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [
+          txId,
+          JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
+          userId,
+          companyId,
+        ],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_DIRECTION_MISMATCH')
+    })
   })
 
   it('rejects BATCH_DUPLICATE_ALLOCATION when the same supplier invoice appears twice', async () => {
@@ -350,14 +398,16 @@ describe('match_batch_allocate', () => {
       { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 400 },
     ]
 
-    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
-      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-      [txId, JSON.stringify(allocations), userId, companyId],
-    )
-    const result = r.rows[0]!.match_batch_allocate
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('BATCH_DUPLICATE_ALLOCATION')
-    expect(result.details?.id).toBe(si)
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [txId, JSON.stringify(allocations), userId, companyId],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_DUPLICATE_ALLOCATION')
+      expect(result.details?.id).toBe(si)
+    })
   })
 
   it('rejects BATCH_MIXED_KINDS_UNSUPPORTED on customer + supplier in same batch', async () => {
@@ -391,20 +441,22 @@ describe('match_batch_allocate', () => {
     // check, so the result code is MIXED_KINDS regardless.
     const txId = await insertTransaction({ userId, companyId, amount: -2000 })
 
-    const r = await getPool().query<{ match_batch_allocate: RpcResult }>(
-      `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-      [
-        txId,
-        JSON.stringify([
-          { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
-          { kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 },
-        ]),
-        userId,
-        companyId,
-      ],
-    )
-    const result = r.rows[0]!.match_batch_allocate
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('BATCH_MIXED_KINDS_UNSUPPORTED')
+    await withUserContext(userId, async (client) => {
+      const r = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        [
+          txId,
+          JSON.stringify([
+            { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
+            { kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 },
+          ]),
+          userId,
+          companyId,
+        ],
+      )
+      const result = r.rows[0]!.match_batch_allocate
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('BATCH_MIXED_KINDS_UNSUPPORTED')
+    })
   })
 })

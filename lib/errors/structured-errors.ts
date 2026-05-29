@@ -1812,6 +1812,11 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen kunde inte hittas.',
     message_en: 'Transaction not found.',
   },
+  BATCH_UNAUTHORIZED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att fördela transaktioner för det här företaget.',
+    message_en: 'You are not authorized to allocate transactions for this company.',
+  },
   BATCH_TX_ALREADY_BOOKED: {
     httpStatus: 409,
     message_sv:

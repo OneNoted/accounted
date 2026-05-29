@@ -543,7 +543,11 @@ export const MatchBatchSchema = z
           }),
         ]),
       )
-      .min(1, 'At least one allocation is required'),
+      .min(1, 'At least one allocation is required')
+      // Cap at 100 to prevent DoS via unbounded FOR UPDATE locks in the RPC
+      // (PR #603 compliance review — OWASP V4.2). Domain-appropriate ceiling:
+      // a real samlingsverifikat rarely covers more than a few dozen invoices.
+      .max(100, 'At most 100 allocations per batch'),
   })
   .superRefine((data, ctx) => {
     // Reject mixed customer + supplier in a single batch — semantically a
