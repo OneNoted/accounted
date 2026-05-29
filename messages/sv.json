@@ -1869,7 +1869,6 @@
     "overshoot_warning": "Fördelningen överskrider transaktionen med {excess}. Sänk något belopp eller ta bort en faktura.",
     "undershoot_warning": "{amount} kvar att fördela — hela transaktionen måste täckas innan du kan bekräfta. Lägg till fler fakturor eller justera beloppen.",
     "fx_rate_missing_warning": "Saknar växelkurs för {currency} — ange beloppet i kronor manuellt.",
-    "leftover_note": "{amount} kvar att fördela (lämna oallokerat eller lägg till fler fakturor).",
     "error_no_allocations_title": "Inga fördelningar",
     "error_no_allocations_description": "Välj minst en faktura att fördela betalningen på.",
     "error_submit_title": "Fördelningen kunde inte sparas",

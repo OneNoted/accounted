@@ -18,7 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, isValidExchangeRate } from '@/lib/utils'
 import { Loader2, Search, X, Plus, Check, AlertTriangle } from 'lucide-react'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -228,11 +228,7 @@ export default function MatchAllocationDialog({
       let defaultAmount: number
       if (sameCurrency) {
         defaultAmount = Math.min(candidate.remaining, remainingTxBudget)
-      } else if (
-        candidate.exchangeRate != null
-        && candidate.exchangeRate > 0
-        && candidate.exchangeRate < 100000  // bound check — sanity guard on a trusted field
-      ) {
+      } else if (isValidExchangeRate(candidate.exchangeRate)) {
         defaultAmount = round2(candidate.remaining * candidate.exchangeRate)
       } else {
         // No (or out-of-range) FX rate. Leave the amount blank rather
@@ -456,18 +452,15 @@ export default function MatchAllocationDialog({
                               warn instead of silently defaulting to a
                               misleading number. PR #607 round-1 review. */}
                           {c.currency !== txCurrency && (
-                            c.exchangeRate != null
-                              && c.exchangeRate > 0
-                              && c.exchangeRate < 100000
-                              ? (
-                                <p className="text-[11px] tabular-nums text-muted-foreground">
-                                  ≈ {formatCurrency(parseAmount(draft.amount) / c.exchangeRate, c.currency)}
-                                </p>
-                              ) : (
-                                <p className="text-[11px] tabular-nums text-warning-foreground">
-                                  {t('fx_rate_missing_warning', { currency: c.currency })}
-                                </p>
-                              )
+                            isValidExchangeRate(c.exchangeRate) ? (
+                              <p className="text-[11px] tabular-nums text-muted-foreground">
+                                ≈ {formatCurrency(parseAmount(draft.amount) / c.exchangeRate, c.currency)}
+                              </p>
+                            ) : (
+                              <p className="text-[11px] tabular-nums text-warning-foreground">
+                                {t('fx_rate_missing_warning', { currency: c.currency })}
+                              </p>
+                            )
                           )}
                         </div>
                       ) : (

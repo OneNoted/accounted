@@ -166,8 +166,8 @@ describe('match_batch_allocate', () => {
     // it rolls back at the end.
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
 
@@ -258,8 +258,8 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
 
@@ -297,7 +297,7 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(outsiderId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
@@ -346,8 +346,8 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
       expect(result.ok).toBe(false)
@@ -367,11 +367,10 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([{ kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 }]),
-          userId,
           companyId,
         ],
       )
@@ -400,8 +399,8 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
-        [txId, JSON.stringify(allocations), userId, companyId],
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [txId, JSON.stringify(allocations), companyId],
       )
       const result = r.rows[0]!.match_batch_allocate
       expect(result.ok).toBe(false)
@@ -443,14 +442,13 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([
             { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
             { kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 },
           ]),
-          userId,
           companyId,
         ],
       )
@@ -491,13 +489,12 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([
             { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1050 },
           ]),
-          userId,
           companyId,
         ],
       )
@@ -552,6 +549,20 @@ describe('match_batch_allocate', () => {
       expect(Number(inv.rows[0]!.paid_amount)).toBe(100) // USD value, not SEK
       expect(Number(inv.rows[0]!.remaining_amount)).toBe(0)
 
+      // Round-3: payment row stores the effective payment-day rate
+      // (v_alloc_amount / v_inv_remaining = 1050/100 = 10.5) alongside
+      // the invoicing rate (10.0). swedish-compliance traceability fix.
+      const pay = await client.query<{
+        exchange_rate: string | null; payment_exchange_rate: string | null
+      }>(
+        `SELECT exchange_rate, payment_exchange_rate
+         FROM public.supplier_invoice_payments
+         WHERE supplier_invoice_id = $1`,
+        [si],
+      )
+      expect(Number(pay.rows[0]!.exchange_rate)).toBe(10) // invoicing rate
+      expect(Number(pay.rows[0]!.payment_exchange_rate)).toBe(10.5) // payment-day rate
+
       // Sum of debits = sum of credits (balanced verifikat).
       const balance = await client.query<{ debits: string; credits: string }>(
         `SELECT
@@ -579,13 +590,12 @@ describe('match_batch_allocate', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ match_batch_allocate: RpcResult }>(
-        `SELECT match_batch_allocate($1, $2::jsonb, $3, $4)`,
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
         [
           txId,
           JSON.stringify([
             { kind: 'supplier_invoice', supplier_invoice_id: si, amount: 1000 },
           ]),
-          userId,
           companyId,
         ],
       )
