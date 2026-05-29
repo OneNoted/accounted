@@ -518,6 +518,45 @@ export const LinkSupplierInvoiceToVoucherSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
+/**
+ * Allocate one bank transaction across N customer OR N supplier invoices.
+ * Backed by the match_batch_allocate PL/pgSQL RPC, which builds a single
+ * combined verifikat (samlingsverifikation) and inserts N payment rows.
+ */
+export const MatchBatchSchema = z
+  .object({
+    allocations: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('customer_invoice'),
+            invoice_id: uuid,
+            amount: nonNegativeAmount,
+          }),
+          z.object({
+            kind: z.literal('supplier_invoice'),
+            supplier_invoice_id: uuid,
+            amount: nonNegativeAmount,
+          }),
+        ]),
+      )
+      .min(1, 'At least one allocation is required'),
+  })
+  .superRefine((data, ctx) => {
+    // Reject mixed customer + supplier in a single batch — semantically a
+    // single bank transfer settles invoices on one side. The RPC also guards
+    // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
+    // layer gives a cleaner 400 with a per-field path.
+    const kinds = new Set(data.allocations.map((a) => a.kind))
+    if (kinds.size > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['allocations'],
+        message: 'Allocations cannot mix customer_invoice and supplier_invoice kinds',
+      })
+    }
+  })
+
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
   // Optional invoice to settle alongside the link. When provided, the
