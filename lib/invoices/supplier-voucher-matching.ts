@@ -487,6 +487,23 @@ export interface LinkSupplierInvoiceToVoucherResult {
  *
  * Re-validates inside the same call to defend against stage→commit drift.
  */
+interface RpcLinkOk {
+  ok: true
+  payment_id: string
+  invoice_status: 'paid' | 'partially_paid'
+  paid_amount: number
+  remaining_amount: number
+  payment_amount: number
+  journal_entry_id: string
+  currency: string
+}
+
+interface RpcLinkErr {
+  ok: false
+  code: SupplierVoucherLinkErrorCode
+  details?: Record<string, unknown>
+}
+
 export async function linkSupplierInvoiceToVoucher(
   supabase: SupabaseClient,
   userId: string,
@@ -496,151 +513,77 @@ export async function linkSupplierInvoiceToVoucher(
   | { ok: true; result: LinkSupplierInvoiceToVoucherResult }
   | { ok: false; code: SupplierVoucherLinkErrorCode; details?: Record<string, unknown> }
 > {
-  const { data: invoice, error: invoiceError } = await supabase
-    .from('supplier_invoices')
-    .select('*, supplier:suppliers(*)')
-    .eq('id', params.supplierInvoiceId)
-    .eq('company_id', companyId)
-    .single()
-  if (invoiceError || !invoice) {
-    return {
-      ok: false,
-      code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND',
-      details: { supplier_invoice_id: params.supplierInvoiceId },
-    }
-  }
+  // All validation + writes happen inside link_supplier_invoice_to_voucher
+  // (PL/pgSQL). The function locks the invoice row, validates the voucher,
+  // and applies UPDATE + INSERT in a single PG transaction so a failure on
+  // either rolls back automatically. The previous TS implementation did
+  // UPDATE-then-INSERT with a manual rollback that could overwrite a
+  // concurrent sibling's successful write — PR #602 review fix.
+  const { data, error } = await supabase.rpc('link_supplier_invoice_to_voucher', {
+    p_supplier_invoice_id: params.supplierInvoiceId,
+    p_journal_entry_id: params.journalEntryId,
+    p_user_id: userId,
+    p_company_id: companyId,
+    p_notes: params.notes ?? null,
+  })
 
-  // Only invoices in an open state can take more payment. Mirrors the
-  // statuses accepted by /api/transactions/[id]/match-supplier-invoice.
-  if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
-    return {
-      ok: false,
-      code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID',
-      details: { status: invoice.status },
-    }
-  }
-
-  const validation = await validateVoucherForSupplierInvoiceLink(
-    supabase,
-    companyId,
-    invoice as SupplierInvoice & { supplier?: Supplier },
-    params.journalEntryId,
-  )
-  if (!validation.ok) return validation
-
-  const now = new Date().toISOString()
-  const newPaidAmount = round2((invoice.paid_amount ?? 0) + validation.paymentAmount)
-  const newRemaining = validation.remainingAfter
-  const newStatus: 'paid' | 'partially_paid' = validation.isFullyPaid ? 'paid' : 'partially_paid'
-
-  // Optimistic lock: only update if the invoice is still in an open state.
-  // Note that we do NOT touch transactions.supplier_invoice_id here — this
-  // flow has no bank transaction, the link is voucher-only.
-  const { data: updatedRows, error: updateInvError } = await supabase
-    .from('supplier_invoices')
-    .update({
-      status: newStatus,
-      paid_at: validation.isFullyPaid ? now : invoice.paid_at,
-      paid_amount: newPaidAmount,
-      remaining_amount: newRemaining,
+  if (error) {
+    log.error('link_supplier_invoice_to_voucher RPC error', {
+      companyId,
+      userId,
+      supplierInvoiceId: params.supplierInvoiceId,
+      journalEntryId: params.journalEntryId,
+      message: error.message,
     })
-    .eq('id', params.supplierInvoiceId)
-    .eq('company_id', companyId)
-    .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
-    .select('id')
-
-  if (updateInvError) {
     return {
       ok: false,
       code: 'LINK_SI_VOUCHER_DB_ERROR',
-      details: { reason: updateInvError.message },
+      details: { reason: error.message },
     }
   }
-  if (!updatedRows || updatedRows.length === 0) {
-    return { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID' }
+
+  const result = data as RpcLinkOk | RpcLinkErr | null
+  if (!result) {
+    return { ok: false, code: 'LINK_SI_VOUCHER_DB_ERROR', details: { reason: 'empty RPC response' } }
+  }
+  if (!result.ok) {
+    return { ok: false, code: result.code, details: result.details }
   }
 
-  const { data: payment, error: insertError } = await supabase
-    .from('supplier_invoice_payments')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      supplier_invoice_id: params.supplierInvoiceId,
-      payment_date: validation.voucher.entry_date,
-      amount: validation.paymentAmount,
-      currency: invoice.currency,
-      journal_entry_id: params.journalEntryId,
-      transaction_id: null,
-      notes: params.notes ?? null,
-    })
-    .select('id')
-    .single()
+  // Fetch the now-updated invoice for event emission. Lightweight; the RPC
+  // committed before this read so the row reflects post-link state.
+  const { data: invoice } = await supabase
+    .from('supplier_invoices')
+    .select('*')
+    .eq('id', params.supplierInvoiceId)
+    .eq('company_id', companyId)
+    .maybeSingle()
 
-  if (insertError) {
-    // Roll back the invoice advance so we don't leave it stuck without a
-    // payment row. The unique constraint on
-    // (transaction_id, supplier_invoice_id) on the payments table doesn't
-    // help here because transaction_id is NULL — but the partial unique on
-    // (journal_entry_id, supplier_invoice_id) (if present) or the LINK_VOUCHER
-    // pre-check is the race guard.
-    const { error: rollbackError } = await supabase
-      .from('supplier_invoices')
-      .update({
-        status: invoice.status,
-        paid_at: invoice.paid_at,
-        paid_amount: invoice.paid_amount,
-        remaining_amount: invoice.remaining_amount,
-      })
-      .eq('id', params.supplierInvoiceId)
-      .eq('company_id', companyId)
-
-    if (rollbackError) {
-      log.error(
-        'supplier voucher link rollback failed — invoice left in advanced state without payment row',
-        {
-          companyId,
+  if (invoice) {
+    try {
+      await eventBus.emit({
+        type: 'supplier_invoice.paid',
+        payload: {
+          supplierInvoice: invoice as SupplierInvoice,
+          paymentAmount: result.payment_amount,
           userId,
-          supplierInvoiceId: params.supplierInvoiceId,
-          journalEntryId: params.journalEntryId,
-          insertError: insertError.message,
-          rollbackError: rollbackError.message,
+          companyId,
         },
-      )
+      })
+    } catch {
+      /* non-critical */
     }
-
-    if (insertError.code === '23505') {
-      return { ok: false, code: 'LINK_SI_VOUCHER_ALREADY_LINKED' }
-    }
-    return {
-      ok: false,
-      code: 'LINK_SI_VOUCHER_DB_ERROR',
-      details: { reason: insertError.message },
-    }
-  }
-
-  try {
-    await eventBus.emit({
-      type: 'supplier_invoice.paid',
-      payload: {
-        supplierInvoice: invoice as SupplierInvoice,
-        paymentAmount: validation.paymentAmount,
-        userId,
-        companyId,
-      },
-    })
-  } catch {
-    /* non-critical */
   }
 
   return {
     ok: true,
     result: {
-      paymentId: (payment as { id: string }).id,
-      invoiceStatus: newStatus,
-      paidAmount: newPaidAmount,
-      remainingAmount: newRemaining,
-      paymentAmount: validation.paymentAmount,
-      journalEntryId: params.journalEntryId,
+      paymentId: result.payment_id,
+      invoiceStatus: result.invoice_status,
+      paidAmount: result.paid_amount,
+      remainingAmount: result.remaining_amount,
+      paymentAmount: result.payment_amount,
+      journalEntryId: result.journal_entry_id,
     },
   }
 }
@@ -648,8 +591,13 @@ export async function linkSupplierInvoiceToVoucher(
 // ── Helpers ─────────────────────────────────────────────────
 
 function computeRemaining(invoice: SupplierInvoice): number {
-  if (typeof invoice.remaining_amount === 'number' && invoice.remaining_amount > 0) {
-    return invoice.remaining_amount
+  // Trust the stored value whenever present, including the legitimate 0 for
+  // a fully-paid invoice. Falling through to `total - paid_amount` for the
+  // 0 case can leak rounding drift across multiple payments and return a
+  // tiny positive number, slipping a fully-paid invoice past
+  // LINK_SI_VOUCHER_INVOICE_FULLY_PAID. PR #602 review fix.
+  if (typeof invoice.remaining_amount === 'number') {
+    return Math.max(0, invoice.remaining_amount)
   }
   const paid = invoice.paid_amount ?? 0
   return Math.max(0, round2(invoice.total - paid))

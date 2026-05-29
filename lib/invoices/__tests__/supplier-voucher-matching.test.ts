@@ -5,7 +5,6 @@ import {
 } from '../supplier-voucher-matching'
 import {
   makeSupplierInvoice,
-  makeSupplier,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
@@ -303,9 +302,18 @@ describe('linkSupplierInvoiceToVoucher', () => {
     vi.clearAllMocks()
   })
 
-  it('rejects with INVOICE_NOT_FOUND when the supplier invoice is missing', async () => {
+  // The implementation now delegates the lock + validate + UPDATE + INSERT
+  // sequence to the link_supplier_invoice_to_voucher PL/pgSQL RPC (PR #602
+  // review fix). The TS wrapper only translates the RPC's structured jsonb
+  // return into the lib's typed Result type and emits the paid event. These
+  // tests mock the RPC response directly.
+
+  it('rejects with INVOICE_NOT_FOUND when the RPC reports the invoice is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: new Error('not found') })
+    enqueue({
+      data: { ok: false, code: 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND' },
+      error: null,
+    })
     const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
       supplierInvoiceId: 'si-missing',
       journalEntryId: 'je-1',
@@ -314,7 +322,42 @@ describe('linkSupplierInvoiceToVoucher', () => {
     if (!result.ok) expect(result.code).toBe('LINK_SI_VOUCHER_INVOICE_NOT_FOUND')
   })
 
-  it('rejects with INVOICE_FULLY_PAID when the invoice is already paid', async () => {
+  it('rejects with INVOICE_FULLY_PAID when the RPC reports the invoice is already paid', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: false,
+        code: 'LINK_SI_VOUCHER_INVOICE_FULLY_PAID',
+        details: { status: 'paid' },
+      },
+      error: null,
+    })
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('LINK_SI_VOUCHER_INVOICE_FULLY_PAID')
+      expect(result.details?.status).toBe('paid')
+    }
+  })
+
+  it('returns LINK_SI_VOUCHER_DB_ERROR when the RPC raises an error', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'connection lost' } })
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-1',
+      journalEntryId: 'je-1',
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('LINK_SI_VOUCHER_DB_ERROR')
+      expect(result.details?.reason).toBe('connection lost')
+    }
+  })
+
+  it('returns success + emits supplier_invoice.paid on the happy path (full payment)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const invoice = makeSupplierInvoice({
       status: 'paid',
@@ -323,58 +366,23 @@ describe('linkSupplierInvoiceToVoucher', () => {
       total: 1000,
       currency: 'SEK',
     })
-    enqueue({
-      data: { ...invoice, supplier: makeSupplier({ name: 'Leverantör AB' }) },
-      error: null,
-    })
-    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
-      supplierInvoiceId: invoice.id,
-      journalEntryId: 'je-1',
-    })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('LINK_SI_VOUCHER_INVOICE_FULLY_PAID')
-  })
 
-  it('advances paid_amount + emits supplier_invoice.paid on the happy path (full payment)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    const invoice = makeSupplierInvoice({
-      status: 'approved',
-      paid_amount: 0,
-      remaining_amount: 1000,
-      total: 1000,
-      currency: 'SEK',
-    })
-    const supplier = makeSupplier({ name: 'Leverantör AB' })
-
-    // 1. supplier_invoices.single
-    enqueue({ data: { ...invoice, supplier }, error: null })
-    // 2. journal_entries.maybeSingle (inside validate)
+    // 1. RPC returns the happy path
     enqueue({
       data: {
-        id: 'je-1',
-        voucher_series: 'B',
-        voucher_number: 12,
-        entry_date: '2024-06-15',
-        description: '',
-        status: 'posted',
-        source_type: 'manual',
-        fiscal_period_id: 'fp-1',
-        company_id: 'company-1',
+        ok: true,
+        payment_id: 'sip-1',
+        invoice_status: 'paid',
+        paid_amount: 1000,
+        remaining_amount: 0,
+        payment_amount: 1000,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
       },
+      error: null,
     })
-    // 3. journal_entry_lines
-    enqueue({
-      data: [
-        { account_number: '2440', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
-        { account_number: '1930', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
-      ],
-    })
-    // 4. existingLinks check
-    enqueue({ data: [], error: null })
-    // 5. supplier_invoices update (optimistic lock returns row)
-    enqueue({ data: [{ id: invoice.id }], error: null })
-    // 6. supplier_invoice_payments insert
-    enqueue({ data: { id: 'sip-1' }, error: null })
+    // 2. Lightweight invoice re-fetch for the event payload
+    enqueue({ data: invoice, error: null })
 
     const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
 
@@ -390,6 +398,7 @@ describe('linkSupplierInvoiceToVoucher', () => {
       expect(result.result.remainingAmount).toBe(0)
       expect(result.result.paymentAmount).toBe(1000)
       expect(result.result.journalEntryId).toBe('je-1')
+      expect(result.result.paymentId).toBe('sip-1')
     }
 
     expect(emitSpy).toHaveBeenCalledWith(
@@ -398,5 +407,38 @@ describe('linkSupplierInvoiceToVoucher', () => {
         payload: expect.objectContaining({ paymentAmount: 1000, userId: 'user-1' }),
       }),
     )
+  })
+
+  it('still returns success even if the post-link invoice re-fetch is empty (event is best-effort)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'sip-2',
+        invoice_status: 'partially_paid',
+        paid_amount: 400,
+        remaining_amount: 600,
+        payment_amount: 400,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+
+    const result = await linkSupplierInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      supplierInvoiceId: 'si-2',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.result.invoiceStatus).toBe('partially_paid')
+      expect(result.result.remainingAmount).toBe(600)
+    }
+    // Event NOT emitted when re-fetch found nothing
+    expect(emitSpy).not.toHaveBeenCalled()
   })
 })
