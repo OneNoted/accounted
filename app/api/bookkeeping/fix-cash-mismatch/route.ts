@@ -30,7 +30,10 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { createInvoicePaymentJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { ensureInitialized } from '@/lib/init'
 import type { Invoice } from '@/types'
+
+ensureInitialized()
 
 type AffectedPayment = {
   payment_id: string
