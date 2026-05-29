@@ -1887,6 +1887,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
       'Summan av fördelningarna är större än transaktionens belopp.',
     message_en: 'Sum of allocations exceeds the transaction amount.',
   },
+  BATCH_AMOUNT_BELOW_TX: {
+    httpStatus: 400,
+    message_sv:
+      'Hela transaktionen måste fördelas. Lägg till fler fakturor eller höj något belopp så att summan motsvarar bankhändelsen.',
+    message_en:
+      'The full transaction amount must be allocated. Add more invoices or raise an amount so the sum matches the bank movement.',
+  },
   BATCH_MIXED_KINDS_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:

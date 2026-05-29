@@ -176,26 +176,24 @@ export default function MatchAllocationDialog({
   const txCurrency = transaction?.currency ?? 'SEK'
 
   // Each draft's `amount` is the allocation in TRANSACTION currency (SEK
-  // for a Swedish bank import, etc.). For cross-currency invoices the user
-  // sees the invoice's own-currency remaining as a reference, but the
-  // input + tally + RPC all speak tx currency. This avoids the
-  // "1 USD + 1 SEK = 2 kr" tally bug from the original implementation
-  // (PR #607 fix).
+  // for a Swedish bank import). For cross-currency invoices the FX
+  // rounding lives inside per-row FX diff lines (Dr 7960 / Cr 3960) — NOT
+  // in the tolerance. So the sum must equal tx_abs exactly: anything
+  // unallocated would leave the bank line on 1930 short of the actual
+  // bank receipt and break reconciliation. (PR #607 round-1 review.)
   const allocated = useMemo(() => {
     return Object.values(drafts).reduce((sum, d) => sum + parseAmount(d.amount), 0)
   }, [drafts])
 
   const leftover = round2(txAmountAbs - allocated)
-
-  // FX rounding from the bank's side can easily produce a 1-2 SEK delta on
-  // a cross-currency payment; 0.5 öre tolerance is far too strict. Use the
-  // greater of 1 SEK or 0.5% of the tx amount so a 100 000 SEK transfer
-  // gets 500 SEK headroom and a 200 SEK Swish receipt still gets 1 SEK.
-  // (PR #607 widening.)
-  const overshootTolerance = Math.max(1, txAmountAbs * 0.005)
-  const overshoot = leftover < -overshootTolerance
+  // 0.005 SEK matches the RPC's BATCH_AMOUNT_EXCEEDS_TX guard so the
+  // "balanced ✓" indicator never lies to the user about what the server
+  // will accept.
+  const TOLERANCE = 0.005
+  const overshoot = leftover < -TOLERANCE
   const balanced =
-    Math.abs(leftover) < overshootTolerance && Object.keys(drafts).length > 0
+    Math.abs(leftover) < TOLERANCE && Object.keys(drafts).length > 0
+  const undershoot = leftover > TOLERANCE
 
   const filteredCandidates = useMemo(() => {
     const selectedIds = new Set(Object.keys(drafts))
@@ -217,23 +215,33 @@ export default function MatchAllocationDialog({
     setDrafts((prev) => {
       if (prev[candidate.id]) return prev
       const remainingTxBudget = Math.max(0, round2(txAmountAbs - allocated))
-      // For cross-currency invoices, the user wants to allocate SEK from
-      // the bank tx — not the invoice's own-currency amount. Default to
-      // remaining × exchange_rate when available so they don't have to
-      // mental-math the FX. Falls back to the same-currency convention
-      // when no rate is on file. (PR #607 fix.)
       const sameCurrency = candidate.currency === txCurrency
-      let candidateInTxCurrency: number
+
+      // Same-currency: partial allowed, default to min(remaining, budget).
+      // Cross-currency: full-payment-only, default to booked SEK (rate
+      // sanity-checked). NOT capped to remainingTxBudget — the cross-
+      // currency RPC guard requires the amount to be within ±10% of
+      // booked_sek, so capping a USD invoice's default at the leftover
+      // budget would silently trigger BATCH_FX_DEVIATION_TOO_LARGE on
+      // submit. Instead, let the row default to the right amount and
+      // the user re-balances the other rows to fit. PR #607 review fix.
+      let defaultAmount: number
       if (sameCurrency) {
-        candidateInTxCurrency = candidate.remaining
-      } else if (candidate.exchangeRate && candidate.exchangeRate > 0) {
-        candidateInTxCurrency = round2(candidate.remaining * candidate.exchangeRate)
+        defaultAmount = Math.min(candidate.remaining, remainingTxBudget)
+      } else if (
+        candidate.exchangeRate != null
+        && candidate.exchangeRate > 0
+        && candidate.exchangeRate < 100000  // bound check — sanity guard on a trusted field
+      ) {
+        defaultAmount = round2(candidate.remaining * candidate.exchangeRate)
       } else {
-        // No FX rate available — fall back to remaining and let the user
-        // adjust manually. The widened tolerance covers the rounding.
-        candidateInTxCurrency = candidate.remaining
+        // No (or out-of-range) FX rate. Leave the amount blank rather
+        // than guessing a misleading default; the user must enter the
+        // SEK amount the bank converted to manually. Blocked from
+        // confirm via the per-row warning below.
+        defaultAmount = 0
       }
-      const defaultAmount = Math.min(candidateInTxCurrency, remainingTxBudget)
+
       return {
         ...prev,
         [candidate.id]: {
@@ -261,12 +269,10 @@ export default function MatchAllocationDialog({
 
   async function handleConfirm() {
     if (!transaction) return
-    if (!balanced && !overshoot) {
-      // Allow undershoot — the tx keeps its leftover unallocated. But reject
-      // a no-allocation submit.
-      if (Object.keys(drafts).length === 0) return
-    }
-    if (overshoot) return
+    // PR #607 round-1 review: require balanced. Undershoot is no longer
+    // allowed because it leaves the bank line short of tx_abs and breaks
+    // reconciliation.
+    if (!balanced || overshoot) return
 
     setSubmitting(true)
     try {
@@ -446,14 +452,22 @@ export default function MatchAllocationDialog({
                           {/* FX hint — appears only for cross-currency rows
                               so the user can see what their tx-currency
                               input translates to in invoice currency.
-                              Computed from the invoice's stored rate; if
-                              missing, show only the static currency label. */}
+                              When the rate is missing or out of range, we
+                              warn instead of silently defaulting to a
+                              misleading number. PR #607 round-1 review. */}
                           {c.currency !== txCurrency && (
-                            <p className="text-[11px] tabular-nums text-muted-foreground">
-                              {c.exchangeRate && c.exchangeRate > 0
-                                ? `≈ ${formatCurrency(parseAmount(draft.amount) / c.exchangeRate, c.currency)}`
-                                : `(${c.currency})`}
-                            </p>
+                            c.exchangeRate != null
+                              && c.exchangeRate > 0
+                              && c.exchangeRate < 100000
+                              ? (
+                                <p className="text-[11px] tabular-nums text-muted-foreground">
+                                  ≈ {formatCurrency(parseAmount(draft.amount) / c.exchangeRate, c.currency)}
+                                </p>
+                              ) : (
+                                <p className="text-[11px] tabular-nums text-warning-foreground">
+                                  {t('fx_rate_missing_warning', { currency: c.currency })}
+                                </p>
+                              )
                           )}
                         </div>
                       ) : (
@@ -503,12 +517,19 @@ export default function MatchAllocationDialog({
                 <Check className="h-4 w-4 flex-shrink-0" />
                 <p>{t('balanced_message')}</p>
               </div>
-            ) : leftover > overshootTolerance && Object.keys(drafts).length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                {t('leftover_note', {
-                  amount: formatCurrency(leftover, transaction.currency),
-                })}
-              </p>
+            ) : undershoot && Object.keys(drafts).length > 0 ? (
+              // Undershoot is now a blocking state — the JE's 1930 line
+              // must equal the bank's actual receipt or reconciliation
+              // breaks. The user must allocate the full amount or remove
+              // selections. PR #607 round-1 review fix.
+              <div className="flex items-start gap-2 rounded-lg bg-warning/10 p-3 text-sm text-warning-foreground">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <p>
+                  {t('undershoot_warning', {
+                    amount: formatCurrency(leftover, transaction.currency),
+                  })}
+                </p>
+              </div>
             ) : null}
           </div>
         </div>
@@ -519,7 +540,10 @@ export default function MatchAllocationDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={submitting || overshoot || Object.keys(drafts).length === 0}
+            // Confirm requires sum == tx_abs exactly (within rounding).
+            // Anything else lets the JE diverge from the bank line and
+            // breaks reconciliation. PR #607 round-1 review fix.
+            disabled={submitting || !balanced || overshoot}
           >
             {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t('confirm')}
