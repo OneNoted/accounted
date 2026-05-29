@@ -1860,6 +1860,13 @@
     "success_title": "Combined verifikat created",
     "success_description": "{count} transactions booked to verifikat {voucher}.",
     "unknown_voucher": "(no number)",
+    "tab_template": "Template",
+    "tab_manual": "Manual",
+    "manual_lines_label": "Lines",
+    "manual_add_line": "Add line",
+    "manual_remove_line": "Remove line",
+    "manual_description_placeholder": "Description (optional)",
+    "docs_inherit_hint": "{count, plural, one {# attachment will follow onto the verifikat} other {# attachments will follow onto the verifikat}}",
     "cancel": "Cancel",
     "confirm": "Confirm booking"
   },
