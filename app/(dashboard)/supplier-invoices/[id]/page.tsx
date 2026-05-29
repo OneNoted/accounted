@@ -10,10 +10,12 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
+import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
 import Link from 'next/link'
@@ -77,6 +79,7 @@ export default function SupplierInvoiceDetailPage() {
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
+  const [payTab, setPayTab] = useState<'new' | 'existing'>('new')
   const [payAmount, setPayAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [paymentAccount, setPaymentAccount] = useState('1930')
@@ -782,205 +785,232 @@ export default function SupplierInvoiceDetailPage() {
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
       {/* Pay Dialog */}
-      <Dialog open={isPayDialogOpen} onOpenChange={setIsPayDialogOpen}>
+      <Dialog
+        open={isPayDialogOpen}
+        onOpenChange={(open) => {
+          setIsPayDialogOpen(open)
+          if (!open) setPayTab('new')
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('pay_dialog_title')}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="payment-date">{t('payment_date_label')}</Label>
-              <Input
-                id="payment-date"
-                type="date"
-                value={paymentDate}
-                max={new Date().toISOString().split('T')[0]}
-                onChange={(e) => setPaymentDate(e.target.value)}
-                className="w-full sm:w-48"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="payment-amount">{t('payment_amount_label')}</Label>
-              <Input
-                id="payment-amount"
-                type="number"
-                step="0.01"
-                value={payAmount}
-                onChange={(e) => setPayAmount(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t('remaining_to_pay', { amount: formatAmount(invoice.remaining_amount), currency: invoice.currency })}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="payment-account">Betalkonto</Label>
-              <AccountCombobox
-                value={paymentAccount}
-                accounts={accounts}
-                onChange={setPaymentAccount}
-              />
-              <p className="text-xs text-muted-foreground">
-                T.ex. 1930 bankkonto, 1940 övrigt bankkonto, 2018 egna uttag (EF), 2893 ägarlån (AB).
-              </p>
-            </div>
-
-            {/* Bokföringspreview — visar exakt vad som kommer postas.
-                Redigerbar via "Redigera"-knappen så användaren kan välja
-                andra konton eller flytta belopp mellan debet/kredit. */}
-            {(markPaidPreview || markPaidPreviewFailed) && (
-              <div className="rounded-lg border p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium">Bokföring</p>
-                  {markPaidPreview && (
-                    <div className="flex gap-2">
-                      {isEditingLines && (
-                        <Button variant="ghost" size="sm" onClick={resetEditLines} disabled={isProcessing}>
-                          Återställ
-                        </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setIsEditingLines((v) => !v)}
-                        disabled={isProcessing}
-                      >
-                        {isEditingLines ? 'Klart' : (
-                          <>
-                            <Pencil className="h-3 w-3 mr-1" />
-                            Redigera
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  )}
+          <Tabs value={payTab} onValueChange={(v) => setPayTab(v as 'new' | 'existing')}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="new">{t('tab_new_payment')}</TabsTrigger>
+              <TabsTrigger value="existing">{t('tab_existing_voucher')}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="new" className="mt-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="payment-date">{t('payment_date_label')}</Label>
+                  <Input
+                    id="payment-date"
+                    type="date"
+                    value={paymentDate}
+                    max={new Date().toISOString().split('T')[0]}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full sm:w-48"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="payment-amount">{t('payment_amount_label')}</Label>
+                  <Input
+                    id="payment-amount"
+                    type="number"
+                    step="0.01"
+                    value={payAmount}
+                    onChange={(e) => setPayAmount(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {t('remaining_to_pay', { amount: formatAmount(invoice.remaining_amount), currency: invoice.currency })}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="payment-account">Betalkonto</Label>
+                  <AccountCombobox
+                    value={paymentAccount}
+                    accounts={accounts}
+                    onChange={setPaymentAccount}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    T.ex. 1930 bankkonto, 1940 övrigt bankkonto, 2018 egna uttag (EF), 2893 ägarlån (AB).
+                  </p>
                 </div>
 
-                {markPaidPreviewFailed && !markPaidPreview && (
-                  <p className="text-sm text-muted-foreground">
-                    Kunde inte förhandsgranska bokföringen. Fortsätt eller avbryt.
-                  </p>
-                )}
-
-                {markPaidPreview && !isEditingLines && (
-                  <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Konto</div>
-                    <div />
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">Debet</div>
-                    <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">Kredit</div>
-                    {markPaidPreview.lines.map((line, i) => (
-                      <div key={i} className="contents">
-                        <div className="font-medium">{line.account_number}</div>
-                        <div className="text-muted-foreground truncate">{line.description}</div>
-                        <div className="text-right">
-                          {line.debit_amount > 0 ? formatCurrency(line.debit_amount, invoice.currency) : ''}
-                        </div>
-                        <div className="text-right">
-                          {line.credit_amount > 0 ? formatCurrency(line.credit_amount, invoice.currency) : ''}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {markPaidPreview && isEditingLines && (
-                  <div className="space-y-2">
-                    {editLines.map((line, i) => (
-                      <div
-                        key={i}
-                        className="grid grid-cols-[minmax(180px,1.6fr)_minmax(0,1fr)_140px_110px_28px] gap-2 items-center"
-                      >
-                        <AccountCombobox
-                          value={line.account_number}
-                          accounts={accounts}
-                          onChange={(acc) => updateEditLine(i, { account_number: acc })}
-                        />
-                        <Input
-                          value={line.description}
-                          onChange={(e) => updateEditLine(i, { description: e.target.value })}
-                          placeholder="Beskrivning"
-                        />
-                        <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">
-                          <button
-                            type="button"
-                            onClick={() => updateEditLine(i, { side: 'debit' })}
-                            className={cn(
-                              'flex-1 px-2 text-xs font-medium transition-colors',
-                              line.side === 'debit' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60',
-                            )}
-                            aria-pressed={line.side === 'debit'}
+                {/* Bokföringspreview — visar exakt vad som kommer postas.
+                    Redigerbar via "Redigera"-knappen så användaren kan välja
+                    andra konton eller flytta belopp mellan debet/kredit. */}
+                {(markPaidPreview || markPaidPreviewFailed) && (
+                  <div className="rounded-lg border p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Bokföring</p>
+                      {markPaidPreview && (
+                        <div className="flex gap-2">
+                          {isEditingLines && (
+                            <Button variant="ghost" size="sm" onClick={resetEditLines} disabled={isProcessing}>
+                              Återställ
+                            </Button>
+                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setIsEditingLines((v) => !v)}
+                            disabled={isProcessing}
                           >
-                            Debet
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => updateEditLine(i, { side: 'credit' })}
-                            className={cn(
-                              'flex-1 px-2 text-xs font-medium border-l transition-colors',
-                              line.side === 'credit' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60',
+                            {isEditingLines ? 'Klart' : (
+                              <>
+                                <Pencil className="h-3 w-3 mr-1" />
+                                Redigera
+                              </>
                             )}
-                            aria-pressed={line.side === 'credit'}
-                          >
-                            Kredit
-                          </button>
+                          </Button>
                         </div>
-                        <Input
-                          inputMode="decimal"
-                          value={line.amount}
-                          onChange={(e) => updateEditLine(i, { amount: e.target.value })}
-                          className="text-right tabular-nums"
-                          placeholder="0"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => removeEditLine(i)}
-                          disabled={editLines.length <= 2}
-                          aria-label="Ta bort rad"
-                          className="h-8 w-8"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ))}
-
-                    <div className="flex items-center justify-between pt-1">
-                      <Button variant="ghost" size="sm" onClick={addEditLine}>
-                        <Plus className="h-3 w-3 mr-1" />
-                        Lägg till rad
-                      </Button>
-                      <div className="text-xs tabular-nums text-muted-foreground">
-                        Debet {formatCurrency(editValidation.totalDebit, invoice.currency)}
-                        {' / '}
-                        Kredit {formatCurrency(editValidation.totalCredit, invoice.currency)}
-                      </div>
+                      )}
                     </div>
 
-                    {!editValidation.isBalanced && (
-                      <p className="text-xs text-destructive">
-                        Debet och kredit måste vara lika och större än noll. Differens:{' '}
-                        {formatCurrency(Math.abs(editValidation.diff), invoice.currency)}
+                    {markPaidPreviewFailed && !markPaidPreview && (
+                      <p className="text-sm text-muted-foreground">
+                        Kunde inte förhandsgranska bokföringen. Fortsätt eller avbryt.
                       </p>
                     )}
-                    {editValidation.accountInvalid && (
-                      <p className="text-xs text-destructive">Kontonummer måste vara 4 siffror.</p>
+
+                    {markPaidPreview && !isEditingLines && (
+                      <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Konto</div>
+                        <div />
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">Debet</div>
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">Kredit</div>
+                        {markPaidPreview.lines.map((line, i) => (
+                          <div key={i} className="contents">
+                            <div className="font-medium">{line.account_number}</div>
+                            <div className="text-muted-foreground truncate">{line.description}</div>
+                            <div className="text-right">
+                              {line.debit_amount > 0 ? formatCurrency(line.debit_amount, invoice.currency) : ''}
+                            </div>
+                            <div className="text-right">
+                              {line.credit_amount > 0 ? formatCurrency(line.credit_amount, invoice.currency) : ''}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {markPaidPreview && isEditingLines && (
+                      <div className="space-y-2">
+                        {editLines.map((line, i) => (
+                          <div
+                            key={i}
+                            className="grid grid-cols-[minmax(180px,1.6fr)_minmax(0,1fr)_140px_110px_28px] gap-2 items-center"
+                          >
+                            <AccountCombobox
+                              value={line.account_number}
+                              accounts={accounts}
+                              onChange={(acc) => updateEditLine(i, { account_number: acc })}
+                            />
+                            <Input
+                              value={line.description}
+                              onChange={(e) => updateEditLine(i, { description: e.target.value })}
+                              placeholder="Beskrivning"
+                            />
+                            <div className="inline-flex rounded-md border bg-background overflow-hidden h-9">
+                              <button
+                                type="button"
+                                onClick={() => updateEditLine(i, { side: 'debit' })}
+                                className={cn(
+                                  'flex-1 px-2 text-xs font-medium transition-colors',
+                                  line.side === 'debit' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60',
+                                )}
+                                aria-pressed={line.side === 'debit'}
+                              >
+                                Debet
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateEditLine(i, { side: 'credit' })}
+                                className={cn(
+                                  'flex-1 px-2 text-xs font-medium border-l transition-colors',
+                                  line.side === 'credit' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60',
+                                )}
+                                aria-pressed={line.side === 'credit'}
+                              >
+                                Kredit
+                              </button>
+                            </div>
+                            <Input
+                              inputMode="decimal"
+                              value={line.amount}
+                              onChange={(e) => updateEditLine(i, { amount: e.target.value })}
+                              className="text-right tabular-nums"
+                              placeholder="0"
+                            />
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeEditLine(i)}
+                              disabled={editLines.length <= 2}
+                              aria-label="Ta bort rad"
+                              className="h-8 w-8"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ))}
+
+                        <div className="flex items-center justify-between pt-1">
+                          <Button variant="ghost" size="sm" onClick={addEditLine}>
+                            <Plus className="h-3 w-3 mr-1" />
+                            Lägg till rad
+                          </Button>
+                          <div className="text-xs tabular-nums text-muted-foreground">
+                            Debet {formatCurrency(editValidation.totalDebit, invoice.currency)}
+                            {' / '}
+                            Kredit {formatCurrency(editValidation.totalCredit, invoice.currency)}
+                          </div>
+                        </div>
+
+                        {!editValidation.isBalanced && (
+                          <p className="text-xs text-destructive">
+                            Debet och kredit måste vara lika och större än noll. Differens:{' '}
+                            {formatCurrency(Math.abs(editValidation.diff), invoice.currency)}
+                          </p>
+                        )}
+                        {editValidation.accountInvalid && (
+                          <p className="text-xs text-destructive">Kontonummer måste vara 4 siffror.</p>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}
-              </div>
-            )}
 
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsPayDialogOpen(false)}>
-                {t('cancel')}
-              </Button>
-              <Button
-                onClick={() => handleMarkPaid(false)}
-                disabled={isProcessing || (isEditingLines && !editValidation.isValid)}
-              >
-                {isProcessing ? t('processing') : t('register_payment')}
-              </Button>
-            </div>
-          </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setIsPayDialogOpen(false)}>
+                    {t('cancel')}
+                  </Button>
+                  <Button
+                    onClick={() => handleMarkPaid(false)}
+                    disabled={isProcessing || (isEditingLines && !editValidation.isValid)}
+                  >
+                    {isProcessing ? t('processing') : t('register_payment')}
+                  </Button>
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="existing" className="mt-4">
+              <LinkVoucherPicker
+                mode="supplier_invoice"
+                invoiceId={invoice.id}
+                invoiceCurrency={invoice.currency}
+                onLinked={() => {
+                  setIsPayDialogOpen(false)
+                  setPayTab('new')
+                  fetchInvoice()
+                }}
+                onCancel={() => setPayTab('new')}
+              />
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 

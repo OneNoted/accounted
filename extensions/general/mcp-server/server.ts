@@ -3974,7 +3974,7 @@ export const tools: McpTool[] = [
         date_to: { type: 'string', description: 'Latest entry date (YYYY-MM-DD, inclusive)' },
         amount_min: { type: 'number', description: 'Minimum line amount (absolute value of debit OR credit)' },
         amount_max: { type: 'number', description: 'Maximum line amount (absolute value)' },
-        text: { type: 'string', description: 'Free-text search in entry description and line description' },
+        text: { type: 'string', maxLength: 200, description: 'Free-text search in entry description and line description (max 200 chars)' },
         voucher_series: { type: 'string', description: 'Filter by voucher series (e.g. "A")' },
         voucher_number_from: { type: 'number', description: 'Lowest voucher number (inclusive)' },
         voucher_number_to: { type: 'number', description: 'Highest voucher number (inclusive)' },
@@ -3982,7 +3982,7 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
         project: { type: 'string', description: 'Filter by project code' },
         cost_center: { type: 'string', description: 'Filter by cost center' },
-        limit: { type: 'number', description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
       },
     },
     outputSchema: {
@@ -4013,7 +4013,7 @@ export const tools: McpTool[] = [
       idempotentHint: true,
       openWorldHint: false,
     },
-    async execute(args, companyId, _userId, supabase) {
+    async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 100), 500)
       const status = (args.status as string) || 'posted'
       const accounts = args.accounts as string[] | undefined
@@ -4024,71 +4024,61 @@ export const tools: McpTool[] = [
         throw new Error('accounts list capped at 50 — use account_from/account_to for ranges')
       }
 
-      // Build the line-level query with a forced inner join on journal_entries
-      // so we can filter by the parent's company_id, status, date range, etc.
-      let query = supabase
-        .from('journal_entry_lines')
-        .select(
-          'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
-          { count: 'exact' }
-        )
-        .eq('journal_entries.company_id', companyId)
-
-      if (status === 'all') {
-        query = query.in('journal_entries.status', ['posted', 'reversed'])
-      } else {
-        query = query.eq('journal_entries.status', status)
-      }
-
-      if (accounts && accounts.length > 0) {
-        query = query.in('account_number', accounts)
-      } else {
-        if (accountFrom) query = query.gte('account_number', accountFrom)
-        if (accountTo) query = query.lte('account_number', accountTo)
-      }
-
       const dateFrom = args.date_from as string | undefined
       const dateTo = args.date_to as string | undefined
-      if (dateFrom) query = query.gte('journal_entries.entry_date', dateFrom)
-      if (dateTo) query = query.lte('journal_entries.entry_date', dateTo)
-
       const voucherSeries = args.voucher_series as string | undefined
-      if (voucherSeries) query = query.eq('journal_entries.voucher_series', voucherSeries)
       const vnFrom = args.voucher_number_from as number | undefined
       const vnTo = args.voucher_number_to as number | undefined
-      if (typeof vnFrom === 'number') query = query.gte('journal_entries.voucher_number', vnFrom)
-      if (typeof vnTo === 'number') query = query.lte('journal_entries.voucher_number', vnTo)
-
       const sourceType = args.source_type as string | undefined
-      if (sourceType) query = query.eq('journal_entries.source_type', sourceType)
-
       const project = args.project as string | undefined
-      if (project) query = query.eq('project', project)
       const costCenter = args.cost_center as string | undefined
-      if (costCenter) query = query.eq('cost_center', costCenter)
 
-      // Free-text search across both line description and entry description.
-      // PostgREST `or` filter applies at the joined level when fully qualified.
-      const text = (args.text as string | undefined)?.trim()
-      if (text) {
-        // Escape both LIKE wildcards (`%` and `_`) so a search for "2_441"
-        // matches the literal string instead of "2X441". Replace `,` with a
-        // space because PostgREST treats it as the `or` separator.
-        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_').replace(/,/g, ' ')
-        query = query.or(
-          `line_description.ilike.%${escaped}%,journal_entries.description.ilike.%${escaped}%`
-        )
+      // Each text-search leg needs its own builder instance — PostgREST
+      // query builders are not reusable across awaits. The factory closes
+      // over the resolved filter values above.
+      const buildBaseQuery = () => {
+        let q = supabase
+          .from('journal_entry_lines')
+          .select(
+            'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
+            { count: 'exact' }
+          )
+          .eq('journal_entries.company_id', companyId)
+
+        if (status === 'all') {
+          q = q.in('journal_entries.status', ['posted', 'reversed'])
+        } else {
+          q = q.eq('journal_entries.status', status)
+        }
+
+        if (accounts && accounts.length > 0) {
+          q = q.in('account_number', accounts)
+        } else {
+          if (accountFrom) q = q.gte('account_number', accountFrom)
+          if (accountTo) q = q.lte('account_number', accountTo)
+        }
+
+        if (dateFrom) q = q.gte('journal_entries.entry_date', dateFrom)
+        if (dateTo) q = q.lte('journal_entries.entry_date', dateTo)
+
+        if (voucherSeries) q = q.eq('journal_entries.voucher_series', voucherSeries)
+        if (typeof vnFrom === 'number') q = q.gte('journal_entries.voucher_number', vnFrom)
+        if (typeof vnTo === 'number') q = q.lte('journal_entries.voucher_number', vnTo)
+
+        if (sourceType) q = q.eq('journal_entries.source_type', sourceType)
+
+        if (project) q = q.eq('project', project)
+        if (costCenter) q = q.eq('cost_center', costCenter)
+
+        return q
       }
 
-      // Order by date desc then voucher_number desc — most recent first
-      query = query
-        .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
-        .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
-        .order('sort_order', { ascending: true })
-        .limit(limit)
-
-      const { data, error, count } = await query
-      if (error) throw new Error(`Database error: ${error.message}`)
+      const applyOrderAndLimit = <T extends ReturnType<typeof buildBaseQuery>>(q: T): T =>
+        q
+          .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+          .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+          .order('sort_order', { ascending: true })
+          .limit(limit) as T
 
       type LineRow = {
         id: string
@@ -4111,19 +4101,115 @@ export const tools: McpTool[] = [
         }
       }
 
+      // Free-text search runs as two parallel .ilike() queries — one against
+      // line_description (base table) and one against journal_entries.description
+      // (embedded resource). PostgREST's flat .or() filter cannot span a base
+      // column and an embedded-resource column ("failed to parse logic tree"),
+      // so we issue two queries and merge by line id. Same pattern as
+      // lib/invoices/duplicate-payment-candidates.ts.
+      const text = (args.text as string | undefined)?.trim()
+      let data: LineRow[] = []
+      let dbMatched = 0
+      // True when at least one text-search leg filled its per-leg fetch
+      // window — i.e. more matches probably exist on the DB side that didn't
+      // make it into the merge. Drives the `truncated` signal honestly even
+      // when the merged distinct set fits inside `limit`.
+      let legCapHit = false
+
+      if (text) {
+        // Length guard — defence in depth against pathological inputs even
+        // though .ilike() parameterises the value (compliance A.8.28).
+        if (text.length > 200) {
+          throw new Error('text filter must be 200 characters or shorter')
+        }
+
+        // LIKE wildcards `%` and `_` are escaped so a search for "2_441"
+        // matches the literal string. Comma stripping is intentionally NOT
+        // applied here: the previous implementation needed it because the
+        // value was interpolated into PostgREST's OR DSL where `,` is the
+        // separator. The .ilike() path passes the pattern as a parameterised
+        // filter operand where `,` is a literal — stripping would mangle
+        // searches for real commas in line descriptions.
+        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+        const pattern = `%${escaped}%`
+
+        // Fetch up to 2× limit per leg to reduce global-ordering loss when
+        // one leg is much more selective than the other (e.g. 150 line
+        // matches vs 5 entry matches with limit=100). Hard-capped at 500
+        // rows per leg so a caller-supplied `limit` near its own ceiling
+        // can't fan out to 2× very large queries. The final post-merge
+        // slice still caps at `limit`; the wider per-leg window just gives
+        // the merge a better tail to choose from.
+        const legLimit = Math.min(limit * 2, 500)
+
+        const buildLeg = (column: 'line_description' | 'journal_entries.description') =>
+          buildBaseQuery()
+            .ilike(column, pattern)
+            .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+            .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+            .order('sort_order', { ascending: true })
+            .limit(legLimit)
+
+        const [byLine, byEntry] = await Promise.all([
+          buildLeg('line_description'),
+          buildLeg('journal_entries.description'),
+        ])
+        if (byLine.error || byEntry.error) {
+          log.warn('query_journal text-search failed', {
+            companyId,
+            userId,
+            byLine: byLine.error?.message ?? null,
+            byEntry: byEntry.error?.message ?? null,
+          })
+          throw new Error('Database error while running text search')
+        }
+
+        const merged = new Map<string, LineRow>()
+        for (const row of (byLine.data ?? []) as unknown as LineRow[]) merged.set(row.id, row)
+        for (const row of (byEntry.data ?? []) as unknown as LineRow[]) {
+          if (!merged.has(row.id)) merged.set(row.id, row)
+        }
+        data = Array.from(merged.values())
+          .sort((a, b) => {
+            const ad = a.journal_entries.entry_date
+            const bd = b.journal_entries.entry_date
+            if (ad !== bd) return ad < bd ? 1 : -1
+            const av = a.journal_entries.voucher_number
+            const bv = b.journal_entries.voucher_number
+            if (av !== bv) return bv - av
+            return a.sort_order - b.sort_order
+          })
+          .slice(0, limit)
+
+        // Honest distinct-row count among what we fetched. If a leg hit its
+        // window cap, more distinct matches may exist; `legCapHit` carries
+        // that signal downstream so `truncated` isn't faked false.
+        dbMatched = merged.size
+        legCapHit =
+          (byLine.data?.length ?? 0) >= legLimit ||
+          (byEntry.data?.length ?? 0) >= legLimit
+      } else {
+        const res = await applyOrderAndLimit(buildBaseQuery())
+        if (res.error) {
+          log.warn('query_journal failed', { companyId, userId, error: res.error.message })
+          throw new Error('Database error while running journal query')
+        }
+        data = (res.data ?? []) as unknown as LineRow[]
+        dbMatched = res.count ?? data.length
+      }
+
       // Apply amount filter post-fetch — PostgREST can't OR an abs(debit) >= n
       // with abs(credit) >= n cleanly. Lines are debit XOR credit, so checking
       // max(debit, credit) works.
       const amountMin = args.amount_min as number | undefined
       const amountMax = args.amount_max as number | undefined
       const amountFilterApplied = typeof amountMin === 'number' || typeof amountMax === 'number'
-      const filtered = (data ?? []).filter((row) => {
-        const r = row as unknown as LineRow
+      const filtered = data.filter((r) => {
         const lineAmount = Math.max(Number(r.debit_amount) || 0, Number(r.credit_amount) || 0)
         if (typeof amountMin === 'number' && lineAmount < amountMin) return false
         if (typeof amountMax === 'number' && lineAmount > amountMax) return false
         return true
-      }) as unknown as LineRow[]
+      })
 
       // Compute totals on the fetched-and-filtered set. Note: when truncated,
       // these are totals of the returned slice, not the full match. The
@@ -4161,11 +4247,10 @@ export const tools: McpTool[] = [
       // result, and surface the pre-filter count + a flag separately so an
       // agent can still tell the DB matched more (it just didn't pass the
       // amount predicate).
-      const dbMatched = count ?? (data ?? []).length
       const total_lines = amountFilterApplied ? lines.length : dbMatched
       const truncated = amountFilterApplied
-        ? (data ?? []).length >= limit && lines.length === limit
-        : dbMatched > lines.length
+        ? data.length >= limit && lines.length === limit
+        : dbMatched > lines.length || legCapHit
       return {
         lines,
         truncated,

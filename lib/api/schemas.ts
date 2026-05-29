@@ -532,6 +532,118 @@ export const LinkInvoiceToVoucherSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
+/**
+ * Supplier-invoice mirror: link an existing posted verifikat as payment for a
+ * supplier invoice. No new JE — only a supplier_invoice_payments row pointing
+ * at the supplied journal_entry_id, plus the invoice's paid/remaining advance.
+ */
+export const LinkSupplierInvoiceToVoucherSchema = z.object({
+  journal_entry_id: uuid,
+  notes: z.string().max(2000).optional(),
+})
+
+/**
+ * Bulk-book N bank transactions on the same date into one combined verifikat
+ * (samlingsverifikation per BFL 5 kap 6§). Two flows multiplexed by which
+ * field is set:
+ *
+ *   - `existing_journal_entry_id`: link the txs to an already-posted voucher
+ *     (no new JE created). The voucher's 19xx net must equal the tx sum.
+ *
+ *   - `template_id` + `mode` + `entry_description`: build a new verifikat
+ *     by applying the booking template to each tx. The route does the ratio
+ *     expansion (one_line_per_tx OR sum_per_account) and passes the final
+ *     lines to the RPC.
+ *
+ * Exactly one of the two paths must be set — enforced by superRefine.
+ */
+export const BulkBookSchema = z
+  .object({
+    tx_ids: z
+      .array(uuid)
+      .min(1, 'At least one transaction is required')
+      .max(200, 'At most 200 transactions per batch'),
+    existing_journal_entry_id: uuid.optional(),
+    template_id: uuid.optional(),
+    mode: z.enum(['one_line_per_tx', 'sum_per_account']).optional(),
+    entry_description: z.string().min(1).max(500).optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasExisting = !!data.existing_journal_entry_id
+    const hasTemplate = !!data.template_id
+    if (hasExisting === hasTemplate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Provide either existing_journal_entry_id (link) or template_id (create new) — not both, and not neither',
+        path: ['existing_journal_entry_id'],
+      })
+      return
+    }
+    if (hasTemplate) {
+      if (!data.mode) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'mode is required when template_id is set',
+          path: ['mode'],
+        })
+      }
+      if (!data.entry_description) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'entry_description is required when template_id is set',
+          path: ['entry_description'],
+        })
+      }
+    }
+  })
+
+/**
+ * Allocate one bank transaction across N customer OR N supplier invoices.
+ * Backed by the match_batch_allocate PL/pgSQL RPC, which builds a single
+ * combined verifikat (samlingsverifikation) and inserts N payment rows.
+ */
+export const MatchBatchSchema = z
+  .object({
+    allocations: z
+      .array(
+        z.discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('customer_invoice'),
+            invoice_id: uuid,
+            // Strictly positive — zero or negative is rejected at the schema
+            // layer (PR #603 review) so the RPC's BATCH_INVALID_AMOUNT path
+            // is only reachable from non-HTTP callers.
+            amount: z.number().positive('Allocation amount must be greater than 0'),
+          }),
+          z.object({
+            kind: z.literal('supplier_invoice'),
+            supplier_invoice_id: uuid,
+            amount: z.number().positive('Allocation amount must be greater than 0'),
+          }),
+        ]),
+      )
+      .min(1, 'At least one allocation is required')
+      // Cap at 100 to prevent DoS via unbounded FOR UPDATE locks in the RPC
+      // (PR #603 compliance review — OWASP V4.2). Domain-appropriate ceiling:
+      // a real samlingsverifikat rarely covers more than a few dozen invoices.
+      .max(100, 'At most 100 allocations per batch'),
+  })
+  .superRefine((data, ctx) => {
+    // Reject mixed customer + supplier in a single batch — semantically a
+    // single bank transfer settles invoices on one side. The RPC also guards
+    // this with BATCH_MIXED_KINDS_UNSUPPORTED, but rejecting at the schema
+    // layer gives a cleaner 400 with a per-field path.
+    const kinds = new Set(data.allocations.map((a) => a.kind))
+    if (kinds.size > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['allocations'],
+        message: 'Allocations cannot mix customer_invoice and supplier_invoice kinds',
+      })
+    }
+  })
+
 export const LinkTransactionJournalEntrySchema = z.object({
   journal_entry_id: uuid,
   // Optional invoice to settle alongside the link. When provided, the
