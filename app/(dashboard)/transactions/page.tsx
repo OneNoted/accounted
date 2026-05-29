@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'

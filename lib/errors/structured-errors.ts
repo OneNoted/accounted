@@ -1975,6 +1975,13 @@ const BULK_BOOK: Record<string, StructuredErrorEntry> = {
       'Alla transaktioner måste vara samma riktning (alla intäkter eller alla utgifter).',
     message_en: 'All transactions must be the same direction (all income or all expense).',
   },
+  BULK_BOOK_MIXED_CURRENCY: {
+    httpStatus: 400,
+    message_sv:
+      'Samlingsbokföring stödjer endast transaktioner i samma valuta. Välj transaktioner i en valuta åt gången.',
+    message_en:
+      'Bulk booking supports only single-currency batches. Select transactions in one currency at a time.',
+  },
   BULK_BOOK_INVALID_PAYLOAD: {
     httpStatus: 400,
     message_sv:

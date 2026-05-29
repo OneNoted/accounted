@@ -117,12 +117,14 @@ export const POST = withRouteContext(
       const txTyped = txs as Pick<Transaction, 'id' | 'amount' | 'currency' | 'description' | 'date'>[]
 
       // Same-currency invariant for v1. Mixed-currency batches would need
-      // FX conversion per tx; out of scope.
+      // FX conversion per tx; out of scope. Use the dedicated
+      // BULK_BOOK_MIXED_CURRENCY code so the toast doesn't blame direction
+      // (PR #606 review fix).
       const currencies = new Set(txTyped.map((t) => t.currency))
       if (currencies.size > 1) {
-        return errorResponseFromCode('BULK_BOOK_DIRECTION_MISMATCH', opLog, {
+        return errorResponseFromCode('BULK_BOOK_MIXED_CURRENCY', opLog, {
           requestId,
-          details: { reason: 'mixed_currencies', currencies: Array.from(currencies) },
+          details: { currencies: Array.from(currencies) },
         })
       }
       const currency = txTyped[0]!.currency
