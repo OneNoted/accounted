@@ -429,8 +429,8 @@ export default function TransactionsPage() {
 
       if (cancelled) return
 
-      if (entityRes?.entity_type) {
-        setEntityType(entityRes.entity_type)
+      if (entityRes?.data?.entity_type) {
+        setEntityType(entityRes.data.entity_type)
       }
     }
 
