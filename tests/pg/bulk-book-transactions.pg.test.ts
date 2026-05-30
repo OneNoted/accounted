@@ -244,7 +244,7 @@ describe('bulk_book_transactions — link existing', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ bulk_book_transactions: RpcResult }>(
-        `SELECT bulk_book_transactions($1::uuid[], $2, $3, $4, $5)`,
+        `SELECT bulk_book_transactions($1::uuid[], $2, $3, $4)`,
         [[tx1, tx2], jeId, null, companyId],
       )
       const result = r.rows[0]!.bulk_book_transactions
@@ -286,7 +286,7 @@ describe('bulk_book_transactions — link existing', () => {
 
     await withUserContext(userId, async (client) => {
       const r = await client.query<{ bulk_book_transactions: RpcResult }>(
-        `SELECT bulk_book_transactions($1::uuid[], $2, $3, $4, $5)`,
+        `SELECT bulk_book_transactions($1::uuid[], $2, $3, $4)`,
         [[tx1, tx2], jeId, null, companyId],
       )
       const result = r.rows[0]!.bulk_book_transactions

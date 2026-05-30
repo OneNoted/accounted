@@ -246,15 +246,21 @@ export default function BulkBookDialog({
   const bankMatches = Math.abs(bankLineNet - expectedBankNet) < 0.005
 
   // The active tab gates which selector must be valid. Both paths still
-  // need a non-empty description, ≥2 lines, balance, and bank-leg match.
+  // need a non-empty description, ≥2 lines, balance, bank-leg match,
+  // and (for manual mode) valid 4-digit account numbers — without this,
+  // a 1–3-digit entry escapes the lexicographic bank-account range
+  // check ('193' < '1900' is true), bank match could pass, and the
+  // server's Zod schema rejects with a 400 only after submit.
   const tabReady = tab === 'template' ? selectedTemplate !== null : manualLines.length > 0
+  const allAccountsValid = previewLines.every((l) => /^\d{4}$/.test(l.account_number))
   const canConfirm =
     !submitting &&
     tabReady &&
     description.trim().length > 0 &&
     previewLines.length >= 2 &&
     isBalanced &&
-    bankMatches
+    bankMatches &&
+    allAccountsValid
 
   function updateManualLine(id: string, patch: Partial<Omit<ManualLine, 'id'>>) {
     setManualLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)))

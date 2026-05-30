@@ -78,9 +78,39 @@ export const POST = withRouteContext(
     let newEntryPayload: { description: string; lines: ComputedLine[] } | null = null
 
     if (body.manual_lines && body.entry_description) {
-      // Manual mode — trust the lines as-is. The RPC's existing balance
-      // + bank-leg-match validation runs against them just like template-
-      // expanded lines, so the safety net is unchanged.
+      // Manual mode. The Zod schema validated the 4-digit format; the
+      // RPC's balance + bank-leg + negative-amount + both-sides-nonzero
+      // guards still run downstream. What's missing is verifying the
+      // account_numbers exist in this company's chart_of_accounts —
+      // without it a typo or adversarial caller could post to a BAS
+      // account that doesn't exist, corrupting the hauptbok and
+      // breaking SIE export. Single roundtrip allowlist check.
+      const accountNumbers = Array.from(
+        new Set(body.manual_lines.map((l) => l.account_number)),
+      )
+      const { data: knownAccounts, error: accountsError } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number')
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+        .in('account_number', accountNumbers)
+      if (accountsError) {
+        opLog.error('chart_of_accounts lookup failed', accountsError)
+        return errorResponseFromCode('BULK_BOOK_RPC_FAILED', opLog, {
+          requestId,
+          details: { message: accountsError.message },
+        })
+      }
+      const validSet = new Set(
+        (knownAccounts ?? []).map((a: { account_number: string }) => a.account_number),
+      )
+      const invalid = accountNumbers.filter((n) => !validSet.has(n))
+      if (invalid.length > 0) {
+        return errorResponseFromCode('BULK_BOOK_INVALID_ACCOUNT', opLog, {
+          requestId,
+          details: { invalid_accounts: invalid },
+        })
+      }
       newEntryPayload = {
         description: body.entry_description,
         lines: body.manual_lines.map((l, i) => ({
