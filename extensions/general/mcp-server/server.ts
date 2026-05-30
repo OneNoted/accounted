@@ -4539,6 +4539,11 @@ export const tools: McpTool[] = [
 
       const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0)
       const txAbs = Math.abs(transaction.amount)
+      // 0.005 SEK tolerance is for floating-point equalisation only,
+      // NOT a rounding allowance. The RPC `match_batch_allocate`
+      // re-enforces the same guard (BATCH_AMOUNT_EXCEEDS_TX /
+      // BATCH_AMOUNT_BELOW_TX) authoritatively (per PR #607 round 3),
+      // and the verifikat lines balance exactly to the öre.
       if (Math.abs(totalAllocated - txAbs) > 0.005) {
         throw new Error(
           `Allocations sum (${totalAllocated.toFixed(2)}) must equal transaction amount (${txAbs.toFixed(2)})`
@@ -4546,7 +4551,10 @@ export const tools: McpTool[] = [
       }
 
       const txDesc = transaction.merchant_name || transaction.description || transactionId
-      const summary = `${allocations.length} ${hasCustomer ? 'kundfaktura' : 'leverantörsfaktura'}${allocations.length === 1 ? '' : 'or'}`
+      // Swedish plurals: kundfaktura → kundfakturor (not kundfakturaor).
+      // Same for leverantörsfaktura → leverantörsfakturor.
+      const noun = hasCustomer ? 'kundfaktura' : 'leverantörsfaktura'
+      const summary = `${allocations.length} ${allocations.length === 1 ? noun : `${noun.slice(0, -1)}or`}`
 
       return stagePendingOperation(supabase, companyId, userId, 'match_batch_allocate',
         `Fördela: ${txDesc} → ${summary}`,
@@ -4677,7 +4685,11 @@ export const tools: McpTool[] = [
       // (which handles the FX diff on 7960/3960). Reject mixed currencies here.
       const currencies = new Set(txs.map((t) => t.currency))
       if (currencies.size > 1) {
-        throw new Error('All transactions must share the same currency')
+        // Route the agent to the cross-currency-capable tool rather
+        // than letting it retry with hand-built FX lines.
+        throw new Error(
+          'All transactions must share the same currency. For cross-currency allocations, use gnubok_match_batch_allocate (which handles the FX diff on 7960/3960).'
+        )
       }
 
       const txSum = txs.reduce((s, t) => s + t.amount, 0)
