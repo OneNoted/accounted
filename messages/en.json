@@ -1866,7 +1866,7 @@
     "manual_add_line": "Add line",
     "manual_remove_line": "Remove line",
     "manual_description_placeholder": "Description (optional)",
-    "docs_inherit_hint": "{count, plural, one {# attachment will follow onto the verifikat} other {# attachments will follow onto the verifikat}}",
+    "docs_inherit_hint": "{count, plural, one {# supporting document will follow (7-year retention per BFL 7 kap)} other {# supporting documents will follow (7-year retention per BFL 7 kap)}}",
     "cancel": "Cancel",
     "confirm": "Confirm booking"
   },

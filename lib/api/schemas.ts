@@ -574,8 +574,12 @@ export const BulkBookSchema = z
       .array(
         z.object({
           account_number: accountNumber,
-          debit_amount: nonNegativeAmount,
-          credit_amount: nonNegativeAmount,
+          // Bound at 99,999,999 SEK per line (compliance-swarm V4.5).
+          // Real-world max is in the millions; an 8-digit ceiling catches
+          // typos (1000000 mistyped as 10000000000) before they hit the
+          // RPC, without blocking legitimate large bookings.
+          debit_amount: nonNegativeAmount.max(99_999_999, 'Line amount exceeds maximum'),
+          credit_amount: nonNegativeAmount.max(99_999_999, 'Line amount exceeds maximum'),
           currency: z.string().min(3).max(3).default('SEK'),
           line_description: z.string().max(200).optional(),
         })

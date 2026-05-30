@@ -151,11 +151,13 @@ export default function BulkBookDialog({
     }
   }, [open, sharedDate, t])
 
-  // Pre-fill manual lines from txs the first time the user switches to
-  // the manual tab. One line per tx on 1930 (bank side), plus one
-  // summed counterpart line on a placeholder account. User edits from
-  // there — faster than starting blank for kiosk-style flows where all
-  // txs are similar (per user feedback on PR #606).
+  // Pre-fill the bank side from the txs (one line per tx on 1930 with
+  // the correct Dr/Cr direction). We intentionally do NOT pre-fill a
+  // counterpart account: swedish-compliance flagged that a hardcoded
+  // 3001/5800 prefill nudges users into submitting verifikat without a
+  // VAT line (26xx) for momsregistrerade affärshändelser. The bank
+  // side is the unambiguous part the user always wants; the
+  // counterpart (and any VAT split) is the user's responsibility.
   useEffect(() => {
     if (tab !== 'manual') return
     if (manualLines.length > 0) return
@@ -168,15 +170,17 @@ export default function BulkBookDialog({
       credit_amount: isIncome ? '' : Math.abs(tx.amount).toFixed(2).replace('.', ','),
       line_description: (tx.description || '').slice(0, 40).trim(),
     }))
+    // One empty counterpart row to scaffold the next entry. Account
+    // left blank — user must choose, which avoids the no-VAT trap.
     const counterpart: ManualLine = {
       id: newManualLineId(),
-      account_number: isIncome ? '3001' : '5800',
-      debit_amount: isIncome ? '' : txSumAbs.toFixed(2).replace('.', ','),
-      credit_amount: isIncome ? txSumAbs.toFixed(2).replace('.', ',') : '',
+      account_number: '',
+      debit_amount: '',
+      credit_amount: '',
       line_description: '',
     }
     setManualLines([...bankLines, counterpart])
-  }, [tab, manualLines.length, transactions, direction, txSumAbs])
+  }, [tab, manualLines.length, transactions, direction])
 
   // Live line preview — driven by either the template/mode pair (template
   // tab) or the user-edited manual lines (manual tab). Same downstream
