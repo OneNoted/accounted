@@ -4614,6 +4614,23 @@ export const tools: McpTool[] = [
         throw new Error('Provide exactly one of existing_journal_entry_id or new_entry')
       }
 
+      // Balance pre-check on the create-new path (compliance-swarm V2.3
+      // / swedish-compliance). The RPC also rejects with
+      // BULK_BOOK_UNBALANCED, but failing fast here lets the agent get
+      // a clear error before staging is even attempted.
+      if (newEntry) {
+        const lines = (newEntry as { lines?: Array<{ debit_amount?: number; credit_amount?: number }> }).lines
+        if (Array.isArray(lines) && lines.length > 0) {
+          const totalDebit = lines.reduce((s, l) => s + (Number(l.debit_amount) || 0), 0)
+          const totalCredit = lines.reduce((s, l) => s + (Number(l.credit_amount) || 0), 0)
+          if (Math.abs(totalDebit - totalCredit) > 0.005) {
+            throw new Error(
+              `new_entry.lines must balance — debits=${totalDebit.toFixed(2)} credits=${totalCredit.toFixed(2)}`
+            )
+          }
+        }
+      }
+
       const { data: txs, error: txError } = await supabase
         .from('transactions')
         .select('id, amount, currency, date, journal_entry_id')

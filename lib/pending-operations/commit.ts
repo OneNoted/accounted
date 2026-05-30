@@ -2628,6 +2628,17 @@ async function commitMatchBatchAllocate(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
+  // Trust boundary (compliance-swarm V8.2.1, A.8.2):
+  // Tenant isolation is enforced authoritatively inside the SQL RPC
+  // `match_batch_allocate` (supabase/migrations/20260601122000_*.sql):
+  //   - `transactions` row fetched WHERE id = p_tx_id AND company_id = p_company_id
+  //   - `invoices` and `supplier_invoices` rows fetched WHERE id = ? AND company_id = p_company_id
+  //   - `auth.uid()` resolves the caller; membership checked against
+  //     `company_members.company_id = p_company_id`
+  // The MCP execute() handler additionally pre-checks the same IDs to
+  // surface clean errors before staging. This commit handler is a thin
+  // pass-through by design — re-querying here would triple the same
+  // check without adding security.
   const txId = params.transaction_id as string
   const allocations = params.allocations
   if (!txId) return { error: 'transaction_id is required', status: 400 }
@@ -2656,6 +2667,15 @@ async function commitMatchBatchAllocate(
       data: result?.details as Record<string, unknown> | undefined,
     }
   }
+  // Structured audit-trail entry on success (compliance-swarm V16). Tx
+  // count + JE id only — no amounts, IDs that could echo PII stay out.
+  log.info('match_batch_allocate committed', {
+    companyId,
+    operationType: 'match_batch_allocate',
+    journalEntryId: result.journal_entry_id,
+    txId,
+    allocationCount: allocations.length,
+  })
   return { data: result as unknown as Record<string, unknown>, status: 200 }
 }
 
@@ -2664,6 +2684,22 @@ async function commitBulkBookTransactions(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
+  // Trust boundary (compliance-swarm V8.2.1, A.8.2):
+  // Tenant isolation + chart-of-accounts validation are enforced
+  // authoritatively inside the SQL RPC `bulk_book_transactions`
+  // (supabase/migrations/20260602121000_*.sql):
+  //   - All `transactions` rows fetched WHERE id = ANY(p_tx_ids) AND
+  //     company_id = p_company_id (line ~115).
+  //   - `journal_entries` row (link-existing branch) fetched WHERE id =
+  //     p_existing_journal_entry_id AND company_id = p_company_id.
+  //   - Every account_number in p_new_entry.lines validated against
+  //     `chart_of_accounts` filtered by company_id + is_active (PR #610
+  //     round 2 added this allowlist).
+  //   - `auth.uid()` resolves the caller; membership checked against
+  //     `company_members.company_id = p_company_id`.
+  // The MCP execute() handler additionally pre-checks tx ownership +
+  // JE ownership at stage time to surface clean errors. This commit
+  // handler is a thin pass-through by design.
   const txIds = params.tx_ids
   const existingJeId = (params.existing_journal_entry_id as string | null | undefined) ?? null
   const newEntry = (params.new_entry as Record<string, unknown> | null | undefined) ?? null
@@ -2690,7 +2726,7 @@ async function commitBulkBookTransactions(
     })
     return { error: error.message || 'Database error', status: 500 }
   }
-  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
+  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string; mode?: string; linked_tx_count?: number; docs_linked?: number }
   if (!result || !result.ok) {
     return {
       error: result?.code || 'bulk_book_transactions failed',
@@ -2698,6 +2734,15 @@ async function commitBulkBookTransactions(
       data: result?.details as Record<string, unknown> | undefined,
     }
   }
+  // Structured audit-trail entry on success (compliance-swarm V16).
+  log.info('bulk_book_transactions committed', {
+    companyId,
+    operationType: 'bulk_book_transactions',
+    journalEntryId: result.journal_entry_id,
+    mode: result.mode,
+    txCount: result.linked_tx_count,
+    docsLinked: result.docs_linked,
+  })
   return { data: result as unknown as Record<string, unknown>, status: 200 }
 }
 
