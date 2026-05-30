@@ -1564,6 +1564,8 @@ export type PendingOperationType =
   | 'match_batch_allocate'
   // PR #606/#610: bulk-book N bank txs into 1 combined verifikat
   | 'bulk_book_transactions'
+  // PR #614: link a single bank tx to an already-posted verifikat (no new JE)
+  | 'link_transaction_journal_entry'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'

@@ -13,7 +13,7 @@ describe('tools/list payload size guard', () => {
     }))
     const payload = JSON.stringify({ tools: projection })
     const approxTokens = Math.round(payload.length / 4)
-    // Ceiling progression: 20K → 25K → 30K → 31K.
+    // Ceiling progression: 20K → 25K → 30K → 31K → 31.5K.
     //   * 20K → 25K when item 8 of the agent-native API plan landed
     //     (additionalProperties: false on all inputSchemas + period_status in the
     //     staged operation envelope).
@@ -26,9 +26,14 @@ describe('tools/list payload size guard', () => {
     //     gnubok_bulk_book_transactions landed (PRs #603/#606/#608/#610). Each
     //     adds the shared STAGED_OPERATION_SCHEMA + a non-trivial inputSchema
     //     for the multi-tx flows. Descriptions already trimmed to 230–260 chars.
+    //   * 31K → 31.5K when gnubok_link_transaction_to_journal_entry landed (PR
+    //     #614). Same family as match_batch_allocate / bulk_book_transactions —
+    //     closes the MCP parity gap with the existing REST endpoint so agents
+    //     can attach a bank tx to an already-posted verifikat without creating
+    //     duplicate bookkeeping. Description trimmed to ~180 chars.
     // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(31_000)
+    expect(approxTokens).toBeLessThan(31_500)
   })
 })

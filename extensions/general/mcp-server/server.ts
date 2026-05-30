@@ -4579,6 +4579,127 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_link_transaction_to_journal_entry',
+    description: 'Link 1 bank tx to an already-posted verifikat (no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string' },
+        journal_entry_id: { type: 'string' },
+        invoice_id: { type: 'string', description: 'Optional kundfaktura to settle alongside the link.' },
+      },
+      required: ['transaction_id', 'journal_entry_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      const journalEntryId = args.journal_entry_id as string
+      const invoiceId = (args.invoice_id as string | undefined) ?? undefined
+      if (!transactionId || !journalEntryId) {
+        throw new Error('transaction_id and journal_entry_id are required')
+      }
+
+      // Tenant-isolation + state pre-checks (OWASP V8.2.1). The commit
+      // handler re-validates authoritatively; failing fast at stage time
+      // gives the agent a clean error before the user is asked to approve.
+      const { data: tx, error: txError } = await supabase
+        .from('transactions')
+        .select('id, date, amount, currency, journal_entry_id, description, merchant_name')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (txError || !tx) throw new Error('Transaction not found')
+      if (tx.journal_entry_id) {
+        throw new Error('Transaction is already linked to a journal entry')
+      }
+
+      const { data: je, error: jeError } = await supabase
+        .from('journal_entries')
+        .select('id, status, voucher_series, voucher_number, entry_date, description')
+        .eq('id', journalEntryId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (jeError || !je) throw new Error('Journal entry not found')
+      if (je.status !== 'posted') {
+        throw new Error(`Journal entry must be posted (status=${je.status})`)
+      }
+
+      let invoicePreview: { invoice_number: string | null; remaining: number | null; will_be_fully_paid: boolean } | null = null
+      if (invoiceId) {
+        const { data: invoice, error: invError } = await supabase
+          .from('invoices')
+          .select('id, invoice_number, status, total, paid_amount, remaining_amount, currency')
+          .eq('id', invoiceId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (invError || !invoice) throw new Error('Invoice not found')
+        if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+          throw new Error(`Invoice is not in an open state (status=${invoice.status})`)
+        }
+        const currentRemaining = (invoice.remaining_amount as number | null) ?? ((invoice.total as number) - ((invoice.paid_amount as number | null) ?? 0))
+        const newRemaining = Math.max(0, Math.round((currentRemaining - (tx.amount as number)) * 100) / 100)
+        invoicePreview = {
+          invoice_number: (invoice.invoice_number as string | null) ?? null,
+          remaining: newRemaining,
+          will_be_fully_paid: newRemaining <= 0,
+        }
+      }
+
+      // Period-lock check uses the LATER of tx.date and je.entry_date so a
+      // tx in an open period attached to a verifikat in a locked period
+      // surfaces the period_status envelope correctly. Mirrors the same
+      // logic in gnubok_bulk_book_transactions.
+      const txDate = tx.date as string
+      const jeDate = je.entry_date as string
+      const periodCheckDate = jeDate > txDate ? jeDate : txDate
+
+      const voucherLabel = je.voucher_series && je.voucher_number != null
+        ? `${je.voucher_series}-${je.voucher_number}`
+        : journalEntryId.slice(0, 8)
+      const txDesc = (tx.merchant_name as string | null) || (tx.description as string | null) || transactionId.slice(0, 8)
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'link_transaction_journal_entry',
+        invoiceId
+          ? `Länka ${txDesc} → verifikat ${voucherLabel} + faktura ${invoicePreview?.invoice_number ?? invoiceId.slice(0, 8)}`
+          : `Länka ${txDesc} → verifikat ${voucherLabel}`,
+        { transaction_id: transactionId, journal_entry_id: journalEntryId, invoice_id: invoiceId ?? null },
+        {
+          transaction_description: txDesc,
+          transaction_amount: tx.amount,
+          transaction_currency: tx.currency,
+          transaction_date: txDate,
+          voucher_label: voucherLabel,
+          voucher_date: jeDate,
+          voucher_description: je.description,
+          invoice_id: invoiceId ?? null,
+          invoice_number: invoicePreview?.invoice_number ?? null,
+          invoice_remaining_after: invoicePreview?.remaining ?? null,
+          will_be_fully_paid: invoicePreview?.will_be_fully_paid ?? null,
+        },
+        actor,
+        {
+          description: invoiceId
+            ? 'After approval the tx attaches to the existing verifikat and the invoice flips to paid/partially_paid. No new bokföring. Verify with gnubok_get_ar_ledger.'
+            : 'After approval the tx attaches to the existing verifikat. No new bokföring. Verify with gnubok_query_journal.',
+          tool: invoiceId ? 'gnubok_get_ar_ledger' : 'gnubok_query_journal',
+        },
+        { dateForPeriodCheck: periodCheckDate }
+      )
+    },
+  },
+
+  {
     name: 'gnubok_bulk_book_transactions',
     description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Two paths: link N txs to an existing posted verifikat, or create a new verifikat from caller-supplied lines. All txs must share date + direction. Docs on the txs inherit. Stages.',
     inputSchema: {

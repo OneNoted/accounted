@@ -103,6 +103,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // a verifikat with caller-supplied lines (template-expanded or manual),
   // the same compliance-critical surface as create_voucher. 'high'.
   bulk_book_transactions: 'high',
+  // Link a single bank tx to an already-posted verifikat (no new JE created).
+  // Reversible by clearing transactions.journal_entry_id and deleting any
+  // invoice_payments row — sits next to link_invoice_voucher semantically;
+  // both attach an existing booking to a different entity.
+  link_transaction_journal_entry: 'medium',
 }
 
 export function getRiskLevel(operationType: string): RiskLevel {

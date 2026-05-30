@@ -144,6 +144,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_counterparty_templates:          'transactions:read',
   gnubok_suggest_categories:                  'transactions:read',
   gnubok_match_transaction_to_invoice:        'transactions:write',
+  gnubok_link_transaction_to_journal_entry:   'transactions:write',
   gnubok_auto_match_period:                   'transactions:write',
   // Customers
   gnubok_list_customers:                  'customers:read',

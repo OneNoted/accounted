@@ -40,6 +40,7 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
@@ -2750,6 +2751,49 @@ async function commitBulkBookTransactions(
   return { data: result as unknown as Record<string, unknown>, status: 200 }
 }
 
+async function commitLinkTransactionJournalEntry(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const transactionId = params.transaction_id as string | undefined
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const invoiceId = (params.invoice_id as string | undefined) ?? undefined
+
+  if (!transactionId || !journalEntryId) {
+    return { error: 'transaction_id and journal_entry_id are required', status: 400 }
+  }
+
+  const outcome = await linkTransactionToJournalEntry(supabase, userId, companyId, {
+    transactionId,
+    journalEntryId,
+    invoiceId,
+  })
+
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    const httpStatus = entry?.httpStatus ?? 500
+    return {
+      error: entry?.message_en ?? outcome.code,
+      status: httpStatus,
+      data: outcome.details as Record<string, unknown> | undefined,
+    }
+  }
+
+  return {
+    data: {
+      transaction_id: outcome.result.transactionId,
+      journal_entry_id: outcome.result.journalEntryId,
+      voucher_label: outcome.result.voucherLabel,
+      invoice_id: outcome.result.invoiceId,
+      invoice_status: outcome.result.invoiceStatus,
+      paid_amount: outcome.result.paidAmount,
+      remaining_amount: outcome.result.remainingAmount,
+    },
+  }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -2896,6 +2940,9 @@ export async function commitPendingOperation(
         break
       case 'bulk_book_transactions':
         result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)
+        break
+      case 'link_transaction_journal_entry':
+        result = await commitLinkTransactionJournalEntry(supabase, userId, companyId, pendingOp.params)
         break
       default:
         return {
