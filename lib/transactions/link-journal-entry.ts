@@ -34,6 +34,7 @@ export type LinkTransactionJournalEntryErrorCode =
   | 'LINK_TX_JE_NOT_POSTED'
   | 'LINK_TX_INVOICE_NOT_FOUND'
   | 'LINK_TX_INVOICE_NOT_OPEN'
+  | 'LINK_TX_INVOICE_CURRENCY_MISMATCH'
   | 'LINK_TX_INVOICE_RACE'
   | 'MATCH_INVOICE_RECORD_PAYMENT_FAILED'
   | 'LINK_TX_DB_ERROR'
@@ -129,20 +130,19 @@ export async function linkTransactionToJournalEntry(
     }
   }
 
-  let invoice:
-    | (Pick<
-        Invoice,
-        | 'id'
-        | 'status'
-        | 'total'
-        | 'paid_amount'
-        | 'remaining_amount'
-        | 'currency'
-        | 'exchange_rate'
-        | 'paid_at'
-        | 'invoice_number'
-      > & { customer?: { name?: string } | null })
-    | null = null
+  type FetchedInvoice = Pick<
+    Invoice,
+    | 'id'
+    | 'status'
+    | 'total'
+    | 'paid_amount'
+    | 'remaining_amount'
+    | 'currency'
+    | 'exchange_rate'
+    | 'paid_at'
+    | 'invoice_number'
+  > & { customer?: { name?: string } | null }
+  let invoice: FetchedInvoice | null = null
   let newPaidAmount = 0
   let newRemaining = 0
   let isFullyPaid = false
@@ -177,12 +177,31 @@ export async function linkTransactionToJournalEntry(
       }
     }
 
-    invoice = invoiceRow as typeof invoice
+    invoice = invoiceRow as unknown as FetchedInvoice
+
+    // BFL 5 kap 2§ + currency-integrity guard: invoices.paid_amount and
+    // remaining_amount are stored in the INVOICE'S currency. Mixing a
+    // foreign-currency tx.amount into those columns silently corrupts the
+    // ledger (a 230 SEK payment would record "230 USD paid" on a USD
+    // invoice). This link path is for the same-currency case only;
+    // cross-currency payments must go through /api/transactions/[id]/match-
+    // invoice which routes through buildInvoicePaymentClearingLines and
+    // posts the FX diff on 3960/7960. Reject here to keep the contract clear.
+    if (transaction.currency !== invoice.currency) {
+      return {
+        ok: false,
+        code: 'LINK_TX_INVOICE_CURRENCY_MISMATCH',
+        details: {
+          transactionCurrency: transaction.currency as string,
+          invoiceCurrency: invoice.currency,
+        },
+      }
+    }
 
     const paidAmount = transaction.amount as number
-    newPaidAmount = Math.round(((invoice!.paid_amount || 0) + paidAmount) * 100) / 100
+    newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
     const currentRemaining =
-      invoice!.remaining_amount ?? invoice!.total - (invoice!.paid_amount || 0)
+      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
     newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
     isFullyPaid = newRemaining <= 0
     newStatus = isFullyPaid ? 'paid' : 'partially_paid'
@@ -264,14 +283,14 @@ export async function linkTransactionToJournalEntry(
     }
 
     // BFL 5 kap 2§ + ML 8 kap 21–23§: the payment row must record the rate
-    // effective on the PAYMENT date, not the invoice-creation date. Using
-    // transaction.exchange_rate (set by the bank-feed/import pipeline at the
-    // tx date) means a foreign-currency invoice's payment row carries the
-    // correct rate for downstream FX-diff reporting. The full 3960/7960
-    // posting still lives in createInvoicePaymentJournalEntry — link-to-
-    // existing-voucher never creates new lines by contract.
-    const paymentExchangeRate =
-      transaction.exchange_rate ?? invoice.exchange_rate ?? null
+    // effective on the PAYMENT date, not the invoice-creation date. If
+    // transaction.exchange_rate is null (SEK tx, no rate needed), leave the
+    // payment row's rate null too — a downstream Riksbanken lookup can
+    // populate it lazily if reporting needs it. Falling back to
+    // invoice.exchange_rate would silently record the wrong (invoice-date)
+    // rate, which corrupts the FX-diff figures in any later VAT or income
+    // reporting.
+    const paymentExchangeRate = transaction.exchange_rate ?? null
 
     const { error: paymentInsertError } = await supabase
       .from('invoice_payments')

@@ -18,6 +18,15 @@
  * multiplying by the invoice's stored rate. That produced a fictitious
  * bank-leg amount and silently dropped the FX gain/loss.
  *
+ * # Customer-invoice only
+ *
+ * This helper is the CUSTOMER side (kundfaktura): AR account 1510, FX gain
+ * 3960 (valutakursvinster rörelsefordringar), FX loss 7960
+ * (valutakursförluster rörelsefordringar), bank-leg = Dr. Supplier-side
+ * settlement has the opposite DR/CR polarity (Cr 1930 / Dr 2440-series) and
+ * a different account taxonomy; it lives in the match_batch_allocate RPC,
+ * not here. Do not call this helper from supplier-invoice flows.
+ *
  * # Currency model
  *
  *   tx.currency       — currency of the bank tx (almost always SEK)
@@ -29,11 +38,16 @@
  *
  *   Bank-leg (1930) = always the actual SEK that hit the bank.
  *   AR-leg (1510)   = the SEK value of the customer-debt reduction at the
- *                     INVOICE's stored rate.
+ *                     INVOICE's stored rate (capped to bankSek on partials
+ *                     to keep 1510 in sync with invoice.remaining_amount).
  *   FX diff         = (AR-leg SEK − Bank-leg SEK); sign drives 3960 vs 7960.
  *                     Per BFL 5 kap 4–5§ every verifikat must balance to the
  *                     öre; the FX diff line is what makes the cross-currency
- *                     verifikat balance.
+ *                     verifikat balance. Only emitted when the bank tx fully
+ *                     clears the invoice's remaining — partials defer the
+ *                     FX adjustment to the final settlement to avoid
+ *                     prematurely zeroing 1510 while the AR row still says
+ *                     partially_paid.
  */
 import type { CreateJournalEntryLineInput } from '@/types'
 import { resolveSekAmount } from './currency-utils'
@@ -113,16 +127,31 @@ export function buildInvoicePaymentClearingLines(
     fxDiffSek = 0
   } else {
     // Cross-currency: AR is denominated in invoice.currency and was
-    // booked on 1510 at invoice.exchange_rate. The remaining invoice
-    // amount × invoice.exchange_rate is the SEK we need to clear from
-    // 1510. If the user is matching a single bank tx against this
-    // invoice, we treat it as fully clearing the remaining (mirroring
-    // match_batch_allocate). Anything partial-cross-currency should go
-    // through the multi-allocation flow.
+    // booked on 1510 at invoice.exchange_rate. The remaining-amount × rate
+    // is the SEK currently sitting on 1510 for this invoice.
     const invRemainingForeign = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0)
     const invRate = invoice.exchange_rate ?? 1
-    arSek = TWO_DP(invRemainingForeign * invRate)
-    fxDiffSek = TWO_DP(arSek - bankSek)
+    const arSekFullRemaining = TWO_DP(invRemainingForeign * invRate)
+
+    // Branch on whether the bank tx fully clears (or over-pays) the
+    // remaining 1510 balance. Partial cross-currency must NOT credit the
+    // full remaining — that would zero 1510 in the GL while the invoice
+    // row stays at status=partially_paid, leaving the ledger inconsistent
+    // with the AR sub-ledger and over-stating FX gain/loss for the period.
+    // Defer the FX adjustment to the final settlement (when bank-SEK
+    // covers the full remaining), per BFL 5 kap 4–5§ "verifikat must
+    // reflect the actual affärshändelse".
+    if (bankSek >= arSekFullRemaining - 0.005) {
+      // Full payment of remaining (or overpay): clear AR and book FX diff.
+      arSek = arSekFullRemaining
+      fxDiffSek = TWO_DP(arSek - bankSek)
+    } else {
+      // Partial cross-currency: book 1930 / 1510 at bankSek (the actual
+      // SEK that moved), no FX line. The deferred FX diff lands on the
+      // verifikat that finally closes the invoice.
+      arSek = bankSek
+      fxDiffSek = 0
+    }
   }
 
   const lines: CreateJournalEntryLineInput[] = [

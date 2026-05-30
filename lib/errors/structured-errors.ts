@@ -434,6 +434,13 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan ändrades samtidigt. Försök igen.',
     message_en: 'Invoice status changed concurrently. Retry the request.',
   },
+  LINK_TX_INVOICE_CURRENCY_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Transaktionens och fakturans valuta måste vara samma för att länka till en befintlig verifikation. Använd matchningsdialogen för valutaomräkning.',
+    message_en:
+      'Transaction and invoice currency must match to link to an existing voucher. Use the match-invoice flow for cross-currency settlement.',
+  },
 }
 
 const MATCH_SI: Record<string, StructuredErrorEntry> = {
