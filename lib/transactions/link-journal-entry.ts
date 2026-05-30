@@ -236,16 +236,19 @@ export async function linkTransactionToJournalEntry(
   }
 
   async function rollbackTxLink(reason: string): Promise<void> {
+    // SOC 2 PI1.3 (processing integrity): if a rollback itself fails, the
+    // ledger ends up in a partial state — tx pointing at the existing
+    // verifikat with no invoice_payments row, or the invoice row at an
+    // intermediate paid_amount. We surface the rollback failure (IDs only,
+    // no amounts or counterparty names) so a reconciliation job can
+    // detect and repair the divergence. The original failure code still
+    // goes back to the caller as the proximate cause.
     const { error: rollbackErr } = await supabase
       .from('transactions')
       .update(priorTxState)
       .eq('id', transactionId)
       .eq('company_id', companyId)
     if (rollbackErr) {
-      // GDPR Art.5(1)(f) / SOC 2 CC7.2: surface partial-state gaps so a
-      // reconciliation job can pick them up. ID-only payload — no amounts,
-      // no counterparty names — keeps the log within data-minimization
-      // bounds while still being actionable.
       log.warn('failed to roll back transaction link after subsequent step failed', {
         companyId,
         transactionId,

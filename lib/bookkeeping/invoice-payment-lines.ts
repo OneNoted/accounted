@@ -75,10 +75,21 @@ export interface PaymentClearingLines {
   /** SEK value of the AR reduction at the invoice's stored rate. The 1510 credit. */
   arSek: number
   /**
-   * fxDiffSek = arSek − bankSek.
-   * Positive → bank received LESS SEK than AR was booked at → kursförlust (7960 debit).
-   * Negative → bank received MORE SEK than AR was booked at → kursvinst (3960 credit).
-   * Zero (or sub-öre) → no FX diff line.
+   * fxDiffSek = arSek − bankSek (this orientation matches what's needed to
+   * make the verifikat balance: positive value goes Dr 7960, negative
+   * value goes Cr 3960).
+   *
+   * Sign reading (note this is the OPPOSITE of an intuitive "profit"
+   * orientation — the value here is a balance-adjustment magnitude, not a
+   * P&L number, because AR is the side being cleared):
+   *   positive → bank received FEWER SEK than AR was booked at → kursförlust → 7960 Dr
+   *   negative → bank received MORE  SEK than AR was booked at → kursvinst   → 3960 Cr
+   *   |value| ≤ 0.005 → no FX diff line emitted (floating-point tolerance,
+   *                     NOT a rounding allowance per BFL 5 kap 4–5§)
+   *
+   * If you want an intuitive "gain" number for UI display, use
+   * `bankSek - arSek` (negate this field). Do not consume the raw sign
+   * in caller logic without reading this paragraph.
    */
   fxDiffSek: number
   lines: CreateJournalEntryLineInput[]

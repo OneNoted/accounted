@@ -4483,13 +4483,24 @@ export const tools: McpTool[] = [
       // correct ID for its kind. The inputSchema marks both invoice_id
       // and supplier_invoice_id as optional because they're mutually
       // exclusive — but the JSON-Schema vocabulary can't express "X
-      // required iff Y=A". Check explicitly here.
+      // required iff Y=A". Check explicitly here. Round-8: also reject
+      // unexpected extra IDs (V4.5) — a customer_invoice row supplying
+      // supplier_invoice_id silently leaks the extra ID into preview_data.
       for (const [i, a] of allocations.entries()) {
-        if (a.kind === 'customer_invoice' && !a.invoice_id) {
-          throw new Error(`allocations[${i}]: invoice_id is required when kind=customer_invoice`)
-        }
-        if (a.kind === 'supplier_invoice' && !a.supplier_invoice_id) {
-          throw new Error(`allocations[${i}]: supplier_invoice_id is required when kind=supplier_invoice`)
+        if (a.kind === 'customer_invoice') {
+          if (!a.invoice_id) {
+            throw new Error(`allocations[${i}]: invoice_id is required when kind=customer_invoice`)
+          }
+          if (a.supplier_invoice_id) {
+            throw new Error(`allocations[${i}]: supplier_invoice_id must not be set when kind=customer_invoice`)
+          }
+        } else if (a.kind === 'supplier_invoice') {
+          if (!a.supplier_invoice_id) {
+            throw new Error(`allocations[${i}]: supplier_invoice_id is required when kind=supplier_invoice`)
+          }
+          if (a.invoice_id) {
+            throw new Error(`allocations[${i}]: invoice_id must not be set when kind=supplier_invoice`)
+          }
         }
       }
 
@@ -4560,6 +4571,13 @@ export const tools: McpTool[] = [
       return stagePendingOperation(supabase, companyId, userId, 'match_batch_allocate',
         `Fördela: ${txDesc} → ${summary}`,
         { transaction_id: transactionId, allocations },
+        // GDPR Art.25: transaction_description is included in preview_data
+        // so the user can recognise the tx at approval time (merchant_name
+        // or fallback to bank description). Same trade-off documented on
+        // gnubok_link_transaction_to_journal_entry — it's the minimum
+        // signal needed for an informed approval. Counterparty-identifying
+        // invoice IDs stay in params (audit trail); they are NOT echoed
+        // back into preview_data beyond aggregate counts.
         {
           transaction_description: txDesc,
           transaction_amount: transaction.amount,
@@ -4635,17 +4653,30 @@ export const tools: McpTool[] = [
       let invoicePreview: { invoice_number: string | null; remaining: number | null; will_be_fully_paid: boolean } | null = null
       if (invoiceId) {
         // GDPR Art.5(1)(c): only the columns the preview displays. We need
-        // remaining_amount for the will-be-fully-paid math and invoice_number
-        // for the staged-op title — total / paid_amount are no longer fetched.
+        // remaining_amount for the will-be-fully-paid math, invoice_number
+        // for the staged-op title, and currency so we can fast-fail the
+        // mismatch before the user is asked to approve (the commit handler
+        // re-checks authoritatively via LINK_TX_INVOICE_CURRENCY_MISMATCH).
         const { data: invoice, error: invError } = await supabase
           .from('invoices')
-          .select('id, invoice_number, status, remaining_amount')
+          .select('id, invoice_number, status, currency, remaining_amount')
           .eq('id', invoiceId)
           .eq('company_id', companyId)
           .maybeSingle()
         if (invError || !invoice) throw new Error('Invoice not found')
         if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
           throw new Error(`Invoice is not in an open state (status=${invoice.status})`)
+        }
+        // Currency-mismatch pre-stage check (swedish-compliance PR #614
+        // round 8). The link-to-existing-voucher contract requires tx and
+        // invoice currency to match — cross-currency settlement must go
+        // through the match-invoice flow that posts 3960/7960 FX-diff
+        // lines via buildInvoicePaymentClearingLines. Failing fast here
+        // saves the user an approval round-trip.
+        if (tx.currency !== invoice.currency) {
+          throw new Error(
+            `Transaction currency (${tx.currency}) does not match invoice currency (${invoice.currency}). Cross-currency settlement must go through the match-invoice flow.`
+          )
         }
         // Explicit NaN guard (A.8.28): silently treating a malformed numeric
         // column as 0 would let a bogus preview pass to the user. The DB
@@ -4785,11 +4816,17 @@ export const tools: McpTool[] = [
           // Reject NaN / non-finite values explicitly (A.8.28).
           // `Number(x) || 0` silently treats NaN as 0; that would let
           // a malformed amount pass the balance check by accident.
+          // Round-8 addition: reject debit=0 && credit=0 "ghost" lines
+          // (BFL 5 kap 6§ — every line must represent a real
+          // bokföringspost with a non-zero amount).
           for (const [i, l] of lines.entries()) {
             const d = Number(l.debit_amount)
             const c = Number(l.credit_amount)
             if (!Number.isFinite(d) || !Number.isFinite(c)) {
               throw new Error(`new_entry.lines[${i}]: debit_amount and credit_amount must be finite numbers`)
+            }
+            if (d === 0 && c === 0) {
+              throw new Error(`new_entry.lines[${i}]: debit_amount and credit_amount cannot both be zero (BFL 5 kap 6§)`)
             }
           }
           const totalDebit = lines.reduce((s, l) => s + Number(l.debit_amount), 0)
@@ -4814,6 +4851,12 @@ export const tools: McpTool[] = [
       if (booked) throw new Error(`Transaction ${booked.id} is already booked`)
       const dates = new Set(txs.map((t) => t.date))
       if (dates.size > 1) throw new Error('All transactions must share the same date')
+      // Reject zero-amount txs (round-8 / A.8.28). The direction computation
+      // below treats amount === 0 as 'expense' (amount > 0 is false), which
+      // would then mis-classify a real income tx in the same batch. Mirrors
+      // the explicit zero-amount guard in gnubok_match_batch_allocate.
+      const zeroAmountTx = txs.find((t) => t.amount === 0)
+      if (zeroAmountTx) throw new Error(`Transaction ${zeroAmountTx.id} has zero amount`)
       const direction = txs[0]!.amount > 0 ? 'income' : 'expense'
       if (txs.some((t) => (direction === 'income' ? t.amount < 0 : t.amount > 0))) {
         throw new Error('All transactions must share the same direction (all income or all expense)')
@@ -4870,6 +4913,12 @@ export const tools: McpTool[] = [
           existing_journal_entry_id: existingJeId,
           new_entry: newEntry,
         },
+        // GDPR Art.25: preview_data carries only aggregate counts + the
+        // shared date/direction — no per-tx descriptions, no per-line
+        // descriptions, no counterparty IDs. The user-facing approval
+        // dialog reconstructs detail from the tx_ids list at render time
+        // rather than persisting denormalized PII here. Same privacy-by-
+        // design rationale as gnubok_link_transaction_to_journal_entry.
         {
           tx_count: txIds.length,
           tx_date: txDate,

@@ -50,6 +50,10 @@ export const GET = withRouteContext(
     }
     const { invoice_id } = parsed.data
 
+    // Data minimization (GDPR Art.5(1)(c)): amount_sek + exchange_rate are
+    // pulled because buildInvoicePaymentClearingLines needs them for the
+    // cross-currency bank-leg math (round-7 FX fix). All other columns
+    // would broaden the projection without serving the preview's purpose.
     const { data: transaction, error: txErr } = await supabase
       .from('transactions')
       .select('id, date, amount, amount_sek, currency, exchange_rate')
