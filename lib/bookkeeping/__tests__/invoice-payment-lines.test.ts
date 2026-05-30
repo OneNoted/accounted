@@ -90,6 +90,37 @@ describe('buildInvoicePaymentClearingLines', () => {
       expect(result.lines).toHaveLength(2)
     })
 
+    it('partial cross-currency WITH paidInInvoiceCurrency: posts proportional 1510 credit + FX-diff line', () => {
+      // The proper-FX path (round-10): caller supplies the invoice-currency
+      // equivalent of the bank payment, computed at today's Riksbanken rate.
+      // The helper credits 1510 by that × invoice.exchange_rate (the
+      // booking rate) and posts the FX-diff line so the verifikat balances.
+      //
+      // Scenario: 1000 SEK bank tx, invoice 140 USD @ 9.30 (booked). Today
+      // Riksbanken rate: 10.45. paidInInvoiceCurrency = 1000/10.45 = 95.6938.
+      // arSek = 95.6938 × 9.30 = 889.95. fxDiff = 889.95 - 1000 = -110.05
+      // (negative → gain → 3960 Cr 110.05).
+      const result = buildInvoicePaymentClearingLines(
+        { amount: 1000, amount_sek: null, currency: 'SEK', exchange_rate: null },
+        { currency: 'USD', exchange_rate: 9.3, remaining_amount: 140, total: 140, paid_amount: 0 },
+        'Inbetalning kundfaktura',
+        95.6938, // paidInInvoiceCurrency
+      )
+      expect(result.bankSek).toBe(1000)
+      expect(result.arSek).toBeCloseTo(889.95, 1)
+      expect(result.fxDiffSek).toBeCloseTo(-110.05, 1)
+      expect(result.lines).toHaveLength(3)
+      expect(result.lines[0]).toMatchObject({ account_number: '1930', debit_amount: 1000 })
+      expect(result.lines[1]).toMatchObject({ account_number: '1510' })
+      expect(result.lines[2]).toMatchObject({
+        account_number: '3960',
+        line_description: 'Valutakursvinst',
+      })
+      const debit = result.lines.reduce((s, l) => s + l.debit_amount, 0)
+      const credit = result.lines.reduce((s, l) => s + l.credit_amount, 0)
+      expect(Math.abs(debit - credit)).toBeLessThanOrEqual(0.005)
+    })
+
     it('partial cross-currency payment defers FX: bank-leg = AR-leg = bankSek, no 3960/7960 line', () => {
       // Invoice 140 USD @ 15.30 (2142 SEK booked on 1510)
       // Bank receives 230 SEK — way below the 2142 remaining. If we credited

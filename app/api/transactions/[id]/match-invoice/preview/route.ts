@@ -20,7 +20,8 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
-import type { EntityType, Invoice, InvoiceItem } from '@/types'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import type { Currency, EntityType, Invoice, InvoiceItem } from '@/types'
 import { z } from 'zod'
 
 type PreviewLine = {
@@ -94,6 +95,63 @@ export const GET = withRouteContext(
 
     const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
     const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    // Cross-currency FX preview. When tx.currency !== invoice.currency we fetch
+    // the Riksbanken spot rate for invoice.currency on the tx date and surface
+    // the conversion to the dialog (the user sees the rate + invoice-currency-
+    // equivalent before approving). The committed verifikat uses the same
+    // numbers; the route POST handler re-runs the lookup so the rate at
+    // commit time is authoritative.
+    //
+    // Per ML 8 kap 21–23§ the rate effective on the payment date is the
+    // correct conversion. If the lookup fails (Riksbanken outage, missing
+    // rate for that date), the response carries `fx_conversion.error` and
+    // the dialog can surface a manual-rate input field instead.
+    type FxConversion =
+      | {
+          required: true
+          tx_currency: string
+          invoice_currency: string
+          rate: number
+          rate_date: string
+          paid_in_invoice_currency: number
+        }
+      | { required: true; error: 'rate_unavailable'; tx_currency: string; invoice_currency: string }
+      | { required: false }
+
+    let fxConversion: FxConversion = { required: false }
+    if (transaction.currency !== invoice.currency) {
+      const rateInfo = await fetchExchangeRate(
+        invoice.currency as Currency,
+        new Date(transaction.date),
+      )
+      if (rateInfo && rateInfo.rate > 0) {
+        // bankSek / rate = how many units of invoice.currency this payment
+        // satisfies. Round to 4 decimal places to preserve precision through
+        // subsequent partial-payment accumulations.
+        const txAbsSek =
+          transaction.currency === 'SEK'
+            ? Math.abs(transaction.amount)
+            : Math.abs(transaction.amount) * (transaction.exchange_rate ?? 1)
+        const paidInInvoiceCurrency =
+          Math.round((txAbsSek / rateInfo.rate) * 10000) / 10000
+        fxConversion = {
+          required: true,
+          tx_currency: transaction.currency,
+          invoice_currency: invoice.currency,
+          rate: rateInfo.rate,
+          rate_date: rateInfo.date,
+          paid_in_invoice_currency: paidInInvoiceCurrency,
+        }
+      } else {
+        fxConversion = {
+          required: true,
+          error: 'rate_unavailable',
+          tx_currency: transaction.currency,
+          invoice_currency: invoice.currency,
+        }
+      }
+    }
 
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
@@ -185,6 +243,9 @@ export const GET = withRouteContext(
           paid_amount: inv.paid_amount ?? null,
         },
         'Inbetalning kundfaktura',
+        fxConversion.required && !('error' in fxConversion)
+          ? fxConversion.paid_in_invoice_currency
+          : undefined,
       )
       for (const line of clearingLines) {
         lines.push({
@@ -202,6 +263,7 @@ export const GET = withRouteContext(
       invoice_already_booked: invoiceAlreadyBooked,
       accounting_method: accountingMethod,
       is_fully_paid: isFullyPaid,
+      fx_conversion: fxConversion,
     })
   },
 )

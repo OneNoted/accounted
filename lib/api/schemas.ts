@@ -516,6 +516,12 @@ export const MatchInvoiceSchema = z
       credit_amount: nonNegativeAmount.default(0),
       line_description: z.string().optional(),
     })).min(2).optional(),
+    // Optional caller-supplied SEK-per-invoice-currency rate for cross-currency
+    // settlement. Used when the Riksbanken lookup returns nothing (rate not
+    // published for that date) — the dialog surfaces an input so the user can
+    // type the rate from their bank statement. Ignored when tx.currency ===
+    // invoice.currency.
+    manual_exchange_rate: z.number().positive().optional(),
   })
   .refine((v) => !v.force || !!v.expected_journal_entry_id, {
     message: 'expected_journal_entry_id is required when force=true',

@@ -353,6 +353,13 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'Transaction and invoice currency must match. For cross-currency settlement, use the multi-invoice allocation flow which posts FX-diff lines on 3960/7960.',
   },
+  MATCH_INVOICE_FX_RATE_UNAVAILABLE: {
+    httpStatus: 400,
+    message_sv:
+      'Kunde inte hämta valutakurs från Riksbanken för betalningsdatumet. Ange kursen manuellt från ditt bankutdrag (fältet manual_exchange_rate).',
+    message_en:
+      'Could not retrieve an exchange rate from Riksbanken for the payment date. Provide the rate manually from your bank statement (manual_exchange_rate field).',
+  },
   MATCH_INVOICE_ALREADY_PAID: {
     httpStatus: 409,
     message_sv: 'Fakturan har redan slutbetalats av en annan förfrågan.',
