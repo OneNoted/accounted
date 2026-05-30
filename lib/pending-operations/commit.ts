@@ -2668,7 +2668,11 @@ async function commitMatchBatchAllocate(
     }
   }
   // Structured audit-trail entry on success (compliance-swarm V16). Tx
-  // count + JE id only — no amounts, IDs that could echo PII stay out.
+  // count + JE id + the source tx id only — no amounts, no
+  // counterparty identifiers, no descriptions. txId is included
+  // intentionally so the audit trail can join successful commits back
+  // to the source bank tx without a separate query; it's not PII on
+  // its own (just an internal UUID, scoped to companyId already logged).
   log.info('match_batch_allocate committed', {
     companyId,
     operationType: 'match_batch_allocate',

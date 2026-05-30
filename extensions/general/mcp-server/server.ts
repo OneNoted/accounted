@@ -4503,28 +4503,37 @@ export const tools: McpTool[] = [
       const supplierInvoiceIds = allocations
         .filter((a) => a.kind === 'supplier_invoice')
         .map((a) => a.supplier_invoice_id!)
+      // Belt-and-suspenders (CC6.1): assert both count equality AND the
+      // missing-set is empty. The Supabase REST client de-dupes by PK so
+      // count >= unique input length is enough on its own, but the
+      // explicit guard prevents an undefined-row edge case in the JSON
+      // response from silently passing.
       if (invoiceIds.length > 0) {
+        const uniqueIds = Array.from(new Set(invoiceIds))
         const { data: found } = await supabase
           .from('invoices')
           .select('id')
-          .in('id', invoiceIds)
+          .in('id', uniqueIds)
           .eq('company_id', companyId)
-        const foundSet = new Set((found ?? []).map((r) => r.id))
-        const missing = invoiceIds.filter((id) => !foundSet.has(id))
-        if (missing.length > 0) {
-          throw new Error(`Invoices not found for this company: ${missing.join(', ')}`)
+        const foundRows = found ?? []
+        const foundSet = new Set(foundRows.map((r) => r.id))
+        const missing = uniqueIds.filter((id) => !foundSet.has(id))
+        if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
+          throw new Error(`Invoices not found for this company: ${missing.join(', ') || '(count mismatch)'}`)
         }
       }
       if (supplierInvoiceIds.length > 0) {
+        const uniqueIds = Array.from(new Set(supplierInvoiceIds))
         const { data: found } = await supabase
           .from('supplier_invoices')
           .select('id')
-          .in('id', supplierInvoiceIds)
+          .in('id', uniqueIds)
           .eq('company_id', companyId)
-        const foundSet = new Set((found ?? []).map((r) => r.id))
-        const missing = supplierInvoiceIds.filter((id) => !foundSet.has(id))
-        if (missing.length > 0) {
-          throw new Error(`Supplier invoices not found for this company: ${missing.join(', ')}`)
+        const foundRows = found ?? []
+        const foundSet = new Set(foundRows.map((r) => r.id))
+        const missing = uniqueIds.filter((id) => !foundSet.has(id))
+        if (missing.length > 0 || foundRows.length !== uniqueIds.length) {
+          throw new Error(`Supplier invoices not found for this company: ${missing.join(', ') || '(count mismatch)'}`)
         }
       }
 
@@ -4618,11 +4627,24 @@ export const tools: McpTool[] = [
       // / swedish-compliance). The RPC also rejects with
       // BULK_BOOK_UNBALANCED, but failing fast here lets the agent get
       // a clear error before staging is even attempted.
+      // The 0.005 tolerance is for floating-point equalisation only,
+      // NOT a rounding allowance per BFL 5 kap 4–5§. The RPC enforces
+      // exact balance to the öre on insert.
       if (newEntry) {
         const lines = (newEntry as { lines?: Array<{ debit_amount?: number; credit_amount?: number }> }).lines
         if (Array.isArray(lines) && lines.length > 0) {
-          const totalDebit = lines.reduce((s, l) => s + (Number(l.debit_amount) || 0), 0)
-          const totalCredit = lines.reduce((s, l) => s + (Number(l.credit_amount) || 0), 0)
+          // Reject NaN / non-finite values explicitly (A.8.28).
+          // `Number(x) || 0` silently treats NaN as 0; that would let
+          // a malformed amount pass the balance check by accident.
+          for (const [i, l] of lines.entries()) {
+            const d = Number(l.debit_amount)
+            const c = Number(l.credit_amount)
+            if (!Number.isFinite(d) || !Number.isFinite(c)) {
+              throw new Error(`new_entry.lines[${i}]: debit_amount and credit_amount must be finite numbers`)
+            }
+          }
+          const totalDebit = lines.reduce((s, l) => s + Number(l.debit_amount), 0)
+          const totalCredit = lines.reduce((s, l) => s + Number(l.credit_amount), 0)
           if (Math.abs(totalDebit - totalCredit) > 0.005) {
             throw new Error(
               `new_entry.lines must balance — debits=${totalDebit.toFixed(2)} credits=${totalCredit.toFixed(2)}`
@@ -4649,9 +4671,10 @@ export const tools: McpTool[] = [
       }
       // Currency homogeneity (swedish-compliance): a samlingsverifikat
       // combining e.g. SEK + EUR txs without explicit FX lines violates
-      // BFL 5 kap 6§ st 3 motpart/belopp clarity. Cross-currency batches
-      // should go through gnubok_match_batch_allocate (which handles the
-      // FX diff on 7960/3960). Reject mixed currencies here.
+      // BFL 5 kap 2§ (alla belopp skall uttryckas i svenska kronor)
+      // read together with the valutakurs rules in BFL 5 kap 6§.
+      // Cross-currency batches should go through gnubok_match_batch_allocate
+      // (which handles the FX diff on 7960/3960). Reject mixed currencies here.
       const currencies = new Set(txs.map((t) => t.currency))
       if (currencies.size > 1) {
         throw new Error('All transactions must share the same currency')
