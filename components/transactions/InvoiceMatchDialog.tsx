@@ -338,7 +338,10 @@ export default function InvoiceMatchDialog({
               </div>
             </div>
 
-            {/* Invoice details */}
+            {/* Invoice details. Shows remaining_amount (what the customer
+                still owes) rather than the original total, so a partially-
+                paid invoice displays the actual figure the user is matching
+                against. Mirrors the supplier-invoice block below. */}
             {isCustomerInvoice && (
               <div className="rounded-lg border p-4 space-y-2">
                 <p className="text-sm font-medium text-muted-foreground">{t('invoice_label')}</p>
@@ -354,7 +357,7 @@ export default function InvoiceMatchDialog({
                   </span>
                   <span className="font-medium">
                     {formatCurrency(
-                      transaction.potential_invoice!.total,
+                      transaction.potential_invoice!.remaining_amount ?? transaction.potential_invoice!.total,
                       transaction.potential_invoice!.currency,
                     )}
                   </span>
@@ -385,17 +388,29 @@ export default function InvoiceMatchDialog({
               </div>
             )}
 
-            {/* Amount comparison */}
+            {/* Amount comparison. Compares the bank tx against what the
+                customer STILL OWES (remaining_amount), not the original
+                invoice.total — otherwise a 1 250 SEK invoice with a prior
+                230 SEK partial would show "Differens: 250 kr" when a 1 000
+                SEK top-up arrives, instead of the actual 20 kr shortfall.
+                The customer branch previously fell back to .total; both
+                branches now mirror the supplier branch's correct logic. */}
             {(() => {
               const txAbs = Math.abs(transaction.amount)
-              const invTotal = isSupplierInvoice
+              const invRemaining = isSupplierInvoice
                 ? transaction.potential_supplier_invoice!.remaining_amount ?? transaction.potential_supplier_invoice!.total
-                : transaction.potential_invoice!.total
+                : transaction.potential_invoice!.remaining_amount ?? transaction.potential_invoice!.total
               const invCurrency = isSupplierInvoice
                 ? transaction.potential_supplier_invoice!.currency
                 : transaction.potential_invoice!.currency
               const sameCurrency = transaction.currency === invCurrency
-              const amountsMatch = sameCurrency && Math.abs(txAbs - invTotal) < 0.01
+              // Cross-currency "match" comparison is meaningless without an FX
+              // conversion — show the explicit different-currencies warning
+              // and skip the numeric match check. The committed verifikat is
+              // built by buildInvoicePaymentClearingLines, which posts the
+              // FX diff to 3960/7960 so the books balance correctly even
+              // when the on-screen numbers can't be naively compared.
+              const amountsMatch = sameCurrency && Math.abs(txAbs - invRemaining) < 0.01
 
               if (amountsMatch) {
                 return (
@@ -406,16 +421,25 @@ export default function InvoiceMatchDialog({
                 )
               }
 
-              const diff = Math.abs(txAbs - invTotal)
               return (
                 <div className="flex items-start gap-2 p-3 rounded-lg bg-warning/10 text-warning-foreground">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <div className="text-sm">
                     <p className="font-medium">{t('amounts_differ')}</p>
                     <p>
-                      {t('amount_diff', { amount: formatCurrency(diff, transaction.currency) })}
-                      {!sameCurrency && t('different_currencies')}
-                      {isSupplierInvoice && diff > 0.01 && sameCurrency && t('partial_payment_note')}
+                      {sameCurrency ? (
+                        <>
+                          {t('amount_diff', {
+                            amount: formatCurrency(
+                              Math.abs(txAbs - invRemaining),
+                              transaction.currency,
+                            ),
+                          })}
+                          {isSupplierInvoice && t('partial_payment_note')}
+                        </>
+                      ) : (
+                        t('different_currencies')
+                      )}
                     </p>
                   </div>
                 </div>

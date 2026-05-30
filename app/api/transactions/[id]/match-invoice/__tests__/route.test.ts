@@ -14,18 +14,20 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
 
-const mockCreateInvoicePaymentJournalEntry = vi.fn()
 const mockCreateInvoiceCashEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
-  createInvoicePaymentJournalEntry: (...args: unknown[]) => mockCreateInvoicePaymentJournalEntry(...args),
   createInvoiceCashEntry: (...args: unknown[]) => mockCreateInvoiceCashEntry(...args),
   getRevenueAccount: vi.fn().mockReturnValue('3001'),
   getOutputVatAccount: vi.fn().mockReturnValue('2611'),
 }))
 
 const mockReverseEntry = vi.fn()
+const mockFindFiscalPeriod = vi.fn()
+const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
+  findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
+  createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
 vi.mock('@/lib/invoices/match-log', () => ({
@@ -71,6 +73,12 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     // Default to no soft-duplicate detected — happy-path tests don't care.
     mockDetectDuplicate.mockResolvedValue(null)
+    // Clearing path delegates to findFiscalPeriod + createJournalEntry (FX fix
+    // PR #614 round 6 — see lib/bookkeeping/invoice-payment-lines.ts). Give
+    // both safe defaults; tests that exercise the clearing path override
+    // mockCreateJournalEntry to assert the result id.
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -220,7 +228,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Update invoice (optimistic lock returns updated row)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -251,16 +259,24 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
 
-    // Verify accrual payment entry was called with paymentAmount
-    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(
+    // Clearing path now builds lines via buildInvoicePaymentClearingLines and
+    // posts via createJournalEntry directly (FX fix PR #614 round 6). For a
+    // same-currency SEK invoice that's two lines: Dr 1930 12 500 / Cr 1510
+    // 12 500, no FX-diff line.
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ id: VALID_UUID }),
-      '2024-06-15',
-      undefined,
-      expect.anything(),
-      12500
+      expect.objectContaining({
+        fiscal_period_id: 'fp-1',
+        entry_date: '2024-06-15',
+        source_type: 'invoice_paid',
+        source_id: VALID_UUID,
+        lines: expect.arrayContaining([
+          expect.objectContaining({ account_number: '1930', debit_amount: 12500 }),
+          expect.objectContaining({ account_number: '1510', credit_amount: 12500 }),
+        ]),
+      }),
     )
   })
 
@@ -294,7 +310,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     // Fetch company settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-payment' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
 
     // Update invoice (optimistic lock)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -346,7 +362,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // routes any non-typed error to INTERNAL_ERROR.
     expect((body.error as unknown as { code: string }).code).toBe('INTERNAL_ERROR')
     // Invoice should NOT have been updated — no further DB calls after storno failure
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('supports partial payment (partially_paid status)', async () => {
@@ -364,7 +380,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-partial' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial' })
 
     // Update invoice (optimistic lock)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -419,10 +435,11 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-clearing' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
-    // The PDF re-attach block runs because invoice.journal_entry_id is set;
-    // returning null skips the attach without aborting the match.
+    // Route order: PDF re-attach (runs first when invoice.journal_entry_id is
+    // set; null result skips the attach insert) → optimistic invoice update →
+    // invoice_payments → update transaction → logMatchEvent.
     enqueue({ data: null, error: null }) // document_attachments lookup
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: null, error: null }) // insert invoice_payments
@@ -438,8 +455,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     expect(status).toBe(200)
     expect(body.invoice_status).toBe('paid')
-    // Must clear 1510, not re-recognise revenue + VAT
-    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
+    // Must clear 1510 via the clearing-entry path, not re-recognise revenue +
+    // VAT via createInvoiceCashEntry.
+    expect(mockCreateJournalEntry).toHaveBeenCalled()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
@@ -492,7 +510,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-clearing' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-clearing' })
 
     // Update invoice
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -512,8 +530,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     expect(status).toBe(200)
     expect(body.invoice_status).toBe('partially_paid')
-    // Cash partial uses accrual-style clearing entry, NOT createInvoiceCashEntry
-    expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalled()
+    // Cash partial uses accrual-style clearing entry (now via the shared
+    // helper + createJournalEntry), NOT createInvoiceCashEntry.
+    expect(mockCreateJournalEntry).toHaveBeenCalled()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
@@ -530,7 +549,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock returns 0 rows (another request fully paid it)
     enqueue({ data: [], error: null })
@@ -559,7 +578,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Optimistic lock succeeds
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -586,7 +605,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: [], error: null }) // hard-duplicate check
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockRejectedValue(new Error('Period locked'))
+    mockCreateJournalEntry.mockRejectedValue(new Error('Period locked'))
 
     // Update invoice (optimistic lock)
     enqueue({ data: [{ id: VALID_UUID }], error: null })
@@ -642,7 +661,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER')
     expect(body.error.details?.existing_journal_entry_id).toBe('je-existing')
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('does NOT run hard-duplicate guard for partially_paid invoices (legitimate additional payment)', async () => {
@@ -660,7 +679,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // Hard-duplicate check is skipped for partially_paid; jump straight to settings
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-partial-extra' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: null, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update tx
@@ -709,7 +728,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.error.code).toBe('MATCH_INVOICE_POSSIBLE_DUPLICATE')
     expect(body.error.details?.candidate?.journal_entry_id).toBe('je-manual')
     expect(body.error.details?.candidate?.voucher_label).toBe('A12')
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('force=true bypasses the soft-duplicate guard when the candidate echo matches', async () => {
@@ -739,7 +758,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
 
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
-    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-forced' })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-forced' })
     enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
     enqueue({ data: null, error: null }) // insert invoice_payments
     enqueue({ data: null, error: null }) // update tx
@@ -801,7 +820,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.error.code).toBe('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH')
     expect(body.error.details?.expected_journal_entry_id).toBe(STALE_UUID)
     expect(body.error.details?.detected_journal_entry_id).toBe(OTHER_CANDIDATE_UUID)
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('returns 409 MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH when no current duplicate exists for the force call', async () => {
@@ -823,6 +842,6 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(409)
     expect(body.error.code).toBe('MATCH_INVOICE_FORCE_CANDIDATE_MISMATCH')
-    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 })

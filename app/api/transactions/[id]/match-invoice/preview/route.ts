@@ -19,6 +19,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from '@/lib/bookkeeping/invoice-entries'
+import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import type { EntityType, Invoice, InvoiceItem } from '@/types'
 import { z } from 'zod'
 
@@ -51,7 +52,7 @@ export const GET = withRouteContext(
 
     const { data: transaction, error: txErr } = await supabase
       .from('transactions')
-      .select('id, date, amount, currency')
+      .select('id, date, amount, amount_sek, currency, exchange_rate')
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -157,22 +158,38 @@ export const GET = withRouteContext(
       })
       lines.push(...creditLines)
     } else {
-      // Clearing entry: Dr 1930 / Cr 1510 at the paid amount in SEK.
+      // Clearing entry. Delegates to the shared helper so the preview and
+      // the committed verifikat are byte-identical — fixing the prior
+      // bug where the preview ran `resolveSekAmount(tx.amount, null,
+      // INV.currency, INV.rate)`, treating the SEK tx number as if it
+      // were in the invoice's currency and multiplying by the invoice's
+      // rate. That produced a fictitious bank-leg and silently dropped
+      // the FX gain/loss for cross-currency invoices.
       const inv = invoice as Invoice
-      const bookedSek = resolveSekAmount(paidAmount, null, inv.currency, inv.exchange_rate)
-      const amount = Math.round(bookedSek * 100) / 100
-      lines.push({
-        account_number: '1930',
-        debit_amount: amount,
-        credit_amount: 0,
-        description: 'Inbetalning från bank',
-      })
-      lines.push({
-        account_number: '1510',
-        debit_amount: 0,
-        credit_amount: amount,
-        description: 'Kvittning kundfordran',
-      })
+      const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+        {
+          amount: transaction.amount,
+          amount_sek: transaction.amount_sek ?? null,
+          currency: transaction.currency,
+          exchange_rate: transaction.exchange_rate ?? null,
+        },
+        {
+          currency: inv.currency,
+          exchange_rate: inv.exchange_rate ?? null,
+          remaining_amount: inv.remaining_amount ?? null,
+          total: inv.total,
+          paid_amount: inv.paid_amount ?? null,
+        },
+        'Inbetalning kundfaktura',
+      )
+      for (const line of clearingLines) {
+        lines.push({
+          account_number: line.account_number,
+          debit_amount: line.debit_amount,
+          credit_amount: line.credit_amount,
+          description: line.line_description ?? '',
+        })
+      }
     }
 
     return NextResponse.json({

@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server'
-import {
-  createInvoicePaymentJournalEntry,
-  createInvoiceCashEntry,
-} from '@/lib/bookkeeping/invoice-entries'
+import { createInvoiceCashEntry } from '@/lib/bookkeeping/invoice-entries'
+import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -311,10 +309,48 @@ export const POST = withRouteContext(
         // intentional — under kontantmetoden 1510 has no prior balance, so
         // partials leave a credit on 1510 that gets resolved on final
         // payment when createInvoiceCashEntry would normally run.
-        const journalEntry = await createInvoicePaymentJournalEntry(
-          supabase, companyId, user.id, invoice as Invoice, transaction.date,
-          undefined, invoice.customer?.name, paidAmount,
+        //
+        // Builds lines via buildInvoicePaymentClearingLines so the verifikat
+        // is byte-identical to what the preview route showed the user. For
+        // same-currency invoices that's just 1930/1510. For cross-currency
+        // it also posts a 3960/7960 FX-diff line so the verifikat balances
+        // per BFL 5 kap 4–5§. Bypasses createInvoicePaymentJournalEntry on
+        // this single path (mark-paid and other callers still use it) —
+        // see lib/bookkeeping/invoice-payment-lines.ts for the contract.
+        const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, transaction.date)
+        if (!fiscalPeriodId) {
+          return errorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
+            requestId,
+            details: { paymentDate: transaction.date },
+          })
+        }
+        const desc = invoice.customer?.name
+          ? `Inbetalning kundfaktura ${invoice.invoice_number}, ${invoice.customer.name}`
+          : `Inbetalning kundfaktura ${invoice.invoice_number}`
+        const { lines: clearingLines } = buildInvoicePaymentClearingLines(
+          {
+            amount: transaction.amount,
+            amount_sek: transaction.amount_sek ?? null,
+            currency: transaction.currency,
+            exchange_rate: transaction.exchange_rate ?? null,
+          },
+          {
+            currency: invoice.currency,
+            exchange_rate: invoice.exchange_rate ?? null,
+            remaining_amount: invoice.remaining_amount ?? null,
+            total: invoice.total,
+            paid_amount: invoice.paid_amount ?? null,
+          },
+          desc,
         )
+        const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
+          fiscal_period_id: fiscalPeriodId,
+          entry_date: transaction.date,
+          description: desc,
+          source_type: 'invoice_paid',
+          source_id: invoice.id,
+          lines: clearingLines,
+        })
         journalEntryId = journalEntry?.id ?? null
       }
     } catch (err) {
