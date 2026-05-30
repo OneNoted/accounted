@@ -2640,7 +2640,12 @@ async function commitMatchBatchAllocate(
     p_company_id: companyId,
   })
   if (error) {
-    log.error('match_batch_allocate RPC error', error)
+    // Sanitised log (A.8.11, CC7.2): only error code + message, no
+    // payload — error.details can echo invoice IDs, amounts, etc.
+    log.error('match_batch_allocate RPC error', {
+      code: (error as { code?: string }).code,
+      message: error.message,
+    })
     return { error: error.message || 'Database error', status: 500 }
   }
   const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
@@ -2678,7 +2683,11 @@ async function commitBulkBookTransactions(
     p_company_id: companyId,
   })
   if (error) {
-    log.error('bulk_book_transactions RPC error', error)
+    // Sanitised log (A.8.11, CC7.2): only error code + message.
+    log.error('bulk_book_transactions RPC error', {
+      code: (error as { code?: string }).code,
+      message: error.message,
+    })
     return { error: error.message || 'Database error', status: 500 }
   }
   const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }

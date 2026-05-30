@@ -4478,6 +4478,56 @@ export const tools: McpTool[] = [
         throw new Error('Supplier allocations require an expense transaction (amount < 0)')
       }
 
+      // Per-allocation guard (Greptile P1): each row must carry the
+      // correct ID for its kind. The inputSchema marks both invoice_id
+      // and supplier_invoice_id as optional because they're mutually
+      // exclusive — but the JSON-Schema vocabulary can't express "X
+      // required iff Y=A". Check explicitly here.
+      for (const [i, a] of allocations.entries()) {
+        if (a.kind === 'customer_invoice' && !a.invoice_id) {
+          throw new Error(`allocations[${i}]: invoice_id is required when kind=customer_invoice`)
+        }
+        if (a.kind === 'supplier_invoice' && !a.supplier_invoice_id) {
+          throw new Error(`allocations[${i}]: supplier_invoice_id is required when kind=supplier_invoice`)
+        }
+      }
+
+      // Tenant-isolation pre-check (OWASP V8.2.1): verify every
+      // referenced invoice belongs to this company BEFORE staging.
+      // The RPC also re-checks this, but failing fast at the MCP
+      // layer gives the agent a clear error instead of an opaque
+      // BATCH_INVOICE_NOT_FOUND code at commit time.
+      const invoiceIds = allocations
+        .filter((a) => a.kind === 'customer_invoice')
+        .map((a) => a.invoice_id!)
+      const supplierInvoiceIds = allocations
+        .filter((a) => a.kind === 'supplier_invoice')
+        .map((a) => a.supplier_invoice_id!)
+      if (invoiceIds.length > 0) {
+        const { data: found } = await supabase
+          .from('invoices')
+          .select('id')
+          .in('id', invoiceIds)
+          .eq('company_id', companyId)
+        const foundSet = new Set((found ?? []).map((r) => r.id))
+        const missing = invoiceIds.filter((id) => !foundSet.has(id))
+        if (missing.length > 0) {
+          throw new Error(`Invoices not found for this company: ${missing.join(', ')}`)
+        }
+      }
+      if (supplierInvoiceIds.length > 0) {
+        const { data: found } = await supabase
+          .from('supplier_invoices')
+          .select('id')
+          .in('id', supplierInvoiceIds)
+          .eq('company_id', companyId)
+        const foundSet = new Set((found ?? []).map((r) => r.id))
+        const missing = supplierInvoiceIds.filter((id) => !foundSet.has(id))
+        if (missing.length > 0) {
+          throw new Error(`Supplier invoices not found for this company: ${missing.join(', ')}`)
+        }
+      }
+
       const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0)
       const txAbs = Math.abs(transaction.amount)
       if (Math.abs(totalAllocated - txAbs) > 0.005) {
@@ -4580,9 +4630,43 @@ export const tools: McpTool[] = [
       if (txs.some((t) => (direction === 'income' ? t.amount < 0 : t.amount > 0))) {
         throw new Error('All transactions must share the same direction (all income or all expense)')
       }
+      // Currency homogeneity (swedish-compliance): a samlingsverifikat
+      // combining e.g. SEK + EUR txs without explicit FX lines violates
+      // BFL 5 kap 6§ st 3 motpart/belopp clarity. Cross-currency batches
+      // should go through gnubok_match_batch_allocate (which handles the
+      // FX diff on 7960/3960). Reject mixed currencies here.
+      const currencies = new Set(txs.map((t) => t.currency))
+      if (currencies.size > 1) {
+        throw new Error('All transactions must share the same currency')
+      }
 
       const txSum = txs.reduce((s, t) => s + t.amount, 0)
       const txDate = txs[0]!.date as string
+
+      // For link-existing branch, also fetch the target JE and use the
+      // LATER of tx_date and JE.entry_date for period-lock check
+      // (swedish-compliance): otherwise a tx in an open period could be
+      // attached to a verifikat in a closed period and the guard
+      // would miss it. Same query also enforces tenant isolation on
+      // the JE (OWASP V8.2.1) before the RPC sees the ID.
+      let periodCheckDate = txDate
+      if (existingJeId) {
+        const { data: je, error: jeError } = await supabase
+          .from('journal_entries')
+          .select('id, entry_date, status')
+          .eq('id', existingJeId)
+          .eq('company_id', companyId)
+          .maybeSingle()
+        if (jeError || !je) {
+          throw new Error('Existing journal entry not found for this company')
+        }
+        if (je.status !== 'posted') {
+          throw new Error(`Existing journal entry must be posted (status=${je.status})`)
+        }
+        // Pass the later date so the period-lock guard fires on whichever
+        // side is in a locked/closed period.
+        periodCheckDate = (je.entry_date as string) > txDate ? (je.entry_date as string) : txDate
+      }
 
       return stagePendingOperation(supabase, companyId, userId, 'bulk_book_transactions',
         existingJeId
@@ -4605,7 +4689,7 @@ export const tools: McpTool[] = [
           description: 'After approval the verifikat carries the combined business event. Verify with gnubok_query_journal or gnubok_get_reconciliation_status.',
           tool: 'gnubok_query_journal',
         },
-        { dateForPeriodCheck: txDate }
+        { dateForPeriodCheck: periodCheckDate }
       )
     },
   },
