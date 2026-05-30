@@ -4409,6 +4409,208 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_match_batch_allocate',
+    description: 'Allocate 1 bank tx across N customer OR N supplier invoices (samlingsbetalning, BFL 5 kap 6§). Use when one receipt covers many invoices, or one transfer pays many bills. Customer kind requires income tx; supplier kind requires expense. Never mix kinds. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        transaction_id: { type: 'string' },
+        allocations: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 100,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', enum: ['customer_invoice', 'supplier_invoice'] },
+              invoice_id: { type: 'string' },
+              supplier_invoice_id: { type: 'string' },
+              amount: { type: 'number', exclusiveMinimum: 0, description: 'Amount in TX currency. Cross-currency = bank-credited SEK.' },
+            },
+            required: ['kind', 'amount'],
+          },
+        },
+      },
+      required: ['transaction_id', 'allocations'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const transactionId = args.transaction_id as string
+      const allocations = args.allocations as Array<{
+        kind: 'customer_invoice' | 'supplier_invoice'
+        invoice_id?: string
+        supplier_invoice_id?: string
+        amount: number
+      }>
+      if (!transactionId) throw new Error('transaction_id is required')
+      if (!Array.isArray(allocations) || allocations.length === 0) {
+        throw new Error('allocations is required (non-empty array)')
+      }
+
+      const { data: transaction, error: txError } = await supabase
+        .from('transactions')
+        .select('id, description, merchant_name, amount, currency, date, journal_entry_id')
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .single()
+      if (txError || !transaction) throw new Error('Transaction not found')
+      if (transaction.journal_entry_id) throw new Error('Transaction is already booked')
+      if (transaction.amount === 0) throw new Error('Transaction has zero amount')
+
+      // Direction guard mirrors the RPC: customer_invoice → income, supplier_invoice → expense.
+      const hasCustomer = allocations.some((a) => a.kind === 'customer_invoice')
+      const hasSupplier = allocations.some((a) => a.kind === 'supplier_invoice')
+      if (hasCustomer && hasSupplier) {
+        throw new Error('Cannot mix customer_invoice and supplier_invoice allocations in one batch')
+      }
+      if (hasCustomer && transaction.amount <= 0) {
+        throw new Error('Customer allocations require an income transaction (amount > 0)')
+      }
+      if (hasSupplier && transaction.amount >= 0) {
+        throw new Error('Supplier allocations require an expense transaction (amount < 0)')
+      }
+
+      const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0)
+      const txAbs = Math.abs(transaction.amount)
+      if (Math.abs(totalAllocated - txAbs) > 0.005) {
+        throw new Error(
+          `Allocations sum (${totalAllocated.toFixed(2)}) must equal transaction amount (${txAbs.toFixed(2)})`
+        )
+      }
+
+      const txDesc = transaction.merchant_name || transaction.description || transactionId
+      const summary = `${allocations.length} ${hasCustomer ? 'kundfaktura' : 'leverantörsfaktura'}${allocations.length === 1 ? '' : 'or'}`
+
+      return stagePendingOperation(supabase, companyId, userId, 'match_batch_allocate',
+        `Fördela: ${txDesc} → ${summary}`,
+        { transaction_id: transactionId, allocations },
+        {
+          transaction_description: txDesc,
+          transaction_amount: transaction.amount,
+          transaction_currency: transaction.currency,
+          transaction_date: transaction.date,
+          allocations_count: allocations.length,
+          allocations_kind: hasCustomer ? 'customer_invoice' : 'supplier_invoice',
+          total_allocated: totalAllocated,
+        },
+        actor,
+        {
+          description: 'After approval the combined verifikat is created and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
+          tool: hasCustomer ? 'gnubok_get_ar_ledger' : 'gnubok_get_supplier_ledger',
+        },
+        { dateForPeriodCheck: transaction.date }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_bulk_book_transactions',
+    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Two paths: link N txs to an existing posted verifikat, or create a new verifikat from caller-supplied lines. All txs must share date + direction. Docs on the txs inherit. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tx_ids: { type: 'array', minItems: 1, maxItems: 200, items: { type: 'string' } },
+        existing_journal_entry_id: { type: 'string' },
+        new_entry: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            description: { type: 'string', minLength: 1, maxLength: 500 },
+            lines: {
+              type: 'array',
+              minItems: 2,
+              maxItems: 200,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  account_number: { type: 'string', pattern: '^\\d{4}$' },
+                  debit_amount: { type: 'number', minimum: 0 },
+                  credit_amount: { type: 'number', minimum: 0 },
+                  currency: { type: 'string', minLength: 3, maxLength: 3 },
+                  line_description: { type: 'string', maxLength: 200 },
+                },
+                required: ['account_number', 'debit_amount', 'credit_amount', 'currency'],
+              },
+            },
+          },
+          required: ['description', 'lines'],
+        },
+      },
+      required: ['tx_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const txIds = args.tx_ids as string[]
+      const existingJeId = (args.existing_journal_entry_id as string | undefined) ?? null
+      const newEntry = (args.new_entry as { description: string; lines: unknown[] } | undefined) ?? null
+      if (!Array.isArray(txIds) || txIds.length === 0) throw new Error('tx_ids is required (non-empty)')
+      if ((existingJeId == null) === (newEntry == null)) {
+        throw new Error('Provide exactly one of existing_journal_entry_id or new_entry')
+      }
+
+      const { data: txs, error: txError } = await supabase
+        .from('transactions')
+        .select('id, amount, currency, date, journal_entry_id')
+        .in('id', txIds)
+        .eq('company_id', companyId)
+      if (txError || !txs || txs.length !== txIds.length) {
+        throw new Error('One or more transactions not found')
+      }
+      const booked = txs.find((t) => t.journal_entry_id != null)
+      if (booked) throw new Error(`Transaction ${booked.id} is already booked`)
+      const dates = new Set(txs.map((t) => t.date))
+      if (dates.size > 1) throw new Error('All transactions must share the same date')
+      const direction = txs[0]!.amount > 0 ? 'income' : 'expense'
+      if (txs.some((t) => (direction === 'income' ? t.amount < 0 : t.amount > 0))) {
+        throw new Error('All transactions must share the same direction (all income or all expense)')
+      }
+
+      const txSum = txs.reduce((s, t) => s + t.amount, 0)
+      const txDate = txs[0]!.date as string
+
+      return stagePendingOperation(supabase, companyId, userId, 'bulk_book_transactions',
+        existingJeId
+          ? `Länka ${txIds.length} transaktioner till verifikat (${txDate})`
+          : `Samlingsverifikation: ${txIds.length} transaktioner ${txDate}`,
+        {
+          tx_ids: txIds,
+          existing_journal_entry_id: existingJeId,
+          new_entry: newEntry,
+        },
+        {
+          tx_count: txIds.length,
+          tx_date: txDate,
+          tx_sum: txSum,
+          direction,
+          mode: existingJeId ? 'link_existing' : 'create_new',
+        },
+        actor,
+        {
+          description: 'After approval the verifikat carries the combined business event. Verify with gnubok_query_journal or gnubok_get_reconciliation_status.',
+          tool: 'gnubok_query_journal',
+        },
+        { dateForPeriodCheck: txDate }
+      )
+    },
+  },
+
+  {
     name: 'gnubok_find_voucher_candidates_for_invoice',
     description: 'List posted verifikat that credit kundfordran (1510) and could be the payment for this invoice. Use before gnubok_link_invoice_to_voucher when the user wants to mark a faktura paid against an existing verifikation (no new bokföring).',
     inputSchema: {

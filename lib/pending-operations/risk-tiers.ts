@@ -92,6 +92,17 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // staged.
   create_salary_run: 'medium',
   generate_agi: 'high',
+
+  // ── Multi-tx flows (PRs #603/#606/#608/#610) ───────────────────────
+  // Allocate 1 bank tx across N customer or supplier invoices into one
+  // combined verifikat. Reversible via storno + invoice_payments delete,
+  // so 'medium' (same tier as match_transaction_invoice — its single-
+  // invoice counterpart).
+  match_batch_allocate: 'medium',
+  // Bulk-book N bank txs into 1 verifikat. The create-new branch posts
+  // a verifikat with caller-supplied lines (template-expanded or manual),
+  // the same compliance-critical surface as create_voucher. 'high'.
+  bulk_book_transactions: 'high',
 }
 
 export function getRiskLevel(operationType: string): RiskLevel {

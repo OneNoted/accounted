@@ -1560,6 +1560,10 @@ export type PendingOperationType =
   | 'generate_agi'
   // Mark invoice paid by linking an existing posted verifikat (no new JE)
   | 'link_invoice_voucher'
+  // PR #603/#607: allocate 1 bank tx across N customer or supplier invoices
+  | 'match_batch_allocate'
+  // PR #606/#610: bulk-book N bank txs into 1 combined verifikat
+  | 'bulk_book_transactions'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron'

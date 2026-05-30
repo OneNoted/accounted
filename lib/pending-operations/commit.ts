@@ -2615,6 +2615,83 @@ async function commitGenerateAgi(
   }
 }
 
+// ── Multi-tx commit handlers (PRs #603/#606/#608/#610) ────────────
+//
+// Both wrap their SQL RPC. The RPCs do all the heavy lifting (locking,
+// balance/period checks, journal entry creation, voucher number,
+// payment/junction rows, doc inheritance). The commit handlers just
+// shape params, call the RPC, and translate the structured error code
+// or success payload into an ExecutorResult.
+
+async function commitMatchBatchAllocate(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const txId = params.transaction_id as string
+  const allocations = params.allocations
+  if (!txId) return { error: 'transaction_id is required', status: 400 }
+  if (!Array.isArray(allocations) || allocations.length === 0) {
+    return { error: 'allocations is required (non-empty array)', status: 400 }
+  }
+  const { data, error } = await supabase.rpc('match_batch_allocate', {
+    p_tx_id: txId,
+    p_allocations: allocations,
+    p_company_id: companyId,
+  })
+  if (error) {
+    log.error('match_batch_allocate RPC error', error)
+    return { error: error.message || 'Database error', status: 500 }
+  }
+  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
+  if (!result || !result.ok) {
+    return {
+      error: result?.code || 'match_batch_allocate failed',
+      status: 400,
+      data: result?.details as Record<string, unknown> | undefined,
+    }
+  }
+  return { data: result as unknown as Record<string, unknown>, status: 200 }
+}
+
+async function commitBulkBookTransactions(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const txIds = params.tx_ids
+  const existingJeId = (params.existing_journal_entry_id as string | null | undefined) ?? null
+  const newEntry = (params.new_entry as Record<string, unknown> | null | undefined) ?? null
+  if (!Array.isArray(txIds) || txIds.length === 0) {
+    return { error: 'tx_ids is required (non-empty array)', status: 400 }
+  }
+  if ((existingJeId == null) === (newEntry == null)) {
+    return {
+      error: 'Provide exactly one of existing_journal_entry_id or new_entry',
+      status: 400,
+    }
+  }
+  const { data, error } = await supabase.rpc('bulk_book_transactions', {
+    p_tx_ids: txIds,
+    p_existing_journal_entry_id: existingJeId,
+    p_new_entry: newEntry,
+    p_company_id: companyId,
+  })
+  if (error) {
+    log.error('bulk_book_transactions RPC error', error)
+    return { error: error.message || 'Database error', status: 500 }
+  }
+  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
+  if (!result || !result.ok) {
+    return {
+      error: result?.code || 'bulk_book_transactions failed',
+      status: 400,
+      data: result?.details as Record<string, unknown> | undefined,
+    }
+  }
+  return { data: result as unknown as Record<string, unknown>, status: 200 }
+}
+
 // ── Public dispatcher ────────────────────────────────────────────
 
 /**
@@ -2755,6 +2832,12 @@ export async function commitPendingOperation(
         break
       case 'generate_agi':
         result = await commitGenerateAgi(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'match_batch_allocate':
+        result = await commitMatchBatchAllocate(supabase, companyId, pendingOp.params)
+        break
+      case 'bulk_book_transactions':
+        result = await commitBulkBookTransactions(supabase, companyId, pendingOp.params)
         break
       default:
         return {
