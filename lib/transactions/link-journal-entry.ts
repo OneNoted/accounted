@@ -16,7 +16,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { createLogger } from '@/lib/logger'
 import type { Invoice, Transaction } from '@/types'
+
+const log = createLogger('transactions/link-journal-entry')
 
 // Codes returned by linkTransactionToJournalEntry. All map to entries in
 // lib/errors/structured-errors.ts so both callers (REST route, MCP commit
@@ -54,6 +57,26 @@ export interface LinkTransactionJournalEntryResult {
 export type LinkTransactionJournalEntryOutcome =
   | { ok: true; result: LinkTransactionJournalEntryResult }
   | { ok: false; code: LinkTransactionJournalEntryErrorCode; details?: Record<string, unknown> }
+
+/**
+ * Canonical verifikat-label format: `${series}-${number}` (e.g. "A-12").
+ * Centralised so the MCP staging preview and the committed result can't
+ * diverge — divergence is a BFL 5 kap 7§ traceability hazard because the
+ * verifikationsserie label that ends up in the audit trail must match the
+ * label the user saw at approval time.
+ *
+ * Fallbacks ('A' series, empty number) are defensive only; in practice a
+ * posted verifikat always has both. Callers should never construct this
+ * string inline — import this helper instead.
+ */
+export function formatVoucherLabel(
+  voucherSeries: string | null | undefined,
+  voucherNumber: number | string | null | undefined,
+): string {
+  const series = voucherSeries ?? 'A'
+  const num = voucherNumber ?? ''
+  return num === '' ? series : `${series}-${num}`
+}
 
 export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
@@ -106,16 +129,34 @@ export async function linkTransactionToJournalEntry(
     }
   }
 
-  let invoice: (Invoice & { customer?: { name?: string } | null }) | null = null
+  let invoice:
+    | (Pick<
+        Invoice,
+        | 'id'
+        | 'status'
+        | 'total'
+        | 'paid_amount'
+        | 'remaining_amount'
+        | 'currency'
+        | 'exchange_rate'
+        | 'paid_at'
+        | 'invoice_number'
+      > & { customer?: { name?: string } | null })
+    | null = null
   let newPaidAmount = 0
   let newRemaining = 0
   let isFullyPaid = false
   let newStatus: 'paid' | 'partially_paid' = 'paid'
 
   if (invoiceId) {
+    // Data minimization (GDPR Art.5(1)(c) / SOC 2 CC6.1): explicit column
+    // list rather than select('*, customer:customers(name)'). Adding new
+    // PII columns to invoices won't silently widen this fetch.
     const { data: invoiceRow, error: fetchInvError } = await supabase
       .from('invoices')
-      .select('*, customer:customers(name)')
+      .select(
+        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, customer:customers(name)'
+      )
       .eq('id', invoiceId)
       .eq('company_id', companyId)
       .single()
@@ -136,11 +177,12 @@ export async function linkTransactionToJournalEntry(
       }
     }
 
-    invoice = invoiceRow as Invoice & { customer?: { name?: string } | null }
+    invoice = invoiceRow as typeof invoice
 
     const paidAmount = transaction.amount as number
-    newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
-    const currentRemaining = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
+    newPaidAmount = Math.round(((invoice!.paid_amount || 0) + paidAmount) * 100) / 100
+    const currentRemaining =
+      invoice!.remaining_amount ?? invoice!.total - (invoice!.paid_amount || 0)
     newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
     isFullyPaid = newRemaining <= 0
     newStatus = isFullyPaid ? 'paid' : 'partially_paid'
@@ -174,14 +216,25 @@ export async function linkTransactionToJournalEntry(
     return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
   }
 
-  async function rollbackTxLink(): Promise<void> {
-    await supabase
+  async function rollbackTxLink(reason: string): Promise<void> {
+    const { error: rollbackErr } = await supabase
       .from('transactions')
       .update(priorTxState)
       .eq('id', transactionId)
       .eq('company_id', companyId)
-    // Best-effort: a failed rollback is logged by the caller via the
-    // structured error code; reconciliation jobs can pick up the gap.
+    if (rollbackErr) {
+      // GDPR Art.5(1)(f) / SOC 2 CC7.2: surface partial-state gaps so a
+      // reconciliation job can pick them up. ID-only payload — no amounts,
+      // no counterparty names — keeps the log within data-minimization
+      // bounds while still being actionable.
+      log.warn('failed to roll back transaction link after subsequent step failed', {
+        companyId,
+        transactionId,
+        journalEntryId,
+        reason,
+        rollbackError: rollbackErr.message,
+      })
+    }
   }
 
   const now = new Date().toISOString()
@@ -201,14 +254,24 @@ export async function linkTransactionToJournalEntry(
       .select('id')
 
     if (updateInvError) {
-      await rollbackTxLink()
+      await rollbackTxLink('invoice update errored')
       return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateInvError.message } }
     }
 
     if (!updatedRows || updatedRows.length === 0) {
-      await rollbackTxLink()
+      await rollbackTxLink('invoice optimistic lock returned 0 rows')
       return { ok: false, code: 'LINK_TX_INVOICE_RACE' }
     }
+
+    // BFL 5 kap 2§ + ML 8 kap 21–23§: the payment row must record the rate
+    // effective on the PAYMENT date, not the invoice-creation date. Using
+    // transaction.exchange_rate (set by the bank-feed/import pipeline at the
+    // tx date) means a foreign-currency invoice's payment row carries the
+    // correct rate for downstream FX-diff reporting. The full 3960/7960
+    // posting still lives in createInvoicePaymentJournalEntry — link-to-
+    // existing-voucher never creates new lines by contract.
+    const paymentExchangeRate =
+      transaction.exchange_rate ?? invoice.exchange_rate ?? null
 
     const { error: paymentInsertError } = await supabase
       .from('invoice_payments')
@@ -219,14 +282,14 @@ export async function linkTransactionToJournalEntry(
         payment_date: transaction.date,
         amount: transaction.amount,
         currency: invoice.currency,
-        exchange_rate: invoice.exchange_rate,
+        exchange_rate: paymentExchangeRate,
         journal_entry_id: journalEntryId,
         transaction_id: transactionId,
         notes: 'Kopplad till befintlig verifikation (ingen ny bokföring skapad)',
       })
 
     if (paymentInsertError && paymentInsertError.code !== '23505') {
-      await supabase
+      const { error: invRevertErr } = await supabase
         .from('invoices')
         .update({
           status: invoice.status,
@@ -236,7 +299,14 @@ export async function linkTransactionToJournalEntry(
         })
         .eq('id', invoiceId)
         .eq('company_id', companyId)
-      await rollbackTxLink()
+      if (invRevertErr) {
+        log.warn('failed to revert invoice status after payment insert failed', {
+          companyId,
+          invoiceId,
+          rollbackError: invRevertErr.message,
+        })
+      }
+      await rollbackTxLink('invoice_payments insert failed')
       return { ok: false, code: 'MATCH_INVOICE_RECORD_PAYMENT_FAILED' }
     }
   }
@@ -266,7 +336,10 @@ export async function linkTransactionToJournalEntry(
     }
   }
 
-  const voucherLabel = `${journalEntry.voucher_series ?? 'A'}${journalEntry.voucher_number ?? ''}`
+  const voucherLabel = formatVoucherLabel(
+    journalEntry.voucher_series as string | null,
+    journalEntry.voucher_number as number | null,
+  )
 
   return {
     ok: true,

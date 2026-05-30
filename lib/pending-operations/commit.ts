@@ -2781,6 +2781,19 @@ async function commitLinkTransactionJournalEntry(
     }
   }
 
+  // Structured audit-trail entry on success (compliance-swarm V16, SOC 2 CC4.1).
+  // Mirrors commitMatchBatchAllocate / commitBulkBookTransactions — IDs only,
+  // no amounts or counterparty PII. invoiceId is logged as boolean to avoid
+  // leaking which invoices are touched while still distinguishing the two
+  // code paths (link-only vs link+settle).
+  log.info('link_transaction_journal_entry committed', {
+    companyId,
+    operationType: 'link_transaction_journal_entry',
+    transactionId: outcome.result.transactionId,
+    journalEntryId: outcome.result.journalEntryId,
+    settledInvoice: outcome.result.invoiceId != null,
+  })
+
   return {
     data: {
       transaction_id: outcome.result.transactionId,

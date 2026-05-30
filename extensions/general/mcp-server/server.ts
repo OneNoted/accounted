@@ -11,6 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { eventBus } from '@/lib/events/bus'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
@@ -4622,7 +4623,7 @@ export const tools: McpTool[] = [
 
       const { data: je, error: jeError } = await supabase
         .from('journal_entries')
-        .select('id, status, voucher_series, voucher_number, entry_date, description')
+        .select('id, status, voucher_series, voucher_number, entry_date')
         .eq('id', journalEntryId)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -4633,9 +4634,12 @@ export const tools: McpTool[] = [
 
       let invoicePreview: { invoice_number: string | null; remaining: number | null; will_be_fully_paid: boolean } | null = null
       if (invoiceId) {
+        // GDPR Art.5(1)(c): only the columns the preview displays. We need
+        // remaining_amount for the will-be-fully-paid math and invoice_number
+        // for the staged-op title — total / paid_amount are no longer fetched.
         const { data: invoice, error: invError } = await supabase
           .from('invoices')
-          .select('id, invoice_number, status, total, paid_amount, remaining_amount, currency')
+          .select('id, invoice_number, status, remaining_amount')
           .eq('id', invoiceId)
           .eq('company_id', companyId)
           .maybeSingle()
@@ -4643,8 +4647,16 @@ export const tools: McpTool[] = [
         if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
           throw new Error(`Invoice is not in an open state (status=${invoice.status})`)
         }
-        const currentRemaining = (invoice.remaining_amount as number | null) ?? ((invoice.total as number) - ((invoice.paid_amount as number | null) ?? 0))
-        const newRemaining = Math.max(0, Math.round((currentRemaining - (tx.amount as number)) * 100) / 100)
+        // Explicit NaN guard (A.8.28): silently treating a malformed numeric
+        // column as 0 would let a bogus preview pass to the user. The DB
+        // column is NUMERIC NOT NULL on remaining_amount once status leaves
+        // 'draft', so a NaN here means something upstream is broken.
+        const remaining = Number(invoice.remaining_amount)
+        const txAmount = Number(tx.amount)
+        if (!Number.isFinite(remaining) || !Number.isFinite(txAmount)) {
+          throw new Error('Invoice remaining_amount or tx amount is not a finite number')
+        }
+        const newRemaining = Math.max(0, Math.round((remaining - txAmount) * 100) / 100)
         invoicePreview = {
           invoice_number: (invoice.invoice_number as string | null) ?? null,
           remaining: newRemaining,
@@ -4660,9 +4672,13 @@ export const tools: McpTool[] = [
       const jeDate = je.entry_date as string
       const periodCheckDate = jeDate > txDate ? jeDate : txDate
 
-      const voucherLabel = je.voucher_series && je.voucher_number != null
-        ? `${je.voucher_series}-${je.voucher_number}`
-        : journalEntryId.slice(0, 8)
+      // Centralised verifikat-label format (formatVoucherLabel) — keeps the
+      // MCP staging preview and the committed audit-trail label byte-identical,
+      // so BFL 5 kap 7§ traceability holds even if the format ever changes.
+      const voucherLabel = formatVoucherLabel(
+        je.voucher_series as string | null,
+        je.voucher_number as number | null,
+      )
       const txDesc = (tx.merchant_name as string | null) || (tx.description as string | null) || transactionId.slice(0, 8)
 
       return stagePendingOperation(
@@ -4674,6 +4690,11 @@ export const tools: McpTool[] = [
           ? `Länka ${txDesc} → verifikat ${voucherLabel} + faktura ${invoicePreview?.invoice_number ?? invoiceId.slice(0, 8)}`
           : `Länka ${txDesc} → verifikat ${voucherLabel}`,
         { transaction_id: transactionId, journal_entry_id: journalEntryId, invoice_id: invoiceId ?? null },
+        // GDPR Art.25: voucher_description is intentionally OMITTED from
+        // preview_data — it can carry free-text merchant/counterparty PII
+        // and the voucher_label alone uniquely identifies the verifikat for
+        // the user's approval decision. Same reasoning as the per-tx
+        // description handling elsewhere in this file.
         {
           transaction_description: txDesc,
           transaction_amount: tx.amount,
@@ -4681,7 +4702,6 @@ export const tools: McpTool[] = [
           transaction_date: txDate,
           voucher_label: voucherLabel,
           voucher_date: jeDate,
-          voucher_description: je.description,
           invoice_id: invoiceId ?? null,
           invoice_number: invoicePreview?.invoice_number ?? null,
           invoice_remaining_after: invoicePreview?.remaining ?? null,

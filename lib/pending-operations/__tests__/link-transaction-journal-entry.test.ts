@@ -162,7 +162,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     expect(result.data).toMatchObject({
       transaction_id: TX_UUID,
       journal_entry_id: JE_UUID,
-      voucher_label: 'A12',
+      voucher_label: 'A-12',
       invoice_id: null,
       invoice_status: null,
     })
