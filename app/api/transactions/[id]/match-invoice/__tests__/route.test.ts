@@ -205,6 +205,38 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect((body.error as unknown as { code: string }).code).toBe('MATCH_INVOICE_NOT_OPEN')
   })
 
+  it('returns 400 MATCH_INVOICE_CURRENCY_MISMATCH for cross-currency settlement', async () => {
+    // Round-9 fix: a SEK bank tx paying a USD invoice would otherwise
+    // corrupt invoice.paid_amount (accumulator treats SEK as USD), flip
+    // a 140 USD invoice to status=paid after a tiny partial. Block here
+    // and route the user to the multi-allocation flow that handles
+    // 3960/7960 FX-diff postings end-to-end.
+    const tx = makeTransaction({ id: 'tx-1', amount: 1000, invoice_id: null, currency: 'SEK' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      currency: 'USD',
+      total: 140,
+      remaining_amount: 140,
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, string> } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_INVOICE_CURRENCY_MISMATCH')
+    expect(body.error.details).toMatchObject({
+      transactionCurrency: 'SEK',
+      invoiceCurrency: 'USD',
+    })
+  })
+
   it('matches transaction to invoice with accrual method (full payment)', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
     const customer = makeCustomer()

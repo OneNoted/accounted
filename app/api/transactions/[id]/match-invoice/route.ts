@@ -99,6 +99,31 @@ export const POST = withRouteContext(
       })
     }
 
+    // Currency-integrity guard (BFL 5 kap 2§ + swedish-compliance PR #614
+    // round 9). invoices.paid_amount / remaining_amount are denominated in
+    // invoice.currency; invoice_payments rows carry currency = invoice.currency
+    // with amount in that currency. The accumulator below assumes
+    // `tx.amount` is already in invoice.currency. For a SEK bank tx paying
+    // a USD invoice the accumulator would silently treat 230 SEK as "230
+    // USD paid" and flip a 140 USD invoice to status=paid after a partial.
+    //
+    // Block cross-currency on this single-allocation path until a proper
+    // FX-aware settlement flow lands. Same-currency (SEK→SEK or USD→USD)
+    // remains fully supported including partials; the buildInvoicePayment-
+    // ClearingLines helper handles the bookkeeping side correctly in both
+    // cases. For SEK tx → USD invoice the user should use the multi-
+    // allocation dialog (gnubok_match_batch_allocate) which DOES handle
+    // FX-diff postings on 3960/7960 end-to-end.
+    if (transaction.currency !== invoice.currency) {
+      return errorResponseFromCode('MATCH_INVOICE_CURRENCY_MISMATCH', txLog, {
+        requestId,
+        details: {
+          transactionCurrency: transaction.currency,
+          invoiceCurrency: invoice.currency,
+        },
+      })
+    }
+
     // Hard-duplicate guard: if the invoice is 'sent'/'overdue' but already
     // has a payment voucher attached (status leak), refuse — booking again
     // would double-credit 1510 / double-debit 1930. Partially-paid invoices
