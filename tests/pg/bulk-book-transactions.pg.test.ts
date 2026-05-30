@@ -49,6 +49,26 @@ async function seedTenant() {
     periodStart: '2026-01-01',
     periodEnd: '2026-12-31',
   })
+  // PR #610 round 2: the RPC now validates every line's account_number
+  // against the company's active chart_of_accounts. Seed just the
+  // accounts the tests touch (cheaper than calling
+  // seed_chart_of_accounts which inserts the full BAS).
+  await getPool().query(
+    `INSERT INTO public.chart_of_accounts
+       (user_id, company_id, account_number, account_name, account_class, account_type, normal_balance, is_active)
+     SELECT $1, $2, n, name, cls, atype, nbal, true
+     FROM (VALUES
+       ('1510', 'Kundfordringar',        1, 'asset',   'debit'),
+       ('1930', 'Bankkonto',             1, 'asset',   'debit'),
+       ('2440', 'Leverantörsskulder',    2, 'liability', 'credit'),
+       ('2611', 'Utgående moms 25%',     2, 'liability', 'credit'),
+       ('3001', 'Försäljning 25% moms',  3, 'revenue', 'credit'),
+       ('3960', 'Valutakursvinster',     3, 'revenue', 'credit'),
+       ('5800', 'Resekostnader',         5, 'expense', 'debit'),
+       ('7960', 'Valutakursförluster',   7, 'expense', 'debit')
+     ) AS t(n, name, cls, atype, nbal)`,
+    [userId, companyId],
+  )
   return { userId, companyId, fiscalPeriodId }
 }
 
