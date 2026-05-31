@@ -43,12 +43,32 @@ export async function GET() {
 
   const companyId = await requireCompanyId(supabase, user.id)
 
-  // RLS handles scoping (system OR company OR team)
+  // Resolve the team this company belongs to (if any) so team-shared
+  // templates stay visible while this company is selected.
+  const { data: company } = await supabase
+    .from('companies')
+    .select('team_id')
+    .eq('id', companyId)
+    .maybeSingle()
+  const teamId = company?.team_id ?? null
+
+  // Scope to the SELECTED company: system + this company + this company's team.
+  // RLS (btl_select) is membership-wide — it returns templates from *every*
+  // company the user belongs to — so the active-company narrowing must happen
+  // here in the API layer (mirrors counterparty-templates). Without this, a
+  // user who owns several companies sees all of their templates merged.
+  const scope = [
+    'is_system.eq.true',
+    `company_id.eq.${companyId}`,
+    ...(teamId ? [`team_id.eq.${teamId}`] : []),
+  ].join(',')
+
   const [templatesRes, usageRes] = await Promise.all([
     supabase
       .from('booking_template_library')
       .select('*')
       .eq('is_active', true)
+      .or(scope)
       .order('category')
       .order('name'),
     supabase
