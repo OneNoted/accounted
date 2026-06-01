@@ -1804,7 +1804,6 @@
     "fx_rate_unavailable_description": "Riksbanken has not published a rate for {date}. Enter the rate from your bank statement (SEK per 1 {invoiceCurrency}).",
     "fx_manual_rate_label": "Manual rate",
     "fx_manual_rate_placeholder": "e.g. 10.4500",
-    "fx_manual_rate_retry": "Use this rate",
     "fx_gain_note": "FX gain: {amount}",
     "fx_loss_note": "FX loss: {amount}",
     "on_confirm_title": "On confirmation:",

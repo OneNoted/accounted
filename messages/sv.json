@@ -1804,7 +1804,6 @@
     "fx_rate_unavailable_description": "Riksbanken har ingen publicerad kurs för {date}. Ange kursen från ditt bankutdrag (SEK per 1 {invoiceCurrency}).",
     "fx_manual_rate_label": "Manuell kurs",
     "fx_manual_rate_placeholder": "t.ex. 10,4500",
-    "fx_manual_rate_retry": "Använd kursen",
     "fx_gain_note": "Kursvinst: {amount}",
     "fx_loss_note": "Kursförlust: {amount}",
     "on_confirm_title": "Vid bekräftelse:",

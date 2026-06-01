@@ -516,33 +516,22 @@ export default function InvoiceMatchDialog({
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-end gap-2">
-                      <div className="flex-1 space-y-1">
-                        <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                          {t('fx_manual_rate_label')}
-                        </label>
-                        <Input
-                          inputMode="decimal"
-                          value={manualRate}
-                          onChange={(e) => setManualRate(e.target.value)}
-                          placeholder={t('fx_manual_rate_placeholder')}
-                          className="tabular-nums"
-                        />
-                      </div>
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          // Re-fetching the preview with manual_exchange_rate
-                          // is a follow-up improvement; for now the manual
-                          // rate flows through onConfirm and the route re-
-                          // computes server-side. Confirm button below
-                          // becomes the trigger.
-                        }}
-                        disabled
-                        className="invisible h-10"
-                      >
-                        {t('fx_manual_rate_retry')}
-                      </Button>
+                    {/* The typed rate flows through onConfirm.manual_exchange_rate
+                        and the route recomputes server-side, so the footer
+                        Confirm button is the trigger — no separate apply button.
+                        Confirm stays disabled until a positive rate is entered
+                        (see DialogFooter guard below). */}
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                        {t('fx_manual_rate_label')}
+                      </label>
+                      <Input
+                        inputMode="decimal"
+                        value={manualRate}
+                        onChange={(e) => setManualRate(e.target.value)}
+                        placeholder={t('fx_manual_rate_placeholder')}
+                        className="tabular-nums"
+                      />
                     </div>
                   </div>
                 )

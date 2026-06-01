@@ -84,24 +84,21 @@ export const GET = withRouteContext(
     const accountingMethod = settings?.accounting_method || 'accrual'
     const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
-    const paidAmount = transaction.amount
-    const currentRemaining =
-      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-    const newRemaining = Math.max(
-      0,
-      Math.round((currentRemaining - paidAmount) * 100) / 100,
-    )
-    const isFullyPaid = newRemaining <= 0
-
-    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
-
     // Cross-currency FX preview. When tx.currency !== invoice.currency we fetch
     // the Riksbanken spot rate for invoice.currency on the tx date and surface
     // the conversion to the dialog (the user sees the rate + invoice-currency-
     // equivalent before approving). The committed verifikat uses the same
     // numbers; the route POST handler re-runs the lookup so the rate at
     // commit time is authoritative.
+    //
+    // This MUST run BEFORE the paid / remaining / fully-paid math below.
+    // invoice.remaining_amount and invoice.total are denominated in INVOICE
+    // currency, so a SEK bank tx has to be converted first. Computing the
+    // comparison from the raw SEK amount made a 1 000 SEK payment look like
+    // it fully cleared a 140 USD invoice (newRemaining went negative →
+    // isFullyPaid=true), which for a cash-method unbooked invoice previewed a
+    // cash entry (Dr 1930 / Cr 30xx) that the POST — which converts first —
+    // would never commit (it posts the clearing entry Dr 1930 / Cr 1510).
     //
     // Per ML 8 kap 21–23§ the rate effective on the payment date is the
     // correct conversion. If the lookup fails (Riksbanken outage, missing
@@ -152,6 +149,30 @@ export const GET = withRouteContext(
         }
       }
     }
+
+    // paidAmount is denominated in INVOICE currency so the remaining /
+    // fully-paid comparison is like-with-like. Same-currency → tx.amount.
+    // Cross-currency with a resolved rate → the spot-rate conversion (mirrors
+    // the POST handler's paidAmountInInvoiceCurrency).
+    const paidAmount =
+      fxConversion.required && !('error' in fxConversion)
+        ? fxConversion.paid_in_invoice_currency
+        : transaction.amount
+    const currentRemaining =
+      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
+    const newRemaining = Math.max(
+      0,
+      Math.round((currentRemaining - paidAmount) * 100) / 100,
+    )
+    // A rate-unavailable cross-currency payment can't be resolved to invoice
+    // currency yet, so never report fully-paid (or preview the cash shape) on
+    // a guess — the dialog blocks confirm until a manual rate is entered and
+    // the POST recomputes the real figure.
+    const fxRateUnavailable = fxConversion.required && 'error' in fxConversion
+    const isFullyPaid = !fxRateUnavailable && newRemaining <= 0
+
+    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
+    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
