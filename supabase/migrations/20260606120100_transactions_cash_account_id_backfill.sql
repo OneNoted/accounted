@@ -64,7 +64,10 @@ WHERE t.cash_account_id IS NULL
 -- on the currency fallback at query time. We must not guess between checking
 -- and savings.
 WITH single_ca AS (
-  SELECT company_id, currency, min(id) AS cash_account_id
+  -- (array_agg(id))[1], not min(id): Postgres has no min() aggregate for uuid.
+  -- HAVING count(*) = 1 guarantees exactly one row per group, so the array has
+  -- a single element and which one we pick is moot.
+  SELECT company_id, currency, (array_agg(id))[1] AS cash_account_id
   FROM public.cash_accounts
   WHERE enabled = true
   GROUP BY company_id, currency
