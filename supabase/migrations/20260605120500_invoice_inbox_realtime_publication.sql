@@ -21,4 +21,19 @@
 -- predicate evaluates true. Default replica identity (primary key) is
 -- sufficient: the client only refetches, never inspecting the old/new record.
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.invoice_inbox_items;
+-- Idempotent: ALTER PUBLICATION ... ADD TABLE errors if the table is already a
+-- member (SQLSTATE 42710). Guard so a re-apply is a no-op — e.g. a Supabase
+-- preview branch that partially applied an earlier revision of this migration
+-- (the ALTER ran, but the schema_migrations bookkeeping insert failed), leaving
+-- the table already in the publication on the next attempt.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'invoice_inbox_items'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.invoice_inbox_items;
+  END IF;
+END $$;

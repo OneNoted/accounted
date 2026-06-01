@@ -20,11 +20,14 @@ UPDATE public.transactions t
 SET cash_account_id = ca.id
 FROM public.journal_entry_lines jel
 JOIN public.cash_accounts ca
-  ON ca.company_id = t.company_id
- AND ca.ledger_account = jel.account_number
+  ON ca.ledger_account = jel.account_number
 WHERE t.cash_account_id IS NULL
   AND t.journal_entry_id IS NOT NULL
   AND jel.journal_entry_id = t.journal_entry_id
+  -- Relate the cash account to the target by company in WHERE, not in the JOIN
+  -- ON above: Postgres forbids referencing the UPDATE target (t) from a
+  -- FROM-clause join condition ("invalid reference to FROM-clause entry for t").
+  AND ca.company_id = t.company_id
   AND jel.account_number BETWEEN '1900' AND '1999'
   AND (
     SELECT count(*)
