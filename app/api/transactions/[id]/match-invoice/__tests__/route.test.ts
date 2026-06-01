@@ -62,6 +62,9 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 import { POST } from '../route'
+// Mocked above — imported here as a spy handle to assert FX rate provenance
+// lands in the audit trail (PR #615 review).
+import { logMatchEvent } from '@/lib/invoices/match-log'
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001'
@@ -286,6 +289,16 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         ]),
       }),
     )
+    // The auto path records the rate provenance as 'riksbanken' (vs 'manual').
+    expect(logMatchEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'tx-1',
+      'matched',
+      expect.objectContaining({
+        newState: expect.objectContaining({ rate_source: 'riksbanken', exchange_rate: 10.45 }),
+      }),
+    )
   })
 
   it('cross-currency settlement: returns 400 FX_RATE_UNAVAILABLE when Riksbanken fails and no manual rate', async () => {
@@ -353,6 +366,17 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // honour it rather than overriding with a possibly-stale Riksbanken value.
     expect(mockFetchExchangeRate).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).toHaveBeenCalled()
+    // Provenance: the manual override is recorded in the audit trail's
+    // new_state so it's distinguishable from an automatic Riksbanken lookup.
+    expect(logMatchEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'tx-1',
+      'matched',
+      expect.objectContaining({
+        newState: expect.objectContaining({ rate_source: 'manual', exchange_rate: 10.5 }),
+      }),
+    )
   })
 
   it('matches transaction to invoice with accrual method (full payment)', async () => {

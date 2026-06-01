@@ -114,7 +114,18 @@ export const POST = withRouteContext(
     // when Riksbanken hasn't published for the date yet).
     type FxConversion =
       | { required: false }
-      | { required: true; rate: number; rate_date: string; paidInInvoiceCurrency: number }
+      | {
+          required: true
+          rate: number
+          rate_date: string
+          paidInInvoiceCurrency: number
+          // Provenance of the rate actually used, recorded for the audit
+          // trail: 'manual' = caller-supplied from a bank statement (Riksbanken
+          // had no rate for the date), 'riksbanken' = spot rate fetched on the
+          // payment date. A manual override on a money path must be traceable
+          // (BFL 5 kap 6–7§; ML 8 kap 21–23§).
+          source: 'manual' | 'riksbanken'
+        }
 
     let fx: FxConversion = { required: false }
     if (transaction.currency !== invoice.currency) {
@@ -150,7 +161,13 @@ export const POST = withRouteContext(
           ? Math.abs(transaction.amount)
           : Math.abs(transaction.amount) * (transaction.exchange_rate ?? 1)
       const paidInInvoiceCurrency = Math.round((txAbsSek / rate) * 10000) / 10000
-      fx = { required: true, rate, rate_date: rateDate, paidInInvoiceCurrency }
+      fx = {
+        required: true,
+        rate,
+        rate_date: rateDate,
+        paidInInvoiceCurrency,
+        source: manualRate != null ? 'manual' : 'riksbanken',
+      }
     }
 
     // Hard-duplicate guard: if the invoice is 'sent'/'overdue' but already
@@ -507,9 +524,21 @@ export const POST = withRouteContext(
     // kontantmetoden partials — invoices that were never booked. When the
     // invoice was booked under accrual, the clearing entry already handles
     // the partial cleanly and the note would be misleading.
-    const paymentNotes = (!invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid)
+    const cashMethodNote = (!invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid)
       ? 'Kontantmetoden: intäkt bokförs vid slutbetalning'
       : null
+
+    // Provenance for a manually-supplied FX rate. The Riksbanken spot rate is
+    // self-documenting (rate + rate_date are reproducible), but a rate the
+    // user typed from their bank statement is an override of the ML 8 kap
+    // 21–23§ obligation and must leave a trail on the verifikat's payment row
+    // (BFL 5 kap 6–7§ — the verifikation must reflect the actual affärshändelse).
+    const manualRateNote =
+      fx.required && fx.source === 'manual'
+        ? `Manuell valutakurs ${fx.rate} ${invoice.currency}/SEK (betalningsdatum ${transaction.date})`
+        : null
+
+    const paymentNotes = [cashMethodNote, manualRateNote].filter(Boolean).join(' · ') || null
 
     // Payment row stores amount in INVOICE currency (the column unit). For
     // same-currency that's tx.amount; for cross-currency it's the spot-rate
@@ -561,7 +590,18 @@ export const POST = withRouteContext(
       invoiceId: invoice_id,
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',
-      newState: { status: newStatus, paid_amount: newPaidAmount, remaining_amount: newRemaining },
+      // rate_source / exchange_rate live inside new_state (the persisted JSON
+      // column) so a manual override — a user-supplied money-path input — is
+      // distinguishable from an automatic Riksbanken lookup in the audit trail
+      // (swarm V16 / SOC 2 CC6.1 / GDPR Art.5(1)(f)). Same-currency matches
+      // carry rate_source: null.
+      newState: {
+        status: newStatus,
+        paid_amount: newPaidAmount,
+        remaining_amount: newRemaining,
+        rate_source: fx.required ? fx.source : null,
+        exchange_rate: fx.required ? fx.rate : null,
+      },
     })
 
     try {
