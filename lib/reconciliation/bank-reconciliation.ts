@@ -104,7 +104,17 @@ function scopeTransactionsToAccount<Q extends {
   or(filters: string): Q
   eq(column: string, value: string): Q
 }>(query: Q, cashAccountId: string | undefined, currency: string): Q {
+  // Both values are interpolated into a raw PostgREST filter string below. They
+  // are DB-derived in every caller (cash_accounts.id / .currency, or the 'SEK'
+  // default), never raw user input — but assert their shape anyway so a future
+  // caller cannot thread an unsanitized value through into the filter.
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new Error(`scopeTransactionsToAccount: invalid currency ${JSON.stringify(currency)}`)
+  }
   if (cashAccountId) {
+    if (!/^[0-9a-fA-F-]{36}$/.test(cashAccountId)) {
+      throw new Error('scopeTransactionsToAccount: invalid cashAccountId (expected UUID)')
+    }
     return query.or(
       `cash_account_id.eq.${cashAccountId},and(cash_account_id.is.null,currency.eq.${currency})`,
     )

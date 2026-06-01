@@ -169,6 +169,31 @@ describe('POST /reconciliation/bank/run', () => {
     expect(runRecMock).not.toHaveBeenCalled()
   })
 
+  it('runs the default 1930 account even without a cash_accounts row (currency fallback)', async () => {
+    // Mirrors the status endpoint's leniency: the primary SEK account always
+    // reconciles via the currency fallback, so a company without a 1930
+    // cash_accounts row is not blocked from running reconciliation.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: null, error: null },
+      }),
+    )
+    const res = await runPOST(
+      postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
+        account_number: '1930',
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    expect(runRecMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ accountNumber: '1930', cashAccountId: undefined }),
+    )
+  })
+
   it('dry-run passes dryRun: true into the matcher', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

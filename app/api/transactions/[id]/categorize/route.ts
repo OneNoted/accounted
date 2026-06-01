@@ -234,12 +234,20 @@ export const POST = withRouteContext(
     // rows with no cash_account_id behave exactly as before.
     let settlementAccount = '1930'
     if (transaction.cash_account_id) {
-      const { data: txCashAccount } = await supabase
+      const { data: txCashAccount, error: cashAccountError } = await supabase
         .from('cash_accounts')
         .select('ledger_account')
         .eq('id', transaction.cash_account_id)
         .eq('company_id', companyId)
         .maybeSingle()
+      if (cashAccountError) {
+        // Don't fail the booking — fall back to 1930 — but surface the lookup
+        // failure so a silent mis-booking to the wrong bank leg stays auditable.
+        txLog.warn('settlement-account lookup failed; defaulting to 1930', {
+          cashAccountId: transaction.cash_account_id,
+          error: cashAccountError.message,
+        })
+      }
       if (txCashAccount?.ledger_account) {
         settlementAccount = txCashAccount.ledger_account as string
       }

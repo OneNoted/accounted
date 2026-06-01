@@ -18,6 +18,13 @@ export async function GET(request: Request) {
   const unmatched = searchParams.get('unmatched') === 'true'
   const reconciled = searchParams.get('reconciled') === 'true'
   const currency = searchParams.get('currency') || undefined
+  // currency is interpolated into the PostgREST .or() filter below, so reject
+  // anything that isn't a 3-letter ISO code. RLS still scopes results to the
+  // company, but an unsanitized value could otherwise malform or widen the
+  // filter (PostgREST filter injection).
+  if (currency && !/^[A-Z]{3}$/.test(currency)) {
+    return NextResponse.json({ error: 'Ogiltig valutakod' }, { status: 400 })
+  }
   const dateFrom = searchParams.get('date_from') || undefined
   const dateTo = searchParams.get('date_to') || undefined
   // When set, return only ignored rows — used by the reconciliation view to

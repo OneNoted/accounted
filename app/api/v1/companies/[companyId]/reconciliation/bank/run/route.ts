@@ -117,7 +117,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Resolve the settlement account to its cash account (currency + id) so the
     // matcher scopes transactions to this exact account, not every same-currency
-    // account. Defaults to '1930' for back-compat.
+    // account. The default '1930' is exempt from the existence check — it falls
+    // back to currency-only scoping, matching the status endpoint and the
+    // pre-feature behaviour. A non-default unknown account is rejected.
     const accountNumber = body.account_number ?? '1930'
     const { data: cashAccount } = await ctx.supabase
       .from('cash_accounts')
@@ -125,7 +127,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .eq('company_id', ctx.companyId!)
       .eq('ledger_account', accountNumber)
       .maybeSingle()
-    if (!cashAccount) {
+    if (!cashAccount && accountNumber !== '1930') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
@@ -140,8 +142,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         dateFrom: body.date_from,
         dateTo: body.date_to,
         accountNumber,
-        currency: (cashAccount.currency as string | undefined) ?? 'SEK',
-        cashAccountId: cashAccount.id as string,
+        currency: (cashAccount?.currency as string | undefined) ?? 'SEK',
+        cashAccountId: cashAccount?.id as string | undefined,
         dryRun: ctx.dryRun,
       })
     } catch (err) {
