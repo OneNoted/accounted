@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Sun, Moon, Monitor, LogOut, Languages } from 'lucide-react'
+import { Sun, Moon, Monitor, LogOut, Languages, ExternalLink } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
@@ -154,6 +155,35 @@ export default function AccountSettingsPage() {
                 {tCommon('logout')}
               </Button>
             </div>
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* Privacy & agreements — surface the otherwise-unlinked DPA + privacy policy */}
+      <section className="border-t border-border/8 pt-8">
+        <Card>
+          <CardHeader>
+            <CardTitle>{tSettings('legal_title')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Link
+              href="/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-secondary/60"
+            >
+              <span className="font-medium">{tSettings('legal_privacy')}</span>
+              <ExternalLink className="h-4 w-4 text-muted-foreground" />
+            </Link>
+            <Link
+              href="/dpa"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-secondary/60"
+            >
+              <span className="font-medium">{tSettings('legal_dpa')}</span>
+              <ExternalLink className="h-4 w-4 text-muted-foreground" />
+            </Link>
           </CardContent>
         </Card>
       </section>
