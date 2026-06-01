@@ -11,6 +11,7 @@ import {
   manualLink,
   unlinkReconciliation,
   getReconciliationStatus,
+  scopeTransactionsToAccount,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { makeTransaction } from '@/tests/helpers'
@@ -37,6 +38,67 @@ function makeGLLine(overrides: Partial<UnlinkedGLLine> = {}): UnlinkedGLLine {
     ...overrides,
   }
 }
+
+// ============================================================
+// scopeTransactionsToAccount — the per-account query filter
+// ============================================================
+
+describe('scopeTransactionsToAccount', () => {
+  // Records every filter call and returns itself so the chain can continue.
+  function makeQueryStub() {
+    const calls: { method: string; args: unknown[] }[] = []
+    const self = {
+      eq: (...args: unknown[]) => {
+        calls.push({ method: 'eq', args })
+        return self
+      },
+      or: (...args: unknown[]) => {
+        calls.push({ method: 'or', args })
+        return self
+      },
+    }
+    return { self, calls }
+  }
+
+  it('scopes by currency AND (this account OR legacy NULL) using a flat two-term or', () => {
+    const { self, calls } = makeQueryStub()
+    const id = '11111111-1111-1111-1111-111111111111'
+
+    scopeTransactionsToAccount(self as never, id, 'SEK')
+
+    // currency is constrained even on the bound branch (a cash account has one
+    // currency), which lets us avoid the fragile nested and() form.
+    expect(calls).toContainEqual({ method: 'eq', args: ['currency', 'SEK'] })
+    expect(calls).toContainEqual({
+      method: 'or',
+      args: [`cash_account_id.eq.${id},cash_account_id.is.null`],
+    })
+    // Regression guard: the old nested `and(cash_account_id.is.null,currency.eq.X)`
+    // silently returned ZERO rows mid-backfill — it must never come back.
+    const orCall = calls.find((c) => c.method === 'or')
+    expect(String(orCall?.args[0])).not.toContain('and(')
+  })
+
+  it('falls back to a pure currency filter when no cash account id is given', () => {
+    const { self, calls } = makeQueryStub()
+
+    scopeTransactionsToAccount(self as never, undefined, 'EUR')
+
+    expect(calls).toEqual([{ method: 'eq', args: ['currency', 'EUR'] }])
+  })
+
+  it('rejects a non-ISO currency (PostgREST filter-injection guard)', () => {
+    const { self } = makeQueryStub()
+    expect(() =>
+      scopeTransactionsToAccount(self as never, undefined, 'SEK; drop' as never),
+    ).toThrow()
+  })
+
+  it('rejects a non-uuid cash account id', () => {
+    const { self } = makeQueryStub()
+    expect(() => scopeTransactionsToAccount(self as never, 'not-a-uuid', 'SEK')).toThrow()
+  })
+})
 
 // ============================================================
 // tryReconcileTransaction — in-memory matching
@@ -424,7 +486,7 @@ describe('manualLink', () => {
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Transaction not found')
+    expect(result.error).toBe('Transaktionen kunde inte hittas.')
   })
 
   it('rejects when transaction is already linked', async () => {
@@ -437,7 +499,7 @@ describe('manualLink', () => {
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Transaction is already linked to a journal entry')
+    expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
   })
 
   it('rejects when journal entry has no line on the selected account', async () => {

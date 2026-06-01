@@ -39,6 +39,20 @@ async function runBackfill(): Promise<void> {
   await getPool().query(BACKFILL_SQL)
 }
 
+// The repair migration re-derives cash_account_id and CORRECTS mis-assignments
+// (the NULL-only original backfill could not). Run the real SQL so the test
+// exercises exactly what ships.
+const REPAIR_SQL = readFileSync(
+  join(
+    process.cwd(),
+    'supabase/migrations/20260609120000_transactions_cash_account_id_repair_backfill.sql',
+  ),
+  'utf8',
+)
+async function runRepair(): Promise<void> {
+  await getPool().query(REPAIR_SQL)
+}
+
 // Insert a journal entry (draft) with the given bank-class line account
 // numbers. One line per account at amount 100 (debit). Balance isn't required
 // for a draft entry — the balance trigger only fires on draft→posted.
@@ -225,6 +239,105 @@ describe('transactions.cash_account_id — account-scoped query isolation', () =
     expect(for1931).toContain(tx1931)
     expect(for1931).toContain(txNullSek)
     expect(for1931).not.toContain(tx1930)
+  })
+})
+
+describe('transactions.cash_account_id — repair backfill (20260609120000)', () => {
+  it('re-seeds a default 1930 SEK cash account for a company that has none', async () => {
+    const { companyId } = await seedCompany()
+    // seedCompany inserts the company directly (no cash account).
+
+    await runRepair()
+
+    const { rows } = await getPool().query(
+      `SELECT ledger_account, currency, is_primary
+         FROM public.cash_accounts WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].ledger_account).toBe('1930')
+    expect(rows[0].currency).toBe('SEK')
+    expect(rows[0].is_primary).toBe(true)
+  })
+
+  it('CORRECTS a booked row mis-assigned to the wrong cash account', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const ca1930 = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
+    const ca1931 = await insertCashAccount({ companyId, ledgerAccount: '1931', currency: 'SEK' })
+
+    // The voucher settled on 1930, but the row was wrongly bound to 1931 — the
+    // exact mis-assignment the NULL-only original backfill can never undo.
+    const je = await insertEntryWithBankLines({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      bankAccounts: ['1930'],
+    })
+    const tx = await insertTransaction({ companyId, userId, journalEntryId: je, cashAccountId: ca1931 })
+
+    await runRepair()
+
+    expect(await getCashAccountId(tx)).toBe(ca1930)
+  })
+
+  it('CORRECTS a mis-assigned unbooked row in a single-SEK-account company', async () => {
+    // The headline Arcim regression: one SEK account; a buggy backfill bound a
+    // SEK row to the wrong account, so per-account scoping dropped it and
+    // Bankavstämning showed 0 transactions. Repair rebinds it to the sole SEK account.
+    const { userId, companyId } = await seedCompany()
+    const caSek = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
+    const caEur = await insertCashAccount({ companyId, ledgerAccount: '1932', currency: 'EUR' })
+    const tx = await insertTransaction({ companyId, userId, currency: 'SEK', cashAccountId: caEur })
+
+    await runRepair()
+
+    expect(await getCashAccountId(tx)).toBe(caSek)
+  })
+
+  it('binds NULL unbooked rows to the single account of their currency', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ca = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
+    const tx = await insertTransaction({ companyId, userId, currency: 'SEK' })
+
+    await runRepair()
+
+    expect(await getCashAccountId(tx)).toBe(ca)
+  })
+
+  it('does NOT touch an unbooked row when two same-currency accounts exist', async () => {
+    const { userId, companyId } = await seedCompany()
+    await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
+    await insertCashAccount({ companyId, ledgerAccount: '1931', currency: 'SEK' })
+    const tx = await insertTransaction({ companyId, userId, currency: 'SEK' })
+
+    await runRepair()
+
+    expect(await getCashAccountId(tx)).toBeNull()
+  })
+
+  it('is idempotent — a second run changes nothing', async () => {
+    const { userId, companyId } = await seedCompany()
+    const ca = await insertCashAccount({ companyId, ledgerAccount: '1930', currency: 'SEK' })
+    const tx = await insertTransaction({ companyId, userId, currency: 'SEK' })
+
+    await runRepair()
+    const first = await getCashAccountId(tx)
+    await runRepair()
+
+    expect(first).toBe(ca)
+    expect(await getCashAccountId(tx)).toBe(ca)
+  })
+
+  it('never rebinds across companies', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const caA = await insertCashAccount({ companyId: a.companyId, ledgerAccount: '1930', currency: 'SEK' })
+    await insertCashAccount({ companyId: b.companyId, ledgerAccount: '1930', currency: 'SEK' })
+    const txA = await insertTransaction({ companyId: a.companyId, userId: a.userId, currency: 'SEK' })
+
+    await runRepair()
+
+    expect(await getCashAccountId(txA)).toBe(caA)
   })
 })
 

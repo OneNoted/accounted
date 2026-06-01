@@ -94,13 +94,24 @@ export interface ReconciliationOptions {
 
 /**
  * Scope a transactions query builder to a single cash account, tolerating
- * legacy rows that predate the cash_account_id backfill:
- *   cash_account_id = X  OR  (cash_account_id IS NULL AND currency = cur)
- * A bound row shows only on its own account; an unbound row falls back to
- * currency so nothing disappears mid-backfill. When cashAccountId is omitted
- * we keep the pure currency filter (back-compat).
+ * legacy rows that predate the cash_account_id backfill. A bound row shows only
+ * on its own account; an unbound (NULL) row falls back to currency so nothing
+ * disappears mid-backfill. When cashAccountId is omitted we keep the pure
+ * currency filter (back-compat).
+ *
+ * The applied filter is:
+ *   currency = cur  AND  (cash_account_id = X  OR  cash_account_id IS NULL)
+ *
+ * Earlier this used a single nested `or(cash_account_id.eq.X,and(cash_account_id.is.null,currency.eq.cur))`.
+ * That nested `and()` form is fragile — it silently returned ZERO rows for
+ * companies whose transactions were NULL/mis-assigned mid-backfill (issue: bank
+ * transactions vanished from Bankavstämning while the 1930 GL movement still
+ * showed). A cash account has exactly one currency (the `cash_accounts`
+ * (company_id, ledger_account) uniqueness assumption), so constraining the bound
+ * branch to that currency too loses nothing and lets us use the flat, reliable
+ * two-term `or` instead.
  */
-function scopeTransactionsToAccount<Q extends {
+export function scopeTransactionsToAccount<Q extends {
   or(filters: string): Q
   eq(column: string, value: string): Q
 }>(query: Q, cashAccountId: string | undefined, currency: string): Q {
@@ -115,9 +126,9 @@ function scopeTransactionsToAccount<Q extends {
     if (!/^[0-9a-fA-F-]{36}$/.test(cashAccountId)) {
       throw new Error('scopeTransactionsToAccount: invalid cashAccountId (expected UUID)')
     }
-    return query.or(
-      `cash_account_id.eq.${cashAccountId},and(cash_account_id.is.null,currency.eq.${currency})`,
-    )
+    return query
+      .eq('currency', currency)
+      .or(`cash_account_id.eq.${cashAccountId},cash_account_id.is.null`)
   }
   return query.eq('currency', currency)
 }
@@ -452,11 +463,11 @@ export async function manualLink(
     .single()
 
   if (txError || !tx) {
-    return { success: false, error: 'Transaction not found' }
+    return { success: false, error: 'Transaktionen kunde inte hittas.' }
   }
 
   if (tx.journal_entry_id) {
-    return { success: false, error: 'Transaction is already linked to a journal entry' }
+    return { success: false, error: 'Transaktionen är redan kopplad till en verifikation.' }
   }
 
   // Fetch journal entry + verify it has a 1930 line
@@ -468,11 +479,11 @@ export async function manualLink(
     .single()
 
   if (entryError || !entry) {
-    return { success: false, error: 'Journal entry not found' }
+    return { success: false, error: 'Verifikationen kunde inte hittas.' }
   }
 
   if (entry.status !== 'posted') {
-    return { success: false, error: 'Journal entry is not posted' }
+    return { success: false, error: 'Verifikationen är inte bokförd ännu.' }
   }
 
   // Defense-in-depth: the transaction must belong to the account being
@@ -516,7 +527,7 @@ export async function manualLink(
     .single()
 
   if (existingLink) {
-    return { success: false, error: 'Another transaction is already linked to this journal entry' }
+    return { success: false, error: 'En annan transaktion är redan kopplad till den här verifikationen.' }
   }
 
   // Apply link
@@ -531,7 +542,7 @@ export async function manualLink(
     .eq('company_id', companyId)
 
   if (updateError) {
-    return { success: false, error: 'Failed to link transaction' }
+    return { success: false, error: 'Kunde inte koppla transaktionen. Försök igen.' }
   }
 
   try {
