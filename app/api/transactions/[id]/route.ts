@@ -35,7 +35,16 @@ export async function DELETE(
     .single()
 
   if (fetchError || !transaction) {
-    return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
+    return NextResponse.json(
+      {
+        error: {
+          code: 'TRANSACTION_NOT_FOUND',
+          message: 'Transaktionen hittades inte.',
+          message_en: 'Transaction not found.',
+        },
+      },
+      { status: 404 }
+    )
   }
 
   // Guard: only unbooked transactions can be deleted. A booked/matched row is

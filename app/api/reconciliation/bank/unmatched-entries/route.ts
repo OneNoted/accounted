@@ -57,25 +57,31 @@ export async function GET(request: Request) {
       .eq('company_id', companyId)
       .maybeSingle()
 
-    if (tx) {
-      const txCurrency = (tx.currency as string | null) ?? 'SEK'
-      const txDate = tx.date as string
-      const ranked = lines
-        .map((line) => {
-          // Score each line in isolation; confidence 0 means "no auto-match
-          // rule fired" — the line still appears so the user can pick it
-          // manually (e.g. a salary or Fortnox voucher with a tweaked date).
-          const match = tryReconcileTransaction(tx as unknown as Transaction, [line], txCurrency)
-          return { ...line, confidence: match?.confidence ?? 0 }
-        })
-        .sort((a, b) => {
-          if (b.confidence !== a.confidence) return b.confidence - a.confidence
-          const da = Math.abs(new Date(a.entry_date).getTime() - new Date(txDate).getTime())
-          const db = Math.abs(new Date(b.entry_date).getTime() - new Date(txDate).getTime())
-          return da - db
-        })
-      return NextResponse.json({ data: ranked })
+    if (!tx) {
+      // transaction_id was supplied but doesn't resolve to a row in the
+      // caller's company — the ranking context is invalid. Return no candidates
+      // rather than silently falling back to the full unranked list, so a
+      // fabricated or foreign id can never yield a broader result set.
+      return NextResponse.json({ data: [] })
     }
+
+    const txCurrency = (tx.currency as string | null) ?? 'SEK'
+    const txDate = tx.date as string
+    const ranked = lines
+      .map((line) => {
+        // Score each line in isolation; confidence 0 means "no auto-match
+        // rule fired" — the line still appears so the user can pick it
+        // manually (e.g. a salary or Fortnox voucher with a tweaked date).
+        const match = tryReconcileTransaction(tx as unknown as Transaction, [line], txCurrency)
+        return { ...line, confidence: match?.confidence ?? 0 }
+      })
+      .sort((a, b) => {
+        if (b.confidence !== a.confidence) return b.confidence - a.confidence
+        const da = Math.abs(new Date(a.entry_date).getTime() - new Date(txDate).getTime())
+        const db = Math.abs(new Date(b.entry_date).getTime() - new Date(txDate).getTime())
+        return da - db
+      })
+    return NextResponse.json({ data: ranked })
   }
 
   return NextResponse.json({ data: lines })

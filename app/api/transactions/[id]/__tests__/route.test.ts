@@ -62,7 +62,7 @@ describe('DELETE /api/transactions/[id]', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Transaction not found' })
+    expect((body as { error: { code: string } }).error.code).toBe('TRANSACTION_NOT_FOUND')
   })
 
   it('returns 409 with an actionable code when transaction has a journal entry', async () => {

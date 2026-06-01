@@ -109,8 +109,13 @@ export function MatchVoucherDialog({
         setGlLines(lines)
         // Pre-select a strong auto-match (exact/reference/date-range) so the
         // common case is one click. Fuzzy (<0.85) is left for the user to confirm.
+        // Auto-select a strong match only when nothing is chosen yet. Toggling
+        // "Visa alla datum" reloads with a wider set — it must NOT discard a
+        // voucher the user already picked. (selected resets to '' on close.)
         const top = lines[0]
-        setSelected(top && (top.confidence ?? 0) >= 0.85 ? top.journal_entry_id : '')
+        setSelected((prev) =>
+          prev ? prev : top && (top.confidence ?? 0) >= 0.85 ? top.journal_entry_id : '',
+        )
       } finally {
         setLoading(false)
       }
