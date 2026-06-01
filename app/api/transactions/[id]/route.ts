@@ -125,8 +125,10 @@ export const PATCH = withRouteContext(
       .is('journal_entry_id', null)
       .is('invoice_id', null)
       .is('supplier_invoice_id', null)
-      .select('*')
-      .maybeSingle<Transaction>()
+      // Return only what the client renders (data minimisation — the row also
+      // carries company_id and other internal fields the caller doesn't need).
+      .select('id, description, title_edited_at')
+      .maybeSingle<Pick<Transaction, 'id' | 'description' | 'title_edited_at'>>()
 
     if (updateError) {
       return errorResponse(updateError, log, { requestId })
@@ -137,12 +139,17 @@ export const PATCH = withRouteContext(
     }
 
     // Behandlingshistorik (BFNAR 2013:2 kap 8) — light-touch for a pre-verifikat
-    // working label; updated_at (trigger) captures "when".
+    // working label; updated_at (trigger) captures "when". We deliberately do
+    // NOT log the description text: a bank label can carry PII (payee names,
+    // reference numbers). The before-value stays recoverable in
+    // original_description and the after-value is the row's current
+    // description, so the log only needs to record that/which way it changed.
     log.info('transaction title edited', {
       transactionId: id,
       actor: user.id,
-      old: transaction.description,
       restored: isRestore,
+      previousLength: transaction.description?.length ?? 0,
+      newLength: description.length,
     })
 
     return NextResponse.json({ data: updated })

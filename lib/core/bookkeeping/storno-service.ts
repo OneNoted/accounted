@@ -96,6 +96,9 @@ async function cancelEntry(supabase: SupabaseClient, entryId: string): Promise<v
   }
 }
 
+/** Journal entry row fetched together with its lines (the embedded select). */
+type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
+
 /**
  * Correct an existing posted journal entry using the storno method.
  *
@@ -115,7 +118,17 @@ export async function correctEntry(
   userId: string,
   originalEntryId: string,
   correctedLines: CreateJournalEntryLineInput[],
-  options?: { newEntryDate?: string; newFiscalPeriodId?: string }
+  options?: {
+    newEntryDate?: string
+    newFiscalPeriodId?: string
+    /**
+     * The original entry (with lines) already loaded by the caller. When
+     * provided, we skip the redundant re-fetch — recordateEntry reads the
+     * original to copy its lines and hands it through here. This also closes
+     * the small TOCTOU window a second independent read would open.
+     */
+    preloadedOriginal?: OriginalWithLines
+  }
 ): Promise<{ reversal: JournalEntry; corrected: JournalEntry }> {
   // Validate the corrected lines are balanced
   const balance = validateBalance(correctedLines)
@@ -130,16 +143,20 @@ export async function correctEntry(
     throw new MeaninglessCorrectionError('net_zero_per_account')
   }
 
-  // Fetch original entry with lines
-  const { data: original, error: fetchError } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('id', originalEntryId)
-    .eq('company_id', companyId)
-    .single()
+  // Fetch original entry with lines — unless the caller already loaded it.
+  let original = options?.preloadedOriginal ?? null
+  if (!original) {
+    const { data, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', originalEntryId)
+      .eq('company_id', companyId)
+      .single()
 
-  if (fetchError || !original) {
-    throw new JournalEntryNotFoundError()
+    if (fetchError || !data) {
+      throw new JournalEntryNotFoundError()
+    }
+    original = data as OriginalWithLines
   }
 
   if (original.status !== 'posted') {
@@ -490,7 +507,13 @@ export async function recordateEntry(
     userId,
     originalEntryId,
     copiedLines,
-    { newEntryDate: newDate, newFiscalPeriodId: target.period_id }
+    {
+      newEntryDate: newDate,
+      newFiscalPeriodId: target.period_id,
+      // Hand the entry we already fetched (with lines) to correctEntry so it
+      // doesn't re-read the same row.
+      preloadedOriginal: original as OriginalWithLines,
+    }
   )
 
   // Move the underlag to the corrected entry so it doesn't surface as a

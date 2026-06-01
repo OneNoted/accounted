@@ -222,9 +222,9 @@ export async function ingestTransactions(
     // Normalize the source title once. Guarantees a non-empty, Swedish-first
     // label for every import path (PSD2 sync + all bank-file CSV/CAMT parsers
     // funnel into raw.description) — catching both empty/whitespace titles and
-    // the legacy English 'Unknown' sentinel. The bank original is preserved
-    // verbatim in original_description below; this normalized value is what the
-    // user sees and edits, and what the content-dedup key is built from.
+    // the legacy English 'Unknown' sentinel. This normalized value is stored as
+    // both description and original_description below; it's what the user sees
+    // and edits, and what the content-dedup key is built from.
     const description = normalizeImportedDescription(raw.description)
 
     // 1. Check for duplicates via external_id (batch pre-fetched)

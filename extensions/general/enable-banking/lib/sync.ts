@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAllTransactionsWithRaw, convertTransaction, getAccountBalance } from './api-client'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
-import { buildStableExternalIds } from '@/lib/transactions/external-id'
+import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
 
@@ -128,7 +128,7 @@ export async function syncAccountTransactions(
       date: tx.booking_date || tx.date,
       // tx.description is already non-empty (convertTransaction guarantees a
       // label); the trailing fallbacks are defensive. Ingest re-normalizes.
-      description: tx.description || tx.counterparty_name || 'Okänd transaktion',
+      description: tx.description || tx.counterparty_name || FALLBACK_DESCRIPTION,
       amount: tx.amount,
       currency: tx.currency || account.currency,
       external_id: externalIds[i],

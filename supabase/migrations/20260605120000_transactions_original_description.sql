@@ -6,8 +6,8 @@
 -- and the storno-only rule attach to the verifikat, not to pre-accounting
 -- staging data. We are about to let users edit that label *before* booking.
 --
--- Two reasons to keep the bank's verbatim text in a separate, immutable column
--- (never written by the edit endpoint):
+-- Two reasons to keep the bank's original text (normalized once at ingest) in a
+-- separate, immutable column (never written by the edit endpoint):
 --   1. Recoverability + provenance — an accidental edit is always reversible,
 --      and the bank original stays auditable as the basis for "vad
 --      affärshändelsen avser" once booked (BFL 5 kap 7§ / god redovisningssed).
@@ -30,7 +30,7 @@ ALTER TABLE public.transactions
   ADD COLUMN IF NOT EXISTS title_edited_at timestamptz;
 
 COMMENT ON COLUMN public.transactions.original_description IS
-  'Immutable verbatim bank/PSD2-provided description captured at ingest. Never overwritten by user title edits; used as the dedup-bridge source and as the "restore original" value.';
+  'Bank/PSD2-provided description captured at ingest, normalized (empty/whitespace and the legacy "Unknown" sentinel map to the Swedish neutral "Okänd transaktion"). Never overwritten by user title edits; used as the dedup-bridge source and as the "restore original" value.';
 COMMENT ON COLUMN public.transactions.title_edited_at IS
   'Set when a user overrides the transaction title (description). NULL = title is still the bank original. Drives the "redigerad" tag and the restore affordance.';
 

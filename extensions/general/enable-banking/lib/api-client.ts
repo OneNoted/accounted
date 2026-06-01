@@ -14,6 +14,7 @@
 
 import { getAuthorizationHeader } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
+import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -658,7 +659,7 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
                    mcc: tx.merchant_category_code,
                    isCredit,
                  }) ||
-                 'Okänd transaktion',
+                 FALLBACK_DESCRIPTION,
     counterparty_name: isCredit ? debtorName : creditorName,
     counterparty_account: isCredit
       ? tx.debtor_account?.iban || tx.debtor_account?.bban

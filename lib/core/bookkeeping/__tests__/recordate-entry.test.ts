@@ -126,21 +126,22 @@ describe('recordateEntry', () => {
     mockResolve.mockResolvedValue({ status: 'open', period_id: 'fp-2025', lock_date: null })
     const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
     const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    // recordateEntry fetches the original once and hands it to correctEntry via
+    // preloadedOriginal, so there is no second original fetch in the sequence.
     results = [
       { data: original, error: null },                                                              // 0 recordate fetch original
-      { data: original, error: null },                                                              // 1 correctEntry fetch original
-      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null }, // 2 target period
-      { data: reversalEntry, error: null },                                                         // 3 insert reversal
-      { data: null, error: null },                                                                  // 4 reversal lines
-      { data: null, error: null },                                                                  // 5 post reversal
-      { data: [{ id: 'a1', account_number: '6230' }, { id: 'a2', account_number: '1930' }], error: null }, // 6 accounts
-      { data: correctedEntry, error: null },                                                        // 7 insert corrected
-      { data: null, error: null },                                                                  // 8 corrected lines
-      { data: null, error: null },                                                                  // 9 post corrected
-      { data: [{ id: 'orig-1' }], error: null },                                                    // 10 CAS
-      { data: { ...reversalEntry, lines: [] }, error: null },                                       // 11 final reversal
-      { data: { ...correctedEntry, lines: [] }, error: null },                                      // 12 final corrected
-      { data: null, error: null },                                                                  // 13 relink documents
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null }, // 1 target period
+      { data: reversalEntry, error: null },                                                         // 2 insert reversal
+      { data: null, error: null },                                                                  // 3 reversal lines
+      { data: null, error: null },                                                                  // 4 post reversal
+      { data: [{ id: 'a1', account_number: '6230' }, { id: 'a2', account_number: '1930' }], error: null }, // 5 accounts
+      { data: correctedEntry, error: null },                                                        // 6 insert corrected
+      { data: null, error: null },                                                                  // 7 corrected lines
+      { data: null, error: null },                                                                  // 8 post corrected
+      { data: [{ id: 'orig-1' }], error: null },                                                    // 9 CAS
+      { data: { ...reversalEntry, lines: [] }, error: null },                                       // 10 final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },                                      // 11 final corrected
+      { data: null, error: null },                                                                  // 12 relink documents
     ]
     const supabase = makeClient()
     const result = await recordateEntry(supabase as never, 'company-1', 'user-1', 'orig-1', '2025-07-03')
