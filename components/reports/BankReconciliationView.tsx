@@ -1,16 +1,16 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import { AccountNumber } from '@/components/ui/account-number'
-import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal, Search, X } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
+import { MatchVerifikationPicker, type UnlinkedGLLine } from '@/components/reconciliation/MatchVerifikationPicker'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -81,19 +81,6 @@ interface ReconciliationStatus {
   unmatched_gl_line_count: number
 }
 
-interface UnlinkedGLLine {
-  line_id: string
-  journal_entry_id: string
-  debit_amount: number
-  credit_amount: number
-  line_description: string | null
-  entry_date: string
-  voucher_number: number
-  voucher_series: string
-  entry_description: string
-  source_type: string
-}
-
 interface UnmatchedTransaction {
   id: string
   date: string
@@ -128,153 +115,6 @@ interface DryRunMatch {
 }
 
 // ============================================================
-// Searchable verifikation picker
-// ============================================================
-
-/**
- * Inline combobox for choosing a journal entry to match a bank transaction
- * against. The native <select> couldn't be searched, and the unmatched-GL list
- * routinely runs to hundreds of rows (historical SIE imports), so the old UX
- * forced users to scroll a giant unsorted dropdown. This picker filters by
- * voucher number, date, amount or description as the user types, and renders
- * the selected verifikation as a removable chip.
- */
-interface MatchPickerProps {
-  glLines: UnlinkedGLLine[]
-  value: string
-  onChange: (journalEntryId: string) => void
-  disabled?: boolean
-  placeholder?: string
-}
-
-function MatchVerifikationPicker({
-  glLines,
-  value,
-  onChange,
-  disabled,
-  placeholder = 'Sök ver.nr, datum, belopp eller beskrivning…',
-}: MatchPickerProps) {
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    function onDocMouseDown(e: MouseEvent) {
-      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDocMouseDown)
-    return () => document.removeEventListener('mousedown', onDocMouseDown)
-  }, [open])
-
-  const selected = glLines.find((l) => l.journal_entry_id === value) || null
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    const base = q.length === 0
-      ? glLines
-      : glLines.filter((line) => {
-          const amt = (line.debit_amount > 0 ? line.debit_amount : line.credit_amount).toString()
-          return (
-            formatVoucher(line).toLowerCase().includes(q) ||
-            line.entry_date.toLowerCase().includes(q) ||
-            amt.includes(q) ||
-            (line.entry_description || '').toLowerCase().includes(q) ||
-            (line.line_description || '').toLowerCase().includes(q)
-          )
-        })
-    return base.slice(0, 25)
-  }, [search, glLines])
-
-  if (selected) {
-    const amount = selected.debit_amount > 0 ? selected.debit_amount : -selected.credit_amount
-    return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm">
-        <span className="font-mono text-xs shrink-0">{formatVoucher(selected)}</span>
-        <span className="text-muted-foreground shrink-0 tabular-nums">{formatDate(selected.entry_date)}</span>
-        <span className="font-mono tabular-nums shrink-0">{formatCurrency(amount)}</span>
-        <span className="truncate text-muted-foreground">{selected.entry_description}</span>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="ml-auto h-6 w-6 shrink-0"
-          onClick={() => onChange('')}
-          disabled={disabled}
-          aria-label="Avmarkera verifikation"
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-    )
-  }
-
-  return (
-    <div ref={containerRef} className="relative">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-        <Input
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value)
-            setOpen(true)
-          }}
-          onFocus={() => setOpen(true)}
-          placeholder={placeholder}
-          disabled={disabled}
-          className="pl-9"
-        />
-      </div>
-      {open && (
-        <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-border bg-popover shadow-[var(--shadow-md)]">
-          {filtered.length === 0 ? (
-            <div className="px-3 py-4 text-sm text-muted-foreground text-center">
-              Inga verifikationer matchar &quot;{search}&quot;
-            </div>
-          ) : (
-            <div className="max-h-72 overflow-y-auto">
-              {filtered.map((line) => {
-                const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
-                return (
-                  <button
-                    key={line.line_id}
-                    type="button"
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-secondary/60 focus:bg-secondary/60 focus:outline-none"
-                    onMouseDown={(e) => {
-                      // mousedown beats blur — without this the popover closes
-                      // before the click registers when the user has tabbed
-                      // through and uses keyboard.
-                      e.preventDefault()
-                    }}
-                    onClick={() => {
-                      onChange(line.journal_entry_id)
-                      setSearch('')
-                      setOpen(false)
-                    }}
-                  >
-                    <span className="font-mono text-xs shrink-0 w-12">{formatVoucher(line)}</span>
-                    <span className="text-muted-foreground shrink-0 tabular-nums w-24">{formatDate(line.entry_date)}</span>
-                    <span className="font-mono tabular-nums shrink-0 w-24 text-right">{formatCurrency(amount)}</span>
-                    <span className="truncate text-muted-foreground flex-1">
-                      {line.line_description || line.entry_description}
-                    </span>
-                  </button>
-                )
-              })}
-              {glLines.length > filtered.length && (
-                <div className="px-3 py-2 text-[11px] text-muted-foreground border-t border-border bg-secondary/30">
-                  Visar {filtered.length} av {glLines.length} — sök för att filtrera fler.
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ============================================================
 // Component
 // ============================================================
 
@@ -286,10 +126,26 @@ export function BankReconciliationView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // dateFrom stays empty by default (full history) so nothing the user needs to
+  // reconcile is hidden on first load. dateTo defaults to today so the field
+  // isn't a blank "åååå-mm-dd" and the upper bound is concrete.
   const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10))
   const [accountNumber, setAccountNumber] = useState('1930')
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
+  // Date filters apply on demand (the "Filtrera" button or an account switch),
+  // never on every keystroke. Editing a date used to re-create fetchAll and
+  // re-trigger its effect — the "switching months reloads automatically"
+  // annoyance. fetchAll reads the live dates from refs so an explicit run always
+  // uses the latest typed values without putting them in its dependency array.
+  const dateFromRef = useRef(dateFrom)
+  const dateToRef = useRef(dateTo)
+  useEffect(() => {
+    dateFromRef.current = dateFrom
+  }, [dateFrom])
+  useEffect(() => {
+    dateToRef.current = dateTo
+  }, [dateTo])
 
   const [dryRunResults, setDryRunResults] = useState<DryRunMatch[] | null>(null)
   const [runLoading, setRunLoading] = useState(false)
@@ -349,17 +205,19 @@ export function BankReconciliationView() {
     setLoading(true)
     setError(null)
     try {
+      const fromValue = dateFromRef.current
+      const toValue = dateToRef.current
       const params = new URLSearchParams()
-      if (dateFrom) params.set('date_from', dateFrom)
-      if (dateTo) params.set('date_to', dateTo)
+      if (fromValue) params.set('date_from', fromValue)
+      if (toValue) params.set('date_to', toValue)
       params.set('account_number', accountNumber)
       const qs = `?${params}`
 
       const txParams = new URLSearchParams()
       txParams.set('currency', accountCurrency)
       txParams.set('account_number', accountNumber)
-      if (dateFrom) txParams.set('date_from', dateFrom)
-      if (dateTo) txParams.set('date_to', dateTo)
+      if (fromValue) txParams.set('date_from', fromValue)
+      if (toValue) txParams.set('date_to', toValue)
       const unmatchedQs = `?unmatched=true&${txParams}`
       const reconciledQs = `?reconciled=true&${txParams}`
 
@@ -410,7 +268,10 @@ export function BankReconciliationView() {
       // it off while the fresh one is still running.
       if (!signal.aborted) setLoading(false)
     }
-  }, [dateFrom, dateTo, accountNumber, accountCurrency])
+    // Deliberately excludes dateFrom/dateTo: editing a date must NOT auto-fetch
+    // (it read from refs above). Re-runs only on account / currency change and
+    // mount; the "Filtrera" button calls fetchAll() explicitly for date changes.
+  }, [accountNumber, accountCurrency])
 
   useEffect(() => {
     fetchAll()
