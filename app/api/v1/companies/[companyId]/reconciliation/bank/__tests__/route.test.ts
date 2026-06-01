@@ -129,6 +129,7 @@ describe('POST /reconciliation/bank/run', () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
       }),
     )
     const res = await runPOST(
@@ -146,14 +147,33 @@ describe('POST /reconciliation/bank/run', () => {
       expect.anything(),
       COMPANY_ID,
       'user-1',
-      expect.objectContaining({ dryRun: false }),
+      expect.objectContaining({ dryRun: false, accountNumber: '1930', cashAccountId: 'ca-1930' }),
     )
+  })
+
+  it('rejects an unknown settlement account', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // No matching cash_accounts row for the requested account_number.
+        cash_accounts: { data: null, error: null },
+      }),
+    )
+    const res = await runPOST(
+      postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
+        account_number: '9999',
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(400)
+    expect(runRecMock).not.toHaveBeenCalled()
   })
 
   it('dry-run passes dryRun: true into the matcher', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
       }),
     )
     const res = await runPOST(
@@ -207,6 +227,7 @@ describe('GET /reconciliation/bank/status', () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
       }),
     )
     const res = await statusGET(
@@ -223,6 +244,7 @@ describe('GET /reconciliation/bank/status', () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
       }),
     )
     const res = await statusGET(

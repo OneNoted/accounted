@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   // AccountPickerDialog seeds it for new companies on first connection.
   const { data: cashAccount } = await supabase
     .from('cash_accounts')
-    .select('currency')
+    .select('id, currency')
     .eq('company_id', companyId)
     .eq('ledger_account', accountNumber)
     .maybeSingle()
@@ -52,6 +52,7 @@ export async function POST(request: Request) {
     dateTo: date_to,
     accountNumber,
     currency,
+    cashAccountId: cashAccount.id as string,
     dryRun: dry_run ?? false,
   })
 
