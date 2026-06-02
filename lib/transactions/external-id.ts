@@ -139,11 +139,15 @@ export function contentBucketKey(date: string, amount: number | string): string 
  * ("TIC" → "TIC  BG 0000005786439 Bg-bet. via internet", "UTBETALNING" →
  * "UTBETALNING Insättning"), so prefix-containment bridges the two where a
  * fixed-length prefix *equality* check (the pre-June-2026 scheme) missed and
- * re-imported. An empty/placeholder description matches anything in its bucket
- * (degrades to date+öre dedup — never drops a real row). Genuinely distinct
- * descriptions ("Coffee" vs "Lunch", or two different reference codes that share
- * a date and amount) are NOT prefixes of one another and never bridge, so two
- * real same-(date,amount) transactions are kept apart.
+ * re-imported. A blank description carries no signal, so it never bridges a
+ * *described* row — otherwise an empty title would wildcard-match any
+ * same-(date,öre) transaction and could silently consume a real one; only two
+ * blanks bridge each other (date+öre identity). In practice every caller
+ * normalizes blanks to FALLBACK_DESCRIPTION upstream (see
+ * normalizeImportedDescription), so the blank path is defense-in-depth.
+ * Genuinely distinct descriptions ("Coffee" vs "Lunch", or two different
+ * reference codes that share a date and amount) are NOT prefixes of one another
+ * and never bridge, so two real same-(date,amount) transactions are kept apart.
  *
  * This is a *best-effort* signal, consumed with COUNTING semantics in the ingest
  * pipeline (N existing matches consume N incoming): its job is to skip re-imports
@@ -156,6 +160,7 @@ export function descriptionsBridge(
 ): boolean {
   const x = (a ?? '').toLowerCase().trim()
   const y = (b ?? '').toLowerCase().trim()
-  if (x === '' || y === '') return true
+  // A blank never wildcards a described row; only two blanks bridge each other.
+  if (x === '' || y === '') return x === y
   return x.startsWith(y) || y.startsWith(x)
 }

@@ -142,10 +142,12 @@ describe('descriptionsBridge', () => {
     expect(descriptionsBridge('Coffee', 'Lunch')).toBe(false)
   })
 
-  it('treats an empty/placeholder description as matching anything in its bucket', () => {
-    // Degrades to date+öre dedup — never drops a real row.
-    expect(descriptionsBridge('', 'anything')).toBe(true)
-    expect(descriptionsBridge('anything', null)).toBe(true)
+  it('does not let a blank description wildcard-match a described row', () => {
+    // A blank carries no signal: it must not consume a described same-(date,öre)
+    // row. Live callers normalize blanks to FALLBACK_DESCRIPTION, so this is
+    // defense-in-depth. Only two blanks bridge each other (date+öre identity).
+    expect(descriptionsBridge('', 'anything')).toBe(false)
+    expect(descriptionsBridge('anything', null)).toBe(false)
     expect(descriptionsBridge(undefined, '')).toBe(true)
   })
 })
