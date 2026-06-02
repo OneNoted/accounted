@@ -428,6 +428,28 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     assertBalanced(input)
   })
 
+  it('honours an explicit reverse_charge_rate (6%) on a 0%-rate line item', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000, vat_amount: 0, total: 10000, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 10000, account_number: '6540', vat_rate: 0, reverse_charge_rate: 0.06 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(600) // 10000 * 0.06
+    expect(findByAccount(input.lines, '2634')[0].credit_amount).toBe(600) // ruta 32
+    expect(findByAccount(input.lines, '4537')[0].debit_amount).toBe(10000) // ruta 21 @ 6%
+    // Higher-rate accounts must NOT appear when the self-assessed rate is 6%.
+    expect(findByAccount(input.lines, '2614')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2624')).toHaveLength(0)
+    expect(findByAccount(input.lines, '4535')).toHaveLength(0)
+    expect(findByAccount(input.lines, '4536')).toHaveLength(0)
+    assertBalanced(input)
+  })
+
   it('books non-EU services to 4531 (ruta 22) and motkonto 4598', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 8000,

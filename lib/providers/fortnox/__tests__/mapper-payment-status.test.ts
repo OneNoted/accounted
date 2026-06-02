@@ -58,6 +58,9 @@ describe('Fortnox mapper — paid-status consistency', () => {
     const dto = mapFortnoxToSupplierInvoice(supplierRaw({ FullyPaid: true }))
     expect(dto.status).toBe('paid')
     expect(dto.paymentStatus.paid).toBe(true)
+    // paid ⇒ no outstanding balance, even though the raw payload omits Balance
+    // (previously balance fell back to the full total, contradicting paid=true).
+    expect(dto.paymentStatus.balance.value).toBe(0)
   })
 
   it('sales: absent Balance is NOT paid (no false-paid on the sales path)', () => {
@@ -71,6 +74,13 @@ describe('Fortnox mapper — paid-status consistency', () => {
     const dto = mapFortnoxToSalesInvoice(salesRaw({ Balance: 0 }))
     expect(dto.status).toBe('paid')
     expect(dto.paymentStatus.paid).toBe(true)
+  })
+
+  it('sales: FullyPaid flag with absent Balance → paid with zero balance', () => {
+    const dto = mapFortnoxToSalesInvoice(salesRaw({ FullyPaid: true }))
+    expect(dto.status).toBe('paid')
+    expect(dto.paymentStatus.paid).toBe(true)
+    expect(dto.paymentStatus.balance.value).toBe(0)
   })
 
   it('status === paid iff paymentStatus.paid across a matrix (both paths)', () => {
@@ -88,6 +98,13 @@ describe('Fortnox mapper — paid-status consistency', () => {
             dto.status === 'paid',
             `Balance=${Balance} FullyPaid=${FullyPaid}`,
           ).toBe(dto.paymentStatus.paid)
+          // Invariant: paid ⇒ balance zeroed (never "fully paid yet full balance").
+          if (dto.paymentStatus.paid) {
+            expect(
+              dto.paymentStatus.balance.value,
+              `Balance=${Balance} FullyPaid=${FullyPaid}`,
+            ).toBe(0)
+          }
         }
       }
     }

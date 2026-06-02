@@ -64,7 +64,11 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0, so a
   // missing Balance never silently reads as paid. A present Balance (incl. 0) is
   // used as-is. Mirrors the supplier path; paid-ness comes from isFullyPaid().
-  const balance = (raw['Balance'] as number | undefined) ?? total;
+  // When paid, force balance to 0 so the DTO is internally consistent
+  // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
+  // would otherwise leave balance = total alongside paid = true.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
   const rows = (raw['InvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -87,7 +91,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: isFullyPaid(raw),
+    paid,
     balance: amount(balance, currency),
   };
 
@@ -126,7 +130,11 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
   // Balance must not be mistaken for "settled" — that would flip a genuinely
   // open payable to paid downstream. A present Balance (incl. 0) is used as-is.
-  const balance = (raw['Balance'] as number | undefined) ?? total;
+  // When paid, force balance to 0 so the DTO is internally consistent
+  // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
+  // would otherwise leave balance = total alongside paid = true.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
 
   const rows = (raw['SupplierInvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -146,7 +154,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: isFullyPaid(raw),
+    paid,
     balance: amount(balance, currency),
   };
 

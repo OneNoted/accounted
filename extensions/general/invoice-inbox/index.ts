@@ -1785,7 +1785,24 @@ export const invoiceInboxExtension: Extension = {
               })
             }
           } catch (err) {
-            console.error('[invoice-inbox/convert] Failed to create registration journal entry:', err)
+            // Engine threw (period lock, unbalanced entry, etc.) instead of
+            // cleanly returning null. Roll back the supplier invoice so the inbox
+            // item is never marked converted against an unbooked invoice (an orphan
+            // understating 2440/2641), then surface the error — mirroring the main
+            // /api/supplier-invoices route's registration catch.
+            await ctx.supabase
+              .from('supplier_invoices')
+              .delete()
+              .eq('id', invoice.id)
+              .eq('company_id', ctx.companyId)
+            const typed = bookkeepingErrorResponse(err)
+            if (typed) return typed
+            return errorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
+              details: {
+                reason: err instanceof Error ? err.message : 'unknown',
+                step: 'registration_journal_entry',
+              },
+            })
           }
         }
 
