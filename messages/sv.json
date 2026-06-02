@@ -183,7 +183,10 @@
     "section_language": "Språk",
     "language_description": "Välj språket för gränssnittet. Fakturor och rapporter förblir alltid på svenska.",
     "language_saved": "Språket har uppdaterats",
-    "language_save_failed": "Kunde inte spara språkinställningen"
+    "language_save_failed": "Kunde inte spara språkinställningen",
+    "legal_title": "Sekretess och avtal",
+    "legal_privacy": "Integritetspolicy",
+    "legal_dpa": "Personuppgiftsbiträdesavtal (DPA)"
   },
   "help": {
     "title": "Hjälp & Ordlista",
@@ -1633,6 +1636,8 @@
     "match_invoice_btn": "Matcha Faktura {number}",
     "match_supplier_invoice_btn": "Matcha Leverantörsfaktura {number}",
     "choose_template_btn": "Välj mall...",
+    "match_voucher_btn": "Matcha mot befintlig verifikation",
+    "more_actions_aria": "Fler åtgärder",
     "delete_aria": "Ta bort transaktion",
     "edit_title_aria": "Ändra titel",
     "edited_badge": "redigerad",

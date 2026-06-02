@@ -62,19 +62,21 @@ describe('DELETE /api/transactions/[id]', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Transaction not found' })
+    expect((body as { error: { code: string } }).error.code).toBe('TRANSACTION_NOT_FOUND')
   })
 
-  it('returns 409 when transaction has a journal entry', async () => {
+  it('returns 409 with an actionable code when transaction has a journal entry', async () => {
     const tx = makeTransaction({ journal_entry_id: 'je-1', bank_connection_id: null, import_source: null })
     enqueue({ data: tx, error: null })
 
     const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
     const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toContain('booked')
+    expect(body.error.code).toBe('TRANSACTION_DELETE_BOOKED')
+    // Swedish, actionable — not the generic "Ladda om sidan" 409 fallback.
+    expect(body.error.message).toMatch(/Bankavstämning|storna/)
   })
 
   it('allows deleting unbooked bank-synced transactions', async () => {
@@ -116,17 +118,36 @@ describe('DELETE /api/transactions/[id]', () => {
     expect(body).toEqual({ success: true })
   })
 
-  it('returns 500 when deletion fails', async () => {
+  it('returns 500 with a structured code when deletion fails', async () => {
     const tx = makeTransaction({ journal_entry_id: null, bank_connection_id: null, import_source: null })
     enqueue({ data: tx, error: null }) // fetch
     enqueue({ data: null, error: { message: 'DB error' } }) // delete fails
 
     const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
     const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(500)
-    expect(body).toEqual({ error: 'Failed to delete transaction' })
+    expect(body.error.code).toBe('TRANSACTION_DELETE_FAILED')
+  })
+
+  it('returns 409 with an audit-trail code when the immutability trigger blocks the delete', async () => {
+    // An unbooked row with payment_match_log rows: the cascade hits the
+    // audit_log_immutable trigger (P0001), not a clean FK error.
+    const tx = makeTransaction({ journal_entry_id: null, bank_connection_id: 'bc-1', import_source: null })
+    enqueue({ data: tx, error: null }) // fetch
+    enqueue({
+      data: null,
+      error: { code: 'P0001', message: 'Audit log entries cannot be modified or deleted' },
+    }) // delete blocked by trigger
+
+    const request = new Request('http://localhost/api/transactions/tx-1', { method: 'DELETE' })
+    const response = await DELETE(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_DELETE_HAS_AUDIT_TRAIL')
+    expect(body.error.message).toMatch(/matchningshistorik|Bankavstämning/)
   })
 })
 

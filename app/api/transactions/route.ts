@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { requireCompanyId } from '@/lib/company/context'
+import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconciliation'
 
 const MAX_ROWS = 500
 
@@ -40,15 +41,20 @@ export async function GET(request: Request) {
 
   let derivedCurrency = currency
   let cashAccountId: string | undefined
+  // Only the primary account claims unassigned (NULL cash_account_id) rows, so
+  // a secondary same-currency account's lists match its status card instead of
+  // pooling the primary's unassigned rows. See scopeTransactionsToAccount.
+  let includeUnassigned = true
   if (accountNumberParam) {
     const { data: cashAccount } = await supabase
       .from('cash_accounts')
-      .select('id, currency')
+      .select('id, currency, is_primary')
       .eq('company_id', companyId)
       .eq('ledger_account', accountNumberParam)
       .maybeSingle()
     if (cashAccount) {
       cashAccountId = cashAccount.id as string
+      includeUnassigned = Boolean(cashAccount.is_primary)
       if (!derivedCurrency && cashAccount.currency) derivedCurrency = cashAccount.currency as string
     }
   }
@@ -75,12 +81,10 @@ export async function GET(request: Request) {
   // OR legacy NULL rows of the same currency (so nothing disappears mid-
   // backfill). With only a currency (no account), filter by currency. With
   // neither (e.g. the company-wide only_ignored recovery list), no scope.
-  if (cashAccountId) {
-    query = query.or(
-      `cash_account_id.eq.${cashAccountId},and(cash_account_id.is.null,currency.eq.${derivedCurrency ?? 'SEK'})`,
-    )
-  } else if (derivedCurrency) {
-    query = query.eq('currency', derivedCurrency)
+  // Shares one implementation with the reconciliation lib so the filter shape
+  // can't drift between the status card and these lists.
+  if (cashAccountId || derivedCurrency) {
+    query = scopeTransactionsToAccount(query, cashAccountId, derivedCurrency ?? 'SEK', includeUnassigned)
   }
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)

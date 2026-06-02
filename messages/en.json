@@ -183,7 +183,10 @@
     "section_language": "Language",
     "language_description": "Choose the language for the interface. Invoices and reports always stay in Swedish.",
     "language_saved": "Language updated",
-    "language_save_failed": "Could not save language preference"
+    "language_save_failed": "Could not save language preference",
+    "legal_title": "Privacy & agreements",
+    "legal_privacy": "Privacy policy",
+    "legal_dpa": "Data Processing Agreement (DPA)"
   },
   "help": {
     "title": "Help & Glossary",
@@ -1633,6 +1636,8 @@
     "match_invoice_btn": "Match invoice {number}",
     "match_supplier_invoice_btn": "Match supplier invoice {number}",
     "choose_template_btn": "Choose template...",
+    "match_voucher_btn": "Match to existing voucher",
+    "more_actions_aria": "More actions",
     "delete_aria": "Delete transaction",
     "edit_title_aria": "Edit title",
     "edited_badge": "edited",

@@ -33,6 +33,7 @@ import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
 import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatchDialog'
 import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
+import { MatchVoucherDialog } from '@/components/transactions/MatchVoucherDialog'
 import InvoicePicker from '@/components/transactions/InvoicePicker'
 import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
 import MatchAllocationDialog from '@/components/transactions/MatchAllocationDialog'
@@ -127,6 +128,9 @@ export default function TransactionsPage() {
   const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   const [splitMatchOpen, setSplitMatchOpen] = useState(false)
   const [splitMatchTransaction, setSplitMatchTransaction] = useState<TransactionWithInvoice | null>(null)
+  // "Matcha mot befintlig verifikation" — link a bank tx to an already-booked
+  // voucher (salary, Fortnox import, manual entry) with no new bokföring.
+  const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
   const [bulkBookOpen, setBulkBookOpen] = useState(false)
   const [isMatchingSupplierFromPicker, setIsMatchingSupplierFromPicker] = useState(false)
   const [isMatchingFromPicker, setIsMatchingFromPicker] = useState(false)
@@ -1034,6 +1038,38 @@ export default function TransactionsPage() {
     }
   }
 
+  function openMatchVoucherDialog(transaction: TransactionWithInvoice) {
+    setMatchVoucherTx(transaction)
+  }
+
+  // Called by MatchVoucherDialog after /api/reconciliation/bank/link succeeds.
+  // The row is now booked (journal_entry_id set, is_business true) so the inbox
+  // filter drops it — animate it out the same way as the invoice-link path.
+  function handleVoucherLinked(transactionId: string, journalEntryId: string, voucherLabel: string) {
+    toast({
+      title: 'Bankhändelsen kopplad',
+      description: voucherLabel
+        ? `Kopplad till verifikation ${voucherLabel}. Ingen ny bokföring skapad.`
+        : 'Ingen ny bokföring skapad.',
+    })
+    setMatchVoucherTx(null)
+    setExitingIds((prev) => new Set(prev).add(transactionId))
+    setTimeout(() => {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === transactionId
+            ? { ...t, is_business: true, journal_entry_id: journalEntryId }
+            : t,
+        ),
+      )
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(transactionId)
+        return next
+      })
+    }, 350)
+  }
+
   async function handleMatchInvoice(transactionId: string, invoiceId: string): Promise<boolean> {
     try {
       const response = await fetch(`/api/transactions/${transactionId}/match-invoice`, {
@@ -1743,6 +1779,7 @@ export default function TransactionsPage() {
                     onOpenMatchDialog={openMatchDialog}
                     onOpenMatchInvoicePicker={openInvoiceMatchPicker}
                     onOpenSplitMatch={openSplitMatchDialog}
+                    onOpenMatchVoucher={openMatchVoucherDialog}
                     onOpenCategoryDialog={openCategoryDialog}
                     onDelete={handleDeleteTransaction}
                     onEditTitle={openEditTitleDialog}
@@ -1847,6 +1884,13 @@ export default function TransactionsPage() {
         isConfirming={isConfirmingMatch}
         onConfirm={handleConfirmInvoiceMatch}
         onLinkToExisting={handleLinkToExistingVoucher}
+      />
+
+      <MatchVoucherDialog
+        open={matchVoucherTx !== null}
+        onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
+        transaction={matchVoucherTx}
+        onLinked={handleVoucherLinked}
       />
 
       <MatchAllocationDialog

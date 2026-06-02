@@ -1,4 +1,5 @@
 import type { Metadata } from 'next'
+import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { getBranding } from '@/lib/branding/service'
 
@@ -87,6 +88,14 @@ export default function PrivacyPolicyPage() {
               Vi använder följande underbiträden för att tillhandahålla tjänsten. Uppgifterna nedan anger
               vilka uppgifter som delas med respektive underbiträde, syftet samt var behandlingen sker
               (GDPR Art. 13).
+            </p>
+            <p>
+              Behandlar du själv personuppgifter åt andra (kunder, leverantörer, anställda)? Se vårt
+              fullständiga{' '}
+              <Link href="/dpa" className="text-primary underline underline-offset-4">
+                personuppgiftsbiträdesavtal (DPA)
+              </Link>{' '}
+              enligt GDPR Art. 28.
             </p>
 
             <div className="overflow-x-auto mt-4">

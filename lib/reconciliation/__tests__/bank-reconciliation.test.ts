@@ -11,6 +11,7 @@ import {
   manualLink,
   unlinkReconciliation,
   getReconciliationStatus,
+  scopeTransactionsToAccount,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { makeTransaction } from '@/tests/helpers'
@@ -37,6 +38,86 @@ function makeGLLine(overrides: Partial<UnlinkedGLLine> = {}): UnlinkedGLLine {
     ...overrides,
   }
 }
+
+// ============================================================
+// scopeTransactionsToAccount — the per-account query filter
+// ============================================================
+
+describe('scopeTransactionsToAccount', () => {
+  // Records every filter call and returns itself so the chain can continue.
+  function makeQueryStub() {
+    const calls: { method: string; args: unknown[] }[] = []
+    const self = {
+      eq: (...args: unknown[]) => {
+        calls.push({ method: 'eq', args })
+        return self
+      },
+      or: (...args: unknown[]) => {
+        calls.push({ method: 'or', args })
+        return self
+      },
+    }
+    return { self, calls }
+  }
+
+  it('scopes by currency AND (this account OR legacy NULL) using a flat two-term or', () => {
+    const { self, calls } = makeQueryStub()
+    const id = '11111111-1111-1111-1111-111111111111'
+
+    scopeTransactionsToAccount(self as never, id, 'SEK')
+
+    // currency is constrained even on the bound branch (a cash account has one
+    // currency), which lets us avoid the fragile nested and() form.
+    expect(calls).toContainEqual({ method: 'eq', args: ['currency', 'SEK'] })
+    expect(calls).toContainEqual({
+      method: 'or',
+      args: [`cash_account_id.eq.${id},cash_account_id.is.null`],
+    })
+    // Regression guard: the old nested `and(cash_account_id.is.null,currency.eq.X)`
+    // silently returned ZERO rows mid-backfill — it must never come back.
+    const orCall = calls.find((c) => c.method === 'or')
+    expect(String(orCall?.args[0])).not.toContain('and(')
+  })
+
+  it('scopes strictly to the account (no NULL fallback) when includeUnassigned is false', () => {
+    const { self, calls } = makeQueryStub()
+    const id = '22222222-2222-2222-2222-222222222222'
+
+    // includeUnassigned=false is the non-primary account case: a secondary
+    // same-currency account (e.g. a 1931 savings account) must NOT pull in the
+    // company's unassigned NULL rows — those belong to the primary account.
+    // Double-counting them inflated the secondary account's bank total and
+    // showed a large bogus difference ("1930 works, the other accounts go wonky").
+    scopeTransactionsToAccount(self as never, id, 'SEK', false)
+
+    expect(calls).toEqual([
+      { method: 'eq', args: ['currency', 'SEK'] },
+      { method: 'eq', args: ['cash_account_id', id] },
+    ])
+    // No OR — the IS NULL fallback must not appear for a non-primary account.
+    expect(calls.find((c) => c.method === 'or')).toBeUndefined()
+  })
+
+  it('falls back to a pure currency filter when no cash account id is given', () => {
+    const { self, calls } = makeQueryStub()
+
+    scopeTransactionsToAccount(self as never, undefined, 'EUR')
+
+    expect(calls).toEqual([{ method: 'eq', args: ['currency', 'EUR'] }])
+  })
+
+  it('rejects a non-ISO currency (PostgREST filter-injection guard)', () => {
+    const { self } = makeQueryStub()
+    expect(() =>
+      scopeTransactionsToAccount(self as never, undefined, 'SEK; drop' as never),
+    ).toThrow()
+  })
+
+  it('rejects a non-uuid cash account id', () => {
+    const { self } = makeQueryStub()
+    expect(() => scopeTransactionsToAccount(self as never, 'not-a-uuid', 'SEK')).toThrow()
+  })
+})
 
 // ============================================================
 // tryReconcileTransaction — in-memory matching
@@ -424,7 +505,7 @@ describe('manualLink', () => {
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Transaction not found')
+    expect(result.error).toBe('Transaktionen kunde inte hittas.')
   })
 
   it('rejects when transaction is already linked', async () => {
@@ -437,7 +518,7 @@ describe('manualLink', () => {
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Transaction is already linked to a journal entry')
+    expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
   })
 
   it('rejects when journal entry has no line on the selected account', async () => {
@@ -488,8 +569,6 @@ describe('manualLink', () => {
     enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
     // Line exists on the selected account
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // No existing link
-    enqueue({ data: null, error: null })
     // Update succeeds
     enqueue({ data: null, error: null })
 
@@ -512,12 +591,30 @@ describe('manualLink', () => {
     enqueue({ data: { ledger_account: '1930' } })
     // Line exists on 1930
     enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
-    // No existing link
-    enqueue({ data: null, error: null })
     // Update succeeds
     enqueue({ data: null, error: null })
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
+  })
+
+  it('allows N:1 — does not reject when the verifikat already has a linked transaction', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // This transaction is itself unlinked; the TARGET entry already has another
+    // transaction pointing at it. manualLink no longer queries for / rejects
+    // that — several bank transactions may settle one verifikat (a salary run
+    // paid in multiple transfers). The only per-transaction guard is that THIS
+    // transaction isn't already linked (tx.journal_entry_id), still enforced.
+    const tx = makeTransaction({ id: 'tx-2', journal_entry_id: null })
+
+    enqueue({ data: tx })
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] })
+    // Update succeeds — note there is NO existing-link lookup in the sequence.
+    enqueue({ data: null, error: null })
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-2', 'je-1', 'user-1', '1930')
 
     expect(result.success).toBe(true)
   })

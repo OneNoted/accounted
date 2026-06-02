@@ -35,13 +35,33 @@ export async function DELETE(
     .single()
 
   if (fetchError || !transaction) {
-    return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
+    return NextResponse.json(
+      {
+        error: {
+          code: 'TRANSACTION_NOT_FOUND',
+          message: 'Transaktionen hittades inte.',
+          message_en: 'Transaction not found.',
+        },
+      },
+      { status: 404 }
+    )
   }
 
-  // Guard: only unbooked transactions can be deleted
+  // Guard: only unbooked transactions can be deleted. A booked/matched row is
+  // räkenskapsinformation — the fix is to unlink (reconciliation) or storno, not
+  // delete. Return a structured bilingual envelope so the UI shows this clear,
+  // actionable message instead of the generic "Ladda om sidan" 409 fallback.
   if (transaction.journal_entry_id) {
     return NextResponse.json(
-      { error: 'Cannot delete a booked transaction. Use reversal (storno) instead.' },
+      {
+        error: {
+          code: 'TRANSACTION_DELETE_BOOKED',
+          message:
+            'Transaktionen är redan bokförd eller kopplad till en verifikation och kan inte raderas. Koppla bort den under Rapporter → Bankavstämning om kopplingen är fel, eller storna verifikationen.',
+          message_en:
+            'The transaction is already booked or linked to a journal entry and cannot be deleted. Unlink it under Reports → Bank reconciliation if the link is wrong, or reverse (storno) the voucher.',
+        },
+      },
       { status: 409 }
     )
   }
@@ -53,7 +73,36 @@ export async function DELETE(
     .eq('company_id', companyId)
 
   if (deleteError) {
-    return NextResponse.json({ error: 'Failed to delete transaction' }, { status: 500 })
+    // An unbooked row can still carry payment_match_log rows (written at ingest
+    // for every auto-suggested match). Their FK cascades on delete, but the
+    // audit-immutability trigger raises P0001 — surface that as an actionable
+    // message (match or ignore instead) rather than a bare 500.
+    const code = (deleteError as { code?: string }).code
+    const message = (deleteError as { message?: string }).message ?? ''
+    if (code === 'P0001' || /Audit log entries cannot be modified or deleted/i.test(message)) {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'TRANSACTION_DELETE_HAS_AUDIT_TRAIL',
+            message:
+              'Transaktionen kan inte raderas eftersom den har en kopplad matchningshistorik (räkenskapsinformation, BFL 7 kap.). Matcha den mot en befintlig verifikation, eller ignorera den under Rapporter → Bankavstämning om du inte vill bokföra den.',
+            message_en:
+              'The transaction cannot be deleted because it has linked match-history records (accounting information, BFL ch. 7). Match it to an existing voucher, or ignore it under Reports → Bank reconciliation if you do not want to book it.',
+          },
+        },
+        { status: 409 }
+      )
+    }
+    return NextResponse.json(
+      {
+        error: {
+          code: 'TRANSACTION_DELETE_FAILED',
+          message: 'Kunde inte ta bort transaktionen. Försök igen.',
+          message_en: 'Could not delete the transaction. Please try again.',
+        },
+      },
+      { status: 500 }
+    )
   }
 
   return NextResponse.json({ success: true })

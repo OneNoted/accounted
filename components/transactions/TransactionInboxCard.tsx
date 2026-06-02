@@ -19,13 +19,22 @@ import {
   AlertCircle,
   ArrowUpRight,
   ArrowDownRight,
+  FileSearch,
   FileText,
   Link2,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Split,
   Trash2,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 // True when the AI tier is active — gates user-facing strings that promise
@@ -53,6 +62,9 @@ interface TransactionInboxCardProps {
    *  detection as the single-pick picker. Optional so legacy callers stay
    *  source-compatible. */
   onOpenSplitMatch?: (transaction: TransactionWithInvoice) => void
+  /** Open the existing-verifikat matcher — link the bank tx to an already-booked
+   *  voucher (salary, Fortnox import, manual entry) with no new bokföring. */
+  onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
   /** Open the edit-title dialog. Only wired for editable (unbooked/unmatched) rows. */
@@ -70,6 +82,7 @@ export default function TransactionInboxCard({
   onOpenMatchDialog,
   onOpenMatchInvoicePicker,
   onOpenSplitMatch,
+  onOpenMatchVoucher,
   onOpenCategoryDialog,
   onDelete,
   onEditTitle,
@@ -197,6 +210,18 @@ export default function TransactionInboxCard({
     ? 'Dela inbetalningen på flera fakturor'
     : 'Dela utbetalningen på flera leverantörsfakturor'
 
+  // Secondary row actions are collapsed into a single ⋯ overflow menu to keep
+  // the inbox row uncluttered. Bokför + the invoice-match button stay inline.
+  // "Matcha mot befintlig verifikation" — link to an already-booked voucher.
+  // Available on any unbooked row (income or expense), independent of whether an
+  // invoice match was auto-detected: the user may want to point the bank line at
+  // an existing salary/Fortnox/manual voucher instead of confirming a payment.
+  const showMatchVoucherItem = isDeletable && !!onOpenMatchVoucher
+  const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
+  const showEditItem = isTitleEditable && !!onEditTitle
+  const showDeleteItem = isDeletable && !!onDelete
+  const showOverflowMenu = showMatchVoucherItem || showSplitItem || showEditItem || showDeleteItem
+
   return (
     <motion.div
       layout
@@ -276,22 +301,6 @@ export default function TransactionInboxCard({
                     <Link2 className="h-4 w-4" />
                   </Button>
                 )}
-                {showInvoiceMatchButton && onOpenSplitMatch && (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onOpenSplitMatch(transaction)
-                    }}
-                    aria-label={splitMatchLabel}
-                    title={splitMatchLabel}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    <Split className="h-4 w-4" />
-                  </Button>
-                )}
                 {/* The Paperclip indicator next to the description
                     (TransactionAttachmentIndicator) is the single click
                     target for opening the underlag. We deliberately don't
@@ -299,36 +308,74 @@ export default function TransactionInboxCard({
                     Per-transaction agent help has moved to Dokumentinkorgen:
                     match the underlag to the transaction and ask from there,
                     where the receipt/invoice is in view. */}
-                {isTitleEditable && onEditTitle && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-muted-foreground hover:text-foreground"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onEditTitle(transaction)
-                    }}
-                    aria-label={t('edit_title_aria')}
-                    title={t('edit_title_aria')}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                )}
-                {isDeletable && onDelete && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-muted-foreground hover:text-destructive"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDelete(transaction.id)
-                    }}
-                    aria-label={t('delete_aria')}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                {/* Secondary actions (split, edit, delete) collapse into a ⋯
+                    overflow menu so the row stays uncluttered. */}
+                {showOverflowMenu && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 text-muted-foreground hover:text-foreground"
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={t('more_actions_aria')}
+                        title={t('more_actions_aria')}
+                        disabled={isProcessing || isDisabled}
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-[14rem]">
+                      {showMatchVoucherItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenMatchVoucher!(transaction)
+                          }}
+                        >
+                          <FileSearch className="h-4 w-4" />
+                          {t('match_voucher_btn')}
+                        </DropdownMenuItem>
+                      )}
+                      {showSplitItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenSplitMatch!(transaction)
+                          }}
+                        >
+                          <Split className="h-4 w-4" />
+                          {splitMatchLabel}
+                        </DropdownMenuItem>
+                      )}
+                      {showEditItem && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onEditTitle!(transaction)
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                          {t('edit_title_aria')}
+                        </DropdownMenuItem>
+                      )}
+                      {showDeleteItem && (
+                        <>
+                          {(showMatchVoucherItem || showSplitItem || showEditItem) && <DropdownMenuSeparator />}
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onDelete!(transaction.id)
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            {t('delete_aria')}
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
               </>
             )}
