@@ -1672,6 +1672,9 @@ export const invoiceInboxExtension: Extension = {
             vat_code: bodyItem.vat_code || null,
             vat_rate: vatRate,
             vat_amount: vatAmount,
+            // Self-assessed RC rate (0.06/0.12/0.25) or null — engine defaults
+            // to 25% huvudregeln when null for a reverse-charge invoice.
+            reverse_charge_rate: body.reverse_charge ? (bodyItem.reverse_charge_rate ?? null) : null,
           }
         })
 
