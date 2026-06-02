@@ -239,17 +239,6 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     params: 'none',
   },
 
-  // --- Lön (payroll) — library-only, shown only with employees ---
-  {
-    slug: 'salary-journal',
-    labelKey: 'name_salary_journal',
-    descKey: 'desc_salary_journal',
-    category: 'payroll',
-    params: 'fiscal',
-    needsEmployees: true,
-    libraryOnly: true,
-  },
-
   // --- Export & arkiv — library-only ---
   {
     slug: 'sie-export',

@@ -99,7 +99,7 @@ export function AccountSettingsContent() {
       </section>
 
       {/* Language */}
-      <section className="space-y-4 border-t border-border/8 pt-8">
+      <section className="space-y-4 border-t border-border pt-8">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {tSettings('section_language')}
         </h2>
@@ -127,19 +127,19 @@ export function AccountSettingsContent() {
       </section>
 
       {/* Security */}
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <SecuritySettings />
       </div>
 
       {/* Calendar feed */}
       {hasCalendarExtension && (
-        <div className="border-t border-border/8 pt-8">
+        <div className="border-t border-border pt-8">
           <CalendarFeedSettings />
         </div>
       )}
 
       {/* Logout */}
-      <section className="border-t border-border/8 pt-8">
+      <section className="border-t border-border pt-8">
         <Card>
           <CardHeader>
             <CardTitle>{tCommon('account_settings')}</CardTitle>
@@ -160,7 +160,7 @@ export function AccountSettingsContent() {
       </section>
 
       {/* Privacy & agreements — surface the otherwise-unlinked DPA + privacy policy */}
-      <section className="border-t border-border/8 pt-8">
+      <section className="border-t border-border pt-8">
         <Card>
           <CardHeader>
             <CardTitle>{tSettings('legal_title')}</CardTitle>

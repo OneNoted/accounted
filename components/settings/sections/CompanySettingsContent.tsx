@@ -48,14 +48,14 @@ export function CompanySettingsContent() {
         <CompanyInfoForm settings={settings} />
       </SettingsFormWrapper>
 
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <LogoUpload
           logoUrl={settings.logo_url}
           onUpdate={(url) => updateSettings({ logo_url: url })}
         />
       </div>
 
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <CompanyMembersSection />
       </div>
 

@@ -57,13 +57,13 @@ export function InvoicingSettingsContent() {
 
       <SettingsFormWrapper onSave={handleSave} className="space-y-8">
         <BankDetailsForm settings={settings} />
-        <div className="border-t border-border/8 pt-8">
+        <div className="border-t border-border pt-8">
           <InvoiceSettingsForm settings={settings} />
         </div>
       </SettingsFormWrapper>
 
       {/* PDF settings — saves individually via toggle switches */}
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
       </div>
     </div>

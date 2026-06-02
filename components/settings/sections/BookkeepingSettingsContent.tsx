@@ -89,7 +89,7 @@ export function BookkeepingSettingsContent() {
         </section>
 
         {/* Default voucher series */}
-        <div className="border-t border-border/8 pt-8">
+        <div className="border-t border-border pt-8">
           <section className="space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
               {t('series_heading')}
@@ -114,13 +114,13 @@ export function BookkeepingSettingsContent() {
         </div>
 
         {/* Period locking */}
-        <div className="border-t border-border/8 pt-8">
+        <div className="border-t border-border pt-8">
           <PeriodLockingSettings settings={settings} />
         </div>
       </SettingsFormWrapper>
 
       {/* Voucher series — per-source-type mapping */}
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <VoucherSeriesPerSourceTypeForm
           settings={settings}
           onSettingsUpdated={updateSettings}
@@ -128,17 +128,17 @@ export function BookkeepingSettingsContent() {
       </div>
 
       {/* Voucher series — read-only display */}
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <VoucherSeriesManager defaultSeries={settings.default_voucher_series || 'A'} />
       </div>
 
       {/* Periodisering auto-detect toggle */}
-      <div className="border-t border-border/8 pt-8">
+      <div className="border-t border-border pt-8">
         <PeriodiseringAutoDetectToggle />
       </div>
 
       {/* Cross-links */}
-      <div className="border-t border-border/8 pt-8 space-y-3">
+      <div className="border-t border-border pt-8 space-y-3">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
           {t('related_heading')}
         </h2>
