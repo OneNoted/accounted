@@ -96,10 +96,10 @@ describe('buildStableExternalIds', () => {
   // existing rows; updating this assertion without one is the bug.
   it('FORMAT IS FROZEN — changing this template silently orphans every prior external_id', () => {
     expect(
-      buildStableExternalIds('eb', 'SE6380000832798443379915', [
+      buildStableExternalIds('eb', 'SE0000000000000000000000', [
         { date: '2026-04-07', amount: -11231 },
       ]),
-    ).toEqual(['eb_SE6380000832798443379915_2026-04-07_-1123100_0'])
+    ).toEqual(['eb_SE0000000000000000000000_2026-04-07_-1123100_0'])
   })
 })
 
@@ -123,20 +123,22 @@ describe('contentBucketKey', () => {
 describe('descriptionsBridge', () => {
   it('bridges prefix-preserving PSD2 enrichment (the June 2026 drift)', () => {
     // The same transaction whose title grew between syncs must still bridge.
-    expect(descriptionsBridge('TIC', 'TIC              BG 0000005786439 Bg-bet. via internet')).toBe(true)
+    // (Synthetic stand-ins for the real prefix-preserving enrichment pattern.)
+    expect(descriptionsBridge('KAFFE', 'KAFFE  BG 0000000000 Bg-bet. via internet')).toBe(true)
     expect(descriptionsBridge('UTBETALNING Insättning', 'UTBETALNING')).toBe(true)
-    expect(descriptionsBridge('1260520734056 Europabetalning', '1260520734056')).toBe(true)
+    expect(descriptionsBridge('REF 000000 Europabetalning', 'REF 000000')).toBe(true)
   })
 
   it('is case- and whitespace-insensitive', () => {
-    expect(descriptionsBridge('  ICA Maxi Solna  ', 'ica maxi solna')).toBe(true)
+    expect(descriptionsBridge('  Mataffär Solna  ', 'mataffär solna')).toBe(true)
   })
 
   it('does NOT bridge genuinely distinct descriptions sharing a date+amount', () => {
-    // Carl Bennet AB micro-deposits: distinct reference codes, same date+amount.
-    expect(descriptionsBridge('A048EAE08B97', '6615B8B0FAA9')).toBe(false)
-    // Brorsan AB: same common stem but diverging tails.
-    expect(descriptionsBridge('DBT.Utd JC', 'DBT.UTD OS')).toBe(false)
+    // Distinct reference codes on same-day same-amount rows (e.g. verification
+    // micro-deposits) must NOT collapse — each is a real transaction.
+    expect(descriptionsBridge('REF-AAAA1111', 'REF-BBBB2222')).toBe(false)
+    // Same common stem, diverging tails — still distinct.
+    expect(descriptionsBridge('PMT.Ref AAA', 'PMT.Ref BBB')).toBe(false)
     expect(descriptionsBridge('Coffee', 'Lunch')).toBe(false)
   })
 

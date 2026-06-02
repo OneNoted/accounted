@@ -401,15 +401,15 @@ describe('ingestTransactions', () => {
     const raw = makeRaw({
       date: '2026-04-07',
       amount: -11231,
-      description: 'TIC              BG 0000005786439 Bg-bet. via internet', // enriched
-      external_id: 'eb_SE63_2026-04-07_-1123100_0', // NEW-scheme id → external_id dedup misses
+      description: 'KAFFE              BG 0000000000 Bg-bet. via internet', // enriched
+      external_id: 'eb_SE00_2026-04-07_-1123100_0', // NEW-scheme id → external_id dedup misses
       import_source: 'enable_banking',
     })
 
     enqueue({ data: [], error: null }) // booked map — none
     // Unbooked enable_banking row carrying the SHORT original description.
     enqueue({
-      data: [{ date: '2026-04-07', amount: -11231, original_description: 'TIC', description: 'TIC' }],
+      data: [{ date: '2026-04-07', amount: -11231, original_description: 'KAFFE', description: 'KAFFE' }],
       error: null,
     })
     enqueue({ data: [], error: null }) // supplier invoices
