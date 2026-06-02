@@ -78,4 +78,36 @@ describe('GL-line read RPCs — tenant-isolation guard', () => {
       expect(m.rows).toHaveLength(0)
     })
   })
+
+  it('rejects an anon (unauthenticated) caller outright — EXECUTE revoked from anon + PUBLIC', async () => {
+    const a = await seedCompany()
+    await insertPostedJournalEntry({
+      userId: a.userId,
+      companyId: a.companyId,
+      fiscalPeriodId: a.fiscalPeriodId,
+      entryDate: '2026-03-15',
+      voucherNumber: 1,
+    })
+
+    // Each probe runs in its own transaction: a permission-denied error aborts
+    // the transaction, so the two can't share one. anon has no EXECUTE (revoked
+    // from its own grant AND from PUBLIC, of which anon is a member), so the call
+    // is rejected at the privilege layer — defense in depth on top of the
+    // in-function tenant guard.
+    const callAsAnon = async (sql: string): Promise<void> => {
+      const client = await getPool().connect()
+      try {
+        await client.query('BEGIN')
+        await client.query(`SELECT set_config('request.jwt.claims', '{"role":"anon"}', true)`)
+        await client.query('SET LOCAL ROLE anon')
+        await client.query(sql, [a.companyId])
+      } finally {
+        await client.query('ROLLBACK').catch(() => {})
+        client.release()
+      }
+    }
+
+    await expect(callAsAnon(UNLINKED)).rejects.toThrow(/permission denied/i)
+    await expect(callAsAnon(MATCHING)).rejects.toThrow(/permission denied/i)
+  })
 })
