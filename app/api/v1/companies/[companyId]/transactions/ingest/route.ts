@@ -22,7 +22,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ingestTransactions } from '@/lib/transactions/ingest'
-import { contentDedupKey } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription } from '@/lib/transactions/external-id'
 import type { RawTransaction } from '@/types'
 
 const RawTx = z.object({
@@ -153,25 +153,31 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
       const { data: bookedInRange } = await ctx.supabase
         .from('transactions')
-        .select('date, amount, description')
+        .select('date, amount, original_description, description')
         .eq('company_id', ctx.companyId!)
         .not('journal_entry_id', 'is', null)
         .gte('date', dateFrom)
         .lte('date', dateTo)
-      // Build the content-dedup key with the SAME helper the live pipeline uses
-      // (lib/transactions/ingest.ts), so the preview's content-match decision
-      // matches the eventual ingest exactly: öre-normalized amount (handles a
-      // PostgREST numeric returned as a string) plus the description prefix.
-      const bookedKeys = new Set(
-        (bookedInRange ?? []).map((r) => {
-          const row = r as { date: string; amount: number | string; description: string | null }
-          return contentDedupKey(row.date, row.amount, row.description)
-        }),
-      )
+      // Mirror the live pipeline's content-dedup bridge (lib/transactions/ingest.ts):
+      // bucket booked rows by (date, öre) and match by description prefix-containment,
+      // keyed off the immutable original_description. This is a preview, so we test
+      // membership without the live pipeline's counting/consume — close enough to
+      // forecast which rows the eventual ingest would skip on content.
+      const bookedBuckets = new Map<string, string[]>()
+      for (const r of bookedInRange ?? []) {
+        const row = r as { date: string; amount: number | string; original_description: string | null; description: string | null }
+        const key = contentBucketKey(row.date, row.amount)
+        const desc = normalizeImportedDescription(row.original_description ?? row.description).toLowerCase().trim()
+        const bucket = bookedBuckets.get(key)
+        if (bucket) bucket.push(desc)
+        else bookedBuckets.set(key, [desc])
+      }
 
       const previewRows = body.transactions.map((tx) => {
         const extIdHit = knownExtIds.has(tx.external_id)
-        const contentHit = bookedKeys.has(contentDedupKey(tx.date, tx.amount, tx.description))
+        const incomingDesc = normalizeImportedDescription(tx.description)
+        const contentHit = (bookedBuckets.get(contentBucketKey(tx.date, tx.amount)) ?? [])
+          .some((stored) => descriptionsBridge(incomingDesc, stored))
         const wouldSkip = extIdHit || contentHit
         const reason = extIdHit
           ? 'external_id_match'
