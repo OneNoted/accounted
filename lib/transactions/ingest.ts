@@ -14,13 +14,21 @@ import type { Transaction, RawTransaction, IngestResult, IngestOptions, Supplier
 export type { RawTransaction, IngestResult } from '@/types'
 
 /**
- * Content-dedup bucket: a `{date}|{öre}` key mapped to the multiset of
- * normalized descriptions of existing rows in that bucket. Matching is by
- * `descriptionsBridge` (prefix-containment), consumed with COUNTING semantics —
- * one stored description is spliced out per deduped incoming row — so two
- * genuinely-distinct same-(date,amount) transactions are never collapsed.
+ * One existing row in a content-dedup bucket: its normalized/lowercased
+ * description plus the cash account it settled on (null for legacy rows that
+ * predate the cash_account_id backfill). `cashAccountId` is the cross-account
+ * guard — see `consumeBridgingTwin`.
  */
-type DescBucket = Map<string, string[]>
+type BucketEntry = { desc: string; cashAccountId: string | null }
+
+/**
+ * Content-dedup bucket: a `{date}|{öre}` key mapped to the multiset of existing
+ * rows in that bucket. Matching is by `descriptionsBridge` (prefix-containment)
+ * gated by the account guard, consumed with COUNTING semantics — one entry is
+ * spliced out per deduped incoming row — so two genuinely-distinct
+ * same-(date,amount) transactions are never collapsed.
+ */
+type DescBucket = Map<string, BucketEntry[]>
 
 interface ExistingTransactionMaps {
   /** Booked transactions (any source) — consumed by any incoming raw transaction. */
@@ -35,18 +43,19 @@ interface ExistingTransactionMaps {
   unbookedEnableBanking: DescBucket
 }
 
-/** Push a row's normalized, lowercased description into its (date, öre) bucket. */
+/** Push a row into its (date, öre) bucket, normalizing the description. */
 function addToBucket(
   bucket: DescBucket,
   date: string,
   amount: number | string,
   description: string,
+  cashAccountId: string | null,
 ): void {
   const key = contentBucketKey(date, amount)
-  const descs = bucket.get(key)
-  const value = description.toLowerCase().trim()
-  if (descs) descs.push(value)
-  else bucket.set(key, [value])
+  const entry: BucketEntry = { desc: description.toLowerCase().trim(), cashAccountId }
+  const entries = bucket.get(key)
+  if (entries) entries.push(entry)
+  else bucket.set(key, [entry])
 }
 
 async function buildExistingTransactionMaps(
@@ -65,7 +74,7 @@ async function buildExistingTransactionMaps(
   try {
     const { data: bookedRows } = await supabase
       .from('transactions')
-      .select('date, amount, original_description, description')
+      .select('date, amount, original_description, description, cash_account_id')
       .eq('company_id', companyId)
       .not('journal_entry_id', 'is', null)
       .gte('date', dateFrom)
@@ -82,6 +91,7 @@ async function buildExistingTransactionMaps(
           tx.date,
           tx.amount,
           normalizeImportedDescription(tx.original_description ?? tx.description),
+          tx.cash_account_id ?? null,
         )
       }
     }
@@ -92,7 +102,7 @@ async function buildExistingTransactionMaps(
   try {
     const { data: unbookedBank } = await supabase
       .from('transactions')
-      .select('date, amount, original_description, description')
+      .select('date, amount, original_description, description, cash_account_id')
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
       .eq('import_source', 'enable_banking')
@@ -108,6 +118,7 @@ async function buildExistingTransactionMaps(
           tx.date,
           tx.amount,
           normalizeImportedDescription(tx.original_description ?? tx.description),
+          tx.cash_account_id ?? null,
         )
       }
     }
@@ -283,31 +294,43 @@ export async function ingestTransactions(
     // enrichment between syncs ("TIC" → "TIC  BG … via internet"). Booked first,
     // then unbooked, preserving the historical 1b-before-1c order.
     //
-    // Consumed with COUNTING semantics: each match splices one stored description
-    // out of its bucket, so N stored twins dedup exactly N incoming and two
+    // Consumed with COUNTING semantics: each match splices one stored entry out
+    // of its bucket, so N stored twins dedup exactly N incoming and two
     // genuinely-distinct same-(date,amount) transactions are kept apart. We
     // consume the LONGEST bridging stored description first so a more-specific
     // twin is matched before a generic one, leaving generic entries for shorter
-    // incoming rows. Residual trade-off: a genuinely-new row whose description is
-    // a prefix-extension of an existing same-(date,öre) row can be mis-deduped;
-    // it is rare, bounded to the ~90-day PSD2 window where old-format ids still
-    // overlap, and the frozen external_id (Layer 1) is the exact dedup going
-    // forward — accepted to stop the re-import flood (the inverse, a visible
+    // incoming rows.
+    //
+    // Account guard: when BOTH the incoming batch and a stored entry have a known
+    // cash_account_id, they must match — so a transaction on one bank account
+    // never deduplicates a genuinely-different one on another account of the same
+    // company (the content bucket is company-wide; only external_id embeds the
+    // account). A null on either side falls back to bridge-allowed, leaving
+    // single-account and legacy (un-backfilled) rows exactly as before.
+    //
+    // Residual trade-off: within one account, a genuinely-new row whose
+    // description is a prefix-extension of an existing same-(date,öre) row can be
+    // mis-deduped; it is rare, bounded to the ~90-day PSD2 window where old-format
+    // ids still overlap, and the frozen external_id (Layer 1) is the exact dedup
+    // going forward — accepted to stop the re-import flood (the inverse, a visible
     // duplicate, was the reported pain).
     const bucketKey = contentBucketKey(raw.date, raw.amount)
     const consumeBridgingTwin = (bucket: DescBucket): boolean => {
-      const descs = bucket.get(bucketKey)
-      if (!descs || descs.length === 0) return false
+      const entries = bucket.get(bucketKey)
+      if (!entries || entries.length === 0) return false
       let bestIdx = -1
       let bestLen = -1
-      for (let i = 0; i < descs.length; i++) {
-        if (descriptionsBridge(description, descs[i]) && descs[i].length > bestLen) {
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
+        const sameAccount =
+          cashAccountId === null || entry.cashAccountId === null || entry.cashAccountId === cashAccountId
+        if (sameAccount && descriptionsBridge(description, entry.desc) && entry.desc.length > bestLen) {
           bestIdx = i
-          bestLen = descs[i].length
+          bestLen = entry.desc.length
         }
       }
       if (bestIdx === -1) return false
-      descs.splice(bestIdx, 1)
+      entries.splice(bestIdx, 1)
       return true
     }
     if (

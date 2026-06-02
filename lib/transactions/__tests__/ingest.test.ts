@@ -504,6 +504,73 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
+  // 2g. Cross-account guard: a transaction on one bank account must NOT
+  //     deduplicate a genuinely-different one on ANOTHER account of the same
+  //     company. The content bucket is company-wide (only external_id embeds
+  //     the account), so the bridge also requires matching cash_account_id when
+  //     both sides know it.
+  // -----------------------------------------------------------------------
+  it('does not dedupe a bridging twin that settled on a different cash account', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-04-07',
+      amount: -250,
+      description: 'Avgift',
+      external_id: 'eb_acctB_2026-04-07_-25000_0',
+      import_source: 'enable_banking',
+    })
+    const inserted = makeTransaction({ id: 'tx-acctB', amount: -250 })
+
+    enqueue({ data: [], error: null }) // booked map — none
+    // Unbooked enable_banking twin, but it settled on a DIFFERENT account (A).
+    enqueue({
+      data: [{ date: '2026-04-07', amount: -250, original_description: 'Avgift', description: 'Avgift', cash_account_id: 'acct-A' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts lookup → batch settled on account B
+    enqueue({ data: inserted, error: null }) // insert — not a duplicate
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      settlementAccount: '1931',
+    })
+
+    expect(result.imported).toBe(1)
+    expect(result.duplicates).toBe(0)
+    expect(result.transaction_ids).toEqual(['tx-acctB'])
+  })
+
+  it('dedupes a bridging twin on the SAME cash account', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-04-07',
+      amount: -250,
+      description: 'Avgift',
+      external_id: 'eb_acctA_2026-04-07_-25000_99', // different id → external_id dedup misses
+      import_source: 'enable_banking',
+    })
+
+    enqueue({ data: [], error: null }) // booked map — none
+    enqueue({
+      data: [{ date: '2026-04-07', amount: -250, original_description: 'Avgift', description: 'Avgift', cash_account_id: 'acct-A' }],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup — no match
+    enqueue({ data: { id: 'acct-A' }, error: null }) // cash_accounts lookup → batch settled on account A (same)
+    // No insert — deduped.
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      settlementAccount: '1930',
+    })
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(0)
+  })
+
+  // -----------------------------------------------------------------------
   // 3. Counts errors when insert fails
   // -----------------------------------------------------------------------
   it('counts errors when insert fails', async () => {
