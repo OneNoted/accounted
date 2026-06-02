@@ -72,6 +72,9 @@ export function MatchVerifikationPicker({
   placeholder = 'Sök ver.nr, datum, belopp eller beskrivning…',
   inline = false,
 }: MatchPickerProps) {
+  // `open` controls the overlay dropdown only. In inline mode the list is always
+  // rendered, so the setOpen() writes in the handlers below are harmless no-ops
+  // there (the inline branch never reads `open`).
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)

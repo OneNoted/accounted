@@ -709,9 +709,9 @@ export function BankReconciliationView() {
               Omatchade transaktioner ({unmatchedTx.length})
             </h2>
             <div className="flex items-center gap-3">
-              {glLines.length > 0 && (
+              {unmatchedGlLines.length > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  {glLines.length} verifikation{glLines.length === 1 ? '' : 'er'} att matcha mot
+                  {unmatchedGlLines.length} verifikation{unmatchedGlLines.length === 1 ? '' : 'er'} att matcha mot
                 </p>
               )}
               <label className="flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-muted-foreground">
