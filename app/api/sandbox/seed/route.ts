@@ -47,6 +47,13 @@ export async function POST(request: Request) {
   // directly: the documented stopgap that still enforces MFA. A no-op for the
   // anonymous users this route serves (they have no second factor), but keeps
   // the route on the same auth path as the rest of the API.
+  //
+  // GDPR Art.32 compensating controls for this anonymous, low-auth write path:
+  // (1) anonymous-only — authenticated users are rejected below (403); (2) the
+  // /24 rate limit above (5/h); (3) all seeded data is synthetic demo content
+  // (fabricated names, example.com emails, documentation-reserved org numbers),
+  // not real personal data; (4) writes are scoped to the caller's own freshly
+  // created sandbox company, RLS-isolated from every other tenant.
   const auth = await requireAuth()
   if (auth.error) return auth.error
   const { user, supabase } = auth
