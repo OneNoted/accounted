@@ -10,6 +10,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
@@ -296,28 +297,17 @@ export const POST = withRouteContext(
       ? fx.paidInInvoiceCurrency
       : transaction.amount
 
-    const currentRemaining = invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount || 0))
-
-    // Overshoot guard: the single-tx match endpoint always books tx.amount in
-    // full against the invoice. If tx > remaining the legacy code path would
-    // push invoice.paid_amount past invoice.total — silently. Reject and
-    // point the user at the split-payment flow which can allocate the excess
-    // across additional invoices.
-    if (paidAmountInInvoiceCurrency > currentRemaining + 0.005) {
+    // Overshoot guard + paid/remaining math — shared with the v1 and agent
+    // (commit) paths via planInvoicePayment so they cannot drift again. Runs
+    // before any JE is created, so a doomed match never burns a voucher number.
+    const payment = planInvoicePayment(invoice, paidAmountInInvoiceCurrency)
+    if (!payment.ok) {
       return errorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
         requestId,
-        details: {
-          transaction_amount: paidAmountInInvoiceCurrency,
-          remaining_amount: Math.round(currentRemaining * 100) / 100,
-          excess: Math.round((paidAmountInInvoiceCurrency - currentRemaining) * 100) / 100,
-        },
+        details: payment.details,
       })
     }
-
-    const newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmountInInvoiceCurrency) * 100) / 100
-    const newRemaining = Math.max(0, Math.round((currentRemaining - paidAmountInInvoiceCurrency) * 100) / 100)
-    const isFullyPaid = newRemaining <= 0
-    const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
+    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
     const { data: settings } = await supabase
       .from('company_settings')
