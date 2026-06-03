@@ -900,19 +900,12 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
-  if (transaction.journal_entry_id) {
-    await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
-    await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
-  }
-
-  const now = new Date().toISOString()
-  const paidAmount = transaction.amount
-
   // Overshoot guard + paid/remaining math — shared with the dashboard and v1
   // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
   // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
-  // total, AR over-credited). Runs before the JE below, so a rejected match
-  // never burns a voucher number.
+  // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
+  // match leaves the transaction untouched and never burns a voucher number.
+  const paidAmount = transaction.amount
   const payment = planInvoicePayment(invoice, paidAmount)
   if (!payment.ok) {
     return {
@@ -923,6 +916,13 @@ async function commitMatchTransactionInvoice(
     }
   }
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+
+  if (transaction.journal_entry_id) {
+    await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
+    await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
+  }
+
+  const now = new Date().toISOString()
 
   const { data: settings } = await supabase
     .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()

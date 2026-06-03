@@ -266,6 +266,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const paidAmount = transaction.amount
+
+    // Overshoot guard + paid/remaining math — shared with the dashboard and
+    // agent (commit) paths via planInvoicePayment. Without this, the public API
+    // silently overpaid an invoice (recording paid_amount > total, over-crediting
+    // AR). Runs BEFORE the storno + strict-mode JE creation, so a rejected match
+    // touches no state.
+    const payment = planInvoicePayment(invoice, paidAmount)
+    if (!payment.ok) {
+      return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+        requestId: ctx.requestId,
+        details: payment.details,
+      })
+    }
+    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+
     if (transaction.journal_entry_id) {
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, transaction.journal_entry_id)
@@ -289,20 +305,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     const now = new Date().toISOString()
-    const paidAmount = transaction.amount
-
-    // Overshoot guard + paid/remaining math — shared with the dashboard and
-    // agent (commit) paths via planInvoicePayment. Without this, the public API
-    // silently overpaid an invoice (recording paid_amount > total, over-crediting
-    // AR). Runs before strict-mode JE creation, so a rejected match touches no state.
-    const payment = planInvoicePayment(invoice, paidAmount)
-    if (!payment.ok) {
-      return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
-        requestId: ctx.requestId,
-        details: payment.details,
-      })
-    }
-    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
     const { data: settings } = await ctx.supabase
       .from('company_settings')
