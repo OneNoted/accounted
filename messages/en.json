@@ -2880,7 +2880,22 @@
     "remove_blocked_cancel_cta": "Close",
     "replace_uploading": "Replacing...",
     "remove_failed": "Could not remove the document.",
-    "replace_failed": "Could not upload new version."
+    "replace_failed": "Could not upload new version.",
+    "choose_from_inbox": "Choose from inbox",
+    "picker_title": "Choose a document from the inbox",
+    "picker_description": "Documents received by email or upload that haven't been used yet.",
+    "picker_search_placeholder": "Search supplier or file name…",
+    "picker_results": "{count}",
+    "picker_empty": "No unused documents in the inbox.",
+    "picker_empty_search": "No documents match \"{query}\".",
+    "picker_source_email": "Email",
+    "picker_source_upload": "Upload",
+    "picker_linked": "Document attached.",
+    "picker_link_failed": "Could not attach the document.",
+    "picker_preview": "Preview",
+    "picker_attach": "Attach document",
+    "picker_close": "Close",
+    "picker_preview_unavailable": "Preview could not be displayed."
   },
   "journal_status": {
     "status_draft": "Draft",

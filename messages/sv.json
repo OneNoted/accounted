@@ -2880,7 +2880,22 @@
     "remove_blocked_cancel_cta": "Stäng",
     "replace_uploading": "Ersätter...",
     "remove_failed": "Kunde inte ta bort underlaget.",
-    "replace_failed": "Kunde inte ladda upp ny version."
+    "replace_failed": "Kunde inte ladda upp ny version.",
+    "choose_from_inbox": "Välj från inkorgen",
+    "picker_title": "Välj underlag från inkorgen",
+    "picker_description": "Underlag som kommit in via e-post eller uppladdning och ännu inte använts.",
+    "picker_search_placeholder": "Sök leverantör eller filnamn…",
+    "picker_results": "{count} st",
+    "picker_empty": "Inga oanvända underlag i inkorgen.",
+    "picker_empty_search": "Inga underlag matchar \"{query}\".",
+    "picker_source_email": "E-post",
+    "picker_source_upload": "Uppladdning",
+    "picker_linked": "Underlag kopplat.",
+    "picker_link_failed": "Kunde inte koppla underlaget.",
+    "picker_preview": "Förhandsgranska",
+    "picker_attach": "Koppla underlag",
+    "picker_close": "Stäng",
+    "picker_preview_unavailable": "Förhandsgranskning kunde inte visas."
   },
   "journal_status": {
     "status_draft": "Utkast",
