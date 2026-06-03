@@ -3040,7 +3040,11 @@
     "toast_draft_saved_description": "The draft can be posted from the bookkeeping page.",
     "toast_save_draft_failed": "Could not save draft",
     "toast_attach_failed_title": "Documents could not be attached",
-    "toast_attach_failed_description": "{count} file(s) could not be linked to the journal entry. Try again from the bookkeeping page."
+    "toast_attach_failed_description": "{count} file(s) could not be linked to the journal entry. Try again from the bookkeeping page.",
+    "fill_balance_tooltip": "Double-click to fill the balancing amount",
+    "fill_balance_hint": "Tip: double-click debit or credit to fill the remaining difference.",
+    "review_month_changed": "Note: different month than the previous voucher ({prev} → {current}).",
+    "review_period_locked": "This period is closed or locked — posting may be rejected."
   },
   "chart_of_accounts": {
     "class_1": "Assets",

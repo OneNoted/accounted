@@ -10,6 +10,11 @@ interface AccountComboboxProps {
   value: string
   accounts: BASAccount[]
   onChange: (accountNumber: string) => void
+  // Fired when the user definitively commits an account: selecting from the
+  // dropdown (Enter or click) or typing a full 4-digit number. Distinct from
+  // onChange, which also fires on intermediate edits. Callers use this to
+  // auto-advance focus (e.g. to the amount field).
+  onCommit?: (accountNumber: string) => void
   // When provided, an inline "Skapa nytt konto" affordance appears in the
   // dropdown's empty state. The current search string is passed so the caller
   // can prefill the create dialog.
@@ -21,7 +26,7 @@ interface AccountComboboxProps {
 
 const MAX_RESULTS = 50
 
-export default function AccountCombobox({ value, accounts, onChange, onCreateAccount, className }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, className }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -112,8 +117,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
       onChange(accountNumber)
       setSearch(accountNumber)
       setIsOpen(false)
+      onCommit?.(accountNumber)
     },
-    [onChange]
+    [onChange, onCommit]
   )
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -152,9 +158,13 @@ export default function AccountCombobox({ value, accounts, onChange, onCreateAcc
     setSearch(newValue)
     // Emit any 4-digit numeric value to the parent. Unknown BAS numbers are
     // accepted optimistically — the submit-time ActivateAccountsDialog lets
-    // the user activate missing accounts without leaving the form.
+    // the user activate missing accounts without leaving the form. A complete
+    // 4-digit number is treated as a commit so focus can advance to the amount.
     if (/^\d{4}$/.test(newValue)) {
       onChange(newValue)
+      // Only treat as a commit when the value newly becomes this account, so
+      // editing an already-committed number doesn't keep stealing focus.
+      if (newValue !== value) onCommit?.(newValue)
     }
     if (!isOpen) {
       setIsOpen(true)
