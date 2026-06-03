@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).",
   "rawRouteAuth": {
-    "count": 174,
+    "count": 171,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -131,19 +131,16 @@
       "app/api/salary/payroll-config/[year]/route.ts",
       "app/api/salary/runs/[id]/agi/submit/route.ts",
       "app/api/salary/runs/[id]/agi/xml/route.ts",
-      "app/api/salary/runs/[id]/approve/route.ts",
       "app/api/salary/runs/[id]/correct/route.ts",
       "app/api/salary/runs/[id]/employees/[employeeId]/route.ts",
       "app/api/salary/runs/[id]/employees/route.ts",
       "app/api/salary/runs/[id]/lines/[lineId]/route.ts",
       "app/api/salary/runs/[id]/lines/route.ts",
-      "app/api/salary/runs/[id]/paid/route.ts",
       "app/api/salary/runs/[id]/payment/bg-lb/route.ts",
       "app/api/salary/runs/[id]/payment/pain001/route.ts",
       "app/api/salary/runs/[id]/payslips/[employeeId]/pdf/route.ts",
       "app/api/salary/runs/[id]/payslips/send/route.ts",
       "app/api/salary/runs/[id]/preview/route.ts",
-      "app/api/salary/runs/[id]/revert/route.ts",
       "app/api/salary/runs/[id]/review/route.ts",
       "app/api/salary/runs/[id]/route.ts",
       "app/api/salary/tax-tables/lookup/route.ts",
