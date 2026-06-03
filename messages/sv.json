@@ -14,6 +14,8 @@
     "search": "Sök",
     "filter": "Filtrera",
     "loading": "Laddar...",
+    "retry": "Försök igen",
+    "load_error": "Kunde inte ladda data",
     "confirm": "Bekräfta",
     "yes": "Ja",
     "no": "Nej",

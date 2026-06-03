@@ -14,6 +14,8 @@
     "search": "Search",
     "filter": "Filter",
     "loading": "Loading...",
+    "retry": "Try again",
+    "load_error": "Could not load data",
     "confirm": "Confirm",
     "yes": "Yes",
     "no": "No",
