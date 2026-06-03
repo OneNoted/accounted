@@ -153,6 +153,8 @@ export function BankReconciliationView() {
   const [applyLoading, setApplyLoading] = useState(false)
   const [linkLoading, setLinkLoading] = useState<string | null>(null)
   const [unlinkLoading, setUnlinkLoading] = useState<string | null>(null)
+  // Per-verifikat loading for the "Märk som ingående balans" re-tag action.
+  const [markLoading, setMarkLoading] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
 
   // Opt-in: also surface vouchers already matched to a bank transaction as
@@ -405,6 +407,34 @@ export function BankReconciliationView() {
       setError('Kunde inte avmatcha transaktion')
     } finally {
       setUnlinkLoading(null)
+    }
+  }
+
+  /**
+   * Re-tag a manual/import voucher that is really an ingående balans as
+   * source_type='opening_balance'. Such a voucher (common after a migration
+   * where the IB was booked as an ordinary verifikat) otherwise stays in the
+   * period movement and shows up as a phantom difference equal to the IB. After
+   * re-tagging it drops out of the diff and is surfaced as "IB — räknas inte".
+   */
+  const handleMarkOpeningBalance = async (journalEntryId: string) => {
+    setMarkLoading(journalEntryId)
+    try {
+      const res = await fetch('/api/reconciliation/bank/mark-opening-balance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ journal_entry_id: journalEntryId }),
+      })
+      const result = await res.json()
+      if (result.error) {
+        setError(result.error)
+      } else {
+        await fetchAll()
+      }
+    } catch {
+      setError('Kunde inte markera verifikationen som ingående balans')
+    } finally {
+      setMarkLoading(null)
     }
   }
 
@@ -883,6 +913,9 @@ export function BankReconciliationView() {
             </CardTitle>
           </CardHeader>
           <CardContent>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Är en manuellt eller importerat bokförd verifikation egentligen en ingående balans? Markera den som IB — då räknas den inte med i avstämningen utan visas separat som ingående balans.
+            </p>
             <table className="w-full text-sm">
               <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
                 <tr className="border-b text-left">
@@ -891,11 +924,13 @@ export function BankReconciliationView() {
                   <th className="py-2">Beskrivning</th>
                   <th className="py-2 w-28 text-right">Belopp</th>
                   <th className="py-2 w-24">Typ</th>
+                  <th className="py-2 w-36"></th>
                 </tr>
               </thead>
               <tbody>
                 {unmatchedGlLines.map((line) => {
                   const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
+                  const isRetaggable = line.source_type === 'manual' || line.source_type === 'import'
                   return (
                     <tr key={line.line_id} className="border-b last:border-0">
                       <td className="py-2 font-mono text-xs">
@@ -909,6 +944,20 @@ export function BankReconciliationView() {
                         {formatCurrency(amount)}
                       </td>
                       <td className="py-2 text-xs text-muted-foreground">{line.source_type}</td>
+                      <td className="py-2 text-right">
+                        {isRetaggable && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs"
+                            disabled={markLoading === line.journal_entry_id}
+                            onClick={() => handleMarkOpeningBalance(line.journal_entry_id)}
+                            title="Markera verifikationen som ingående balans — den utesluts då från avstämningen"
+                          >
+                            {markLoading === line.journal_entry_id ? 'Markerar…' : 'Märk som IB'}
+                          </Button>
+                        )}
+                      </td>
                     </tr>
                   )
                 })}

@@ -2494,6 +2494,7 @@
     "cancel": "Avbryt",
     "confirm": "Länka som betalning",
     "link_success_title": "Verifikationen länkades till fakturan",
+    "link_success_tx_reconciled": "Den matchande banktransaktionen har också kopplats till verifikationen och försvinner från Transaktioner.",
     "link_failed_title": "Kunde inte länka verifikationen"
   },
   "supplier_invoice_editor": {

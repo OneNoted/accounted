@@ -243,6 +243,137 @@ describe('commitPendingOperation: create_voucher', () => {
     )
   })
 
+  // ── opening-balance (IB) flow ──────────────────────────────────────
+  // gnubok_create_voucher accepts a typed boolean is_opening_balance. The
+  // executor derives source_type='opening_balance' (so bank reconciliation
+  // excludes the IB from period movement) ONLY after re-validating the entry:
+  // every line must be a balance-sheet account (class 1/2) AND entry_date must
+  // equal the fiscal period's period_start. It never trusts a raw source_type.
+
+  it('opening_balance: derives source_type=opening_balance for a valid IB (class 1/2 lines, dated on period_start)', async () => {
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-ib', voucher_number: 1, voucher_series: 'A' })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-01-01',
+        description: 'Ingående balanser (migrering)',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 5000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(createJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'opening_balance' }),
+      'user_accept'
+    )
+  })
+
+  it('opening_balance: rejects with 400 when any line is a P&L account (class 3-8)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-01-01',
+        description: 'IB with a revenue account smuggled in',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 5000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/balanskonton|3001/i)
+    // No period lookup and no engine call once a P&L account is detected.
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('opening_balance: rejects with 400 when entry_date is not the fiscal period start', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-03-15',
+        description: 'IB dated mid-year',
+        fiscal_period_id: 'fp-1',
+        is_opening_balance: true,
+        lines: [
+          { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
+          { account_number: '2081', debit_amount: 0, credit_amount: 5000 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/första dag|2026-01-01/i)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('opening_balance absent: source_type stays manual (no period lookup, unchanged behaviour)', async () => {
+    vi.mocked(createJournalEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-manual', voucher_number: 50 })
+    )
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-03-15',
+        description: 'ordinary manual voucher, mid-year, on class-1 accounts',
+        fiscal_period_id: 'fp-1',
+        // is_opening_balance omitted — must NOT trigger the IB path or its
+        // extra fiscal_periods lookup, even though the lines are class 1/2.
+        lines: [
+          { account_number: '1930', debit_amount: 250, credit_amount: 0 },
+          { account_number: '1910', debit_amount: 0, credit_amount: 250 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(createJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'manual' }),
+      'user_accept'
+    )
+  })
+
   it('passes bulk_accept commit_method when invoked from the bulk-commit path', async () => {
     // The bulk-commit route passes opts.commitMethod = 'bulk_accept' so the
     // resulting journal_entry rows are tagged correctly per BFNAR 2013:2

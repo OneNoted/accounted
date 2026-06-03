@@ -975,6 +975,16 @@ export const BankUnlinkSchema = z.object({
   transaction_id: uuid,
 })
 
+/**
+ * Re-tag a mis-typed bank-account opening balance (a manual/import voucher that
+ * is really an ingående balans) as source_type='opening_balance' so bank
+ * reconciliation excludes it from the period movement. Routed to the
+ * mark_entry_as_opening_balance SECURITY DEFINER RPC, which enforces the rest.
+ */
+export const MarkOpeningBalanceSchema = z.object({
+  journal_entry_id: uuid,
+})
+
 export const RunReconciliationSchema = z.object({
   date_from: isoDate.optional(),
   date_to: isoDate.optional(),

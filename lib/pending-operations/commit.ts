@@ -1035,6 +1035,7 @@ async function commitLinkInvoiceVoucher(
       payment_amount: outcome.result.paymentAmount,
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
     },
   }
 }
@@ -1077,6 +1078,7 @@ async function commitLinkSupplierInvoiceVoucher(
       payment_amount: outcome.result.paymentAmount,
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
     },
   }
 }
@@ -2330,6 +2332,64 @@ async function commitCreateVoucher(
     fiscalPeriodId = resolved
   }
 
+  // source_type is derived here — never trust params.source_type. The MCP tool
+  // stages a typed boolean (is_opening_balance), not a raw source_type string,
+  // so a tampered or future direct-staging path can't inject
+  // 'bank'/'invoice'/etc. and corrupt audit attribution. The default is
+  // 'manual'. We only upgrade to 'opening_balance' after independently
+  // re-validating the entry genuinely looks like an ingående balans — this
+  // matters because bank reconciliation excludes an IB from the period movement
+  // ONLY when source_type='opening_balance' (lib/reconciliation/bank-reconciliation.ts);
+  // a mislabelled 'manual' IB shows up as a phantom reconciliation difference.
+  let sourceType: JournalEntrySourceType = 'manual'
+  if (params.is_opening_balance === true) {
+    // Constraint 1: every line must be a balance-sheet account (BAS class 1 or
+    // 2). Mirrors the canonical opening-balance flow which rejects P&L accounts
+    // (app/api/import/opening-balance/execute/route.ts). Inlined to avoid
+    // coupling this executor to the SIE-import module.
+    const nonBalanceSheet = lines
+      .map((l) => l.account_number)
+      .filter((num) => {
+        const cls = parseInt(num.charAt(0), 10)
+        return !(cls === 1 || cls === 2)
+      })
+    if (nonBalanceSheet.length > 0) {
+      return {
+        error:
+          `Ingående balans får bara innehålla balanskonton (klass 1–2). ` +
+          `Dessa konton hör inte hemma i en IB: ${[...new Set(nonBalanceSheet)].join(', ')}. ` +
+          `Bokför resultatkonton som en vanlig verifikation utan is_opening_balance.`,
+        status: 400,
+      }
+    }
+
+    // Constraint 2: the entry must be dated on the fiscal period's first day —
+    // an IB opens the period (same as the canonical flow, which dates the entry
+    // on period.period_start). We fetch period_start here because the resolved
+    // fiscalPeriodId may have come from either the explicit param or a date
+    // lookup; either way the date must line up exactly.
+    const { data: period, error: periodErr } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, name')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (periodErr || !period) {
+      return { error: 'Räkenskapsperioden hittades inte.', status: 404 }
+    }
+    if (entryDate !== period.period_start) {
+      return {
+        error:
+          `En ingående balans måste dateras på räkenskapsårets första dag ` +
+          `(${period.period_start}). Angivet datum: ${entryDate}. ` +
+          `Ändra datumet eller bokför som en vanlig verifikation utan is_opening_balance.`,
+        status: 400,
+      }
+    }
+
+    sourceType = 'opening_balance'
+  }
+
   try {
     const entry = await createJournalEntry(
       supabase,
@@ -2339,10 +2399,7 @@ async function commitCreateVoucher(
         fiscal_period_id: fiscalPeriodId,
         entry_date: entryDate,
         description,
-        // source_type is hardcoded — never trust params.source_type. The MCP
-        // tool stages 'manual', but a future direct-staging path could
-        // otherwise inject 'bank'/'invoice'/etc. and corrupt audit attribution.
-        source_type: 'manual' as JournalEntrySourceType,
+        source_type: sourceType,
         voucher_series: (params.voucher_series as string) || undefined,
         notes: (params.notes as string) || undefined,
         lines,

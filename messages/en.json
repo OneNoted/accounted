@@ -2494,6 +2494,7 @@
     "cancel": "Cancel",
     "confirm": "Link as payment",
     "link_success_title": "Journal entry linked to invoice",
+    "link_success_tx_reconciled": "The matching bank transaction was also linked to the journal entry and will leave the Transactions list.",
     "link_failed_title": "Could not link the journal entry"
   },
   "supplier_invoice_editor": {
