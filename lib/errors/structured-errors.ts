@@ -199,7 +199,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   },
   MEANINGLESS_CORRECTION: {
     httpStatus: 400,
-    message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse — det finns inget att rätta (BFL 5 kap. 5 §).',
+    message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse — det finns inget att rätta.',
     message_en: 'The correction represents no economic event — nothing to correct.',
   },
   NO_OPEN_PERIOD_FOR_DATE: {

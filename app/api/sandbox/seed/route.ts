@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { createLogger } from '@/lib/logger'
@@ -43,12 +43,13 @@ export async function POST(request: Request) {
   })
   if (!rl.ok) return rl.response!
 
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized', requestId }, { status: 401 })
-  }
+  // Can't use withRouteContext (see above — no company yet), so call requireAuth
+  // directly: the documented stopgap that still enforces MFA. A no-op for the
+  // anonymous users this route serves (they have no second factor), but keeps
+  // the route on the same auth path as the rest of the API.
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
+  const { user, supabase } = auth
 
   if (!user.is_anonymous) {
     return NextResponse.json(

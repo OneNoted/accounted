@@ -35,7 +35,11 @@ const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', '
 const ROUND_EXEMPT = new Set(['lib/money.ts', 'lib/bokslut/rounding.ts'])
 
 const RAW_AUTH_RE = /\.auth\.getUser\(/
-const GUARD_RE = /requireAuth|withRouteContext/
+// Match the guard at its CALL site, not a bare import, so a file that imports
+// withRouteContext but still hand-rolls getUser() on another handler is still
+// flagged. withRouteContext is usually called with a generic (`withRouteContext<…>(`),
+// so accept either `<` or `(` after the name.
+const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
 
 function walk(dir, exts, out = []) {

@@ -18,6 +18,14 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  *    UI locale, so error copy is consistent and localized;
  *  - exposes `refetch()` for retry / post-mutation refresh.
  *
+ * Behaviour notes (intentional):
+ *  - `data` is NOT cleared on `refetch()` or url change — it keeps the previous
+ *    result while the new request is in flight (keep-previous-data), so lists
+ *    don't blank out on refresh. Read `loading` to show a pending indicator.
+ *  - When `url`/`enabled` start inactive and later become active, `loading`
+ *    flips true on the effect tick, not synchronously on the activating render.
+ *    Pair with `DataState` (which branches on `loading` first) to avoid a flash.
+ *
  * Response convention: the JSON body is returned as-is, typed as `T`. Most
  * Accounted routes wrap payloads as `{ data: ... }`, so the common usage is
  * `useFetch<{ data: Account[] }>(...)` then read `result.data?.data`. Pass

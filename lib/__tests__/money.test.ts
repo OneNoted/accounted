@@ -25,6 +25,10 @@ describe('roundOre', () => {
   it('handles negative amounts', () => {
     expect(roundOre(-1.234)).toBe(-1.23)
     expect(roundOre(-99.999)).toBe(-100)
+    // The EPSILON nudge moves a stored negative value slightly toward zero, so
+    // an exact-half negative rounds toward +∞ (mirrors Math.round on negatives):
+    // -1.005 → -1.00, not -1.01. Documented so a refactor can't silently flip it.
+    expect(roundOre(-1.005)).toBe(-1)
   })
 })
 
