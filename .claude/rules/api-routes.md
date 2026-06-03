@@ -7,33 +7,40 @@ paths:
 
 Use the `/erp-api-route` skill when scaffolding new endpoints.
 
+**Default: wrap every cookie-session route in `withRouteContext`** (`lib/api/with-route-context.ts`). It is the only path that enforces MFA (AAL2) on hosted — it calls `requireAuth()`, resolves the active `companyId`, optionally gates non-viewer role (`requireWrite: true`), and converts thrown errors into the canonical envelope. **Never hand-roll `supabase.auth.getUser()` in a route** — that skips MFA. CI enforces this via the ratchet guard (`npm run check:guards`); a new route calling `getUser()` directly fails the build.
+
 ```typescript
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MySchema } from '@/lib/api/schemas'
 
 ensureInitialized()  // Module-level — loads extensions for event emission
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+// Dynamic route: pass the params type as the generic.
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'resource.action',
+  async (request, { supabase, companyId, user, log }, { params }) => {
+    const { id } = await params
+    const validation = await validateBody(request, MySchema)
+    if (!validation.success) return validation.response
 
-  const result = await validateBody(request, MySchema)
-  if (!result.success) return result.response
-
-  // Business logic... always filter by company_id (defense in depth alongside RLS)
-  return NextResponse.json({ data: result })
-}
+    // Business logic... always filter by company_id (defense in depth alongside RLS).
+    // Throw typed domain errors (e.g. lib/bookkeeping/errors) — the wrapper maps
+    // them to the right status + canonical { error: { code, message, message_en } }.
+    return NextResponse.json({ data: result })
+  },
+  { requireWrite: true }, // omit for read-only routes
+)
 ```
 
-- Dynamic route params: `{ params }: { params: Promise<{ id: string }> }` (Next.js 16 — params are async).
-- Response shapes: `{ data }` for success, `{ error }` for failures.
+- Dynamic route params: `{ params }: { params: Promise<{ id: string }> }` (Next.js 16 — params are async). With `withRouteContext`, pass that shape as the generic and destructure `params` from the 3rd handler arg.
+- Response shapes: `{ data }` for success; failures are the canonical `{ error: { code, message, message_en?, requestId? } }` envelope (thrown errors → `errorResponse`). Don't hand-build `{ error: 'string' }`.
 - Zod schemas in `lib/api/schemas.ts` — 100+ schemas with shared primitives (uuid, isoDate, accountNumber, nonNegativeAmount).
 - Routes that emit events must call `ensureInitialized()` at module level.
-- API-key auth uses `createServiceClientNoCookies()`; every query still filters by `company_id`.
+- Opt out of `withRouteContext` only when the route genuinely can't guarantee a company context (e.g. onboarding) — then call `requireAuth()` directly so MFA is still enforced.
+- API-key auth (`/api/v1/*`) uses `createServiceClientNoCookies()` + `v1ErrorResponse`; every query still filters by `company_id`.
 
 ## Endpoint map (`app/api/`)
 

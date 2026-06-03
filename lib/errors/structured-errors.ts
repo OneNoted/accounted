@@ -197,6 +197,37 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'Bookkeeping database operation failed.',
     retryable: true,
   },
+  MEANINGLESS_CORRECTION: {
+    httpStatus: 400,
+    message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse — det finns inget att rätta (BFL 5 kap. 5 §).',
+    message_en: 'The correction represents no economic event — nothing to correct.',
+  },
+  NO_OPEN_PERIOD_FOR_DATE: {
+    httpStatus: 400,
+    message_sv:
+      'Det finns ingen räkenskapsperiod som täcker det valda datumet. Skapa eller öppna räkenskapsåret först.',
+    message_en: 'No fiscal period covers the selected date.',
+    remediation: {
+      description: 'Create or open the fiscal year that covers the date before retrying.',
+      resource: 'Accounted://period/active',
+    },
+  },
+  TARGET_PERIOD_CLOSED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret som täcker datumet är stängt (bokslut) och kan inte öppnas. Bokför i en öppen period i stället.',
+    message_en: 'The fiscal year covering the date is closed and cannot be reopened.',
+  },
+  TARGET_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsperioden som täcker datumet är låst.',
+    message_en: 'The fiscal period covering the date is locked.',
+    remediation: {
+      description:
+        'Unlock the period (if status is "locked", not "closed") or use a date inside an open period.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
   PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv: 'Bokföringen är låst för denna period.',

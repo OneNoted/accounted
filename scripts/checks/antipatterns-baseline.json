@@ -1,7 +1,7 @@
 {
   "_comment": "Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).",
   "rawRouteAuth": {
-    "count": 178,
+    "count": 174,
     "files": [
       "app/api/account/delete/route.ts",
       "app/api/account/password/route.ts",
@@ -29,12 +29,8 @@
       "app/api/bookkeeping/fiscal-periods/period-status/route.ts",
       "app/api/bookkeeping/fiscal-periods/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/chain/route.ts",
-      "app/api/bookkeeping/journal-entries/[id]/commit/route.ts",
-      "app/api/bookkeeping/journal-entries/[id]/correct/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/no-document-required/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/notes/route.ts",
-      "app/api/bookkeeping/journal-entries/[id]/recordate/route.ts",
-      "app/api/bookkeeping/journal-entries/[id]/reverse/route.ts",
       "app/api/bookkeeping/journal-entries/[id]/route.ts",
       "app/api/bookkeeping/journal-entries/route.ts",
       "app/api/bookkeeping/mapping-rules/evaluate/route.ts",
