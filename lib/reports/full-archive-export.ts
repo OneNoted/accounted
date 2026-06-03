@@ -526,7 +526,7 @@ interface SieSourceManifestEntry {
 /**
  * Copy raw imported SIE files from the `sie-files` storage bucket into the
  * archive under `sie/original/`. Preserves the byte-identical source that the
- * user uploaded (vs the `sie/<period>.se` files which gnubok re-generates from
+ * user uploaded (vs the `sie/<period>.se` files which Accounted re-generates from
  * the current journal entries).
  *
  * `sie/imports.json` and `sie/account_mappings.json` are written regardless of

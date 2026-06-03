@@ -133,7 +133,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     }
 
     // ── Step 2: Customers (bulk) ──────────────────────────────────
-    // customerIdMap: provider customer id → gnubok customer id.
+    // customerIdMap: provider customer id → Accounted customer id.
     // orgNumberToCustomerId / nameToCustomerId speed up invoice lookup
     // without extra queries later.
     const customerIdMap = new Map<string, string>()

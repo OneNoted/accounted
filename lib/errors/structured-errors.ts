@@ -114,7 +114,7 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Mint a new key with the missing scope or grant it through the API key settings.',
-      resource: 'gnubok://capabilities',
+      resource: 'Accounted://capabilities',
     },
   },
 }
@@ -131,7 +131,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Activate the missing accounts via bookkeeping settings, or use a different category.',
-      resource: 'gnubok://chart-of-accounts',
+      resource: 'Accounted://chart-of-accounts',
     },
   },
   JOURNAL_ENTRY_NOT_BALANCED: {
@@ -148,7 +148,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'No fiscal period covers the entry date.',
     remediation: {
       description: 'Create or extend the relevant fiscal period before retrying.',
-      resource: 'gnubok://period/active',
+      resource: 'Accounted://period/active',
     },
   },
   ENTRY_DATE_OUTSIDE_FISCAL_PERIOD: {
@@ -157,7 +157,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'Entry date is outside the active fiscal period.',
     remediation: {
       description: 'Use a date inside an open period or create one that covers it.',
-      resource: 'gnubok://period/active',
+      resource: 'Accounted://period/active',
     },
   },
   JOURNAL_ENTRY_NOT_FOUND: {
@@ -272,7 +272,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en: 'The supplied account does not exist in the chart of accounts.',
     remediation: {
       description: 'Activate the account in the chart of accounts or pick a different one.',
-      resource: 'gnubok://chart-of-accounts',
+      resource: 'Accounted://chart-of-accounts',
     },
   },
   TX_CATEGORIZE_INVALID_TEMPLATE: {

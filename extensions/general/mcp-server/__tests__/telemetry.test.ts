@@ -316,11 +316,11 @@ describe('mcp.resource_read telemetry', () => {
     const eventPromise = captureNextResourceReadEvent()
 
     await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://skill/quarterly-vat-review' })
+      mcpRequest('resources/read', { uri: 'Accounted://skill/quarterly-vat-review' })
     )
 
     const event = await eventPromise
-    expect(event.uri).toBe('gnubok://skill/quarterly-vat-review')
+    expect(event.uri).toBe('Accounted://skill/quarterly-vat-review')
     expect(event.kind).toBe('skill')
     expect(event.success).toBe(true)
     expect(event.errorCode).toBeNull()
@@ -330,11 +330,11 @@ describe('mcp.resource_read telemetry', () => {
     const eventPromise = captureNextResourceReadEvent()
 
     await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://nonexistent/whatever' })
+      mcpRequest('resources/read', { uri: 'Accounted://nonexistent/whatever' })
     )
 
     const event = await eventPromise
-    expect(event.uri).toBe('gnubok://nonexistent/whatever')
+    expect(event.uri).toBe('Accounted://nonexistent/whatever')
     expect(event.kind).toBe('unknown')
     expect(event.success).toBe(false)
     expect(event.errorCode).toBe('RESOURCE_NOT_FOUND')
@@ -346,7 +346,7 @@ describe('mcp.resource_read telemetry', () => {
     // The dispatcher only matches kind=skill when findSkill returns a hit;
     // unknown slugs fall through and end up as kind=unknown.
     await handleMcpRequest(
-      mcpRequest('resources/read', { uri: 'gnubok://skill/does-not-exist' })
+      mcpRequest('resources/read', { uri: 'Accounted://skill/does-not-exist' })
     )
 
     const event = await eventPromise

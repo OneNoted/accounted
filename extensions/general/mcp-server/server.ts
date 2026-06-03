@@ -837,7 +837,7 @@ const VAT_REPORT_OUTPUT_SCHEMA = {
  *  buyer's VAT number is invalid).
  *
  *  Companies using non-standard charts must either book to one of these
- *  or extend the list — gnubok's BAS chart only ships 3001/3002/3003/3004
+ *  or extend the list — Accounted's BAS chart only ships 3001/3002/3003/3004
  *  by default, but 30xx alternates are common in custom charts. */
 const RUTA_05_ACCOUNTS = [
   // Domestic sales by VAT rate (canonical BAS)
@@ -1399,7 +1399,7 @@ function previousPeriodArgs(
 export const tools: McpTool[] = [
   {
     name: 'gnubok_search_tools',
-    description: 'Search gnubok MCP tools by keyword and return their schemas at a chosen detail level. Call this first when looking for a capability — avoids loading every tool schema upfront.',
+    description: 'Search Accounted MCP tools by keyword and return their schemas at a chosen detail level. Call this first when looking for a capability — avoids loading every tool schema upfront.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7713,6 +7713,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: { type: 'string', description: 'UUID of fiscal period. If omitted, resolved from entry_date.' },
         voucher_series: { type: 'string', description: 'Single letter A–Z. Defaults to A.' },
         notes: { type: 'string', description: 'Internal notes (max 2000 chars) — visible on the verifikation but not on reports.' },
+        is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Marks the entry source_type=opening_balance so bank reconciliation excludes it from period movement. Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
         inbox_item_id: { type: 'string', description: 'Optional inbox item UUID to book directly. On confirm, the inbox item is linked to the new verifikat and its OCR document is attached to the journal entry. Fails if the inbox item is already booked (as voucher) or converted (to supplier invoice).' },
         lines: {
           type: 'array',
@@ -7889,16 +7890,23 @@ export const tools: McpTool[] = [
       }
 
       // NOTE: source_type is intentionally NOT included in the staged params.
-      // The executor hardcodes 'manual' so a tampered or future direct-staged
-      // pending_operations row can't misrepresent the entry's origin.
+      // The executor derives it: 'opening_balance' when the typed
+      // is_opening_balance flag is set AND the executor re-validates the entry
+      // genuinely looks like an IB (all class-1/2 lines, dated on the period
+      // start); otherwise 'manual'. We never accept a raw source_type string —
+      // a tampered or future direct-staged pending_operations row can't
+      // misrepresent the entry's origin, only assert "this is an IB" via a
+      // boolean the executor independently verifies.
+      const isOpeningBalance = args.is_opening_balance === true
       return stagePendingOperation(supabase, companyId, userId, 'create_voucher',
-        `Manuell verifikation: ${description}`,
+        `${isOpeningBalance ? 'Ingående balans' : 'Manuell verifikation'}: ${description}`,
         {
           entry_date: entryDate,
           description,
           fiscal_period_id: fiscalPeriodId,
           voucher_series: (args.voucher_series as string) || undefined,
           notes: (args.notes as string) || undefined,
+          is_opening_balance: isOpeningBalance,
           inbox_item_id: inboxItemId,
           document_id: inboxDocumentId,
           lines,
@@ -8190,7 +8198,7 @@ export const tools: McpTool[] = [
       // If the original touches output/input VAT accounts (2610–2670), a storno
       // is correct ONLY if the moms period covering entry_date has not yet been
       // filed with Skatteverket. For filed periods the legal path is an
-      // omprövning (rättelse-omprövning per ML 2023:200, SFL 22 kap). gnubok
+      // omprövning (rättelse-omprövning per ML 2023:200, SFL 22 kap). Accounted
       // doesn't track per-VAT-period filing status today, so we surface a
       // soft warning rather than block — the human approver decides.
       const vatAccounts = originalLines
@@ -8727,7 +8735,7 @@ export const tools: McpTool[] = [
   // ── Bring-your-own-extraction for inbox items ────────────────
   {
     name: 'gnubok_set_inbox_extracted_data',
-    description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than gnubok\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
+    description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than Accounted\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9167,7 +9175,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           },
           serverInfo: SERVER_INFO,
           instructions: [
-            'gnubok — Swedish double-entry bookkeeping via conversation.',
+            'Accounted — Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
             '• tools/list returns the full schema for every tool. To narrow a large catalog, call gnubok_search_tools(query="…") — it ranks tools by relevance; pass detail="name"|"summary"|"full" to control payload size.',
@@ -9423,7 +9431,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
-      // Skills exposed at gnubok://skill/<slug> — Markdown bodies, forward-compatible
+      // Skills exposed at Accounted://skill/<slug> — Markdown bodies, forward-compatible
       // with a future native MCP skills/list primitive. Atom slugs (slash-bearing
       // registry ids) are URL-encoded in the URI; skillSlugFromUri decodes.
       if (uri.startsWith(SKILL_URI_PREFIX)) {

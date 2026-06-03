@@ -355,7 +355,7 @@ export async function ensureFiscalPeriod(
 
     if (!replaceableGateOpen || hasEntries) {
       throw new Error(
-        `SIE-filens räkenskapsår (${startDate} – ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i gnubok ` +
+        `SIE-filens räkenskapsår (${startDate} – ${endDate}) överlappar men matchar inte ett befintligt räkenskapsår i Accounted ` +
           `(${existing.name}: ${existing.period_start} – ${existing.period_end}). ` +
           `Justera räkenskapsåret i Inställningar → Företag så att det matchar SIE-filen exakt, eller importera en SIE-fil som täcker exakt samma period.`
       )
@@ -902,10 +902,27 @@ export async function importVouchers(
     // traceability alongside the aggregate sie_imports.migration_documentation.
     sourceSeries: string | null
     sourceNumber: number | null
+    // 'import' for ordinary migrated vouchers; 'opening_balance' for a #VER that
+    // is really the year's ingående balans (see isLikelyOpeningBalance below).
+    sourceType: 'import' | 'opening_balance'
     lines: { account_number: string; debit_amount: number; credit_amount: number; line_description: string | null }[]
   }
 
   const preparedVouchers: PreparedVoucher[] = []
+
+  // A SIE file represents the opening balance either as #IB records (handled
+  // separately by createOpeningBalanceEntry → source_type='opening_balance') or,
+  // in some source systems, as an ordinary #VER dated on the fiscal-year start.
+  // When there are NO current-year #IB records, detect a clearly-labelled IB
+  // voucher and tag it opening_balance so bank reconciliation excludes it from
+  // the period movement (otherwise it lands as 'import' and surfaces as a phantom
+  // difference equal to the IB). Deliberately conservative — requires the IB
+  // wording AND a balance-sheet-only voucher on FY start, and never a
+  // share-capital deposit. A missed IB still falls back to the manual "Märk som
+  // ingående balans" action in Bankavstämning, so we never risk hiding a real
+  // bank movement by over-classifying.
+  const hasCurrentYearIb = parsed.openingBalances.some((b) => b.yearIndex === 0)
+  const fyStart = parsed.stats.fiscalYearStart
 
   for (const voucher of parsed.vouchers) {
     const lines: PreparedVoucher['lines'] = []
@@ -1038,13 +1055,23 @@ export async function importVouchers(
     const rawSourceSeries = voucher.series && voucher.series.trim() ? voucher.series.trim() : null
     const rawSourceNumber = Number.isFinite(voucher.number) ? voucher.number : null
 
+    const voucherDateStr = formatDate(voucher.date)
+    const isLikelyOpeningBalance =
+      !hasCurrentYearIb &&
+      !!fyStart && fyStart.slice(0, 10) === voucherDateStr &&
+      lines.length > 0 &&
+      lines.every((l) => isBalanceSheetAccount(l.account_number)) &&
+      /ing[åa]ende balans|ing[åa]ende saldo|opening balance/i.test(voucher.description || '') &&
+      !/aktiekapital/i.test(voucher.description || '')
+
     preparedVouchers.push({
       sourceId: voucherId,
       series: resolvedSeries,
-      date: formatDate(voucher.date),
+      date: voucherDateStr,
       description: voucher.description || `Import: ${voucher.series}${voucher.number}`,
       sourceSeries: rawSourceSeries,
       sourceNumber: rawSourceNumber,
+      sourceType: isLikelyOpeningBalance ? 'opening_balance' : 'import',
       lines,
     })
   }
@@ -1141,7 +1168,7 @@ export async function importVouchers(
       voucher_series: series,
       entry_date: v.date,
       description: v.description,
-      source_type: 'import',
+      source_type: v.sourceType,
       source_voucher_series: v.sourceSeries,
       source_voucher_number: v.sourceNumber,
       status: 'posted',
@@ -1778,7 +1805,7 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  *     updated data from Fortnox without manual cleanup.
  *
  * Replace only cancels journal entries with source_type='import' — entries
- * the user created natively in gnubok (categorized transactions, invoices,
+ * the user created natively in Accounted (categorized transactions, invoices,
  * etc.) are left alone. See the replace_sie_import RPC.
  */
 export async function executeSIEImport(

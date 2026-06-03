@@ -6,7 +6,7 @@ import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
  * GET /api/company/check-org-number?org_number=XXXXXXXXXX
  *
  * Returns `{ data: { exists: boolean } }` indicating whether the given
- * organisation number is already registered in any non-archived gnubok
+ * organisation number is already registered in any non-archived Accounted
  * company. Used by the onboarding wizard to warn users before they try to
  * create a duplicate.
  *

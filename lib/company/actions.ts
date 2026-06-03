@@ -8,7 +8,7 @@ import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 
 /**
  * Check whether an org number is already registered in any non-archived
- * gnubok company. Uses the service role because RLS hides rows the caller
+ * Accounted company. Uses the service role because RLS hides rows the caller
  * isn't a member of — and "other users' duplicates" is exactly what we
  * need to detect. Returns null when `orgNumber` is empty/malformed. Throws
  * if the underlying query fails — callers must not silently treat that as

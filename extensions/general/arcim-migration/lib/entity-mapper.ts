@@ -1,8 +1,8 @@
 /**
- * Maps Arcim Sync canonical DTOs to gnubok internal types.
+ * Maps Arcim Sync canonical DTOs to Accounted internal types.
  *
  * These mappers transform the normalized data from any Swedish accounting
- * provider into the exact shapes gnubok expects for database insertion.
+ * provider into the exact shapes Accounted expects for database insertion.
  */
 
 import type { CustomerType, SupplierType, VatTreatment } from '@/types'
@@ -275,11 +275,11 @@ export function mapSalesInvoice(
   const primaryTaxPercent = dto.lines.find(l => l.taxPercent != null)?.taxPercent
   const vatTreatment = inferVatTreatment(primaryTaxPercent, dto.currencyCode)
 
-  // Map Arcim status to gnubok status
+  // Map Arcim status to Accounted status
   const statusMap: Record<string, string> = {
     draft: 'draft',
     sent: 'sent',
-    booked: 'sent', // gnubok has no 'booked' status — treat as sent
+    booked: 'sent', // Accounted has no 'booked' status — treat as sent
     paid: 'paid',
     overdue: 'overdue',
     cancelled: 'cancelled',

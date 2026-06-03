@@ -63,7 +63,7 @@ function translateOAuthError(error: string, description: string | null): string 
  * Provider Migration extension
  *
  * Migrates bookkeeping data from external Swedish accounting systems
- * (Fortnox, Visma, Bokio, Björn Lundén, Briox) into gnubok by talking
+ * (Fortnox, Visma, Bokio, Björn Lundén, Briox) into Accounted by talking
  * directly to each provider's API.
  *
  * Bookkeeping data (accounts, balances, vouchers) is imported via SIE

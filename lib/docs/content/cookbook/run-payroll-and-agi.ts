@@ -109,7 +109,7 @@ Failures return \`SALARY_RUN_APPROVE_VALIDATION_FAILED\` with a per-employee bre
 
 ## 4. Mark paid (approved → paid)
 
-After the bank transfer settles (or you mark it on the same day for cash-method shops), tell gnubok:
+After the bank transfer settles (or you mark it on the same day for cash-method shops), tell Accounted:
 
 \`\`\`bash
 curl -X POST "https://gnubok.app/api/v1/companies/$COMPANY_ID/salary-runs/$SR_ID/mark-paid" \\

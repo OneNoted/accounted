@@ -198,7 +198,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // period count. An alternative reading is that cap-suppressed periods
     // shouldn't count toward future windows (only periods that actually
     // had karens deducted). That requires persisting per-period karens-
-    // deduction state, which gnubok doesn't yet do. The period-count
+    // deduction state, which Accounted doesn't yet do. The period-count
     // reading can over-suppress karens for an employee who hits the cap
     // repeatedly — softer error than the opposite.
     //

@@ -1024,7 +1024,7 @@ describe('importVouchers — per-voucher series preservation', () => {
   it('preserves original source series/number on each imported entry, even across skipped vouchers', async () => {
     const { supabase, journalEntryInserts } = buildCapturingSupabase()
     // A2 is an empty voucher (no lines) — will be skipped. A1 and A3 survive.
-    // Gnubok assigns target numbers 1 and 2 (contiguous), but source_voucher_number
+    // Accounted assigns target numbers 1 and 2 (contiguous), but source_voucher_number
     // must preserve the SIE originals (1 and 3) so traceability is not lost.
     const parsed = makeParsedFile({
       vouchers: [

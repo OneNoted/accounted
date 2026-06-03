@@ -73,7 +73,7 @@ export function buildErrorReferenceMd(): string {
   const lines: string[] = []
   lines.push('# Errors')
   lines.push('')
-  lines.push(`> Every error returned by the gnubok REST API uses a stable code from this catalogue. Codes never change once shipped — agents can pattern-match on them safely. The \`docs_url\` field on every error envelope points at the anchor for that specific code.`)
+  lines.push(`> Every error returned by the Accounted REST API uses a stable code from this catalogue. Codes never change once shipped — agents can pattern-match on them safely. The \`docs_url\` field on every error envelope points at the anchor for that specific code.`)
   lines.push('')
   lines.push('## Envelope shape')
   lines.push('')

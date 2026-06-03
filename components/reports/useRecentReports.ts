@@ -4,11 +4,11 @@ import { useCallback, useEffect, useState } from 'react'
 
 /**
  * Tracks the last few report slugs the user opened, per company, in
- * localStorage. Mirrors the `gnubok:<key>:<companyId>` convention used by
+ * localStorage. Mirrors the `Accounted:<key>:<companyId>` convention used by
  * FiscalYearSelector (STORAGE_KEY_PREFIX). Powers the "Senast öppnade" shelf
  * so returning users skip the library hop.
  */
-const STORAGE_KEY_PREFIX = 'gnubok:report-recents:'
+const STORAGE_KEY_PREFIX = 'Accounted:report-recents:'
 const MAX_RECENTS = 4
 
 export function useRecentReports(companyId: string | null | undefined) {

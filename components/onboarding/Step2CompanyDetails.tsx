@@ -96,7 +96,7 @@ export default function Step2CompanyDetails({
 
   const orgNumber = watch('org_number')
 
-  // Debounced duplicate check against gnubok's own companies table. Runs in
+  // Debounced duplicate check against Accounted's own companies table. Runs in
   // parallel with the TIC lookup — they don't conflict. On match, the submit
   // button is disabled; the server action would also reject ('org_number_exists')
   // but blocking client-side avoids a wasted roundtrip.

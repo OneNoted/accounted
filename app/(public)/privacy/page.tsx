@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-06-01
+            Senast uppdaterad: 2026-06-03
           </p>
         </div>
 
@@ -43,7 +43,7 @@ export default function PrivacyPolicyPage() {
           <CardContent className="prose prose-sm max-w-none">
             <p>Vi behandlar följande kategorier av personuppgifter:</p>
             <ul>
-              <li><strong>Kontouppgifter:</strong> E-postadress (för inloggning via magic link)</li>
+              <li><strong>Kontouppgifter:</strong> E-postadress (för inloggning)</li>
               <li><strong>Företagsuppgifter:</strong> Företagsnamn, organisationsnummer, adress, kontaktuppgifter</li>
               <li><strong>Bokföringsdata:</strong> Verifikationer, fakturor, kvitton, transaktioner, kontoplaner</li>
               <li><strong>Bankdata:</strong> Kontosaldon och transaktioner (via PSD2-koppling)</li>
@@ -112,7 +112,7 @@ export default function PrivacyPolicyPage() {
                   <tr className="border-b">
                     <td className="py-2 pr-4 font-medium">Supabase</td>
                     <td className="py-2 pr-4">Databas, autentisering, fillagring</td>
-                    <td className="py-2 pr-4">EU (eu-central-1)</td>
+                    <td className="py-2 pr-4">EU (eu-north-1, Stockholm)</td>
                     <td className="py-2">EU-baserad lagring</td>
                   </tr>
                   <tr className="border-b">
@@ -181,7 +181,7 @@ export default function PrivacyPolicyPage() {
             <p>
               Vissa underbiträden är baserade i USA. För dessa överföringar används EU-kommissionens
               standardavtalsklausuler (SCCs) som skyddsmekanism i enlighet med GDPR kapitel V.
-              All primär datalagring (databas, filer) sker inom EU via Supabase (eu-central-1).
+              All primär datalagring (databas, filer) sker inom EU via Supabase (eu-north-1, Stockholm).
               Även AI-inferens sker inom EU (Amazon Bedrock, eu-north-1) och innebär ingen
               överföring till tredje land.
             </p>

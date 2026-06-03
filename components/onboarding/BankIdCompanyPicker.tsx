@@ -24,7 +24,7 @@ export interface MemberCompany {
 
 export interface TicPickerCompany {
   role: EnrichmentCompanyRole
-  /** 'new' = not in gnubok, can set up. 'exists' = in gnubok but user is not a member. */
+  /** 'new' = not in Accounted, can set up. 'exists' = in Accounted but user is not a member. */
   status: 'new' | 'exists'
 }
 
