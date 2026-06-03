@@ -13,6 +13,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "check:guards": "node scripts/checks/no-new-antipatterns.mjs",
     "test": "vitest run --project unit",
     "test:pg": "vitest run --project pg-real"
   },
