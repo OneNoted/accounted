@@ -1206,6 +1206,111 @@ describe('createSupplierInvoiceCashEntry', () => {
 })
 
 // ============================================================
+// createSupplierInvoiceCashEntry — foreign-currency settlement
+// (kontantmetoden books the expense at the PAYMENT-date rate; the
+//  payment-account credit must equal the SEK that left the bank)
+// ============================================================
+
+describe('createSupplierInvoiceCashEntry — foreign-currency settlement', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('books a no-VAT foreign invoice at the payment-date rate, not the invoice rate (the reported bug)', async () => {
+    // 19 USD invoice. The invoice was captured at rate 9.20 (→ 174.80 SEK),
+    // but the bank actually paid 175.28 SEK at the payment-date rate. Under
+    // kontantmetoden the expense belongs at the payment rate, so 1930 must
+    // equal the bank movement exactly — and there is NO kursdifferens.
+    const invoice = makeSupplierInvoice({
+      currency: 'USD', exchange_rate: 9.20, subtotal: 19, vat_amount: 0, total: 19,
+    })
+    const items = [makeItem({ line_total: 19, account_number: '4000', vat_rate: 0, vat_amount: 0 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2026-01-19', 'non_eu_business',
+      undefined, undefined, 175.28,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // Payment-date rate (175.28 / 19), NOT the invoice's 9.20 (which would give 174.80).
+    expect(findByAccount(input.lines, '4000')[0].debit_amount).toBe(175.28)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(175.28)
+    // No kursvinst/kursförlust under the cash method.
+    expect(findByAccount(input.lines, '7960')).toHaveLength(0)
+    expect(findByAccount(input.lines, '3960')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2641')).toHaveLength(0)
+    assertBalanced(input)
+  })
+
+  it('translates a foreign reverse-charge invoice (fiktiv moms base) at the payment rate', async () => {
+    // 100 USD EU-service invoice, reverse charge. Bank paid 922.50 SEK.
+    const invoice = makeSupplierInvoice({
+      currency: 'USD', exchange_rate: 9.20, subtotal: 100, vat_amount: 0, total: 100, reverse_charge: true,
+    })
+    const items = [makeItem({ line_total: 100, account_number: '6540', vat_rate: 0.25, vat_amount: 0 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2026-01-19', 'eu_business',
+      undefined, undefined, 922.50,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '6540')[0].debit_amount).toBe(922.50)
+    // Fiktiv moms on the payment-rate base (922.50 × 25%), and it nets out so
+    // 1930 still equals the bank movement.
+    expect(findByAccount(input.lines, '2645')[0].debit_amount).toBeCloseTo(230.63, 2)
+    expect(findByAccount(input.lines, '2614')[0].credit_amount).toBeCloseTo(230.63, 2)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(922.50)
+    assertBalanced(input)
+  })
+
+  it('folds a sub-öre rounding residual into the largest expense line so 1930 = bank SEK', async () => {
+    // Two expense lines whose per-line payment-rate rounding sums to 175.29,
+    // one öre over the 175.28 that actually left the bank. The residual is
+    // folded into the larger line so the bank credit lands exactly on 175.28.
+    const invoice = makeSupplierInvoice({
+      currency: 'USD', exchange_rate: 1.75, subtotal: 100, vat_amount: 0, total: 100,
+    })
+    const items = [
+      makeItem({ id: 'a', line_total: 33.33, account_number: '4000', vat_rate: 0, vat_amount: 0 }),
+      makeItem({ id: 'b', line_total: 66.67, account_number: '5000', vat_rate: 0, vat_amount: 0 }),
+    ]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2026-01-19', 'swedish_business',
+      undefined, undefined, 175.28,
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const debitSum = input.lines
+      .filter((l) => l.debit_amount > 0)
+      .reduce((s, l) => s + l.debit_amount, 0)
+    expect(Math.round(debitSum * 100) / 100).toBe(175.28)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(175.28)
+    assertBalanced(input)
+  })
+
+  it('ignores settledBankSek for a SEK invoice (behaviour unchanged)', async () => {
+    const invoice = makeSupplierInvoice({
+      currency: 'SEK', subtotal: 8000, vat_amount: 2000, total: 10000,
+    })
+    const items = [makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business',
+      undefined, undefined, 9999, // bogus settlement SEK must be ignored for a SEK invoice
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '6200')[0].debit_amount).toBe(8000)
+    expect(findByAccount(input.lines, '2641')[0].debit_amount).toBe(2000)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+})
+
+// ============================================================
 // createSupplierCreditNoteEntry
 // ============================================================
 

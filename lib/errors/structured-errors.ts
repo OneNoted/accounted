@@ -503,9 +503,9 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
   MATCH_SI_CASH_FX_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:
-      'Kontantmetoden stödjer inte valutakursdifferenser. Byt till löpande bokföring eller bokför valutakursdifferensen manuellt.',
+      'Kontantmetoden kan inte dela upp en delbetalning i utländsk valuta. Betala hela fakturan på en gång, byt till löpande bokföring eller bokför betalningen manuellt.',
     message_en:
-      'Cash accounting does not support exchange-rate differences. Switch to accrual or book the FX difference manually.',
+      'The cash method cannot handle a partial foreign-currency payment. Pay the invoice in full, switch to accrual, or book the payment manually.',
   },
   MATCH_SI_AMOUNT_EXCEEDS_REMAINING: {
     httpStatus: 400,

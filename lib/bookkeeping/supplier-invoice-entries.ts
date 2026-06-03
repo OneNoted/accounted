@@ -282,7 +282,12 @@ export async function createSupplierInvoiceCashEntry(
   paymentDate: string,
   supplierType: string,
   supplierName?: string,
-  paymentAccount?: string
+  paymentAccount?: string,
+  // SEK that actually settled the invoice (the amount that left the bank). For
+  // a foreign-currency invoice this pins the whole entry to the PAYMENT-date
+  // rate — see the kontantmetoden note below. Omit for SEK invoices and the
+  // behaviour is byte-identical to before.
+  settledBankSek?: number
 ): Promise<JournalEntry | null> {
   const creditAccount = paymentAccount || '1930'
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
@@ -291,25 +296,46 @@ export async function createSupplierInvoiceCashEntry(
     return null
   }
 
+  // Under kontantmetoden the booked affärshändelse IS the payment (BFL 5 kap —
+  // "bokföring vid betalningstillfället"), so the entire verifikat is translated
+  // at the PAYMENT-date rate (ÅRL 4 kap 6 §). There is no kursvinst/kursförlust
+  // because no leverantörsskuld was ever carried at a historical rate — that
+  // only happens under faktureringsmetoden (handled by the 2440-clearing path
+  // with 7960/3960). When the caller passes the SEK that actually settled the
+  // invoice, we derive the implied payment-date rate from it so the payment-
+  // account credit equals the bank movement to the öre. For SEK invoices, or
+  // when no settlement SEK is supplied, we keep the invoice's stored rate.
+  const isForeign = invoice.currency !== 'SEK'
+  const useSettlementRate =
+    settledBankSek != null && settledBankSek > 0 && isForeign && invoice.total > 0
+  const effectiveRate = useSettlementRate
+    ? settledBankSek / invoice.total
+    : invoice.exchange_rate
+
   const desc = buildSupplierDescription('Kontantbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName)
   const lines: CreateJournalEntryLineInput[] = []
+  // Expense debit lines tracked separately so a sub-öre translation residual
+  // can be folded into the largest one (öresavrundning step below).
+  const expenseLines: CreateJournalEntryLineInput[] = []
 
   // Aggregate expense amounts by account number and convert to SEK
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
     const current = expenseByAccount.get(item.account_number) || 0
-    const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate)
+    const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, effectiveRate)
     expenseByAccount.set(item.account_number, current + itemSek)
   }
 
   // Debit: Expense accounts (in SEK)
   for (const [accountNumber, amount] of expenseByAccount) {
-    lines.push({
+    const line: CreateJournalEntryLineInput = {
       account_number: accountNumber,
       debit_amount: Math.round(amount * 100) / 100,
       credit_amount: 0,
       line_description: desc,
-    })
+    }
+    lines.push(line)
+    expenseLines.push(line)
   }
 
   const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
@@ -327,8 +353,10 @@ export async function createSupplierInvoiceCashEntry(
     // Per-rate bucketing: see registration entry above for the FK004 rationale.
     // Drive iteration off the basis (line_total per rate) — fiktiv moms is
     // always statutory base × rate; manual vat_amount overrides don't apply.
-    const baseByRate = groupBaseByRate(items, invoice.currency, invoice.exchange_rate)
-    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, invoice.exchange_rate)
+    // effectiveRate (payment-date rate under kontantmetoden) keeps the fiktiv
+    // moms base consistent with the expense lines above.
+    const baseByRate = groupBaseByRate(items, invoice.currency, effectiveRate)
+    const nonBasisBaseByRate = groupNonBasisBaseByRate(items, invoice.currency, effectiveRate)
     const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
     for (const [rate, baseAmount] of baseByRate) {
       if (rate > 0 && baseAmount > 0) {
@@ -342,8 +370,9 @@ export async function createSupplierInvoiceCashEntry(
       }
     }
   } else if (invoice.vat_amount > 0) {
-    // Domestic standard: Debit ingående moms per rate group
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate)
+    // Domestic standard: Debit ingående moms per rate group (at the payment-
+    // date rate when settling a foreign invoice — see effectiveRate above).
+    const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate)
     for (const [rate, amount] of vatByRate) {
       if (amount > 0) {
         lines.push({
@@ -353,6 +382,24 @@ export async function createSupplierInvoiceCashEntry(
           line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
         })
       }
+    }
+  }
+
+  // Öresavrundning: when translating a foreign invoice at the payment-date
+  // rate, per-line rounding can drift the implied bank total by an öre or two.
+  // Fold that residual into the largest expense line so the payment-account
+  // credit lands exactly on the SEK that left the bank (1930 reconciles to the
+  // bank transaction). Immaterial to the momsdeklaration — rutor are whole
+  // kronor. The |residual| ≤ 1 guard ensures we only absorb rounding noise,
+  // never a real shortfall (a partial settlement is blocked upstream).
+  if (useSettlementRate && expenseLines.length > 0) {
+    const debitSum = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const creditSum = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    const provisionalCredit = Math.round((debitSum - creditSum) * 100) / 100
+    const residual = Math.round((settledBankSek! - provisionalCredit) * 100) / 100
+    if (residual !== 0 && Math.abs(residual) <= 1) {
+      const target = expenseLines.reduce((a, b) => (b.debit_amount >= a.debit_amount ? b : a))
+      target.debit_amount = Math.round((target.debit_amount + residual) * 100) / 100
     }
   }
 

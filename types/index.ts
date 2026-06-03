@@ -762,6 +762,21 @@ export interface Invoice {
   // Conversion tracking (proforma -> invoice)
   converted_from_id: string | null
 
+  // Self-billing received (mottagen självfaktura, ML 17 kap 15§). When
+  // `is_self_billed` is true the customer issued the invoice on our behalf;
+  // for us it is a sale. The counterparty's number lives in
+  // `external_invoice_number` and our own `invoice_number` stays null so we
+  // never consume our löpnummerserie (BFL 5 kap 6§).
+  is_self_billed?: boolean
+  external_invoice_number?: string | null
+  self_billing_agreement_ref?: string | null
+  received_date?: string | null
+
+  // Verifikation produced when the invoice was booked (registration entry).
+  // Lets the payment flow detect an already-booked sale and clear 1510 rather
+  // than re-recognising revenue.
+  journal_entry_id?: string | null
+
   // Payment tracking
   paid_at: string | null
   paid_amount: number | null

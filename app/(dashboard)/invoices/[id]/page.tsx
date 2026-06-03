@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
-import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { invoiceNumberDisplay, invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
   Loader2,
@@ -427,6 +427,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isProforma = docType === 'proforma'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  // Self-billing invoices we received: the document is the counterparty's, so
+  // there is no own PDF to render and no send step — it arrives already booked.
+  const isSelfBilled = !!(invoice as Invoice & { is_self_billed?: boolean }).is_self_billed
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -437,12 +440,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</h1>
+              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : invoiceNumberDisplay(invoice.invoice_number)}</h1>
               {isProforma && (
                 <Badge variant="secondary" className="bg-primary/10 text-primary">{t('badge_proforma')}</Badge>
               )}
               {isDeliveryNote && (
                 <Badge variant="secondary" className="bg-success/10 text-success">{t('badge_delivery_note')}</Badge>
+              )}
+              {isSelfBilled && (
+                <Badge variant="outline">{t('badge_self_billed')}</Badge>
               )}
               <Badge variant={statusVariant as 'default' | 'secondary' | 'destructive'}>
                 {statusLabel(invoice.status)}
@@ -516,14 +522,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('mark_as_paid')}
             </Button>
           )}
-          <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
-            {isDownloading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
-            {t('download_pdf')}
-          </Button>
+          {/* No own PDF for a received self-billing invoice — the verifikationsunderlag is the document the customer sent us. */}
+          {!isSelfBilled && (
+            <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
+              {isDownloading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="mr-2 h-4 w-4" />
+              )}
+              {t('download_pdf')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -706,9 +715,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('invoice_number_label')}</span>
-                <span className={cn('font-medium', !invoice.invoice_number && 'italic text-muted-foreground')}>{invoiceNumberDisplay(invoice.invoice_number)}</span>
+                <span className="text-muted-foreground">{isSelfBilled ? t('external_number_label') : t('invoice_number_label')}</span>
+                <span className={cn('font-medium', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : invoiceNumberDisplay(invoice.invoice_number)}</span>
               </div>
+              {isSelfBilled && (invoice as Invoice).self_billing_agreement_ref && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">{t('agreement_ref_label')}</span>
+                  <span className="font-medium">{(invoice as Invoice).self_billing_agreement_ref}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('invoice_date_label')}</span>
                 <span>{formatDate(invoice.invoice_date)}</span>

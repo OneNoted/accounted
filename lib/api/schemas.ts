@@ -216,6 +216,34 @@ export const CreateCreditNoteSchema = z.object({
   reason: z.string().optional(),
 })
 
+// Self-billing received (mottagen självfaktura, ML 17 kap 15§). The customer
+// issued the invoice on our behalf; for us it is a sale. We store the
+// counterparty's number in external_invoice_number and never assign one from
+// our own series. No ROT/RUT (that is a B2C, own-issued concept), so the item
+// schema is the lean revenue-only shape — vat_rate is constrained to the legal
+// Swedish set so the booked output VAT is always reportable.
+export const SelfBillingInvoiceItemSchema = z.object({
+  description: z.string().min(1, 'Item description is required'),
+  quantity: z.number().positive('Quantity must be positive'),
+  unit: z.string().min(1, 'Unit is required').default('st'),
+  unit_price: z.number(),
+  vat_rate: z
+    .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+    .optional(),
+})
+
+export const CreateSelfBillingInvoiceSchema = z.object({
+  customer_id: uuid,
+  external_invoice_number: z.string().min(1, 'External invoice number is required').max(64),
+  self_billing_agreement_ref: z.string().max(128).optional(),
+  invoice_date: isoDate,
+  received_date: isoDate,
+  due_date: isoDate,
+  currency: CurrencySchema,
+  notes: z.string().optional(),
+  items: z.array(SelfBillingInvoiceItemSchema).min(1, 'At least one item is required'),
+})
+
 // ============================================================
 // Recurring invoice schedule schemas
 // ============================================================

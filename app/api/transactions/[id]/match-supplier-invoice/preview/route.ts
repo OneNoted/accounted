@@ -45,7 +45,10 @@ export const GET = withRouteContext(
 
     const { data: transaction, error: txErr } = await supabase
       .from('transactions')
-      .select('id, date, amount, currency')
+      // amount_sek is needed for the cash-method preview: a foreign-currency
+      // settlement is translated at the payment-date rate (the SEK that left
+      // the bank), mirroring the committed verifikat from the POST handler.
+      .select('id, date, amount, currency, amount_sek')
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -84,6 +87,23 @@ export const GET = withRouteContext(
       const si = invoice as SupplierInvoice & { items?: SupplierInvoiceItem[] }
       const items = si.items ?? []
 
+      // Kontantmetoden books the expense AT PAYMENT at the payment-date rate
+      // (the SEK that actually left the bank), so translate this preview the
+      // same way the committed verifikat does. The bank SEK is only known when
+      // the transaction is in SEK or carries a stored amount_sek; for a foreign
+      // transaction without it we fall back to the invoice's own rate (the raw
+      // foreign amount must never be used — that would render 19 USD as 19 kr).
+      const bankSek =
+        transaction.currency === 'SEK'
+          ? Math.abs(transaction.amount)
+          : transaction.amount_sek != null
+            ? Math.abs(transaction.amount_sek)
+            : null
+      const cashRate =
+        bankSek != null && si.currency !== 'SEK' && si.total > 0
+          ? bankSek / si.total
+          : si.exchange_rate
+
       // Mirror createSupplierInvoiceCashEntry: per-item expense debit + VAT
       // debit + bank credit. We only need a faithful preview, not exact
       // account-mapping fidelity — show one aggregate expense line per item
@@ -92,8 +112,8 @@ export const GET = withRouteContext(
       let totalVatSek = 0
       if (items.length > 0) {
         for (const it of items) {
-          const lineTotal = resolveSekAmount(it.line_total, null, si.currency, si.exchange_rate)
-          const vat = resolveSekAmount(it.vat_amount, null, si.currency, si.exchange_rate)
+          const lineTotal = resolveSekAmount(it.line_total, null, si.currency, cashRate)
+          const vat = resolveSekAmount(it.vat_amount, null, si.currency, cashRate)
           const expenseAcct = (it as { expense_account?: string | null }).expense_account ?? '4000'
           lines.push({
             account_number: expenseAcct,
@@ -105,8 +125,11 @@ export const GET = withRouteContext(
           totalVatSek += vat
         }
       } else {
-        const subSek = resolveSekAmount(si.subtotal, si.subtotal_sek, si.currency, si.exchange_rate)
-        const vatSek = resolveSekAmount(si.vat_amount, si.vat_amount_sek, si.currency, si.exchange_rate)
+        // Pass null for the pre-computed SEK so cashRate (payment-date rate)
+        // drives the translation — resolveSekAmount would otherwise prefer the
+        // invoice-rate *_sek columns and ignore the rate.
+        const subSek = resolveSekAmount(si.subtotal, null, si.currency, cashRate)
+        const vatSek = resolveSekAmount(si.vat_amount, null, si.currency, cashRate)
         lines.push({
           account_number: '4000',
           debit_amount: Math.round(subSek * 100) / 100,

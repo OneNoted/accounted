@@ -21,7 +21,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
-import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { invoiceNumberDisplay, invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, Receipt, Lock, Repeat } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
@@ -114,6 +114,7 @@ export default function InvoicesPage() {
   const filteredInvoices = invoices.filter((invoice) => {
     const matchesSearch =
       (invoice.invoice_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (invoice.external_invoice_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (invoice.customer as { name: string })?.name?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const isCreditNote = !!invoice.credited_invoice_id
@@ -305,8 +306,8 @@ export default function InvoicesPage() {
                     </div>
                   }
                 >
-                  <DataListPrimary className={cn(!invoice.invoice_number && 'italic text-muted-foreground')}>
-                    {invoiceNumberDisplay(invoice.invoice_number)}{' '}
+                  <DataListPrimary className={cn(!invoice.invoice_number && !invoice.external_invoice_number && 'italic text-muted-foreground')}>
+                    {invoice.is_self_billed ? invoiceDisplayNumber(invoice) : invoiceNumberDisplay(invoice.invoice_number)}{' '}
                     <span className="font-normal text-muted-foreground">
                       · {(invoice.customer as { name: string })?.name}
                     </span>
@@ -341,6 +342,14 @@ export default function InvoicesPage() {
                         <DataListMetaSeparator />
                         <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
                           {t('badge_delivery_note')}
+                        </Badge>
+                      </>
+                    )}
+                    {invoice.is_self_billed && (
+                      <>
+                        <DataListMetaSeparator />
+                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
+                          {t('badge_self_billed')}
                         </Badge>
                       </>
                     )}

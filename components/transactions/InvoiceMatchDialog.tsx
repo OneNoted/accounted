@@ -637,18 +637,25 @@ export default function InvoiceMatchDialog({
                     <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">
                       {t('booking_credit')}
                     </div>
+                    {/* Verifikat amounts are always denominated in SEK (the
+                        bookkeeping home currency) — the preview route builds
+                        every line via resolveSekAmount. Format them as SEK,
+                        NOT transaction.currency, otherwise a foreign-currency
+                        payment (e.g. 19 USD) shows the converted SEK figure
+                        with the wrong symbol ("175,28 US$" instead of
+                        "175,28 kr"). */}
                     {preview.lines.map((line, i) => (
                       <div key={i} className="contents">
                         <div className="font-medium">{line.account_number}</div>
                         <div className="text-muted-foreground truncate">{line.description}</div>
                         <div className="text-right">
                           {line.debit_amount > 0
-                            ? formatCurrency(line.debit_amount, transaction.currency)
+                            ? formatCurrency(line.debit_amount, 'SEK')
                             : ''}
                         </div>
                         <div className="text-right">
                           {line.credit_amount > 0
-                            ? formatCurrency(line.credit_amount, transaction.currency)
+                            ? formatCurrency(line.credit_amount, 'SEK')
                             : ''}
                         </div>
                       </div>
@@ -730,16 +737,17 @@ export default function InvoiceMatchDialog({
                         {t('booking_add_line')}
                       </Button>
                       <div className="text-xs tabular-nums text-muted-foreground">
-                        {t('booking_debit')} {formatCurrency(editValidation.totalDebit, transaction.currency)}
+                        {/* SEK: edited verifikat rows are home-currency, like the read-only preview above. */}
+                        {t('booking_debit')} {formatCurrency(editValidation.totalDebit, 'SEK')}
                         {' / '}
-                        {t('booking_credit')} {formatCurrency(editValidation.totalCredit, transaction.currency)}
+                        {t('booking_credit')} {formatCurrency(editValidation.totalCredit, 'SEK')}
                       </div>
                     </div>
 
                     {!editValidation.isBalanced && (
                       <p className="text-xs text-destructive">
                         {t('booking_unbalanced', {
-                          diff: formatCurrency(Math.abs(editValidation.diff), transaction.currency),
+                          diff: formatCurrency(Math.abs(editValidation.diff), 'SEK'),
                         })}
                       </p>
                     )}

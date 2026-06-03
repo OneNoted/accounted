@@ -116,32 +116,38 @@ export const POST = withRouteContext(
         ? txAmountAbs
         : invoice.remaining_amount
 
-    // Actual SEK leaving the bank — what really moved out of 1930. For a
-    // SEK transaction this is just the absolute amount; for a foreign-
-    // currency transaction we use the SEK conversion stored at import.
-    const actualBankSek =
+    // SEK that actually left the bank, when we know it. SEK transaction → the
+    // absolute amount; foreign transaction with a stored amount_sek → that
+    // value; foreign transaction WITHOUT amount_sek → unknown (null). The raw
+    // foreign amount must never stand in here — treating 19 USD as 19 SEK is
+    // exactly the bug that books "19 kr" on a ~175 kr payment.
+    const bankSekStored =
       transaction.currency === 'SEK'
         ? txAmountAbs
-        : (transaction.amount_sek != null
-            ? Math.abs(transaction.amount_sek)
-            : txAmountAbs)
+        : transaction.amount_sek != null
+          ? Math.abs(transaction.amount_sek)
+          : null
 
-    // SEK value that's actually sitting on 2440 for this payment portion:
+    // SEK the invoice was booked at for this payment portion:
     //   - SEK invoice: face value = paymentAmountInvoiceCurrency
     //   - Non-SEK invoice w/ exchange_rate: portion × rate
-    //   - Non-SEK invoice w/o exchange_rate: can't compute precisely; fall
-    //     back to actualBankSek (no FX diff, plain SEK booking)
-    // FX diff hits 7960/3960 so 2440 clears cleanly instead of leaving a
-    // residual. Triggered whenever bank-paid SEK differs from booked SEK —
-    // happens for any currency mismatch (SEK→EUR, EUR→SEK, EUR→USD), not
-    // just non-SEK invoices.
+    //   - Non-SEK invoice w/o exchange_rate: can't compute (null)
     const invoiceFxRate = invoice.exchange_rate ?? null
-    const originalBookedSek =
+    const bookedSek =
       invoice.currency === 'SEK'
         ? paymentAmountInvoiceCurrency
         : invoiceFxRate && invoiceFxRate > 0
           ? Math.round(paymentAmountInvoiceCurrency * invoiceFxRate * 100) / 100
-          : actualBankSek
+          : null
+
+    // Actual SEK leaving the bank. Prefer the stored bank figure; if a foreign
+    // transaction has no amount_sek, fall back to the invoice's booked SEK so
+    // the magnitude is right (→ exchangeRateDifference 0, i.e. "no independent
+    // bank figure to reconcile against"). Last resort, with no invoice rate
+    // either, is the raw amount. The FX diff hits 7960/3960 so 2440 clears
+    // cleanly whenever bank-paid SEK genuinely differs from booked SEK.
+    const actualBankSek = bankSekStored ?? bookedSek ?? txAmountAbs
+    const originalBookedSek = bookedSek ?? actualBankSek
 
     // Positive = gain (AP credited at more SEK than the bank actually paid).
     // Negative = loss (bank paid more SEK than the AP we owed).
@@ -171,15 +177,24 @@ export const POST = withRouteContext(
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
 
+    // A full settlement pays off the whole remaining balance. Cross-currency
+    // matches always do (paymentAmountInvoiceCurrency is clamped to
+    // invoice.remaining_amount above); same-currency does when the bank amount
+    // covers the remaining balance.
+    const fullSettlement =
+      transaction.currency !== invoice.currency ||
+      txAmountAbs >= invoice.remaining_amount - 0.005
+
     // Cash method (kontantmetoden) collapses registration + payment into a
-    // single entry that credits 1930 at sum(expenses_SEK). It has no
-    // exchange_rate_difference path — if the actual bank SEK differs from
-    // the invoice's booked SEK, the 1930 credit won't match the bank
-    // transaction and we'd silently leave a reconciliation gap. Block the
-    // combination and ask the user to switch to accrual or do a manual JE.
-    // Only applies to true cash-method invoices — accrual-booked invoices
-    // never hit the cash branch.
-    if (useCashEntry && exchangeRateDifference !== 0) {
+    // single entry. Under the cash method the expense is recognised AT PAYMENT
+    // at the payment-date rate, so there is no kursvinst/kursförlust — we hand
+    // the builder the actual bank SEK (settledBankSek) and it translates the
+    // whole verifikat to that, leaving 1930 equal to the bank transaction.
+    // The only combination we still can't model is a PARTIAL cash-method
+    // payment across rates: the cash builder books the full invoice, so a
+    // partial bank amount can't pin the entry cleanly. That narrow case stays
+    // blocked (switch to accrual or book manually).
+    if (useCashEntry && exchangeRateDifference !== 0 && !fullSettlement) {
       return errorResponseFromCode('MATCH_SI_CASH_FX_UNSUPPORTED', txLog, {
         requestId,
         details: {
@@ -229,6 +244,12 @@ export const POST = withRouteContext(
           (invoice.items || []) as SupplierInvoiceItem[],
           transaction.date,
           invoice.supplier?.supplier_type || 'swedish_business',
+          undefined, // supplierName (unchanged default)
+          undefined, // paymentAccount (unchanged default 1930)
+          // Pin a foreign-currency settlement to the payment-date rate so 1930
+          // equals the bank movement (kontantmetoden books the expense at
+          // payment). No-op for SEK invoices and same-rate settlements.
+          exchangeRateDifference !== 0 && fullSettlement ? actualBankSek : undefined,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else {
