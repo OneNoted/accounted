@@ -217,4 +217,24 @@ describe('POST /api/invoices/self-billed', () => {
     expect(status).toBe(400)
     expect(mockSupabase.from).toHaveBeenCalledWith('invoices')
   })
+
+  it('rejects a foreign-currency self-billed invoice when no FX rate is available', async () => {
+    mockDomesticVat()
+    // fetchExchangeRate is mocked to resolve null (rate unavailable for the
+    // invoice date). Booking would otherwise fall through to a silent 1:1 SEK
+    // conversion, so the route must refuse up front — before any insert.
+    enqueue({ data: makeCustomer({ id: VALID_UUID }), error: null }) // fetch customer
+
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: { ...validBody, currency: 'EUR' },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ type: string; error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/växelkurs/i)
+    // Never books a wrong-magnitude verifikat and never inserts the invoice.
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
 })

@@ -114,13 +114,30 @@ export const POST = withRouteContext(
     let totalSek: number | null = null
     if (input.currency !== 'SEK') {
       const rateData = await fetchExchangeRate(input.currency, new Date(input.invoice_date))
-      if (rateData) {
-        exchangeRate = rateData.rate
-        exchangeRateDate = rateData.date
-        subtotalSek = convertToSEK(subtotal, exchangeRate)
-        vatAmountSek = convertToSEK(vatAmount, exchangeRate)
-        totalSek = convertToSEK(total, exchangeRate)
+      if (!rateData) {
+        // No FX rate for the invoice date — refuse rather than letting the
+        // booking fall through to resolveSekAmount's legacy 1:1 fallback, which
+        // would treat e.g. 1 000 USD as 1 000 SEK and commit a balanced but
+        // silently wrong-magnitude verifikat. ML 7 kap 7§ requires the
+        // invoice-date rate; we never substitute today's. The user can retry
+        // once the rate is published.
+        log.warn('self-billed invoice rejected: no FX rate for invoice date', {
+          currency: input.currency,
+          invoiceDate: input.invoice_date,
+        })
+        return NextResponse.json(
+          {
+            error: `Kunde inte hämta växelkurs för ${input.currency} på fakturadatumet (${input.invoice_date}). Försök igen senare.`,
+            type: 'validation_error',
+          },
+          { status: 400 },
+        )
       }
+      exchangeRate = rateData.rate
+      exchangeRateDate = rateData.date
+      subtotalSek = convertToSEK(subtotal, exchangeRate)
+      vatAmountSek = convertToSEK(vatAmount, exchangeRate)
+      totalSek = convertToSEK(total, exchangeRate)
     }
 
     const { data: invoice, error: invoiceError } = await supabase
@@ -232,11 +249,21 @@ export const POST = withRouteContext(
             { status: 400 },
           )
         }
-        await supabase
+        const { error: linkError } = await supabase
           .from('invoices')
           .update({ journal_entry_id: journalEntry.id })
           .eq('id', invoice.id)
           .eq('company_id', companyId!)
+        if (linkError) {
+          // The verifikat is already committed (immutable) — don't roll it back
+          // over a failed convenience link. Log loudly: this is the exact write
+          // that silently no-ops if the journal_entry_id column is ever missing
+          // again (it was absent in prod for months before 20260613100000).
+          log.error('self-billed invoice booked but journal_entry_id link failed', linkError, {
+            invoiceId: invoice.id,
+            journalEntryId: journalEntry.id,
+          })
+        }
       } catch (err) {
         await supabase.from('invoices').delete().eq('id', invoice.id)
         log.error('failed to book self-billed invoice; rolled back', err as Error, { invoiceId: invoice.id })

@@ -1245,6 +1245,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'SIE-export stöds för närvarande endast för Fortnox.',
     message_en: 'SIE export is currently only supported for Fortnox.',
   },
+  PROVIDER_SIE_IMPORT_REQUIRED: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringsdata (SIE) måste importeras först. Ladda upp en SIE-fil med kontoplan, ingående balanser och verifikationer innan du hämtar kunder, leverantörer och fakturor från den här leverantören.',
+    message_en:
+      'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers and invoices from this provider.',
+  },
   PROVIDER_MIGRATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Migrationen från leverantören misslyckades.',

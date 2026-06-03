@@ -103,10 +103,18 @@ export async function POST(
       )
       if (journalEntry) {
         journalEntryId = journalEntry.id
-        await supabase
+        const { error: linkError } = await supabase
           .from('invoices')
           .update({ journal_entry_id: journalEntry.id })
           .eq('id', id)
+        if (linkError) {
+          // Don't fail mark-sent — the verifikat committed; only the link
+          // failed. But log it: this write silently no-ops when the
+          // journal_entry_id column is missing (it was absent in prod until the
+          // 20260613100000 migration), which leaves mark-paid unable to detect
+          // an already-booked sale.
+          console.error('mark-sent: failed to link journal_entry_id to invoice:', linkError)
+        }
       }
     } catch (err) {
       console.error('Failed to create invoice journal entry on mark-sent:', err)

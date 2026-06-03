@@ -1025,6 +1025,30 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
+          // ── Guard: a completed SIE import is required before entity import ──
+          // Every provider except Fortnox exposes ONLY entity data (customers,
+          // suppliers, invoices) via API — never the general ledger. Fortnox pulls
+          // the GL itself via SIE-over-API. Importing entities without the
+          // SIE-derived ledger (kontoplan, ingående balanser, verifikationer)
+          // would leave an incomplete bokföring under BFL: a subledger with no
+          // chart of accounts and no opening balances, so every subsequent posting
+          // and balance is wrong. The wizard surfaces this as an advisory banner,
+          // but it must be enforced here so the rule cannot be bypassed by a direct
+          // API call, a skipped wizard step, or a stale client.
+          if (consent.provider !== 'fortnox') {
+            const { count: completedSieImports } = await supabase
+              .from('sie_imports')
+              .select('id', { count: 'exact', head: true })
+              .eq('company_id', companyId)
+              .eq('status', 'completed')
+
+            if (!completedSieImports || completedSieImports < 1) {
+              return errorResponseFromCode('PROVIDER_SIE_IMPORT_REQUIRED', moduleLog, {
+                details: { provider: consent.provider },
+              })
+            }
+          }
+
           log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
 
           const results = await executeMigration({
