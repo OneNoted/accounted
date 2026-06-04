@@ -2387,6 +2387,10 @@ export async function executeSIEImport(
         manual: mappingStats.manual,
         unmapped: mappingStats.unmapped,
       },
+      // Behandlingshistorik for #KONTO renames applied by this import
+      // (BFNAR 2013:2 — the warnings array only carries the count).
+      accountRenames:
+        accountSync.renamedAccounts.length > 0 ? accountSync.renamedAccounts : undefined,
       vouchers: voucherStats,
       openingBalanceRounding: ibRoundingAdjustment !== 0 ? ibRoundingAdjustment : null,
       migrationAdjustment: migrationAdjustmentInfo,

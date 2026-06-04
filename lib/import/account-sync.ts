@@ -190,25 +190,43 @@ export async function syncMappedAccounts(
     result.created = missing.length
   }
 
-  // Rename pass: carry the file's names into existing accounts.
+  // Rename pass: carry the file's names into existing accounts. The diff set
+  // is small (only names that actually changed), so the UPDATEs run
+  // concurrently in bounded batches — a full-chart re-sync must not serialize
+  // N round trips, but also must not stampede the API with 1000+ in flight.
   if (updateAccountNames) {
+    const renames: Array<{ num: string; from: string; to: string }> = []
     for (const [num, currentName] of existingByNumber) {
       const desired = desiredNames.get(num)
-      if (!desired || desired === currentName) continue
-
-      const { error: updateError } = await supabase
-        .from('chart_of_accounts')
-        .update({ account_name: desired })
-        .eq('company_id', companyId)
-        .eq('account_number', num)
-
-      if (updateError) {
-        // Non-fatal: the import is still correct with the old name.
-        result.renameFailed++
-        continue
+      if (desired && desired !== currentName) {
+        renames.push({ num, from: currentName, to: desired })
       }
-      result.renamed++
-      result.renamedAccounts.push({ accountNumber: num, from: currentName, to: desired })
+    }
+
+    const RENAME_BATCH_SIZE = 25
+    for (let i = 0; i < renames.length; i += RENAME_BATCH_SIZE) {
+      const batch = renames.slice(i, i + RENAME_BATCH_SIZE)
+      const outcomes = await Promise.allSettled(
+        batch.map(async ({ num, to }) => {
+          const { error: updateError } = await supabase
+            .from('chart_of_accounts')
+            .update({ account_name: to })
+            .eq('company_id', companyId)
+            .eq('account_number', num)
+          if (updateError) throw new Error(updateError.message)
+        })
+      )
+
+      outcomes.forEach((outcome, idx) => {
+        if (outcome.status === 'rejected') {
+          // Non-fatal: the import is still correct with the old name.
+          result.renameFailed++
+          return
+        }
+        result.renamed++
+        const { num, from, to } = batch[idx]
+        result.renamedAccounts.push({ accountNumber: num, from, to })
+      })
     }
   }
 

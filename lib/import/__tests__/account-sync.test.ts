@@ -399,6 +399,33 @@ describe('syncMappedAccounts — rename pass', () => {
     expect(result.renamed).toBe(1)
   })
 
+  it('renames multiple accounts concurrently and aggregates per-account results', async () => {
+    const { supabase, updates } = buildCapturingSupabase({
+      existingAccounts: [
+        { account_number: '1930', account_name: 'Gammalt bankkonto' },
+        { account_number: '1510', account_name: 'Gamla kundfordringar' },
+        { account_number: '2440', account_name: 'Leverantörsskulder' },
+      ],
+    })
+
+    const result = await run(supabase, [
+      mapping({ sourceAccount: '1930', targetAccount: '1930', sourceName: 'Företagskonto Swedbank' }),
+      mapping({ sourceAccount: '1510', targetAccount: '1510', sourceName: 'Kundfordringar SEK' }),
+      // Unchanged name — must not produce an UPDATE.
+      mapping({ sourceAccount: '2440', targetAccount: '2440', sourceName: 'Leverantörsskulder' }),
+    ])
+
+    expect(updates).toHaveLength(2)
+    expect(result.renamed).toBe(2)
+    expect(result.renameFailed).toBe(0)
+    expect(result.renamedAccounts.map((r) => r.accountNumber).sort()).toEqual(['1510', '1930'])
+    expect(result.renamedAccounts.find((r) => r.accountNumber === '1930')).toEqual({
+      accountNumber: '1930',
+      from: 'Gammalt bankkonto',
+      to: 'Företagskonto Swedbank',
+    })
+  })
+
   it('counts failed renames as non-fatal', async () => {
     const { supabase } = buildCapturingSupabase({
       existingAccounts: [{ account_number: '1930', account_name: 'Gammalt namn' }],
