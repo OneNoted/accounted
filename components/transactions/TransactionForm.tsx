@@ -4,7 +4,8 @@ import { useEffect, useMemo } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { format, parseISO, isValid } from 'date-fns'
+import { format } from 'date-fns'
+import { isSaneDateString } from '@/lib/utils'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,17 +30,11 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
         date: z
           .string()
           .min(1, t('date_required'))
-          // Native <input type="date"> normally emits 'YYYY-MM-DD', but its
-          // year subfield accepts up to 6 digits — over-typing produces
-          // '202403-02-05' (year 202403), which Postgres stores happily and
-          // which then crashes every date formatter. Require a 4-digit year
-          // and a real, in-range calendar date.
-          .refine((s) => {
-            if (!s) return true // empty handled by .min above
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
-            const d = parseISO(s)
-            return isValid(d) && d.getFullYear() >= 1900 && d.getFullYear() <= 2100
-          }, t('date_invalid')),
+          // Single source of truth for the date rule, shared with the server
+          // CreateTransactionSchema: rejects the 6-digit-year corruption a
+          // native date input can emit ('202403-02-05') plus impossible /
+          // out-of-range dates.
+          .refine((s) => !s || isSaneDateString(s), t('date_invalid')),
         description: z.string().min(1, t('description_required')),
         amount: z.number().refine((n) => n !== 0, t('amount_required')),
         currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),

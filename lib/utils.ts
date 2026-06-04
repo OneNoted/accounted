@@ -6,6 +6,15 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Shown by the date formatters when handed an Invalid Date. We fail closed —
+ * render a neutral placeholder rather than the raw malformed string — so a
+ * corrupted value is never surfaced to the UI, and never throws either. After
+ * the server validation + DB CHECK landed, a bad date shouldn't reach here at
+ * all; this is the last-resort guard.
+ */
+const INVALID_DATE_PLACEHOLDER = '—'
+
 export function formatCurrency(amount: number, currency: string = 'SEK'): string {
   return new Intl.NumberFormat('sv-SE', {
     style: 'currency',
@@ -26,8 +35,23 @@ export function formatDate(date: Date | string): string {
   // Date, and date-fns `format` THROWS a RangeError on that. One bad row must
   // never crash an entire route via the error boundary — degrade to the raw
   // input instead.
-  if (!isValid(d)) return typeof date === 'string' ? date : ''
+  if (!isValid(d)) return INVALID_DATE_PLACEHOLDER
   return formatDateFns(d, 'yyyy-MM-dd')
+}
+
+/**
+ * True when `s` is a real, in-range calendar date in `YYYY-MM-DD` form.
+ *
+ * The shape check (4-digit year) is what stops the native <input type="date">
+ * 6-digit-year corruption ('202403-02-05'); the parse + range check also
+ * rejects impossible dates (2024-13-40) and absurd years. Exported as the ONE
+ * authoritative date rule shared by the client form and the server-side
+ * CreateTransactionSchema, so the two validation layers can never drift.
+ */
+export function isSaneDateString(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const d = parseISO(s)
+  return isValid(d) && d.getFullYear() >= 1900 && d.getFullYear() <= 2100
 }
 
 /**
@@ -39,7 +63,7 @@ export function formatDate(date: Date | string): string {
  */
 export function formatDateTime(date: Date | string): string {
   const d = typeof date === 'string' ? parseISO(date) : date
-  if (!isValid(d)) return typeof date === 'string' ? date : ''
+  if (!isValid(d)) return INVALID_DATE_PLACEHOLDER
   return formatDateFns(d, 'yyyy-MM-dd HH:mm')
 }
 
@@ -83,7 +107,7 @@ export function formatWholeKr(amount: number): string {
  */
 export function formatDateLong(date: Date | string, locale: string = 'sv'): string {
   const d = typeof date === 'string' ? parseISO(date) : date
-  if (!isValid(d)) return typeof date === 'string' ? date : ''
+  if (!isValid(d)) return INVALID_DATE_PLACEHOLDER
   const intlLocale = locale === 'en' ? 'en-US' : 'sv-SE'
   return d.toLocaleDateString(intlLocale, {
     day: 'numeric',
