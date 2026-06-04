@@ -85,20 +85,25 @@ export async function syncInvoiceStatusFromPaymentEntry(
         .eq('company_id', companyId)
     }
 
-    // Remove the payment row(s) tied to the reversed voucher so a re-match of
-    // the same bank line doesn't double-count or trip the unique index on
-    // supplier_invoice_payments. Capture the linked transaction id first so the
-    // bank line can be released back to the inbox.
+    // Remove THIS invoice's payment row tied to the reversed voucher so a
+    // re-match of the same bank line doesn't double-count or trip the unique
+    // index on supplier_invoice_payments. Scoped to the source invoice — a
+    // batch voucher carries sibling rows for other invoices whose status this
+    // call does not restore, so deleting them here would desync paid_amount
+    // from the payment rows (PR #666 review, SOC 2 CC6.3). Capture the linked
+    // transaction id first so the bank line can be released back to the inbox.
     const { data: spRows } = await supabase
       .from('supplier_invoice_payments')
       .select('transaction_id')
       .eq('journal_entry_id', entryId)
+      .eq('supplier_invoice_id', entry.source_id)
       .eq('company_id', companyId)
 
     await supabase
       .from('supplier_invoice_payments')
       .delete()
       .eq('journal_entry_id', entryId)
+      .eq('supplier_invoice_id', entry.source_id)
       .eq('company_id', companyId)
 
     await releaseLinkedTransactions(
@@ -161,19 +166,23 @@ export async function syncInvoiceStatusFromPaymentEntry(
         .in('status', ['paid', 'partially_paid'])
     }
 
-    // Remove the payment row(s) tied to the reversed voucher so a re-match of
-    // the same bank line doesn't trip the (transaction_id, invoice_id) /
-    // (journal_entry_id, invoice_id) unique indexes on invoice_payments.
+    // Remove THIS invoice's payment row tied to the reversed voucher so a
+    // re-match of the same bank line doesn't trip the (transaction_id,
+    // invoice_id) / (journal_entry_id, invoice_id) unique indexes on
+    // invoice_payments. Scoped to the source invoice — see the supplier
+    // branch comment for the batch-voucher rationale.
     const { data: ipRows } = await supabase
       .from('invoice_payments')
       .select('transaction_id')
       .eq('journal_entry_id', entryId)
+      .eq('invoice_id', entry.source_id)
       .eq('company_id', companyId)
 
     await supabase
       .from('invoice_payments')
       .delete()
       .eq('journal_entry_id', entryId)
+      .eq('invoice_id', entry.source_id)
       .eq('company_id', companyId)
 
     await releaseLinkedTransactions(
@@ -215,11 +224,12 @@ async function releaseLinkedTransactions(
     category: null,
   }
 
-  const { error: byEntryError } = await supabase
+  const { data: releasedByEntry, error: byEntryError } = await supabase
     .from('transactions')
     .update(resetFields)
     .eq('company_id', companyId)
     .eq('journal_entry_id', entryId)
+    .select('id')
   if (byEntryError) {
     // Best-effort like the rest of the sync — the storno itself already
     // committed — but a failed release leaves the bank line stuck on a
@@ -228,20 +238,37 @@ async function releaseLinkedTransactions(
       companyId,
       journalEntryId: entryId,
     })
+  } else if (releasedByEntry && releasedByEntry.length > 0) {
+    // transactions has no write_audit_log trigger, so the clearing of the
+    // link/categorization columns is logged here for incident reconstruction.
+    log.info('Released bank transactions from reversed payment voucher', {
+      companyId,
+      journalEntryId: entryId,
+      invoiceColumn,
+      transactionIds: releasedByEntry.map((r) => (r as { id: string }).id),
+    })
   }
 
   const txIds = paymentTransactionIds.filter((id): id is string => !!id)
   if (txIds.length > 0) {
-    const { error: byIdError } = await supabase
+    const { data: releasedById, error: byIdError } = await supabase
       .from('transactions')
       .update(resetFields)
       .eq('company_id', companyId)
       .in('id', txIds)
+      .select('id')
     if (byIdError) {
       log.error('Failed to release transactions by payment transaction ids', byIdError, {
         companyId,
         journalEntryId: entryId,
         transactionIds: txIds,
+      })
+    } else if (releasedById && releasedById.length > 0) {
+      log.info('Released payment-linked bank transactions from reversed voucher', {
+        companyId,
+        journalEntryId: entryId,
+        invoiceColumn,
+        transactionIds: releasedById.map((r) => (r as { id: string }).id),
       })
     }
   }

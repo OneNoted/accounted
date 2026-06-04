@@ -718,7 +718,9 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
-  if (invoice.status === 'sent' || invoice.status === 'paid' || invoice.status === 'overdue') {
+  // partially_paid/credited imply the invoice was already issued too — the
+  // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
+  if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
     return { error: 'Invoice has already been sent', status: 409 }
   }
   // A cancelled invoice keeps its F-series number for ML 17 kap 24§ compliance

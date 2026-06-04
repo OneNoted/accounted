@@ -18,6 +18,12 @@
 -- (LinkInvoiceToVoucherSchema / LinkSupplierInvoiceToVoucherSchema) enforces on
 -- the API path — direct PostgREST callers could otherwise insert unbounded text.
 --
+-- And pins payment-row attribution (GDPR Art. 32): for user-session callers the
+-- JWT sub is authoritative for invoice_payments.user_id — a direct PostgREST
+-- caller could otherwise attribute financial records to an arbitrary user via
+-- p_user_id. service_role / direct callers keep p_user_id verbatim (their
+-- company + user scoping happens in the TS layer).
+--
 -- Both function bodies are otherwise identical to their previous versions.
 
 CREATE OR REPLACE FUNCTION public.link_invoice_to_voucher(
@@ -45,14 +51,21 @@ DECLARE
   v_is_fully_paid boolean;
   v_now timestamptz := now();
   v_payment_id uuid;
+  v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_acting_user uuid := p_user_id;
 BEGIN
   -- 0. Tenant guard (mirrors 20260611140000): anon/authenticated may only act
   --    on their own companies; service_role / direct access bypasses.
-  IF coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '')
-       IN ('anon', 'authenticated')
-     AND p_company_id NOT IN (SELECT public.user_company_ids())
-  THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'LINK_VOUCHER_INVOICE_NOT_FOUND');
+  IF v_jwt_role IN ('anon', 'authenticated') THEN
+    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'LINK_VOUCHER_INVOICE_NOT_FOUND');
+    END IF;
+    -- Attribution: the JWT sub is authoritative for user-session callers —
+    -- p_user_id cannot point the payment row at someone else.
+    v_acting_user := coalesce(
+      (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid,
+      p_user_id
+    );
   END IF;
 
   IF p_notes IS NOT NULL AND char_length(p_notes) > 2000 THEN
@@ -186,7 +199,7 @@ BEGIN
     user_id, company_id, invoice_id, payment_date, amount, currency,
     exchange_rate, journal_entry_id, transaction_id, notes
   ) VALUES (
-    p_user_id, p_company_id, p_invoice_id, v_voucher.entry_date,
+    v_acting_user, p_company_id, p_invoice_id, v_voucher.entry_date,
     v_payment_amount, v_invoice.currency, v_invoice.exchange_rate,
     p_journal_entry_id, NULL, p_notes
   )
@@ -231,14 +244,21 @@ DECLARE
   v_is_fully_paid boolean;
   v_now timestamptz := now();
   v_payment_id uuid;
+  v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_acting_user uuid := p_user_id;
 BEGIN
   -- Tenant guard (mirrors 20260611140000): anon/authenticated may only act on
   -- their own companies; service_role / direct access bypasses.
-  IF coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '')
-       IN ('anon', 'authenticated')
-     AND p_company_id NOT IN (SELECT public.user_company_ids())
-  THEN
-    RETURN jsonb_build_object('ok', false, 'code', 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND');
+  IF v_jwt_role IN ('anon', 'authenticated') THEN
+    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+      RETURN jsonb_build_object('ok', false, 'code', 'LINK_SI_VOUCHER_INVOICE_NOT_FOUND');
+    END IF;
+    -- Attribution: the JWT sub is authoritative for user-session callers —
+    -- p_user_id cannot point the payment row at someone else.
+    v_acting_user := coalesce(
+      (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')::uuid,
+      p_user_id
+    );
   END IF;
 
   IF p_notes IS NOT NULL AND char_length(p_notes) > 2000 THEN
@@ -337,7 +357,7 @@ BEGIN
     user_id, company_id, supplier_invoice_id, payment_date, amount, currency,
     journal_entry_id, transaction_id, notes
   ) VALUES (
-    p_user_id, p_company_id, p_supplier_invoice_id, v_voucher.entry_date,
+    v_acting_user, p_company_id, p_supplier_invoice_id, v_voucher.entry_date,
     v_payment_amount, v_invoice.currency, p_journal_entry_id, NULL, p_notes
   )
   RETURNING id INTO v_payment_id;

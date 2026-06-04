@@ -140,10 +140,20 @@ describe('voucher-link write RPCs — tenant-isolation guard', () => {
     expect(payments.rows).toHaveLength(0)
 
     // A member of company A still links successfully through the same path —
-    // the guard must not break legitimate user-session calls.
+    // the guard must not break legitimate user-session calls. The spoofed
+    // p_user_id is ignored for user-session callers: the JWT sub is
+    // authoritative for payment-row attribution (GDPR Art. 32). Asserted
+    // inside the context — withUserContext rolls its transaction back.
+    const spoofedUserId = randomUUID()
     await withUserContext(a.userId, async (client) => {
-      const res = await client.query(LINK_INVOICE, [invoiceId, voucherId, a.userId, a.companyId, null])
+      const res = await client.query(LINK_INVOICE, [invoiceId, voucherId, spoofedUserId, a.companyId, null])
       expect(res.rows[0].result).toMatchObject({ ok: true, invoice_status: 'paid' })
+      const payment = await client.query(
+        `SELECT user_id FROM public.invoice_payments WHERE invoice_id = $1`,
+        [invoiceId],
+      )
+      expect(payment.rows).toHaveLength(1)
+      expect(payment.rows[0].user_id).toBe(a.userId)
     })
   })
 
