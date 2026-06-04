@@ -429,7 +429,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isRealInvoice = docType === 'invoice'
   // Self-billing invoices we received: the document is the counterparty's, so
   // there is no own PDF to render and no send step — it arrives already booked.
-  const isSelfBilled = !!(invoice as Invoice & { is_self_billed?: boolean }).is_self_billed
+  const isSelfBilled = !!invoice.is_self_billed
   return (
     <div className="space-y-8">
       {/* Header */}

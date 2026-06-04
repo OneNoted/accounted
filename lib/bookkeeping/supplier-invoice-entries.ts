@@ -7,6 +7,7 @@ import {
   resolveReverseChargeRate,
 } from './vat-entries'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -395,11 +396,11 @@ export async function createSupplierInvoiceCashEntry(
   if (useSettlementRate && expenseLines.length > 0) {
     const debitSum = lines.reduce((sum, l) => sum + l.debit_amount, 0)
     const creditSum = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    const provisionalCredit = Math.round((debitSum - creditSum) * 100) / 100
-    const residual = Math.round((settledBankSek! - provisionalCredit) * 100) / 100
+    const provisionalCredit = roundOre(debitSum - creditSum)
+    const residual = roundOre(settledBankSek! - provisionalCredit)
     if (residual !== 0 && Math.abs(residual) <= 1) {
       const target = expenseLines.reduce((a, b) => (b.debit_amount >= a.debit_amount ? b : a))
-      target.debit_amount = Math.round((target.debit_amount + residual) * 100) / 100
+      target.debit_amount = roundOre(target.debit_amount + residual)
     }
   }
 

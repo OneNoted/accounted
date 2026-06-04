@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 
 /**
@@ -21,9 +21,11 @@ import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
  * input — the create action rejects that separately as `org_number_invalid`.
  */
 export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // requireAuth() (not a raw getUser()) so MFA AAL2 is enforced on hosted before
+  // we run the account-scoped lookup. The returned client carries the caller's
+  // RLS context, which is what scopes the companies SELECT below.
+  const { supabase, error: authError } = await requireAuth()
+  if (authError) return authError
 
   const url = new URL(request.url)
   const raw = url.searchParams.get('org_number') ?? ''

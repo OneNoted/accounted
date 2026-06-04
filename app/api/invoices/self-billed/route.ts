@@ -7,6 +7,7 @@ import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { roundOre } from '@/lib/money'
 import type { EntityType, Invoice } from '@/types'
 
 ensureInitialized()
@@ -62,9 +63,11 @@ export const POST = withRouteContext(
 
     // The issuer of a self-billing invoice is, in our books, the customer we
     // sold to. Require an existing customer row so VAT rules + reporting work.
+    // Project only the fields used below (data minimisation — GDPR Art. 25 /
+    // SOC 2 CC6.3): VAT treatment derivation and the verifikat description.
     const { data: customer, error: customerError } = await supabase
       .from('customers')
-      .select('*')
+      .select('id, name, customer_type, vat_number_validated')
       .eq('id', input.customer_id)
       .eq('company_id', companyId!)
       .single()
@@ -96,11 +99,11 @@ export const POST = withRouteContext(
         })
       }
       const lineTotal = item.quantity * item.unit_price
-      vatAmount += Math.round((lineTotal * itemRate) / 100 * 100) / 100
+      vatAmount += roundOre((lineTotal * itemRate) / 100)
     }
 
     const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
-    const total = Math.round((subtotal + vatAmount) * 100) / 100
+    const total = roundOre(subtotal + vatAmount)
 
     const uniqueRates = new Set(input.items.map((item) => item.vat_rate ?? vatRules.rate))
     const isMixedRate = uniqueRates.size > 1
@@ -197,13 +200,14 @@ export const POST = withRouteContext(
         unit_price: item.unit_price,
         line_total: lineTotal,
         vat_rate: itemRate,
-        vat_amount: Math.round((lineTotal * itemRate) / 100 * 100) / 100,
+        vat_amount: roundOre((lineTotal * itemRate) / 100),
       }
     })
 
     const { error: itemsError } = await supabase.from('invoice_items').insert(items)
     if (itemsError) {
-      // Cascade-deletes the items too.
+      // The item insert failed, so nothing was written there — just remove the
+      // orphaned invoice header.
       await supabase.from('invoices').delete().eq('id', invoice.id)
       log.error('self-billed invoice items insert failed; rolled back', itemsError, { invoiceId: invoice.id })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, {
@@ -230,6 +234,19 @@ export const POST = withRouteContext(
     // 30xx + 26xx). Kontantmetoden: leave unbooked until payment, exactly like a
     // normal invoice — the mark-paid flow books the cash entry then.
     if (accountingMethod === 'accrual') {
+      if (!completeInvoice) {
+        // The row was inserted but the re-fetch came back empty (transient DB
+        // issue). Roll back rather than crash on a null cast inside the engine —
+        // and surface it as a fetch failure, not an opaque booking error.
+        await supabase.from('invoices').delete().eq('id', invoice.id)
+        log.error('self-billed invoice re-fetch returned no row before booking; rolled back', undefined, {
+          invoiceId: invoice.id,
+        })
+        return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', log, {
+          requestId,
+          details: { stage: 'refetch_before_booking' },
+        })
+      }
       try {
         const journalEntry = await createInvoiceJournalEntry(
           supabase,
@@ -277,12 +294,18 @@ export const POST = withRouteContext(
       .eq('id', invoice.id)
       .single()
 
+    // The invoice is committed (and, under accrual, booked) by this point. If the
+    // final re-fetch comes back empty under transient load, fall back to the
+    // shapes we already hold so the 200 always carries a usable id — otherwise
+    // the client's redirect to /invoices/{id} would throw on a null result.
+    const responseInvoice = (finalInvoice ?? completeInvoice ?? invoice) as Invoice
+
     await eventBus.emit({
       type: 'invoice.created',
-      payload: { invoice: finalInvoice as Invoice, companyId: companyId!, userId: user.id },
+      payload: { invoice: responseInvoice, companyId: companyId!, userId: user.id },
     })
 
-    return NextResponse.json({ data: finalInvoice })
+    return NextResponse.json({ data: responseInvoice })
   },
   { requireWrite: true },
 )

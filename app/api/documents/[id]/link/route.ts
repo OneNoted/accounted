@@ -45,7 +45,7 @@ export const POST = withRouteContext(
       )
 
       if (body.inbox_item_id) {
-        const { error: inboxError } = await supabase
+        const { data: stamped, error: inboxError } = await supabase
           .from('invoice_inbox_items')
           .update({ created_journal_entry_id: body.journal_entry_id })
           .eq('id', body.inbox_item_id)
@@ -54,11 +54,20 @@ export const POST = withRouteContext(
           // mismatched pairing becomes a safe no-op rather than mis-marking an
           // unrelated item as consumed.
           .eq('document_id', id)
+          .select('id')
         if (inboxError) {
           // Non-fatal — the verifikat ↔ underlag link already succeeded.
           opLog.warn('inbox item stamp after link failed', {
             inboxItemId: body.inbox_item_id,
             reason: inboxError.message,
+          })
+        } else if (!stamped || stamped.length === 0) {
+          // Zero rows updated means the supplied inbox_item_id / document_id
+          // pairing did not match (wrong company, wrong document, or a stale
+          // id). The doc link itself still succeeded; surface the cross-resource
+          // mismatch as an observable warning rather than silently ignoring it.
+          opLog.warn('inbox item stamp matched no rows (cross-resource mismatch)', {
+            inboxItemId: body.inbox_item_id,
           })
         }
       }

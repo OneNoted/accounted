@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge'
 import { AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
@@ -122,7 +123,7 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
     // Credit-normal accounts (liabilities/equity class 2, revenue class 3): positive when credit > debit
     // Debit-normal accounts (assets class 1, expenses class 4-9): positive when debit > credit
     const creditNormal = row.account_class === 2 || row.account_class === 3
-    return Math.round((creditNormal ? credit - debit : debit - credit) * 100) / 100
+    return roundOre(creditNormal ? credit - debit : debit - credit)
   }
 
   function formatSigned(amount: number): string {
