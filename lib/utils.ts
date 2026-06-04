@@ -25,6 +25,48 @@ export function formatDate(date: Date | string): string {
 }
 
 /**
+ * Date + time for audit / metadata displays: `2026-05-11 14:30`. ISO-ordered
+ * and locale-independent (sortable, unambiguous), matching `formatDate`'s
+ * accounting convention. Use for "created at" / "last synced" timestamps. For
+ * date-only accounting values use `formatDate`; for friendly long-form metadata
+ * dates use `formatDateLong`.
+ */
+export function formatDateTime(date: Date | string): string {
+  const d = typeof date === 'string' ? parseISO(date) : date
+  return formatDateFns(d, 'yyyy-MM-dd HH:mm')
+}
+
+/**
+ * Bare amount with sv-SE grouping and exactly two decimals, no currency symbol:
+ * `1234.5` → `1 234,50`. Use in table cells / inputs where the column header or
+ * surrounding context already conveys "kr" and `formatCurrency`'s symbol would
+ * be noise. Stays sv-SE in both locales (Swedish accounting convention, not a
+ * UI string) — same rule as `formatCurrency`. When you need the SEK symbol, use
+ * `formatCurrency`.
+ */
+export function formatAmount(amount: number): string {
+  return new Intl.NumberFormat('sv-SE', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount)
+}
+
+/**
+ * Whole-krona amount, no decimals, sv-SE grouping: `1234.56` → `1 235`. For
+ * compact KPI tiles and rounded summaries.
+ *
+ * NOTE: not for statutory output. INK2 / NE-bilaga / SRU require *truncation*
+ * (`Math.trunc`) per SFL 22:1, not rounding — use the dedicated SRU formatter
+ * for those surfaces.
+ */
+export function formatWholeKr(amount: number): string {
+  return new Intl.NumberFormat('sv-SE', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount)
+}
+
+/**
  * Long-form date for metadata/audit contexts (e.g. "9 maj 2026" / "May 9, 2026").
  * Use formatDate for transaction/voucher/invoice dates that need to align in tables.
  *

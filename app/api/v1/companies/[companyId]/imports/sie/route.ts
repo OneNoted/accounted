@@ -62,7 +62,7 @@ registerEndpoint({
   description:
     'Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as the request body, parses it, checks for duplicate imports by file-hash, and replays every #VER + #TRANS into the company\'s bookkeeping. Returns an `operation_id` immediately — poll `GET /api/v1/operations/{id}` for status + final result. The byte-equivalent dashboard route at /api/import/sie/execute backs the same lib helper, so a SIE imported via v1 matches what the dashboard would produce.',
   useWhen:
-    'Migrating bookkeeping data from another system (Fortnox, Bokio, Visma) into gnubok, restoring from a backup .se file, or recreating a period from an archive.',
+    'Migrating bookkeeping data from another system (Fortnox, Bokio, Visma) into Accounted, restoring from a backup .se file, or recreating a period from an archive.',
   doNotUseFor:
     'Bank transaction CSV/XML imports (use POST /imports/bank). Single-voucher creation (use POST /journal-entries). Importing into a period that already has posted entries — SIE imports run on a fresh period.',
   pitfalls: [

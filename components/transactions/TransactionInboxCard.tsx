@@ -97,7 +97,7 @@ export default function TransactionInboxCard({
   // upload POST succeeds, without waiting for the parent to refetch. The
   // next parent refresh will sync; in the meantime the user sees the
   // correct visual state immediately. Same hook handles agent-chat uploads
-  // via the gnubok:transaction-document-linked window event (AgentChat
+  // via the Accounted:transaction-document-linked window event (AgentChat
   // dispatches it after /api/agent/upload returns).
   const [optimisticDocumentId, setOptimisticDocumentId] = useState<string | null>(null)
   useEffect(() => {
@@ -106,8 +106,8 @@ export default function TransactionInboxCard({
       if (!detail || detail.transaction_id !== transaction.id || !detail.document_id) return
       setOptimisticDocumentId(detail.document_id)
     }
-    window.addEventListener('gnubok:transaction-document-linked', onLinked)
-    return () => window.removeEventListener('gnubok:transaction-document-linked', onLinked)
+    window.addEventListener('Accounted:transaction-document-linked', onLinked)
+    return () => window.removeEventListener('Accounted:transaction-document-linked', onLinked)
   }, [transaction.id])
   const attachedDocumentId =
     optimisticDocumentId ?? (transaction as { document_id?: string | null }).document_id ?? null

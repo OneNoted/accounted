@@ -24,6 +24,7 @@ import {
   amountsMatchFuzzy,
   customerNameMatches,
 } from './invoice-matching'
+import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import type { Invoice, Customer } from '@/types'
 
 const log = createLogger('voucher-matching')
@@ -460,6 +461,10 @@ export interface LinkInvoiceToVoucherResult {
   remainingAmount: number
   paymentAmount: number
   journalEntryId: string
+  /** Bank transaction auto-reconciled to the linked voucher, if exactly one
+   *  unbooked line matched it; null when nothing was safely linkable. Lets the
+   *  inbox row leave the Transactions list — the gap this whole flow fixes. */
+  reconciledTransactionId: string | null
 }
 
 /**
@@ -602,6 +607,30 @@ export async function linkInvoiceToVoucher(
     /* non-critical */
   }
 
+  // Close the loop on the bank feed: the invoice→voucher link above only
+  // advanced the invoice, so the bank transaction that paid it kept sitting in
+  // the Transactions inbox (journal_entry_id still null). Reconcile it to the
+  // same verifikat when it can be done unambiguously. Best-effort — the invoice
+  // link has already committed, so a failure here must not fail the whole call.
+  let reconciledTransactionId: string | null = null
+  try {
+    const recon = await autoReconcileTransactionForLinkedVoucher(
+      supabase,
+      companyId,
+      userId,
+      params.journalEntryId,
+      { invoiceId: params.invoiceId },
+    )
+    reconciledTransactionId = recon?.linkedTransactionId ?? null
+  } catch (err) {
+    log.warn('auto-reconcile of bank transaction after voucher link failed (non-blocking)', {
+      companyId,
+      invoiceId: params.invoiceId,
+      journalEntryId: params.journalEntryId,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   return {
     ok: true,
     result: {
@@ -611,6 +640,7 @@ export async function linkInvoiceToVoucher(
       remainingAmount: newRemaining,
       paymentAmount: validation.paymentAmount,
       journalEntryId: params.journalEntryId,
+      reconciledTransactionId,
     },
   }
 }

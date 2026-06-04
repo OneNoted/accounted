@@ -140,7 +140,7 @@ interface SIEFileStatus {
   alreadyImported: boolean
   importedAt: string | null
   // New (period-based) detection. When present, this fiscal year already has a
-  // completed import in gnubok and a re-sync will replace it (cancelling the
+  // completed import in Accounted and a re-sync will replace it (cancelling the
   // imported journal entries; user-created entries are untouched).
   previousImport: {
     importedAt: string | null

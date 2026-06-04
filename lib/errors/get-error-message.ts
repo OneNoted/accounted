@@ -18,6 +18,7 @@
  */
 
 import { formatCurrency } from '@/lib/utils'
+import { getErrorEntry } from './structured-errors'
 
 type ErrorContext =
   | 'invoice'
@@ -277,6 +278,17 @@ export function getErrorMessage(
         message_en?: unknown
         account_numbers?: unknown
         details?: unknown
+      }
+
+      // For English UI, return the registry's English message for any known
+      // code instead of falling through to the Swedish branches below (which
+      // ignored locale — English users were shown Swedish prose). The Swedish
+      // path is left entirely unchanged; codes absent from the registry still
+      // fall through. The dynamic branches (amounts / lock date / reason) keep
+      // owning Swedish display.
+      if (locale === 'en' && typeof structured.code === 'string') {
+        const entry = getErrorEntry(structured.code)
+        if (entry?.message_en) return entry.message_en
       }
 
       if (structured.code === 'ACCOUNTS_NOT_IN_CHART' && Array.isArray(structured.account_numbers)) {

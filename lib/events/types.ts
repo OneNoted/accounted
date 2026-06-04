@@ -174,7 +174,7 @@ export type CoreEvent =
   // get loaded by agents. `kind` discriminates by URI scheme so we can
   // GROUP BY skill vs widget vs data without parsing URIs.
   | { type: 'mcp.resource_read'; payload: {
-      uri: string                                   // e.g. 'gnubok://skill/month-end-close'
+      uri: string                                   // e.g. 'Accounted://skill/month-end-close'
       kind: 'widget' | 'skill' | 'data' | 'unknown'
       success: boolean
       errorCode: string | null

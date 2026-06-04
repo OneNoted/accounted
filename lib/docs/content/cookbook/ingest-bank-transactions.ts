@@ -1,6 +1,6 @@
 export const COOKBOOK_INGEST_BANK_MD = `# Cookbook — ingest and categorise bank transactions
 
-> Push a bank statement file into gnubok, get AI-assisted category suggestions, commit the categorisations, and match payments against open invoices. End-to-end transaction-to-booking pipeline.
+> Push a bank statement file into Accounted, get AI-assisted category suggestions, commit the categorisations, and match payments against open invoices. End-to-end transaction-to-booking pipeline.
 
 This is the operational companion to the [Transactions reference](/docs/api/reference/transactions) and the [Imports reference](/docs/api/reference/imports). Use it for the first integration where transactions enter the system from a bank source.
 

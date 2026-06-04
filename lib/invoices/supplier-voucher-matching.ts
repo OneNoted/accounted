@@ -24,6 +24,7 @@ import {
   amountsMatchFuzzy,
   customerNameMatches,
 } from './invoice-matching'
+import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import type { SupplierInvoice, Supplier } from '@/types'
 
 const log = createLogger('supplier-voucher-matching')
@@ -480,6 +481,9 @@ export interface LinkSupplierInvoiceToVoucherResult {
   remainingAmount: number
   paymentAmount: number
   journalEntryId: string
+  /** Bank transaction auto-reconciled to the linked voucher, if exactly one
+   *  unbooked line matched it; null when nothing was safely linkable. */
+  reconciledTransactionId: string | null
 }
 
 /**
@@ -594,6 +598,29 @@ export async function linkSupplierInvoiceToVoucher(
     }
   }
 
+  // Close the loop on the bank feed: the link above only advanced the supplier
+  // invoice, leaving the bank transaction that paid it in the Transactions
+  // inbox. Reconcile it to the same verifikat when unambiguous. Best-effort —
+  // the link RPC has already committed.
+  let reconciledTransactionId: string | null = null
+  try {
+    const recon = await autoReconcileTransactionForLinkedVoucher(
+      supabase,
+      companyId,
+      userId,
+      params.journalEntryId,
+      { supplierInvoiceId: params.supplierInvoiceId },
+    )
+    reconciledTransactionId = recon?.linkedTransactionId ?? null
+  } catch (err) {
+    log.warn('auto-reconcile of bank transaction after supplier voucher link failed (non-blocking)', {
+      companyId,
+      supplierInvoiceId: params.supplierInvoiceId,
+      journalEntryId: params.journalEntryId,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   return {
     ok: true,
     result: {
@@ -603,6 +630,7 @@ export async function linkSupplierInvoiceToVoucher(
       remainingAmount: result.remaining_amount,
       paymentAmount: result.payment_amount,
       journalEntryId: result.journal_entry_id,
+      reconciledTransactionId,
     },
   }
 }

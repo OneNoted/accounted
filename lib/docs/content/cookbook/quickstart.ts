@@ -4,7 +4,7 @@ export const QUICKSTART_MD = `# Quickstart — send your first invoice
 
 ## What you'll need
 
-- A test API key (\`gnubok_sk_test_*\`) from the gnubok dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data — safe for evals.
+- A test API key (\`gnubok_sk_test_*\`) from the Accounted dashboard at **/settings/api**. Test keys are bound to a deterministic sandbox company seeded with realistic data — safe for evals.
 - \`curl\` or any HTTP client.
 
 ## 1. List the companies the key can access

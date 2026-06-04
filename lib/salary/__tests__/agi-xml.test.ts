@@ -443,7 +443,7 @@ describe('generateAGIXml — Frånvarouppgift', () => {
     expect(closeRoot).toBeGreaterThan(firstFranvaro)
   })
 
-  it('emits FK820/824/826 absence-removal and percent fields not at all (gnubok always sends timmar)', () => {
+  it('emits FK820/824/826 absence-removal and percent fields not at all (Accounted always sends timmar)', () => {
     const xml = generateAGIXml(company, employeesWithAbsence, totals)
     expect(xml).not.toContain('faltkod="820"')
     expect(xml).not.toContain('faltkod="824"')

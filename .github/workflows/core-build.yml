@@ -21,6 +21,12 @@ jobs:
       - run: npm run setup:extensions
       - run: npm run build
       - run: npm test
+      - name: Antipattern ratchet (no new MFA-bypassing routes / naive öre-rounding)
+        # Fails only if a PR ADDS a route that hand-rolls supabase.auth.getUser()
+        # instead of the MFA-enforcing guard, or a new Math.round(x*100)/100.
+        # Baseline lives in scripts/checks/antipatterns-baseline.json and ratchets
+        # down as the A1 (route auth) and D1 (rounding) migrations land.
+        run: npm run check:guards
       - name: Check no core imports from extensions
         run: |
           VIOLATIONS=$(grep -r "from '@/extensions/" lib/ app/api/ components/ --include="*.ts" --include="*.tsx" \

@@ -640,6 +640,206 @@ export async function unlinkReconciliation(
   return { success: true }
 }
 
+/** Float tolerance for matching a bank line to a verifikat (0.5 öre). */
+const VOUCHER_LINK_AMOUNT_TOLERANCE = 0.005
+
+/** A bank line settling a verifikat sits within a few days of the voucher's
+ *  entry_date. Kept tight so the single-candidate rule below stays meaningful. */
+const VOUCHER_LINK_DATE_WINDOW_DAYS = 7
+
+/** Shift an ISO 'YYYY-MM-DD' date by ±days, returning the same string shape. */
+function shiftIsoDate(date: string, days: number): string {
+  const d = new Date(date)
+  if (Number.isNaN(d.getTime())) return date
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+interface CashAccountInfo {
+  id: string | null
+  currency: string
+  isPrimary: boolean
+}
+
+/**
+ * Reconcile the single unbooked bank transaction that corresponds to a verifikat
+ * the user just linked to an invoice from the invoice page — the symmetric move
+ * to the transactions-side match, closing the gap where linkInvoiceToVoucher /
+ * linkSupplierInvoiceToVoucher advanced the invoice but left the bank line
+ * sitting in the Transactions inbox (still journal_entry_id = null).
+ *
+ * Deliberately conservative — it only acts when the link is unambiguous:
+ *   • the voucher has NO bank transaction reconciled to it yet (never adds a
+ *     second one automatically — that N:1 case must be an explicit choice in
+ *     Bankavstämning),
+ *   • the voucher touches exactly ONE cash-account line (a transfer hitting two
+ *     bank accounts, or an AR/AP reclass with none, is left alone), and
+ *   • exactly ONE unbooked, non-ignored transaction on that account matches the
+ *     bank movement (same amount within tolerance, same direction) inside a
+ *     tight date window.
+ * Anything else is left untouched: the user can still match it by hand from the
+ * Transactions list. The link itself uses manualLink — no new journal entry, no
+ * JE mutation — so this is a reconciliation link, never a second booking.
+ *
+ * Best-effort by contract: returns the linked transaction id or null, and the
+ * caller treats a throw as "nothing linked" because the invoice link has already
+ * committed.
+ */
+export async function autoReconcileTransactionForLinkedVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  journalEntryId: string,
+  options: {
+    invoiceId?: string
+    supplierInvoiceId?: string
+    dateWindowDays?: number
+  } = {},
+): Promise<{ linkedTransactionId: string } | null> {
+  const windowDays = options.dateWindowDays ?? VOUCHER_LINK_DATE_WINDOW_DAYS
+
+  // 1. If a bank transaction already points at this voucher, the bank side is
+  //    settled — don't attach another one behind the user's back.
+  const { data: alreadyLinked } = await supabase
+    .from('transactions')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+    .limit(1)
+  if (alreadyLinked && alreadyLinked.length > 0) return null
+
+  // 2. Load the voucher (must be posted) and its lines.
+  const { data: entry } = await supabase
+    .from('journal_entries')
+    .select('id, entry_date, status')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (!entry || entry.status !== 'posted' || !entry.entry_date) return null
+
+  const { data: lines } = await supabase
+    .from('journal_entry_lines')
+    .select('account_number, debit_amount, credit_amount')
+    .eq('journal_entry_id', journalEntryId)
+  if (!lines || lines.length === 0) return null
+
+  // 3. Which BAS codes carry a bank feed? cash_accounts is the source of truth.
+  const { data: cashAccounts } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account, currency, is_primary')
+    .eq('company_id', companyId)
+
+  const cashByAccount = new Map<string, CashAccountInfo>()
+  for (const raw of (cashAccounts ?? []) as Array<{
+    id: string
+    ledger_account: string | null
+    currency: string | null
+    is_primary: boolean | null
+  }>) {
+    if (raw.ledger_account) {
+      cashByAccount.set(raw.ledger_account, {
+        id: raw.id,
+        currency: raw.currency ?? 'SEK',
+        isPrimary: raw.is_primary ?? false,
+      })
+    }
+  }
+  // Companies created before cash_accounts seeding reconcile against 1930/SEK.
+  if (cashByAccount.size === 0) {
+    cashByAccount.set('1930', { id: null, currency: 'SEK', isPrimary: true })
+  }
+
+  const cashLines = (lines as Array<{
+    account_number: string
+    debit_amount: number | null
+    credit_amount: number | null
+  }>).filter((l) => cashByAccount.has(l.account_number))
+
+  // Exactly one bank movement → exactly one bank transaction to attach.
+  if (cashLines.length !== 1) return null
+
+  const cashLine = cashLines[0]
+  const accountNumber = cashLine.account_number
+  const cashAccount = cashByAccount.get(accountNumber)!
+  const debit = Number(cashLine.debit_amount ?? 0)
+  const credit = Number(cashLine.credit_amount ?? 0)
+  const movement = debit > 0 ? debit : -credit // + money in, − money out
+  if (Math.abs(movement) <= VOUCHER_LINK_AMOUNT_TOLERANCE) return null
+
+  // 4. Unbooked, non-ignored candidate transactions on that account, scoped the
+  //    same way Bankavstämning scopes (handles legacy NULL cash_account_id rows).
+  const fromDate = shiftIsoDate(entry.entry_date, -windowDays)
+  const toDate = shiftIsoDate(entry.entry_date, windowDays)
+  let candQuery = supabase
+    .from('transactions')
+    .select('id, amount')
+    .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .eq('is_ignored', false)
+    .gte('date', fromDate)
+    .lte('date', toDate)
+  candQuery = scopeTransactionsToAccount(
+    candQuery,
+    cashAccount.id ?? undefined,
+    cashAccount.currency,
+    cashAccount.isPrimary,
+  )
+  const { data: candidates } = await candQuery
+
+  const matches = ((candidates ?? []) as Array<{ id: string; amount: number }>).filter((tx) => {
+    const amt = Number(tx.amount)
+    if (Math.abs(Math.abs(amt) - Math.abs(movement)) > VOUCHER_LINK_AMOUNT_TOLERANCE) return false
+    return Math.sign(amt) === Math.sign(movement)
+  })
+
+  // Two same-amount unbooked lines near the same date → don't guess.
+  if (matches.length !== 1) return null
+  const transactionId = matches[0].id
+
+  // 5. Reconcile via the exact path Bankavstämning uses (manualLink re-validates
+  //    posted status, the cash-account line, and the not-already-linked guard,
+  //    then sets journal_entry_id + reconciliation_method + is_business). No new
+  //    journal entry is created.
+  const linkResult = await manualLink(
+    supabase,
+    companyId,
+    transactionId,
+    journalEntryId,
+    userId,
+    accountNumber,
+  )
+  if (!linkResult.success) return null
+
+  // Tag the transaction with the (supplier) invoice for traceability + parity
+  // with the transactions-side match. is_business is already set by manualLink,
+  // so the row has already dropped out of the inbox regardless of this update.
+  const tag: Record<string, unknown> = { potential_invoice_id: null }
+  if (options.invoiceId) tag.invoice_id = options.invoiceId
+  if (options.supplierInvoiceId) {
+    tag.supplier_invoice_id = options.supplierInvoiceId
+    tag.potential_supplier_invoice_id = null
+  }
+  if (Object.keys(tag).length > 1) {
+    await supabase
+      .from('transactions')
+      .update(tag)
+      .eq('id', transactionId)
+      .eq('company_id', companyId)
+  }
+
+  logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
+    invoiceId: options.invoiceId,
+    supplierInvoiceId: options.supplierInvoiceId,
+    matchMethod: 'invoice_voucher_link',
+    newState: {
+      journal_entry_id: journalEntryId,
+      reconciliation_method: 'manual',
+    },
+  })
+
+  return { linkedTransactionId: transactionId }
+}
+
 // ============================================================
 // Helpers
 // ============================================================

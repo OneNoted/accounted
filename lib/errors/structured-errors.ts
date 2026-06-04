@@ -114,7 +114,7 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Mint a new key with the missing scope or grant it through the API key settings.',
-      resource: 'gnubok://capabilities',
+      resource: 'Accounted://capabilities',
     },
   },
 }
@@ -131,7 +131,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Activate the missing accounts via bookkeeping settings, or use a different category.',
-      resource: 'gnubok://chart-of-accounts',
+      resource: 'Accounted://chart-of-accounts',
     },
   },
   JOURNAL_ENTRY_NOT_BALANCED: {
@@ -148,7 +148,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'No fiscal period covers the entry date.',
     remediation: {
       description: 'Create or extend the relevant fiscal period before retrying.',
-      resource: 'gnubok://period/active',
+      resource: 'Accounted://period/active',
     },
   },
   ENTRY_DATE_OUTSIDE_FISCAL_PERIOD: {
@@ -157,7 +157,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_en: 'Entry date is outside the active fiscal period.',
     remediation: {
       description: 'Use a date inside an open period or create one that covers it.',
-      resource: 'gnubok://period/active',
+      resource: 'Accounted://period/active',
     },
   },
   JOURNAL_ENTRY_NOT_FOUND: {
@@ -196,6 +196,37 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikationen kunde inte sparas. Försök igen.',
     message_en: 'Bookkeeping database operation failed.',
     retryable: true,
+  },
+  MEANINGLESS_CORRECTION: {
+    httpStatus: 400,
+    message_sv: 'Rättelsen motsvarar ingen ekonomisk händelse — det finns inget att rätta.',
+    message_en: 'The correction represents no economic event — nothing to correct.',
+  },
+  NO_OPEN_PERIOD_FOR_DATE: {
+    httpStatus: 400,
+    message_sv:
+      'Det finns ingen räkenskapsperiod som täcker det valda datumet. Skapa eller öppna räkenskapsåret först.',
+    message_en: 'No fiscal period covers the selected date.',
+    remediation: {
+      description: 'Create or open the fiscal year that covers the date before retrying.',
+      resource: 'Accounted://period/active',
+    },
+  },
+  TARGET_PERIOD_CLOSED: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret som täcker datumet är stängt (bokslut) och kan inte öppnas. Bokför i en öppen period i stället.',
+    message_en: 'The fiscal year covering the date is closed and cannot be reopened.',
+  },
+  TARGET_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsperioden som täcker datumet är låst.',
+    message_en: 'The fiscal period covering the date is locked.',
+    remediation: {
+      description:
+        'Unlock the period (if status is "locked", not "closed") or use a date inside an open period.',
+      tool: 'gnubok_unlock_period',
+    },
   },
   PERIOD_LOCKED: {
     httpStatus: 400,
@@ -272,7 +303,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en: 'The supplied account does not exist in the chart of accounts.',
     remediation: {
       description: 'Activate the account in the chart of accounts or pick a different one.',
-      resource: 'gnubok://chart-of-accounts',
+      resource: 'Accounted://chart-of-accounts',
     },
   },
   TX_CATEGORIZE_INVALID_TEMPLATE: {

@@ -40,6 +40,7 @@ import {
   createSupplierInvoiceRegistrationEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -899,18 +900,29 @@ async function commitMatchTransactionInvoice(
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
+  // Overshoot guard + paid/remaining math — shared with the dashboard and v1
+  // routes via planInvoicePayment. This agent/MCP path previously had NO guard,
+  // so a 1500 payment on a 1000 invoice was silently accepted (paid_amount >
+  // total, AR over-credited). Runs BEFORE the storno + JE below, so a rejected
+  // match leaves the transaction untouched and never burns a voucher number.
+  const paidAmount = transaction.amount
+  const payment = planInvoicePayment(invoice, paidAmount)
+  if (!payment.ok) {
+    return {
+      error:
+        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
+        'Transaktionsbeloppet är större än fakturans återstående belopp.',
+      status: 400,
+    }
+  }
+  const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+
   if (transaction.journal_entry_id) {
     await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
     await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
   }
 
   const now = new Date().toISOString()
-  const paidAmount = transaction.amount
-  const newPaidAmount = Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
-  const currentRemaining = invoice.remaining_amount ?? (invoice.total - (invoice.paid_amount || 0))
-  const newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
-  const isFullyPaid = newRemaining <= 0
-  const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
 
   const { data: settings } = await supabase
     .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
@@ -1035,6 +1047,7 @@ async function commitLinkInvoiceVoucher(
       payment_amount: outcome.result.paymentAmount,
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
     },
   }
 }
@@ -1077,6 +1090,7 @@ async function commitLinkSupplierInvoiceVoucher(
       payment_amount: outcome.result.paymentAmount,
       payment_id: outcome.result.paymentId,
       journal_entry_id: outcome.result.journalEntryId,
+      reconciled_transaction_id: outcome.result.reconciledTransactionId,
     },
   }
 }
@@ -2330,6 +2344,64 @@ async function commitCreateVoucher(
     fiscalPeriodId = resolved
   }
 
+  // source_type is derived here — never trust params.source_type. The MCP tool
+  // stages a typed boolean (is_opening_balance), not a raw source_type string,
+  // so a tampered or future direct-staging path can't inject
+  // 'bank'/'invoice'/etc. and corrupt audit attribution. The default is
+  // 'manual'. We only upgrade to 'opening_balance' after independently
+  // re-validating the entry genuinely looks like an ingående balans — this
+  // matters because bank reconciliation excludes an IB from the period movement
+  // ONLY when source_type='opening_balance' (lib/reconciliation/bank-reconciliation.ts);
+  // a mislabelled 'manual' IB shows up as a phantom reconciliation difference.
+  let sourceType: JournalEntrySourceType = 'manual'
+  if (params.is_opening_balance === true) {
+    // Constraint 1: every line must be a balance-sheet account (BAS class 1 or
+    // 2). Mirrors the canonical opening-balance flow which rejects P&L accounts
+    // (app/api/import/opening-balance/execute/route.ts). Inlined to avoid
+    // coupling this executor to the SIE-import module.
+    const nonBalanceSheet = lines
+      .map((l) => l.account_number)
+      .filter((num) => {
+        const cls = parseInt(num.charAt(0), 10)
+        return !(cls === 1 || cls === 2)
+      })
+    if (nonBalanceSheet.length > 0) {
+      return {
+        error:
+          `Ingående balans får bara innehålla balanskonton (klass 1–2). ` +
+          `Dessa konton hör inte hemma i en IB: ${[...new Set(nonBalanceSheet)].join(', ')}. ` +
+          `Bokför resultatkonton som en vanlig verifikation utan is_opening_balance.`,
+        status: 400,
+      }
+    }
+
+    // Constraint 2: the entry must be dated on the fiscal period's first day —
+    // an IB opens the period (same as the canonical flow, which dates the entry
+    // on period.period_start). We fetch period_start here because the resolved
+    // fiscalPeriodId may have come from either the explicit param or a date
+    // lookup; either way the date must line up exactly.
+    const { data: period, error: periodErr } = await supabase
+      .from('fiscal_periods')
+      .select('period_start, name')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (periodErr || !period) {
+      return { error: 'Räkenskapsperioden hittades inte.', status: 404 }
+    }
+    if (entryDate !== period.period_start) {
+      return {
+        error:
+          `En ingående balans måste dateras på räkenskapsårets första dag ` +
+          `(${period.period_start}). Angivet datum: ${entryDate}. ` +
+          `Ändra datumet eller bokför som en vanlig verifikation utan is_opening_balance.`,
+        status: 400,
+      }
+    }
+
+    sourceType = 'opening_balance'
+  }
+
   try {
     const entry = await createJournalEntry(
       supabase,
@@ -2339,10 +2411,7 @@ async function commitCreateVoucher(
         fiscal_period_id: fiscalPeriodId,
         entry_date: entryDate,
         description,
-        // source_type is hardcoded — never trust params.source_type. The MCP
-        // tool stages 'manual', but a future direct-staging path could
-        // otherwise inject 'bank'/'invoice'/etc. and corrupt audit attribution.
-        source_type: 'manual' as JournalEntrySourceType,
+        source_type: sourceType,
         voucher_series: (params.voucher_series as string) || undefined,
         notes: (params.notes as string) || undefined,
         lines,

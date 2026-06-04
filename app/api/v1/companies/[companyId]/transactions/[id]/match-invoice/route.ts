@@ -30,6 +30,7 @@ import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookke
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { eventBus } from '@/lib/events/bus'
 import type { EntityType, Invoice, Transaction } from '@/types'
@@ -265,6 +266,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const paidAmount = transaction.amount
+
+    // Overshoot guard + paid/remaining math — shared with the dashboard and
+    // agent (commit) paths via planInvoicePayment. Without this, the public API
+    // silently overpaid an invoice (recording paid_amount > total, over-crediting
+    // AR). Runs BEFORE the storno + strict-mode JE creation, so a rejected match
+    // touches no state.
+    const payment = planInvoicePayment(invoice, paidAmount)
+    if (!payment.ok) {
+      return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', txLog, {
+        requestId: ctx.requestId,
+        details: payment.details,
+      })
+    }
+    const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+
     if (transaction.journal_entry_id) {
       try {
         await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, transaction.journal_entry_id)
@@ -288,17 +305,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     const now = new Date().toISOString()
-    const paidAmount = transaction.amount
-    const newPaidAmount =
-      Math.round(((invoice.paid_amount || 0) + paidAmount) * 100) / 100
-    const currentRemaining =
-      invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
-    const newRemaining = Math.max(
-      0,
-      Math.round((currentRemaining - paidAmount) * 100) / 100,
-    )
-    const isFullyPaid = newRemaining <= 0
-    const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
 
     const { data: settings } = await ctx.supabase
       .from('company_settings')
