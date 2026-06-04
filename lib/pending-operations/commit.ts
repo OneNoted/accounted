@@ -2261,6 +2261,10 @@ async function commitImportSie(
   const importOpeningBalances = Boolean(params.import_opening_balances)
   const importTransactions = Boolean(params.import_transactions)
   const voucherSeries = params.voucher_series as string | undefined
+  // Default true (not Boolean(...) — operations staged before this param
+  // existed must keep the file's account names, matching the UI default).
+  const updateAccountNames =
+    params.update_account_names === undefined ? true : Boolean(params.update_account_names)
 
   if (!fileContent || !filename || !Array.isArray(mappings)) {
     return { error: 'file_content, filename, and mappings are required', status: 400 }
@@ -2281,6 +2285,7 @@ async function commitImportSie(
       importOpeningBalances,
       importTransactions,
       voucherSeries,
+      updateAccountNames,
     })
 
     if (!result.success) {

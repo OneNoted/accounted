@@ -177,3 +177,61 @@ describe('gnubok_import_sie — stage-time validation', () => {
     expect(result.preview.would_skip_all_vouchers).toBe(false)
   })
 })
+
+describe('gnubok_import_sie — update_account_names staging', () => {
+  // Captures the pending_operations insert payload so the staged params can
+  // be asserted (createQueuedMockSupabase cannot inspect arguments).
+  function buildCapturingSupabase() {
+    const staged: Array<Record<string, unknown>> = []
+    const supabase = {
+      from: (table: string) => {
+        if (table !== 'pending_operations') throw new Error(`Unexpected table: ${table}`)
+        return {
+          insert: (row: Record<string, unknown>) => {
+            staged.push(row)
+            return {
+              select: () => ({
+                single: () => Promise.resolve({ data: { id: 'op-sie' }, error: null }),
+              }),
+            }
+          },
+        }
+      },
+    }
+    return { supabase, staged }
+  }
+
+  it('defaults update_account_names to true in the staged params', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect(staged).toHaveLength(1)
+    expect((staged[0].params as Record<string, unknown>).update_account_names).toBe(true)
+  })
+
+  it('stages update_account_names: false when the caller opts out', async () => {
+    const { supabase, staged } = buildCapturingSupabase()
+
+    await importSie.execute(
+      {
+        file_content: VALID_SIE,
+        filename: 'bok.se',
+        mappings: COVER_VALID_SIE,
+        update_account_names: false,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect((staged[0].params as Record<string, unknown>).update_account_names).toBe(false)
+  })
+})
