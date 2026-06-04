@@ -123,8 +123,12 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
 
   async function handlePick(item: AvailableInboxDoc) {
     // Select mode: the journal entry doesn't exist yet — hand the pick to the
-    // parent and let it link after creation.
+    // parent and let it link after creation. Clear the preview first: the
+    // preview dialog's open state is `previewItem !== null`, so leaving it set
+    // would strand a floating preview after the picker closes (the component
+    // stays mounted; the on-open reset only runs on the next open).
     if (onSelect) {
+      setPreviewItem(null)
       onSelect(item)
       onClose()
       return
@@ -150,6 +154,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
         return
       }
       toast({ title: t('picker_linked') })
+      setPreviewItem(null)
       onLinked?.()
       onClose()
     } catch {
