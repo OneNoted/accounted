@@ -18,6 +18,7 @@ import type {
 } from './types'
 import type { CreateJournalEntryLineInput } from '@/types'
 import { mappingsToMap, getMappingStats } from './account-mapper'
+import { syncMappedAccounts } from './account-sync'
 import { calculateFileHash } from './sie-parser'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
@@ -1807,6 +1808,12 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
  * Replace only cancels journal entries with source_type='import' — entries
  * the user created natively in Accounted (categorized transactions, invoices,
  * etc.) are left alone. See the replace_sie_import RPC.
+ *
+ * `updateAccountNames` (default true) carries the SIE file's #KONTO names
+ * into the chart for identity-mapped accounts: new accounts are created with
+ * the file's name and existing accounts whose name differs are renamed.
+ * When false, accounts are created with BAS default names and existing
+ * accounts are left untouched (the pre-2026-06 behavior).
  */
 export async function executeSIEImport(
   supabase: SupabaseClient,
@@ -1822,6 +1829,7 @@ export async function executeSIEImport(
     importTransactions: boolean
     voucherSeries?: string
     onExistingPeriod?: 'block' | 'replace'
+    updateAccountNames?: boolean
   }
 ): Promise<ImportResult> {
   const result: ImportResult = {
@@ -1837,6 +1845,7 @@ export async function executeSIEImport(
   }
 
   const onExistingPeriod = options.onExistingPeriod ?? 'block'
+  const updateAccountNames = options.updateAccountNames ?? true
 
   try {
     // Validate all accounts are mapped
@@ -1950,72 +1959,32 @@ export async function executeSIEImport(
     // Build account mapping lookup
     const accountMap = mappingsToMap(mappings)
 
-    // Ensure all mapped target accounts exist in chart_of_accounts.
-    // Uses a single batch query + batch insert instead of per-account round trips.
-    const targetAccounts = [...new Set(
-      mappings.filter(m => m.targetAccount).map(m => m.targetAccount!)
-    )]
-
-    if (targetAccounts.length > 0) {
-      const { data: existing } = await supabase
-        .from('chart_of_accounts')
-        .select('account_number')
-        .eq('company_id', companyId)
-        .in('account_number', targetAccounts)
-
-      const existingSet = new Set((existing || []).map(a => a.account_number))
-      const missing = targetAccounts.filter(num => !existingSet.has(num))
-
-      if (missing.length > 0) {
-        const targetNameMap = new Map<string, string>()
-        for (const m of mappings) {
-          if (m.targetAccount) targetNameMap.set(m.targetAccount, m.targetName || m.sourceName)
-        }
-
-        const inserts = missing.map(num => {
-          const basRef = getBASReference(num)
-          if (basRef) {
-            return {
-              user_id: userId,
-              company_id: companyId,
-              account_number: num,
-              account_name: basRef.account_name,
-              account_class: basRef.account_class,
-              account_group: basRef.account_group,
-              account_type: basRef.account_type,
-              normal_balance: basRef.normal_balance,
-              sru_code: basRef.sru_code ?? computeSRUCode(num),
-              k2_excluded: basRef.k2_excluded,
-              plan_type: 'full_bas' as const,
-              is_active: true,
-              is_system_account: false,
-            }
-          }
-          const classNum = parseInt(num.charAt(0), 10)
-          const group = num.substring(0, 2)
-          const classified = classifyAccount(num)
-          return {
-            user_id: userId,
-            company_id: companyId,
-            account_number: num,
-            account_name: targetNameMap.get(num) || `Konto ${num}`,
-            account_class: classNum,
-            account_group: group,
-            account_type: classified.account_type,
-            normal_balance: classified.normal_balance,
-            sru_code: computeSRUCode(num),
-            plan_type: 'full_bas' as const,
-            is_active: true,
-            is_system_account: false,
-          }
-        })
-
-        const { error: insertError } = await supabase.from('chart_of_accounts').insert(inserts)
-        if (insertError && !insertError.message.includes('duplicate')) {
-          result.errors.push(`Failed to create accounts: ${insertError.message}`)
-          return result
-        }
-      }
+    // Ensure all mapped target accounts exist in chart_of_accounts and,
+    // unless disabled, carry the SIE file's #KONTO names into the chart —
+    // customized names from the source system (e.g. Fortnox) would otherwise
+    // be lost to the BAS defaults.
+    const accountSync = await syncMappedAccounts(
+      supabase,
+      companyId,
+      userId,
+      mappings,
+      updateAccountNames
+    )
+    if (accountSync.error) {
+      result.errors.push(`Failed to create accounts: ${accountSync.error}`)
+      return result
+    }
+    if (accountSync.renamed > 0) {
+      result.warnings.push(
+        accountSync.renamed === 1
+          ? '1 konto bytte namn till namnet från SIE-filen'
+          : `${accountSync.renamed} konton bytte namn till namnen från SIE-filen`
+      )
+    }
+    if (accountSync.renameFailed > 0) {
+      result.warnings.push(
+        `${accountSync.renameFailed} kontonamn kunde inte uppdateras från SIE-filen`
+      )
     }
 
     // Create or find fiscal period
