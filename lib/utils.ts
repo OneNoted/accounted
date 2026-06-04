@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { format as formatDateFns, parseISO } from "date-fns"
+import { format as formatDateFns, parseISO, isValid } from "date-fns"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -21,6 +21,12 @@ export function formatDate(date: Date | string): string {
   // UTC for bare date strings — that's an off-by-one we don't want for
   // accounting data.
   const d = typeof date === 'string' ? parseISO(date) : date
+  // A malformed value (e.g. a 6-digit year fat-fingered into a native
+  // <input type="date">, stored by Postgres as year 202403) yields an Invalid
+  // Date, and date-fns `format` THROWS a RangeError on that. One bad row must
+  // never crash an entire route via the error boundary — degrade to the raw
+  // input instead.
+  if (!isValid(d)) return typeof date === 'string' ? date : ''
   return formatDateFns(d, 'yyyy-MM-dd')
 }
 
@@ -33,6 +39,7 @@ export function formatDate(date: Date | string): string {
  */
 export function formatDateTime(date: Date | string): string {
   const d = typeof date === 'string' ? parseISO(date) : date
+  if (!isValid(d)) return typeof date === 'string' ? date : ''
   return formatDateFns(d, 'yyyy-MM-dd HH:mm')
 }
 
@@ -76,6 +83,7 @@ export function formatWholeKr(amount: number): string {
  */
 export function formatDateLong(date: Date | string, locale: string = 'sv'): string {
   const d = typeof date === 'string' ? parseISO(date) : date
+  if (!isValid(d)) return typeof date === 'string' ? date : ''
   const intlLocale = locale === 'en' ? 'en-US' : 'sv-SE'
   return d.toLocaleDateString(intlLocale, {
     day: 'numeric',
