@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { roundOre } from '@/lib/money'
 import { getRevenueAccount, getOutputVatAccount } from '@/lib/bookkeeping/invoice-entries'
 import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -196,7 +197,7 @@ export const GET = withRouteContext(
           const rate = it.vat_rate ?? 25
           const itemVat = resolveSekAmount(it.vat_amount, null, inv.currency, inv.exchange_rate)
           const itemTotal = resolveSekAmount(it.line_total, null, inv.currency, inv.exchange_rate)
-          const sub = Math.round(itemTotal * 100) / 100
+          const sub = roundOre(itemTotal)
           const bucket = byRate.get(rate) ?? { subtotal: 0, vat: 0 }
           bucket.subtotal += sub
           bucket.vat += itemVat

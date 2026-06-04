@@ -316,7 +316,7 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     await syncInvoiceStatusFromPaymentEntry(
       supabase,
       'co-1',
-      entry({ source_type: 'supplier_invoice_cash_payment', source_id: 'supplier-invoice-1' }),
+      entry({ source_type: 'supplier_invoice_paid', source_id: 'supplier-invoice-1' }),
     )
 
     expect(updatePayload('supplier_invoices')).toMatchObject({
@@ -331,6 +331,37 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
       supplier_invoice_id: null,
       is_business: null,
       category: null,
+    })
+  })
+
+  // Regression for the Greptile finding on PR #666: the supplier branch
+  // required a payment row before restoring status/amounts, so reversing a
+  // supplier_invoice_cash_payment (which books NO payment row — cash entries
+  // are only ever full payments) deleted nothing visible but left the invoice
+  // permanently at status='paid' / remaining_amount=0 — the same deadlock the
+  // customer branch fix closed.
+  it('supplier cash-payment reversal restores status without a payment row', async () => {
+    const { supabase, updatePayload } = createRecordingSupabase([
+      { data: null }, // supplier_invoice_payments select amount → none (cash entry)
+      { data: { paid_amount: 1000, total_amount: 1000, due_date: '2099-12-31' } }, // supplier_invoices select
+      { data: null }, // supplier_invoices update
+      { data: [] }, // supplier_invoice_payments select transaction_id
+      { data: null }, // supplier_invoice_payments delete
+      { data: null }, // transactions update by journal_entry_id
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(
+      supabase,
+      'co-1',
+      entry({ source_type: 'supplier_invoice_cash_payment', source_id: 'supplier-invoice-1' }),
+    )
+
+    expect(updatePayload('supplier_invoices')).toMatchObject({
+      status: 'approved',
+      paid_amount: 0,
+      remaining_amount: 1000,
+      paid_at: null,
+      payment_journal_entry_id: null,
     })
   })
 })

@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import type { JournalEntry } from '@/types'
+
+const log = createLogger('payment-sync')
 
 export const PAYMENT_SOURCE_TYPES = [
   'invoice_paid',
@@ -32,10 +36,15 @@ export async function syncInvoiceStatusFromPaymentEntry(
   const entryId = entry.id
 
   if (entry.source_type.startsWith('supplier_invoice')) {
+    // Scope to THIS invoice's payment row: a batch voucher (match_batch_allocate)
+    // carries one payment row per invoice under the same journal_entry_id, so an
+    // unfiltered .single() errors out on multi-row and silently yields null.
     const { data: payment } = await supabase
       .from('supplier_invoice_payments')
       .select('amount')
       .eq('journal_entry_id', entryId)
+      .eq('supplier_invoice_id', entry.source_id)
+      .eq('company_id', companyId)
       .single()
 
     const { data: supplierInvoice } = await supabase
@@ -45,9 +54,15 @@ export async function syncInvoiceStatusFromPaymentEntry(
       .eq('company_id', companyId)
       .single()
 
-    if (supplierInvoice && payment) {
-      const newPaidAmount = Math.round((supplierInvoice.paid_amount - payment.amount) * 100) / 100
-      const newRemaining = Math.round((supplierInvoice.total_amount - Math.max(0, newPaidAmount)) * 100) / 100
+    if (supplierInvoice) {
+      // Same fallback semantics as the customer branch below: a cash payment
+      // (supplier_invoice_cash_payment) books no payment row and is only ever
+      // a FULL payment, so reverting the whole paid_amount is correct. The
+      // old `&& payment` guard skipped the restore entirely for cash
+      // reversals, leaving the supplier invoice deadlocked on 'paid'.
+      const paymentAmount = payment?.amount ?? supplierInvoice.paid_amount
+      const newPaidAmount = roundOre(supplierInvoice.paid_amount - paymentAmount)
+      const newRemaining = roundOre(supplierInvoice.total_amount - Math.max(0, newPaidAmount))
       let newStatus: string
       if (newPaidAmount > 0) {
         newStatus = 'partially_paid'
@@ -94,10 +109,14 @@ export async function syncInvoiceStatusFromPaymentEntry(
       'supplier_invoice_id',
     )
   } else {
+    // Scoped like the supplier branch: filter by invoice_id + company_id so a
+    // batch voucher's sibling payment rows don't break the .single().
     const { data: payment } = await supabase
       .from('invoice_payments')
       .select('amount')
       .eq('journal_entry_id', entryId)
+      .eq('invoice_id', entry.source_id)
+      .eq('company_id', companyId)
       .single()
 
     const { data: customerInvoice } = await supabase
@@ -114,7 +133,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // payment, so reverting the whole paid_amount is correct there. Guarding
       // this keeps a future partial-cash path from over-reverting.
       const paymentAmount = payment?.amount ?? customerInvoice.paid_amount
-      const newPaidAmount = Math.round((customerInvoice.paid_amount - paymentAmount) * 100) / 100
+      const newPaidAmount = roundOre(customerInvoice.paid_amount - paymentAmount)
       const safePaidAmount = Math.max(0, newPaidAmount)
       // The supplier branch already resets remaining_amount; the customer branch
       // never did, leaving it stale (= total) after a reversal so the invoice
@@ -122,7 +141,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // .in('status', …) guard below can leave status/remaining un-updated if
       // the invoice isn't paid/partially_paid — only reachable on a non-storno
       // path; the payment-row delete + tx release still run, freeing the line.)
-      const newRemaining = Math.round((customerInvoice.total - safePaidAmount) * 100) / 100
+      const newRemaining = roundOre(customerInvoice.total - safePaidAmount)
       const revertStatus = newPaidAmount > 0
         ? 'partially_paid'
         : customerInvoice.due_date && new Date(customerInvoice.due_date) < new Date()
@@ -196,18 +215,34 @@ async function releaseLinkedTransactions(
     category: null,
   }
 
-  await supabase
+  const { error: byEntryError } = await supabase
     .from('transactions')
     .update(resetFields)
     .eq('company_id', companyId)
     .eq('journal_entry_id', entryId)
+  if (byEntryError) {
+    // Best-effort like the rest of the sync — the storno itself already
+    // committed — but a failed release leaves the bank line stuck on a
+    // reversed JE, so it must be observable.
+    log.error('Failed to release transactions by journal_entry_id', byEntryError, {
+      companyId,
+      journalEntryId: entryId,
+    })
+  }
 
   const txIds = paymentTransactionIds.filter((id): id is string => !!id)
   if (txIds.length > 0) {
-    await supabase
+    const { error: byIdError } = await supabase
       .from('transactions')
       .update(resetFields)
       .eq('company_id', companyId)
       .in('id', txIds)
+    if (byIdError) {
+      log.error('Failed to release transactions by payment transaction ids', byIdError, {
+        companyId,
+        journalEntryId: entryId,
+        transactionIds: txIds,
+      })
+    }
   }
 }
