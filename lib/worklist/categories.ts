@@ -10,6 +10,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SuggestedMatch } from './types'
 
 const log = createLogger('worklist')
@@ -35,8 +36,14 @@ export const NEEDS_DOC_SOURCE_TYPES = [
  */
 const INBOX_SCAN_CAP = 1000
 
-function logAndZero(category: string, error: { message?: string } | null): number {
-  log.error(`worklist count failed: ${category}`, { reason: error?.message })
+function logAndZero(
+  category: string,
+  companyId: string,
+  error: { message?: string } | null,
+): number {
+  // companyId is a structured field so repeated failures can be correlated
+  // to a tenant in monitoring.
+  log.error(`worklist count failed: ${category}`, { companyId, reason: error?.message })
   return 0
 }
 
@@ -57,7 +64,7 @@ export async function countUnbookedTransactions(
     .eq('company_id', companyId)
     .is('is_business', null)
     .eq('is_ignored', false)
-  if (error) return logAndZero('book_transaction', error)
+  if (error) return logAndZero('book_transaction', companyId, error)
   return count ?? 0
 }
 
@@ -80,7 +87,7 @@ export async function countInboxDocuments(
     .is('created_journal_entry_id', null)
     .is('matched_transaction_id', null)
     .limit(INBOX_SCAN_CAP)
-  if (error) return logAndZero('inbox_document', error)
+  if (error) return logAndZero('inbox_document', companyId, error)
 
   const docIds = (rows ?? [])
     .map((r) => r.document_id as string | null)
@@ -94,7 +101,7 @@ export async function countInboxDocuments(
     .in('id', docIds)
     .is('journal_entry_id', null)
     .eq('is_current_version', true)
-  if (docError) return logAndZero('inbox_document', docError)
+  if (docError) return logAndZero('inbox_document', companyId, docError)
   return count ?? 0
 }
 
@@ -114,7 +121,7 @@ export async function countSuggestedMatches(
     .is('is_business', null)
     .eq('is_ignored', false)
     .or(SUGGESTED_MATCH_OR)
-  if (error) return logAndZero('suggested_match', error)
+  if (error) return logAndZero('suggested_match', companyId, error)
   return count ?? 0
 }
 
@@ -128,57 +135,71 @@ export async function countSupplierInvoicesAwaitingApproval(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'registered')
-  if (error) return logAndZero('supplier_invoice_approval', error)
+  if (error) return logAndZero('supplier_invoice_approval', companyId, error)
   return count ?? 0
 }
 
 /**
- * Posted verifikat without underlag. Faithful port of the home-page math:
- * posted entries of document-requiring source types, minus entries with a
- * current-version document, minus doc-exempt entries that lack a document
- * (exempt entries WITH a document are already inside the second set —
- * subtracting only the exempt-without-doc remainder avoids double-counting).
+ * Posted verifikat without underlag: posted entries of document-requiring
+ * source types that have neither a current-version document nor a
+ * journal_entry_no_doc_required exemption.
  *
- * NOTE the with-docs set spans ALL source types (not just the
- * document-requiring ones) — kept as-is so this function lands with zero
- * count drift vs the existing dashboard; tightening the set is a separate,
- * user-visible change.
+ * Computed as an exact per-entry set difference (the home page previously
+ * subtracted set SIZES, which both let documents on non-document-requiring
+ * entries shrink the count and silently truncated at the PostgREST row cap).
+ * All three reads paginate via fetchAllRows; row volume is bounded by the
+ * company's posted-entry history (id-only columns).
  */
 export async function countVerifikatMissingDocument(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
-  const [postedRes, withDocsRes, exemptRes] = await Promise.all([
-    supabase
-      .from('journal_entries')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .eq('status', 'posted')
-      .in('source_type', [...NEEDS_DOC_SOURCE_TYPES]),
-    supabase
-      .from('document_attachments')
-      .select('journal_entry_id')
-      .eq('company_id', companyId)
-      .eq('is_current_version', true)
-      .not('journal_entry_id', 'is', null),
-    supabase
-      .from('journal_entry_no_doc_required')
-      .select('journal_entry_id')
-      .eq('company_id', companyId),
-  ])
+  try {
+    const [entries, docs, exemptions] = await Promise.all([
+      fetchAllRows<{ id: string }>(({ from, to }) =>
+        supabase
+          .from('journal_entries')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
+          .order('id')
+          .range(from, to),
+      ),
+      fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
+        supabase
+          .from('document_attachments')
+          .select('journal_entry_id')
+          .eq('company_id', companyId)
+          .eq('is_current_version', true)
+          .not('journal_entry_id', 'is', null)
+          .order('id')
+          .range(from, to),
+      ),
+      fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
+        supabase
+          .from('journal_entry_no_doc_required')
+          .select('journal_entry_id')
+          .eq('company_id', companyId)
+          .order('journal_entry_id')
+          .range(from, to),
+      ),
+    ])
 
-  if (postedRes.error) return logAndZero('verifikat_missing_document', postedRes.error)
-  if (withDocsRes.error) return logAndZero('verifikat_missing_document', withDocsRes.error)
-  if (exemptRes.error) return logAndZero('verifikat_missing_document', exemptRes.error)
-
-  const withDocs = new Set(
-    (withDocsRes.data ?? []).map((d) => d.journal_entry_id as string),
-  )
-  let exemptWithoutDoc = 0
-  for (const row of (exemptRes.data ?? []) as { journal_entry_id: string }[]) {
-    if (!withDocs.has(row.journal_entry_id)) exemptWithoutDoc++
+    const withDoc = new Set(docs.map((d) => d.journal_entry_id))
+    const exempt = new Set(exemptions.map((e) => e.journal_entry_id))
+    let missing = 0
+    for (const entry of entries) {
+      if (!withDoc.has(entry.id) && !exempt.has(entry.id)) missing++
+    }
+    return missing
+  } catch (err) {
+    return logAndZero(
+      'verifikat_missing_document',
+      companyId,
+      err instanceof Error ? { message: err.message } : null,
+    )
   }
-  return Math.max(0, (postedRes.count ?? 0) - withDocs.size - exemptWithoutDoc)
 }
 
 /** Overdue customer invoices (not credited). */
@@ -192,7 +213,7 @@ export async function countOverdueInvoices(
     .eq('company_id', companyId)
     .eq('status', 'overdue')
     .is('credited_invoice_id', null)
-  if (error) return logAndZero('overdue_invoice', error)
+  if (error) return logAndZero('overdue_invoice', companyId, error)
   return count ?? 0
 }
 
@@ -211,7 +232,7 @@ export async function countDeadlinesNeedingAction(
     .eq('company_id', companyId)
     .eq('is_completed', false)
     .in('status', ['action_needed', 'overdue'])
-  if (error) return logAndZero('deadline_action', error)
+  if (error) return logAndZero('deadline_action', companyId, error)
   return count ?? 0
 }
 
@@ -225,7 +246,7 @@ export async function countPendingOperations(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'pending')
-  if (error) return logAndZero('pending_operations', error)
+  if (error) return logAndZero('pending_operations', companyId, error)
   return count ?? 0
 }
 

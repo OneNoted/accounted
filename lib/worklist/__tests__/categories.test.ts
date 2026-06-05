@@ -63,28 +63,43 @@ describe('countInboxDocuments', () => {
 })
 
 describe('countVerifikatMissingDocument', () => {
-  it('subtracts documented and exempt-without-doc entries from the posted count', async () => {
-    // 10 posted document-requiring entries; 4 distinct entries have docs;
-    // 2 exemptions of which 1 also has a doc (already subtracted) → 10-4-1=5.
-    enqueue({ count: 10 }) // journal_entries head count
+  it('counts posted document-requiring entries with neither document nor exemption', async () => {
+    // 6 posted entries: je-1 documented+exempt, je-2 documented, je-3 exempt
+    // → je-4, je-5, je-6 missing.
     enqueue({
       data: [
-        { journal_entry_id: 'je-1' },
-        { journal_entry_id: 'je-1' }, // duplicate doc on same entry — one entry
-        { journal_entry_id: 'je-2' },
-        { journal_entry_id: 'je-3' },
-        { journal_entry_id: 'je-4' },
+        { id: 'je-1' },
+        { id: 'je-2' },
+        { id: 'je-3' },
+        { id: 'je-4' },
+        { id: 'je-5' },
+        { id: 'je-6' },
       ],
     })
     enqueue({
-      data: [{ journal_entry_id: 'je-1' }, { journal_entry_id: 'je-9' }],
+      data: [
+        { journal_entry_id: 'je-1' },
+        { journal_entry_id: 'je-1' }, // second doc on the same entry — still one entry
+        { journal_entry_id: 'je-2' },
+      ],
     })
-    await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(5)
+    enqueue({
+      data: [{ journal_entry_id: 'je-1' }, { journal_entry_id: 'je-3' }],
+    })
+    await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(3)
   })
 
-  it('clamps to 0 when documented entries exceed the posted count', async () => {
-    enqueue({ count: 1 })
-    enqueue({ data: [{ journal_entry_id: 'a' }, { journal_entry_id: 'b' }] })
+  it('ignores documents attached to entries outside the document-requiring set', async () => {
+    // The doc on je-99 (e.g. a VAT-settlement entry) must not shrink the count.
+    enqueue({ data: [{ id: 'je-1' }] })
+    enqueue({ data: [{ journal_entry_id: 'je-99' }] })
+    enqueue({ data: [] })
+    await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(1)
+  })
+
+  it('soft-fails to 0 when a paginated read errors', async () => {
+    enqueue({ error: { message: 'boom' } })
+    enqueue({ data: [] })
     enqueue({ data: [] })
     await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(0)
   })
