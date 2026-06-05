@@ -178,6 +178,9 @@ BEGIN
         'details', jsonb_build_object('status', v_voucher.status));
     END IF;
 
+    -- Round-2 fix: explicit 4-digit length guard alongside the BETWEEN
+    -- range. The lexicographic comparison is safe on 4-digit strings;
+    -- the length guard is defense-in-depth against schema drift.
     SELECT COALESCE(SUM(debit_amount - credit_amount), 0) INTO v_voucher_bank_net
     FROM public.journal_entry_lines
     WHERE journal_entry_id = p_existing_journal_entry_id
@@ -229,6 +232,11 @@ BEGIN
       RETURN jsonb_build_object('ok', false, 'code', 'BULK_BOOK_NO_LINES');
     END IF;
 
+    -- Round-2 fix: chart-of-accounts allowlist check inside the RPC.
+    -- The route's manual branch validates account_numbers, but the
+    -- template branch and any direct DB caller bypass that check.
+    -- Doing it here ensures every line, regardless of path, is verified
+    -- against the company's active BAS chart.
     WITH submitted AS (
       SELECT DISTINCT value->>'account_number' AS acct
       FROM jsonb_array_elements(p_new_entry->'lines')
@@ -261,6 +269,7 @@ BEGIN
       END IF;
       v_lines_total_debit := v_lines_total_debit + v_line_debit;
       v_lines_total_credit := v_lines_total_credit + v_line_credit;
+      -- Round-2 fix: length(4) guard alongside the BETWEEN range.
       IF length(v_line_account) = 4 AND v_line_account BETWEEN '1900' AND '1999' THEN
         v_lines_bank_net := v_lines_bank_net + v_line_debit - v_line_credit;
       END IF;
@@ -351,6 +360,10 @@ BEGIN
     v_target_je := v_journal_entry_id;
   END IF;
 
+  -- Round-2 fix: explicit tenant isolation on the document side.
+  -- Without d.company_id = p_company_id, a cross-tenant document_id
+  -- on a transactions row (multi-tenant bug scenario) could link a
+  -- foreign tenant's doc onto this verifikat.
   WITH linked AS (
     UPDATE public.document_attachments AS d
     SET journal_entry_id = v_target_je,
@@ -439,7 +452,7 @@ DECLARE
   v_booked_sek numeric;
   v_fx_diff numeric;
   v_paid_in_inv_currency numeric;
-  v_payment_rate numeric;
+  v_payment_rate numeric;     -- round-3 (swedish-compliance traceability)
   v_inv_number_short text;
   v_caller uuid := auth.uid();
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
@@ -768,9 +781,10 @@ BEGIN
 
       IF v_invoice.currency = v_tx.currency THEN
         v_paid_in_inv_currency := v_alloc_amount;
-        v_payment_rate := NULL;
+        v_payment_rate := NULL;        -- same-currency: no FX context
       ELSE
         v_paid_in_inv_currency := COALESCE(v_invoice.remaining_amount, v_invoice.total);
+        -- Round-3: effective payment-day rate. SEK_paid / foreign_remaining.
         IF v_paid_in_inv_currency > 0 THEN
           v_payment_rate := ROUND((v_alloc_amount / v_paid_in_inv_currency) * 1000000) / 1000000;
         ELSE
