@@ -219,6 +219,11 @@ export const CreateInvoiceSchema = z.object({
   // present (enforced via rot-rut-rules.validateInvoice in the API).
   deduction_personnummer: z.string().max(20).optional(),
   deduction_housing_designation: z.string().max(128).optional(),
+  // When true, save as an unnumbered draft: skip F-series allocation and the
+  // invoice.created event until the user finalizes via POST /invoices/{id}/finalize
+  // ("Granska och skapa"). An unnumbered draft is not yet an issued faktura
+  // (ML 17 kap 24§), so it can be hard-deleted with no gap in the number series.
+  save_as_draft: z.boolean().optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 

@@ -91,24 +91,40 @@ describe('DELETE /api/invoices/[id]', () => {
     expect(body.data.invoice_number).toBe('F-2026001')
   })
 
-  it('cancels an un-numbered draft (legacy null-number row)', async () => {
+  it('hard deletes an un-numbered draft (saved via "Spara som utkast")', async () => {
     enqueue({
       data: { id: 'inv-1', status: 'draft', invoice_number: null, user_id: 'user-1' },
       error: null,
     })
+    // delete().select('id') returns the removed row
     enqueue({ data: [{ id: 'inv-1' }], error: null })
 
     const response = await DELETE(
       createMockRequest('/api/invoices/inv-1', { method: 'DELETE' }),
       createMockRouteParams({ id: 'inv-1' })
     )
-    const { status, body } = await parseJsonResponse<{
-      data: { cancelled: boolean; invoice_number: string | null }
-    }>(response)
+    const { status, body } = await parseJsonResponse<{ data: { deleted: boolean } }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.cancelled).toBe(true)
-    expect(body.data.invoice_number).toBeNull()
+    expect(body.data.deleted).toBe(true)
+  })
+
+  it('returns 409 INVOICE_CANCEL_RACE when an un-numbered draft is finalized concurrently', async () => {
+    enqueue({
+      data: { id: 'inv-1', status: 'draft', invoice_number: null, user_id: 'user-1' },
+      error: null,
+    })
+    // delete matched 0 rows — the draft was finalized (numbered) in the meantime.
+    enqueue({ data: [], error: null })
+
+    const response = await DELETE(
+      createMockRequest('/api/invoices/inv-1', { method: 'DELETE' }),
+      createMockRouteParams({ id: 'inv-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_CANCEL_RACE')
   })
 
   it('returns 409 INVOICE_CANCEL_RACE when status flipped between fetch and update', async () => {

@@ -1007,6 +1007,9 @@ export interface CreateInvoiceInput {
   deduction_personnummer?: string
   /** Fastighetsbeteckning. Required when any item carries deduction_type === 'rot'. */
   deduction_housing_designation?: string
+  /** Save as an unnumbered draft (no F-number, no invoice.created) until the
+   *  user finalizes via "Granska & skapa". Lets the draft be hard-deleted. */
+  save_as_draft?: boolean
   items: CreateInvoiceItemInput[]
 }
 

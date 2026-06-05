@@ -738,6 +738,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan ändrades samtidigt och kunde inte makuleras. Ladda om och försök igen.',
     message_en: 'Invoice was modified concurrently and could not be cancelled. Reload and retry.',
   },
+  INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Fakturan kunde inte hittas.',
+    message_en: 'Invoice not found.',
+  },
+  INVOICE_FINALIZE_NOT_DRAFT: {
+    httpStatus: 409,
+    message_sv: 'Endast onumrerade utkast kan skapas. Fakturan har redan ett nummer eller är inte ett utkast.',
+    message_en: 'Only unnumbered drafts can be finalized; this invoice already has a number or is not a draft.',
+  },
   // Quotes / Offerter
   QUOTE_NOT_FOUND: {
     httpStatus: 404,

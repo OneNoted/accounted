@@ -102,6 +102,7 @@ export default function NewInvoicePage() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
@@ -579,6 +580,61 @@ export default function NewInvoicePage() {
       })
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // "Spara som utkast" — save an unnumbered draft (save_as_draft) without the
+  // review dialog. The invoice gets no F-number and fires no invoice.created
+  // until the user opens it and clicks "Granska & skapa" (finalize). Same
+  // ROT/RUT privacy sanitization as handleConfirm.
+  async function saveDraftData(data: FormData) {
+    setIsSavingDraft(true)
+
+    const anyDeduction = data.items.some((i) => i.deduction_type)
+    const sanitizedItems = data.items.map((item) => {
+      if (item.deduction_type) return item
+      const {
+        deduction_type: _dt,
+        labor_hours: _lh,
+        work_type: _wt,
+        housing_designation: _hd,
+        apartment_number: _an,
+        ...rest
+      } = item
+      return rest
+    })
+    const payload: CreateInvoiceInput = {
+      ...(data as CreateInvoiceInput),
+      save_as_draft: true,
+      items: sanitizedItems as CreateInvoiceInput['items'],
+      ...(anyDeduction
+        ? {}
+        : { deduction_personnummer: undefined, deduction_housing_designation: undefined }),
+    }
+
+    try {
+      const response = await fetch('/api/invoices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(result, { context: 'invoice', statusCode: response.status }))
+      }
+      toast({
+        title: t('toast_draft_saved_title'),
+        description: t('toast_draft_saved_description'),
+      })
+      router.push(`/invoices/${result.data.id}`)
+    } catch (error) {
+      toast({
+        title: t('save_draft_failed_title'),
+        description: getErrorMessage(error, { context: 'invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSavingDraft(false)
     }
   }
 
@@ -1305,16 +1361,32 @@ export default function NewInvoicePage() {
           </Card>
 
             {/* Actions — desktop/tablet only */}
-            <Button
-              type="submit"
-              className="w-full hidden md:block"
-              size="lg"
-              disabled={isSubmitting || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              {isSelfBilled ? ts('register') : t('review_and_create')}
-            </Button>
+            <div className="hidden md:flex md:flex-col md:gap-2">
+              <Button
+                type="submit"
+                className="w-full"
+                size="lg"
+                disabled={isSubmitting || isSavingDraft || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
+                {isSelfBilled ? ts('register') : t('review_and_create')}
+              </Button>
+              {!isSelfBilled && watchDocumentType === 'invoice' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  size="lg"
+                  disabled={isSubmitting || isSavingDraft || !canWrite}
+                  title={!canWrite ? t('viewer_disabled_tooltip') : t('save_as_draft_tooltip')}
+                  onClick={handleSubmit(saveDraftData)}
+                >
+                  {isSavingDraft ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {t('save_as_draft')}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -1329,14 +1401,26 @@ export default function NewInvoicePage() {
                 {formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}
               </p>
             </div>
-            <Button
-              type="submit"
-              disabled={isSubmitting || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-              {isSelfBilled ? ts('register') : t('review_and_create')}
-            </Button>
+            <div className="flex items-center gap-2">
+              {!isSelfBilled && watchDocumentType === 'invoice' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isSubmitting || isSavingDraft || !canWrite}
+                  onClick={handleSubmit(saveDraftData)}
+                >
+                  {isSavingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : t('save_as_draft_short')}
+                </Button>
+              )}
+              <Button
+                type="submit"
+                disabled={isSubmitting || isSavingDraft || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
+                {isSelfBilled ? ts('register') : t('review_and_create')}
+              </Button>
+            </div>
           </div>
         </div>
       </form>

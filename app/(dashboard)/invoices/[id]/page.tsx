@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
-import { invoiceNumberDisplay, invoiceDisplayNumber } from '@/lib/invoices/display'
+import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import {
   Loader2,
@@ -101,6 +101,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isDownloading, setIsDownloading] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
+  const [isFinalizing, setIsFinalizing] = useState(false)
+  const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
 
@@ -373,6 +376,61 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloading(false)
   }
 
+  // Open the finalize dialog and peek the next F-number so the user can see
+  // which number they'll get before committing. Read-only (peek_next_invoice_number);
+  // the real number is allocated atomically on confirm and may differ by one if
+  // another invoice is created in between.
+  async function openFinalizeDialog() {
+    setNextNumberPreview(null)
+    setShowFinalizeDialog(true)
+    try {
+      const r = await fetch('/api/invoices/next-number?document_type=invoice')
+      if (r.ok) {
+        const json = await r.json()
+        setNextNumberPreview(json?.data?.preview ?? null)
+      }
+    } catch {
+      // Best-effort preview; the dialog still works without it.
+    }
+  }
+
+  // "Granska & skapa" — finalize an unnumbered draft into a real invoice:
+  // allocate the F-number and emit invoice.created. After this the invoice
+  // behaves like any draft (send / makulera), no longer hard-deletable.
+  async function finalizeInvoice() {
+    if (!invoice) return
+
+    setIsFinalizing(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/finalize`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error?.message || t('fallback_try_again'))
+      }
+
+      toast({
+        title: t('finalized_toast_title'),
+        description: t('finalized_toast_description', { number: data.data?.invoice_number ?? '' }),
+      })
+
+      setShowFinalizeDialog(false)
+      fetchInvoice()
+    } catch (error) {
+      toast({
+        title: t('finalize_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsFinalizing(false)
+    }
+  }
+
   async function deleteInvoice() {
     if (!invoice) return
 
@@ -385,15 +443,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       if (!response.ok) {
         const data = await response.json()
-        throw new Error(data.error || t('cancel_failed_fallback'))
+        throw new Error(data.error?.message || t('cancel_failed_fallback'))
       }
 
-      toast({
-        title: t('cancelled_toast_title'),
-        description: invoice.invoice_number
-          ? t('cancelled_with_number', { number: invoice.invoice_number })
-          : t('cancelled_draft'),
-      })
+      // Unnumbered drafts are hard deleted ("Ta bort"); numbered drafts are
+      // makulerade and keep their number in the series.
+      toast(
+        invoice.invoice_number
+          ? {
+              title: t('cancelled_toast_title'),
+              description: t('cancelled_with_number', { number: invoice.invoice_number }),
+            }
+          : {
+              title: t('removed_toast_title'),
+              description: t('removed_toast_description'),
+            }
+      )
 
       router.push('/invoices')
     } catch (error) {
@@ -427,6 +492,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isProforma = docType === 'proforma'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  // An unnumbered draft is one saved via "Spara som utkast" that hasn't been
+  // finalized — no F-number yet, so it can still be reviewed-and-created or
+  // hard-deleted. Once finalized it gets a number and behaves like any draft.
+  const isUnnumberedDraft = invoice.status === 'draft' && !invoice.invoice_number && isRealInvoice
+  // A numbered draft is issued-but-unsent ("Ej skickad"), distinct from an
+  // unnumbered draft ("Utkast"). Display-only — the DB status stays 'draft'.
+  const isUnsentNumberedInvoice = invoice.status === 'draft' && !!invoice.invoice_number && isRealInvoice
+  const displayStatusVariant = isUnsentNumberedInvoice ? 'outline' : statusVariant
+  const displayStatusLabel = isUnsentNumberedInvoice ? t('status_unsent') : statusLabel(invoice.status)
   // Self-billing invoices we received: the document is the counterparty's, so
   // there is no own PDF to render and no send step — it arrives already booked.
   const isSelfBilled = !!invoice.is_self_billed
@@ -440,7 +514,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : invoiceNumberDisplay(invoice.invoice_number)}</h1>
+              <h1 className={cn('font-display text-2xl sm:text-3xl font-medium tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '—')}</h1>
               {isProforma && (
                 <Badge variant="secondary" className="bg-primary/10 text-primary">{t('badge_proforma')}</Badge>
               )}
@@ -450,8 +524,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {isSelfBilled && (
                 <Badge variant="outline">{t('badge_self_billed')}</Badge>
               )}
-              <Badge variant={statusVariant as 'default' | 'secondary' | 'destructive'}>
-                {statusLabel(invoice.status)}
+              <Badge variant={displayStatusVariant as 'default' | 'secondary' | 'destructive' | 'outline'}>
+                {displayStatusLabel}
               </Badge>
             </div>
             <p className="text-muted-foreground">
@@ -479,7 +553,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('convert_to_invoice')}
             </Button>
           )}
-          {invoice.status === 'draft' && !isDeliveryNote && (
+          {isUnnumberedDraft && (
+            <Button
+              onClick={openFinalizeDialog}
+              disabled={isFinalizing || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('finalize_action')}
+            </Button>
+          )}
+          {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
             customerHasEmail ? (
               <Button
                 onClick={() => openSendDialog('email')}
@@ -716,7 +800,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <CardContent className="space-y-4">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{isSelfBilled ? t('external_number_label') : t('invoice_number_label')}</span>
-                <span className={cn('font-medium', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : invoiceNumberDisplay(invoice.invoice_number)}</span>
+                <span className={cn('font-medium', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '—')}</span>
               </div>
               {isSelfBilled && (invoice as Invoice).self_billing_agreement_ref && (
                 <div className="flex justify-between">
@@ -1087,60 +1171,84 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   </>
                 )}
                 {!isProforma && invoice.status === 'draft' && (
-                  <>
-                    {!isDeliveryNote && customerHasEmail ? (
-                      <>
-                        <Button
-                          className="w-full"
-                          onClick={() => openSendDialog('email')}
-                        >
-                          <Mail className="mr-2 h-4 w-4" />
-                          {t('send_via_email')}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          className="w-full text-muted-foreground"
-                          onClick={() => openSendDialog('manual')}
-                        >
-                          <Send className="mr-2 h-4 w-4" />
-                          {t('mark_sent_manually')}
-                        </Button>
-                        <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
-                          {t('send_manual_hint_with_email')}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        {!isDeliveryNote && (
-                          <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-2 dark:bg-yellow-950/30 dark:border-yellow-800">
-                            <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
-                            <p className="text-xs text-yellow-700 dark:text-yellow-400">
-                              {t('no_customer_email_warning')}
-                            </p>
-                          </div>
-                        )}
-                        <Button
-                          className="w-full"
-                          onClick={() => openSendDialog('manual')}
-                        >
-                          <Send className="mr-2 h-4 w-4" />
-                          {t('mark_sent_manually')}
-                        </Button>
-                        <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
-                          {t('send_manual_hint_no_email')}
-                        </p>
-                      </>
-                    )}
-                    <Button
-                      variant="outline"
-                      className="w-full text-destructive hover:text-destructive"
-                      onClick={() => setShowDeleteDialog(true)}
-                      disabled={isDeleting}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      {t('delete_draft')}
-                    </Button>
-                  </>
+                  isUnnumberedDraft ? (
+                    <>
+                      {/* Unnumbered draft (saved via "Spara som utkast"): review
+                          and create it, or remove it without a trace. */}
+                      <Button
+                        className="w-full"
+                        onClick={openFinalizeDialog}
+                        disabled={isFinalizing}
+                      >
+                        <FileText className="mr-2 h-4 w-4" />
+                        {t('finalize_action')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setShowDeleteDialog(true)}
+                        disabled={isDeleting}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t('remove_action')}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      {!isDeliveryNote && customerHasEmail ? (
+                        <>
+                          <Button
+                            className="w-full"
+                            onClick={() => openSendDialog('email')}
+                          >
+                            <Mail className="mr-2 h-4 w-4" />
+                            {t('send_via_email')}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="w-full text-muted-foreground"
+                            onClick={() => openSendDialog('manual')}
+                          >
+                            <Send className="mr-2 h-4 w-4" />
+                            {t('mark_sent_manually')}
+                          </Button>
+                          <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
+                            {t('send_manual_hint_with_email')}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          {!isDeliveryNote && (
+                            <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg mb-2 dark:bg-yellow-950/30 dark:border-yellow-800">
+                              <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-500 mt-0.5 flex-shrink-0" />
+                              <p className="text-xs text-yellow-700 dark:text-yellow-400">
+                                {t('no_customer_email_warning')}
+                              </p>
+                            </div>
+                          )}
+                          <Button
+                            className="w-full"
+                            onClick={() => openSendDialog('manual')}
+                          >
+                            <Send className="mr-2 h-4 w-4" />
+                            {t('mark_sent_manually')}
+                          </Button>
+                          <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
+                            {t('send_manual_hint_no_email')}
+                          </p>
+                        </>
+                      )}
+                      <Button
+                        variant="outline"
+                        className="w-full text-destructive hover:text-destructive"
+                        onClick={() => setShowDeleteDialog(true)}
+                        disabled={isDeleting}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t('delete_draft')}
+                      </Button>
+                    </>
+                  )
                 )}
                 {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && (
                   <>
@@ -1174,12 +1282,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      {/* Cancel confirmation dialog. The invoice transitions to status='cancelled'
-          and the F-series number is retained so the sequence stays gap-free. */}
+      {/* Remove/cancel confirmation. A numbered draft is makulerad (status flips
+          to 'cancelled', number retained for a gap-free series); an unnumbered
+          draft is hard deleted since it never entered the number series. */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('delete_dialog_title')}</DialogTitle>
+            <DialogTitle>{invoice.invoice_number ? t('delete_dialog_title') : t('remove_dialog_title')}</DialogTitle>
             <DialogDescription>
               {invoice.invoice_number ? (
                 <>
@@ -1192,7 +1301,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </>
               ) : (
                 <>
-                  {t('delete_dialog_desc_no_number')}
+                  {t('remove_dialog_desc')}
                 </>
               )}
             </DialogDescription>
@@ -1203,7 +1312,33 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
             <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
               {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {t('delete_dialog_confirm')}
+              {invoice.invoice_number ? t('delete_dialog_confirm') : t('remove_dialog_confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Finalize confirmation — "Granska & skapa". Allocates the F-number and
+          turns the unnumbered draft into a real, issued invoice. */}
+      <Dialog open={showFinalizeDialog} onOpenChange={setShowFinalizeDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('finalize_dialog_title')}</DialogTitle>
+            <DialogDescription>{t('finalize_dialog_desc')}</DialogDescription>
+          </DialogHeader>
+          {nextNumberPreview && (
+            <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-4 py-3">
+              <span className="text-sm text-muted-foreground">{t('finalize_dialog_number_label')}</span>
+              <span className="text-base font-medium tabular-nums">{nextNumberPreview}</span>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} disabled={isFinalizing}>
+              {t('finalize_dialog_cancel')}
+            </Button>
+            <Button onClick={finalizeInvoice} disabled={isFinalizing}>
+              {isFinalizing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('finalize_dialog_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>
