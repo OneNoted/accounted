@@ -13,6 +13,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
+import { getActor } from '@/lib/bookkeeping/actor-context'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
@@ -342,6 +343,12 @@ export async function createDraftEntry(
  * Uses the atomic commit_journal_entry RPC so the voucher number increment
  * and status update happen in one transaction. If the balance trigger rejects
  * the entry, the sequence increment rolls back — no burned numbers.
+ *
+ * Actor attribution: the surrounding runWithActor() scope (set by the
+ * approval entry points — commitPendingOperation, web approve routes) is
+ * forwarded to the RPC, which stamps journal_entries.committed_actor_* and
+ * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs,
+ * identical to pre-attribution behaviour.
  */
 export async function commitEntry(
   supabase: SupabaseClient,
@@ -351,6 +358,7 @@ export async function commitEntry(
   commitMethod?: string,
   rubricVersion?: string
 ): Promise<JournalEntry> {
+  const actor = getActor()
 
   // Atomic: increment voucher sequence + update status in one transaction.
   // Rolls back the sequence if the balance trigger or any constraint fails.
@@ -359,6 +367,8 @@ export async function commitEntry(
     p_entry_id: entryId,
     p_commit_method: commitMethod ?? null,
     p_rubric_version: rubricVersion ?? null,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
   })
 
   if (commitError) {

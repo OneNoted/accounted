@@ -109,7 +109,13 @@ describe('gnubok_approve_pending_operation', () => {
     // the resolution silently fails and we fall back to just commitMethod).
     // An api_key actor records 'api_key' in the immutable layer — MCP-relayed
     // acknowledgment, not a first-party human session (vision §8 P0-1).
-    expect(commitSpy.mock.calls[0][4]).toMatchObject({ commitMethod: 'api_key' })
+    // The actor option drives the runWithActor() scope inside
+    // commitPendingOperation so EVERY journal commit in the op is attributed
+    // (committed_actor_* + audit_log, migration 20260619120000).
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({
+      commitMethod: 'api_key',
+      actor: { type: 'api_key' },
+    })
     expect(result.status).toBe('committed')
     expect(result.operation_id).toBe('op-1')
     expect(result.data?.invoice_id).toBe('inv-1')
@@ -137,7 +143,10 @@ describe('gnubok_approve_pending_operation', () => {
         { type: actorType }
       )
 
-      expect(commitSpy.mock.calls[0][4]).toMatchObject({ commitMethod: expected })
+      expect(commitSpy.mock.calls[0][4]).toMatchObject({
+        commitMethod: expected,
+        actor: { type: actorType },
+      })
     }
   )
 

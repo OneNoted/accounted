@@ -8615,10 +8615,11 @@ export const tools: McpTool[] = [
       // for first-party agent surfaces (e.g. in-app agent chat) once they
       // commit through this layer with a distinguishable actor type.
       //
-      // Note: commitPendingOperation currently threads commitMethod into the
-      // journal only for create_voucher ops (pre-existing); other operation
-      // types keep their per-handler defaults, with this approval's actor
-      // recorded in processing_history below either way.
+      // commitMethod reaches the journal only for create_voucher ops
+      // (pre-existing); the actor option below covers EVERY journal commit
+      // this operation makes via the runWithActor() scope inside
+      // commitPendingOperation, stamping journal_entries.committed_actor_*
+      // and the audit_log COMMIT row (migration 20260619120000).
       const commitMethod =
         actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
 
@@ -8627,7 +8628,14 @@ export const tools: McpTool[] = [
         userId,
         companyId,
         operation,
-        { commitMethod, ...(userEmail ? { userEmail } : {}) }
+        {
+          commitMethod,
+          actor: {
+            type: actor?.type === 'api_key' ? 'api_key' : 'user',
+            ...(actor?.label ? { label: actor.label } : {}),
+          },
+          ...(userEmail ? { userEmail } : {}),
+        }
       )
 
       // Audit the MCP-initiated approval. Failure must not break the user

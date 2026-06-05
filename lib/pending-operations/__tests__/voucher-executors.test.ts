@@ -41,6 +41,7 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 })
 
 import { commitPendingOperation } from '../commit'
+import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
@@ -123,6 +124,67 @@ describe('commitPendingOperation: create_voucher', () => {
     // findFiscalPeriod must NOT be called when fiscal_period_id is supplied —
     // it's the caller's explicit choice.
     expect(findFiscalPeriod).not.toHaveBeenCalled()
+  })
+
+  it('runs the executor inside the opts.actor attribution scope (migration 20260619120000)', async () => {
+    // The real commitEntry reads getActor() and forwards it to the commit RPC.
+    // Here we assert the dispatcher establishes the scope around the executor —
+    // the engine mock captures what attribution it would have seen.
+    let seenActor: CommitActor | undefined
+    vi.mocked(createJournalEntry).mockImplementationOnce(async () => {
+      seenActor = getActor()
+      return makeJournalEntry({ id: 'je-101', voucher_number: 43, voucher_series: 'A' })
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'Attribution scope test',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '1010', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op, {
+      actor: { type: 'api_key', label: 'Claude Desktop' },
+    })
+
+    expect(result.status).toBe('committed')
+    expect(seenActor).toEqual({ type: 'api_key', label: 'Claude Desktop' })
+  })
+
+  it('leaves attribution unset when opts.actor is omitted (pre-attribution behaviour)', async () => {
+    let seenActor: CommitActor | undefined = { type: 'system' } // sentinel, must be overwritten
+    vi.mocked(createJournalEntry).mockImplementationOnce(async () => {
+      seenActor = getActor()
+      return makeJournalEntry({ id: 'je-102', voucher_number: 44, voucher_series: 'A' })
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })
+    enqueue({ data: null, error: null })
+
+    const op = makePendingOp({
+      params: {
+        entry_date: '2026-05-12',
+        description: 'No actor scope',
+        fiscal_period_id: 'fp-1',
+        lines: [
+          { account_number: '1010', debit_amount: 100, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+        ],
+      },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+    expect(seenActor).toBeUndefined()
   })
 
   it('resolves fiscal_period from entry_date when omitted', async () => {

@@ -28,6 +28,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { runWithActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { closePeriod, lockPeriod, unlockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -117,6 +118,16 @@ export interface CommitOptions {
    * 20260505190027_drop_agent_auto_commit.
    */
   commitMethod?: 'user_accept' | 'bulk_accept' | 'agent' | 'api_key'
+  /**
+   * WHO is relaying this approval (api_key with the key's display name, plain
+   * user, agent_chat, …). Propagated to every journal-entry commit made by the
+   * operation via the runWithActor() AsyncLocalStorage scope — unlike
+   * commitMethod, which only the create_voucher executor threads explicitly —
+   * and stamped onto journal_entries.committed_actor_* plus the audit_log
+   * COMMIT row by the commit_journal_entry RPC (migration 20260619120000).
+   * Omitted → NULL attribution, identical to pre-attribution behaviour.
+   */
+  actor?: CommitActor
 }
 
 // ── Helper: ensure fiscal period covers the date ──────────────────
@@ -3019,8 +3030,25 @@ async function commitLinkTransactionJournalEntry(
  *
  * Used by both the human-approval route and the auto-commit path. Status row
  * transitions are applied here so the two callers stay consistent.
+ *
+ * When opts.actor is set, the entire executor runs inside a runWithActor()
+ * scope so EVERY journal-entry commit the operation makes — regardless of
+ * which entry generator produced it — carries actor attribution into
+ * journal_entries.committed_actor_* and the audit_log COMMIT row via
+ * commitEntry() → commit_journal_entry RPC (migration 20260619120000).
  */
 export async function commitPendingOperation(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  pendingOp: PendingOperation,
+  opts: CommitOptions = {}
+): Promise<CommitResult> {
+  const run = () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts)
+  return opts.actor ? runWithActor(opts.actor, run) : run()
+}
+
+async function commitPendingOperationInner(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
