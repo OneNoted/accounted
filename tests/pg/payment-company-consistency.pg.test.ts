@@ -1,6 +1,6 @@
 /**
  * pg-real test for the payment company-consistency triggers
- * (20260619120000_payment_company_consistency.sql).
+ * (20260619130000_payment_company_consistency.sql).
  *
  * invoice_payments and supplier_invoice_payments are the only two child tables
  * carrying BOTH a parent FK and their own company_id. A row whose company_id

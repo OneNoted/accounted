@@ -1,6 +1,6 @@
 /**
  * pg-real test for the SECURITY DEFINER write-RPC tenant guards
- * (20260619120100_securitydefiner_write_rpc_tenant_guards.sql).
+ * (20260619130100_securitydefiner_write_rpc_tenant_guards.sql).
  *
  * Six SECURITY DEFINER write RPCs are EXECUTE-able by `authenticated` and so,
  * without an in-function tenant guard, an authenticated user could call them via
