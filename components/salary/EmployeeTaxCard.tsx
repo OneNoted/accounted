@@ -141,7 +141,17 @@ export default function EmployeeTaxCard({
                 value={municipality}
                 year={incomeYear}
                 disabled={disabled}
-                onChange={setMunicipality}
+                onChange={(value) => {
+                  setMunicipality(value)
+                  // Clearing the field must clear the derived table/rate too —
+                  // otherwise we'd report an empty kommun alongside a stale
+                  // table number (an inconsistent pair). Manual entry keeps its
+                  // own value.
+                  if (!value && !tableManual) {
+                    setTableNumber(null)
+                    setRate(null)
+                  }
+                }}
                 onSelect={(kommun, table, totalRate) => {
                   setMunicipality(kommun)
                   setRate(totalRate)

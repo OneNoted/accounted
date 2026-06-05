@@ -2297,7 +2297,6 @@
     "delete_dialog_status_makulerad": "Cancelled",
     "delete_dialog_desc_with_number_2": ".",
     "delete_dialog_number_kept": "Invoice number {number} is kept so the number series stays unbroken per ML 17 kap 24§.",
-    "delete_dialog_desc_no_number": "The draft is marked as cancelled. This cannot be undone.",
     "delete_dialog_cancel": "Cancel",
     "delete_dialog_confirm": "Cancel invoice",
     "finalize_action": "Review & create",

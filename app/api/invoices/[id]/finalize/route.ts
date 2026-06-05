@@ -41,8 +41,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Only an unnumbered draft can be finalized. Numbered drafts are already
     // issued (cancel via makulering instead); sent/paid invoices are immutable.
     // A null document_type means a plain invoice (older rows / default).
+    // Self-billed drafts are counterparty documents (självfakturering) and must
+    // not be allocated an F-series number through this flow even if a direct
+    // API call left one unnumbered.
     const docType = invoice.document_type ?? 'invoice'
-    if (invoice.status !== 'draft' || invoice.invoice_number || docType !== 'invoice') {
+    if (
+      invoice.status !== 'draft' ||
+      invoice.invoice_number ||
+      docType !== 'invoice' ||
+      invoice.is_self_billed
+    ) {
       return errorResponseFromCode('INVOICE_FINALIZE_NOT_DRAFT', log, { requestId })
     }
 
@@ -53,18 +61,31 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
     }
 
-    const { data: completeInvoice } = await supabase
+    const { data: completeInvoice, error: refetchError } = await supabase
       .from('invoices')
       .select('*, customer:customers(*), items:invoice_items(*)')
       .eq('id', id)
       .single()
 
-    if (completeInvoice) {
-      await eventBus.emit({
-        type: 'invoice.created',
-        payload: { invoice: completeInvoice as Invoice, companyId: companyId!, userId: user.id },
-      })
+    // The number was already allocated, so the invoice is finalized in the DB —
+    // but if the re-read fails we cannot emit invoice.created with a complete
+    // payload, which would silently drop the audit-log entry, webhooks, and any
+    // extension wired to the event. Surface it as a 500 rather than returning
+    // 200 with a null body and a hollow success toast. A reload shows the
+    // (correctly numbered) invoice; the failure is now visible in monitoring.
+    if (refetchError || !completeInvoice) {
+      log.error(
+        'finalize: number allocated but invoice re-read failed; invoice.created not emitted',
+        refetchError as Error,
+        { invoiceId: id },
+      )
+      return errorResponseFromCode('INVOICE_FINALIZE_INCOMPLETE', log, { requestId })
     }
+
+    await eventBus.emit({
+      type: 'invoice.created',
+      payload: { invoice: completeInvoice as Invoice, companyId: companyId!, userId: user.id },
+    })
 
     return NextResponse.json({ data: completeInvoice })
   },

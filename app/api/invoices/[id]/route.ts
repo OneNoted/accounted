@@ -1,9 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { eventBus } from '@/lib/events'
+import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger } from '@/lib/logger'
+
+ensureInitialized() // Module-level — wires the audit-log handler for invoice.draft_deleted.
 
 const log = createLogger('api.invoices.cancel')
 
@@ -80,6 +84,15 @@ export async function DELETE(
       // makulering of a now-issued invoice.
       return errorResponseFromCode('INVOICE_CANCEL_RACE', log)
     }
+
+    // The row is gone, so there's no journal trace of the removal. Emit an
+    // audit event carrying the identifiers so the event log records who deleted
+    // which draft and when — the makulering path leaves a journal/status trail,
+    // a hard delete otherwise leaves none.
+    await eventBus.emit({
+      type: 'invoice.draft_deleted',
+      payload: { invoiceId: id, companyId, userId: user.id },
+    })
 
     return NextResponse.json({ data: { deleted: true } })
   }

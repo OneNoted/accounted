@@ -120,4 +120,53 @@ describe('POST /api/invoices/[id]/finalize ("Granska & skapa")', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('INVOICE_FINALIZE_NOT_DRAFT')
   })
+
+  it('rejects a self-billed draft (counterparty document, no F-number allocation)', async () => {
+    const selfBilled = makeInvoice({
+      id: 'inv-1',
+      invoice_number: null,
+      status: 'draft',
+      document_type: 'invoice',
+      is_self_billed: true,
+    })
+    enqueue({ data: selfBilled, error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/finalize', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_FINALIZE_NOT_DRAFT')
+    expect(emitSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 INVOICE_FINALIZE_INCOMPLETE (and emits nothing) when the re-read fails after numbering', async () => {
+    const draft = makeInvoice({
+      id: 'inv-1',
+      invoice_number: null,
+      status: 'draft',
+      document_type: 'invoice',
+    })
+
+    enqueue({ data: draft, error: null })                            // fetch draft
+    enqueue({ data: '2026001', error: null })                        // number allocation
+    enqueue({ data: null, error: { message: 'transient db error' } }) // re-read fails
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/finalize', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' })
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INVOICE_FINALIZE_INCOMPLETE')
+    // No invoice.created emitted with a hollow payload.
+    expect(emitSpy).not.toHaveBeenCalled()
+  })
 })

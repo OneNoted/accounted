@@ -135,7 +135,10 @@ describe('POST /api/company/[id]/delete', () => {
     expect(status).toBe(200)
   })
 
-  it('still accepts the raw companies.name when a settings name exists', async () => {
+  it('rejects the stale companies.name when a settings name exists (only the displayed name is accepted)', async () => {
+    // Security: the UI only ever shows company_settings.company_name when set, so
+    // the server must not accept the stale companies.name as an alternative
+    // confirmation — that would be a delete path the user was never shown.
     mockAuth('user-1')
     mockService({
       companies: [{ data: { id: 'c1', name: 'Gammalt namn', archived_at: null }, error: null }],
@@ -150,7 +153,7 @@ describe('POST /api/company/[id]/delete', () => {
     const { status } = await parseJsonResponse(
       await POST(req, createMockRouteParams({ id: 'c1' }))
     )
-    expect(status).toBe(200)
+    expect(status).toBe(400)
   })
 
   it('returns 403 when caller is member but not owner', async () => {

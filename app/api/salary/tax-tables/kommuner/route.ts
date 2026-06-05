@@ -23,7 +23,14 @@ const cache = new Map<number, KommunRate[]>()
 
 export const GET = withRouteContext('salary.tax_tables.kommuner', async (request) => {
   const { searchParams } = new URL(request.url)
-  const year = parseInt(searchParams.get('year') || String(new Date().getFullYear()))
+  // A non-numeric or out-of-range year would otherwise reach Skatteverket as
+  // 'år': 'NaN' and stick a NaN key in the module cache for the process
+  // lifetime. Clamp to a sane window and fall back to the current year.
+  const parsedYear = parseInt(searchParams.get('year') || '', 10)
+  const year =
+    Number.isFinite(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100
+      ? parsedYear
+      : new Date().getFullYear()
 
   let kommuner = cache.get(year)
   if (!kommuner) {

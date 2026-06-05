@@ -30,6 +30,11 @@ export type CoreEvent =
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   // Invoicing
   | { type: 'invoice.created'; payload: { invoice: Invoice; userId: string; companyId: string } }
+  // Hard delete of an un-finalized, unnumbered draft (no F-series number was
+  // consumed). Carries only the identifiers — the row is gone — so the audit
+  // log can record who removed which draft and when. Numbered drafts are
+  // makulerade instead and surface via the journal, not this event.
+  | { type: 'invoice.draft_deleted'; payload: { invoiceId: string; userId: string; companyId: string } }
   | { type: 'invoice.sent'; payload: { invoice: Invoice; userId: string; companyId: string } }
   | { type: 'invoice.paid'; payload: { invoice: Invoice; paymentAmount: number; paymentDate: string; userId: string; companyId: string } }
   | { type: 'credit_note.created'; payload: { creditNote: CreditNote; userId: string; companyId: string } }

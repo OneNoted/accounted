@@ -2297,7 +2297,6 @@
     "delete_dialog_status_makulerad": "Makulerad",
     "delete_dialog_desc_with_number_2": ".",
     "delete_dialog_number_kept": "Fakturanumret {number} behålls för att hålla nummerserien obruten enligt ML 17 kap 24§.",
-    "delete_dialog_desc_no_number": "Utkastet markeras som makulerat. Detta kan inte ångras.",
     "delete_dialog_cancel": "Avbryt",
     "delete_dialog_confirm": "Makulera",
     "finalize_action": "Granska & skapa",

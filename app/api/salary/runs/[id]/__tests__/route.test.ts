@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createQueuedMockSupabase,
   createMockRequest,
@@ -7,25 +8,28 @@ import {
 } from '@/tests/helpers'
 
 // ── Mocks ────────────────────────────────────────────────────
-
-const mockCreateClient = vi.fn()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => mockCreateClient(),
-}))
+// The route is wrapped in withRouteContext, which resolves auth via
+// requireAuth() (the only path that enforces MFA/AAL2 on hosted) and the active
+// company via getActiveCompanyId(). Mock those, not createClient/getUser.
 
 vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
+}))
+
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: vi.fn(),
+}))
+
+vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
-}))
-
 import { DELETE } from '../route'
+import { requireAuth } from '@/lib/auth/require-auth'
 
 // ── Test data ────────────────────────────────────────────────
 
@@ -39,8 +43,10 @@ describe('DELETE /api/salary/runs/[id]', () => {
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null as never,
+      supabase: {} as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
     const request = createMockRequest('/api/salary/runs/run-1', { method: 'DELETE' })
@@ -53,8 +59,11 @@ describe('DELETE /api/salary/runs/[id]', () => {
 
   it('returns 404 when salary run not found', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
 
     enqueueMany([
       { data: null, error: { message: 'Not found' } }, // salary_runs lookup
@@ -70,8 +79,11 @@ describe('DELETE /api/salary/runs/[id]', () => {
 
   it('returns 400 when the run is not a draft (booked must be storno-reversed)', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
 
     enqueueMany([
       { data: { id: 'run-1', status: 'booked' } }, // salary_runs lookup
@@ -87,8 +99,11 @@ describe('DELETE /api/salary/runs/[id]', () => {
 
   it('deletes a draft run and returns success', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: supabase as never,
+      error: null,
+    })
 
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup

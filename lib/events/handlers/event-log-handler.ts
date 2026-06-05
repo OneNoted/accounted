@@ -17,6 +17,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'document.accessed',
   'document.deleted',
   'invoice.created',
+  'invoice.draft_deleted',
   'invoice.sent',
   'credit_note.created',
   'transaction.synced',
@@ -88,9 +89,13 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
 
   // Flat-string ID fields on events that don't carry a full entity object.
   // Bank connection events fall into this category — the connection lives in
-  // an extension table, so we record its id directly.
+  // an extension table, so we record its id directly. invoice.draft_deleted
+  // carries only invoiceId because the row is already gone.
   if (typeof payload.connectionId === 'string') {
     return payload.connectionId
+  }
+  if (typeof payload.invoiceId === 'string') {
+    return payload.invoiceId
   }
 
   // For journal_entry.corrected: use the corrected entry's ID

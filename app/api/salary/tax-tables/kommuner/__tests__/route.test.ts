@@ -68,6 +68,17 @@ describe('GET /api/salary/tax-tables/kommuner', () => {
     expect(body.data.kommuner[1]).toMatchObject({ kommun: 'Stockholm', tableNumber: 30 })
   })
 
+  it('falls back to the current year for a non-numeric year (no NaN reaches Skatteverket/cache)', async () => {
+    const currentYear = new Date().getFullYear()
+    const request = new Request('http://localhost/api/salary/tax-tables/kommuner?year=not-a-year')
+    const response = await GET(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { year: number } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.year).toBe(currentYear)
+    expect(fetchKommunTaxRates).toHaveBeenCalledWith(currentYear)
+  })
+
   it('caches per year — a second request for the same year does not refetch', async () => {
     const req1 = new Request('http://localhost/api/salary/tax-tables/kommuner?year=2032')
     await GET(req1, { params: Promise.resolve({}) })

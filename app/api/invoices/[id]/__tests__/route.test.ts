@@ -5,10 +5,15 @@ import {
   parseJsonResponse,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
+}))
+
+vi.mock('@/lib/init', () => ({
+  ensureInitialized: vi.fn(),
 }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -27,6 +32,7 @@ describe('DELETE /api/invoices/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
 
@@ -91,13 +97,15 @@ describe('DELETE /api/invoices/[id]', () => {
     expect(body.data.invoice_number).toBe('F-2026001')
   })
 
-  it('hard deletes an un-numbered draft (saved via "Spara som utkast")', async () => {
+  it('hard deletes an un-numbered draft (saved via "Spara som utkast") and emits an audit event', async () => {
     enqueue({
       data: { id: 'inv-1', status: 'draft', invoice_number: null, user_id: 'user-1' },
       error: null,
     })
     // delete().select('id') returns the removed row
     enqueue({ data: [{ id: 'inv-1' }], error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
 
     const response = await DELETE(
       createMockRequest('/api/invoices/inv-1', { method: 'DELETE' }),
@@ -107,6 +115,11 @@ describe('DELETE /api/invoices/[id]', () => {
 
     expect(status).toBe(200)
     expect(body.data.deleted).toBe(true)
+    // The hard delete leaves no journal trace, so an audit event must record it.
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'invoice.draft_deleted',
+      payload: { invoiceId: 'inv-1', companyId: 'company-1', userId: 'user-1' },
+    })
   })
 
   it('returns 409 INVOICE_CANCEL_RACE when an un-numbered draft is finalized concurrently', async () => {

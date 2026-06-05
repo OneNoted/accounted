@@ -387,7 +387,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const r = await fetch('/api/invoices/next-number?document_type=invoice')
       if (r.ok) {
         const json = await r.json()
-        setNextNumberPreview(json?.data?.preview ?? null)
+        const preview = json?.data?.preview
+        // Only show a value that looks like a real invoice number. Guards the
+        // preview against an unexpected/oversized API response being rendered
+        // verbatim — a short alphanumeric token (optional series prefix), never
+        // free-form text.
+        setNextNumberPreview(
+          typeof preview === 'string' && /^[A-Za-z0-9-]{1,32}$/.test(preview) ? preview : null
+        )
       }
     } catch {
       // Best-effort preview; the dialog still works without it.

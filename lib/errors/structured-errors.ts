@@ -748,6 +748,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Endast onumrerade utkast kan skapas. Fakturan har redan ett nummer eller är inte ett utkast.',
     message_en: 'Only unnumbered drafts can be finalized; this invoice already has a number or is not a draft.',
   },
+  INVOICE_FINALIZE_INCOMPLETE: {
+    httpStatus: 500,
+    message_sv: 'Fakturanumret tilldelades men fakturan kunde inte läsas tillbaka. Ladda om sidan och kontrollera fakturan.',
+    message_en: 'The invoice number was assigned but the invoice could not be re-read. Reload the page and verify the invoice.',
+  },
   // Quotes / Offerter
   QUOTE_NOT_FOUND: {
     httpStatus: 404,

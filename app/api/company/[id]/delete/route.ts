@@ -92,11 +92,13 @@ export async function POST(
     )
   }
 
-  // 3. Confirm name matches the company's display name. The UI shows
-  // company_settings.company_name (companies.name may be stale), so validate
-  // against that with a fallback to companies.name. Accept either value so the
-  // gate matches whatever name the user was shown. Case-sensitive trim, mirror
-  // of the client-side check in CompanyDangerZone.
+  // 3. Confirm name matches the exact name the UI displays. The dashboard layout
+  // resolves the displayed name as `company_settings.company_name || companies.name`
+  // (companies.name may be stale) and CompanyDangerZone gates on that value, so
+  // the server must accept ONLY that single name. Accepting the stale
+  // companies.name as an alternative would open a confirmation path the user was
+  // never shown — weakening the gate on an irreversible action (ASVS V8.2.1).
+  // Case-sensitive trim, mirror of the client-side check.
   const { data: companySettings } = await service
     .from('company_settings')
     .select('company_name')
@@ -106,7 +108,7 @@ export async function POST(
   const displayName = (companySettings?.company_name || company.name).trim()
   const typed = confirm_name.trim()
 
-  if (typed !== displayName && typed !== company.name.trim()) {
+  if (typed !== displayName) {
     return NextResponse.json(
       { error: 'Företagsnamnet stämmer inte överens.' },
       { status: 400 }
