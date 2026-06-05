@@ -151,4 +151,19 @@ describe('supplier_invoice_payments — company-consistency trigger', () => {
     )
     expect(rows.rows).toHaveLength(0)
   })
+
+  it('rejects an UPDATE that points company_id at a foreign tenant', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const supplierInvoiceId = await seedSupplierInvoice({ userId: a.userId, companyId: a.companyId })
+    const ins = await getPool().query(INSERT_SUPPLIER_PAYMENT, [a.userId, a.companyId, supplierInvoiceId])
+    const paymentId = ins.rows[0].id as string
+
+    await expect(
+      getPool().query(`UPDATE public.supplier_invoice_payments SET company_id = $1 WHERE id = $2`, [
+        b.companyId,
+        paymentId,
+      ]),
+    ).rejects.toThrow(/does not match supplier_invoices\.company_id/i)
+  })
 })

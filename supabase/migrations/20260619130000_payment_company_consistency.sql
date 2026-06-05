@@ -41,9 +41,16 @@ BEGIN
   WHERE p.company_id IS DISTINCT FROM si.company_id;
 
   IF v_bad_invoice_payments IS NOT NULL OR v_bad_supplier_payments IS NOT NULL THEN
-    RAISE EXCEPTION 'Cannot arm payment company-consistency triggers over dirty data. invoice_payments mismatched ids: %; supplier_invoice_payments mismatched ids: %',
-      COALESCE(v_bad_invoice_payments, ARRAY[]::uuid[]),
+    -- Row ids go to NOTICE (server log, operator-visible at apply time); the
+    -- exception itself carries only counts so error pipelines/aggregators do
+    -- not ingest identifier dumps (OWASP ASVS V8.2.1 / SOC 2 CC6.1).
+    RAISE NOTICE 'mismatched invoice_payments ids: %',
+      COALESCE(v_bad_invoice_payments, ARRAY[]::uuid[]);
+    RAISE NOTICE 'mismatched supplier_invoice_payments ids: %',
       COALESCE(v_bad_supplier_payments, ARRAY[]::uuid[]);
+    RAISE EXCEPTION 'Cannot arm payment company-consistency triggers over dirty data: % invoice_payments and % supplier_invoice_payments row(s) mismatched — see preceding NOTICEs for ids.',
+      COALESCE(array_length(v_bad_invoice_payments, 1), 0),
+      COALESCE(array_length(v_bad_supplier_payments, 1), 0);
   END IF;
 END
 $$;
@@ -56,6 +63,7 @@ $$;
 CREATE OR REPLACE FUNCTION public.enforce_payment_company_consistency()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY INVOKER
 AS $$
 DECLARE
   v_parent_company_id uuid;

@@ -189,7 +189,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.reserve_voucher_range(uuid, uuid, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.reserve_voucher_range(uuid, uuid, text, integer) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.reserve_voucher_range(uuid, uuid, text, integer) TO authenticated;
 
 -- =============================================================================
@@ -232,7 +232,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.release_voucher_range(uuid, uuid, text, integer, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.release_voucher_range(uuid, uuid, text, integer, integer) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.release_voucher_range(uuid, uuid, text, integer, integer) TO authenticated;
 
 -- =============================================================================
@@ -299,7 +299,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.rotate_company_inbox(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.rotate_company_inbox(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rotate_company_inbox(uuid) TO authenticated;
 
 NOTIFY pgrst, 'reload schema';
