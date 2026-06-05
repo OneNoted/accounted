@@ -57,7 +57,7 @@ All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\`
 2. **"Which invoices are overdue?"**
    Claude calls \`gnubok_get_ar_ledger\` (kundreskontra) and lists outstanding customer invoices with aging.
 3. **"Compute my VAT report for this quarter and tell me if I can close it."**
-   Claude calls \`gnubok_get_vat_report\` for the momsdeklaration rutor, then \`gnubok_vat_close_check\` to scan for blockers (uncategorised rows, unapproved supplier invoices, receipts missing on expenses ≥ 4 000 kr) and reports \`ready_to_close\`.
+   Claude calls \`gnubok_get_vat_report\` for the momsdeklaration rutor, then \`gnubok_vat_close_check\` to scan for blockers (uncategorised rows, unapproved supplier invoices, missing receipts on expenses ≥ 4 000 kr — the tool's high-value heuristic; BFL requires underlag for every affärshändelse regardless of amount) and reports \`ready_to_close\`.
 
 ## 10-minute reviewer test
 
