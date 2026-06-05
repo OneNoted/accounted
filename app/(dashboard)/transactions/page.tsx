@@ -875,7 +875,7 @@ export default function TransactionsPage() {
     // standing third.
     const ok = await confirm({
       title: 'Ignorera transaktionen?',
-      description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Du kan återställa den under Bankavstämning när som helst.`,
+      description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton — riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
       confirmLabel: 'Ignorera',
       cancelLabel: 'Avbryt',
       variant: 'warning',

@@ -56,6 +56,21 @@ describe('countInboxDocuments', () => {
     expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
   })
 
+  it('chunks the document id filter so large inboxes stay under URL limits', async () => {
+    // 200 deduped ids → two .in() chunks of 150 + 50, counts summed.
+    enqueue({
+      data: Array.from({ length: 200 }, (_, i) => ({
+        id: `item-${i}`,
+        document_id: `doc-${i}`,
+      })),
+    })
+    enqueue({ count: 140 })
+    enqueue({ count: 45 })
+    await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(185)
+    // 1 inbox query + 2 chunked document queries.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(3)
+  })
+
   it('soft-fails to 0 on query error', async () => {
     enqueue({ error: { message: 'boom' } })
     await expect(countInboxDocuments(supabase, COMPANY)).resolves.toBe(0)
@@ -101,6 +116,19 @@ describe('countVerifikatMissingDocument', () => {
     enqueue({ error: { message: 'boom' } })
     enqueue({ data: [] })
     enqueue({ data: [] })
+    await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(0)
+  })
+
+  it('soft-fails to 0 (never a silent partial) when pagination errors mid-stream', async () => {
+    // First page of entries is full (1000 = fetchAllRows page size), so a
+    // second page is requested and errors. fetchAllRows must throw — the
+    // count drops to a logged 0 rather than computing from a truncated set.
+    enqueue({
+      data: Array.from({ length: 1000 }, (_, i) => ({ id: `je-${i}` })),
+    })
+    enqueue({ data: [] }) // document_attachments page 1
+    enqueue({ data: [] }) // exemptions page 1
+    enqueue({ error: { message: 'mid-stream failure' } }) // entries page 2
     await expect(countVerifikatMissingDocument(supabase, COMPANY)).resolves.toBe(0)
   })
 })

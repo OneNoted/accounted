@@ -36,6 +36,12 @@ export const NEEDS_DOC_SOURCE_TYPES = [
  */
 const INBOX_SCAN_CAP = 1000
 
+/**
+ * Max ids per PostgREST .in() filter. Ids travel in the GET query string;
+ * 150 UUIDs ≈ 5.6 KB, comfortably under common 8 KB proxy URL limits.
+ */
+const IN_CLAUSE_CHUNK = 150
+
 function logAndZero(
   category: string,
   companyId: string,
@@ -89,20 +95,31 @@ export async function countInboxDocuments(
     .limit(INBOX_SCAN_CAP)
   if (error) return logAndZero('inbox_document', companyId, error)
 
-  const docIds = (rows ?? [])
-    .map((r) => r.document_id as string | null)
-    .filter((id): id is string => !!id)
+  const docIds = [
+    ...new Set(
+      (rows ?? [])
+        .map((r) => r.document_id as string | null)
+        .filter((id): id is string => !!id),
+    ),
+  ]
   if (docIds.length === 0) return 0
 
-  const { count, error: docError } = await supabase
-    .from('document_attachments')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .in('id', docIds)
-    .is('journal_entry_id', null)
-    .eq('is_current_version', true)
-  if (docError) return logAndZero('inbox_document', companyId, docError)
-  return count ?? 0
+  // PostgREST serialises .in() into the GET query string — chunk the id list
+  // so a large inbox can't push the URL past proxy limits (HTTP 414, which
+  // would silently zero the badge via the error branch).
+  let total = 0
+  for (let i = 0; i < docIds.length; i += IN_CLAUSE_CHUNK) {
+    const { count, error: docError } = await supabase
+      .from('document_attachments')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .in('id', docIds.slice(i, i + IN_CLAUSE_CHUNK))
+      .is('journal_entry_id', null)
+      .eq('is_current_version', true)
+    if (docError) return logAndZero('inbox_document', companyId, docError)
+    total += count ?? 0
+  }
+  return total
 }
 
 /** Shared predicate for transactions carrying a match hint. */
