@@ -95,6 +95,15 @@ export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCO
  * Scopes that allow staging a pending_operation. Used to detect a
  * segregation-of-duties conflict when paired with `pending_operations:approve`
  * on the same API key (ISO 27001:2022 A.5.3, SOC 2 CC6.1).
+ *
+ * Documented system control (BFNAR 2013:2 systemdokumentation): `agent:write`
+ * is deliberately NOT a staging scope. The memory tools it gates
+ * (gnubok_remember_fact/forget_fact) write advisory agent context — they
+ * cannot create, mutate, or stage räkenskapsinformation, so memory-write +
+ * approve on one key does not let an agent both stage and commit bookkeeping.
+ * If a future memory surface ever feeds DIRECTLY into voucher generation
+ * (rather than via a separately staged-and-approved operation), revisit this
+ * classification.
  */
 export const STAGING_SCOPES: ApiKeyScope[] = [
   'transactions:write',

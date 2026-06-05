@@ -118,6 +118,21 @@ export const POST = withRouteContext(
       })
     }
 
+    if (sodAcknowledgedAt) {
+      // High-risk security event: the creator self-attested the stage+approve
+      // combination. The durable record is the sod_acknowledged_* pair on the
+      // key row; this structured entry additionally lands the acceptance in
+      // the logging pipeline (ASVS V16.1.1 / SOC 2 CC6.1).
+      log.warn('api_key.sod_acknowledged', {
+        keyId: data.id,
+        keyPrefix: data.key_prefix,
+        conflictingScope,
+        scopes,
+        acknowledgedBy: user.id,
+        companyId,
+      })
+    }
+
     return NextResponse.json({
       data: {
         ...data,

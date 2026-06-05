@@ -7,6 +7,13 @@
 -- combined risk and when, so the acceptance is auditable (ISO 27001:2022
 -- A.5.3 segregation of duties / SOC 2 CC6.1; BFNAR 2013:2 behandlingshistorik).
 --
+-- DELIBERATE DESIGN: this is a SELF-attestation — sod_acknowledged_by is the
+-- creating user, not a second approver. The product serves enskilda firmor
+-- where a second person frequently does not exist, and the claude.ai chat
+-- approval flow legitimately requires stage+approve on one credential. The
+-- control objective is informed consent + an auditable record, not dual
+-- control; hard blocking was considered and rejected (see PR #681).
+--
 -- Part 2 — agent:write grandfathering
 -- The memory tools gnubok_remember_fact / gnubok_forget_fact were previously
 -- UNMAPPED in TOOL_SCOPE_MAP, which meant they were callable by ANY
