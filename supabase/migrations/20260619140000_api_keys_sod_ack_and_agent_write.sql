@@ -25,6 +25,14 @@ ALTER TABLE public.api_keys
   ADD COLUMN IF NOT EXISTS sod_acknowledged_at timestamptz,
   ADD COLUMN IF NOT EXISTS sod_acknowledged_by uuid REFERENCES auth.users(id);
 
+-- The acknowledgement is only auditable as a pair (WHO accepted WHEN) — enforce
+-- both-or-neither at the DB layer so a partial write can never silently pass.
+ALTER TABLE public.api_keys
+  DROP CONSTRAINT IF EXISTS api_keys_sod_ack_paired;
+ALTER TABLE public.api_keys
+  ADD CONSTRAINT api_keys_sod_ack_paired
+    CHECK ((sod_acknowledged_at IS NULL) = (sod_acknowledged_by IS NULL));
+
 -- Grandfather agent:write onto existing non-revoked keys that already carry an
 -- explicit scope list. Keys with NULL scopes are intentionally left NULL —
 -- pinning them to a materialized list would freeze their dynamic

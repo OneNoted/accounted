@@ -113,6 +113,31 @@ describe('api_keys SoD-ack columns + agent:write grandfathering', () => {
     expect(rows[0]?.sod_acknowledged_by).toBe(userId)
   })
 
+  it('rejects a partial SoD acknowledgement (paired-NULL CHECK)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const keyId = await insertApiKey({
+      userId,
+      companyId,
+      scopes: ['invoices:write', 'pending_operations:approve'],
+    })
+
+    // Timestamp without acknowledger — the audit pair must be both-or-neither.
+    await expect(
+      getPool().query(
+        `UPDATE public.api_keys SET sod_acknowledged_at = now() WHERE id = $1`,
+        [keyId],
+      ),
+    ).rejects.toMatchObject({ code: '23514' }) // check_violation
+
+    // Acknowledger without timestamp — equally rejected.
+    await expect(
+      getPool().query(
+        `UPDATE public.api_keys SET sod_acknowledged_by = $2 WHERE id = $1`,
+        [keyId, userId],
+      ),
+    ).rejects.toMatchObject({ code: '23514' })
+  })
+
   it('grandfather UPDATE adds agent:write to scoped, non-revoked keys (idempotent)', async () => {
     const { userId, companyId } = await seedCompany()
     // Mimic a pre-migration key created with an explicit scope list but WITHOUT
