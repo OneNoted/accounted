@@ -833,6 +833,20 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Perioden är redan låst.',
     message_en: 'Period is already locked.',
   },
+  // Forward-chaining a new räkenskapsår is blocked while a prior period is
+  // still fully open (not locked, not closed, not covered by the company-wide
+  // lock-through date). BFL 6 kap allows löpande bokföring of the new year in
+  // parallel with bokslut, but the prior year must at least be locked so
+  // nothing is back-posted into a year you've moved on from. The blocking
+  // periods (id + name + dates) are attached to the response `details` so the
+  // UI can offer to lock them inline. See app/api/bookkeeping/fiscal-periods.
+  PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS: {
+    httpStatus: 409,
+    message_sv:
+      'Du måste låsa föregående räkenskapsår innan du kan skapa ett nytt.',
+    message_en:
+      'Cannot create a new fiscal year while a prior period is still open; lock it first.',
+  },
 }
 
 const YEAR_END: Record<string, StructuredErrorEntry> = {
