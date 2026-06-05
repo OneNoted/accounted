@@ -5,6 +5,7 @@ describe('tools/list payload size guard', () => {
   it('keeps the projected tools/list payload under the context-budget ceiling', () => {
     const projection = tools.map((t) => ({
       name: t.name,
+      ...(t.title ? { title: t.title } : {}),
       description: t.description,
       inputSchema: t.inputSchema,
       ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
@@ -13,7 +14,7 @@ describe('tools/list payload size guard', () => {
     }))
     const payload = JSON.stringify({ tools: projection })
     const approxTokens = Math.round(payload.length / 4)
-    // Ceiling progression: 20K → 25K → 30K → 31K → 31.5K.
+    // Ceiling progression: 20K → 25K → 30K → 31K → 31.5K → 32K → 36K.
     //   * 20K → 25K when item 8 of the agent-native API plan landed
     //     (additionalProperties: false on all inputSchemas + period_status in the
     //     staged operation envelope).
@@ -38,9 +39,13 @@ describe('tools/list payload size guard', () => {
     //     faktura paid against an already-posted verifikat (no new bokföring),
     //     which is exactly the fix for invoices imported from Fortnox as open
     //     payables while their payment already exists in the SIE-imported GL.
+    //   * 32K → 36K when top-level Tool.title (MCP spec 2025-06-18) landed on all
+    //     92 tools for Connectors Directory readiness; the ~10 longest descriptions
+    //     were trimmed toward 180–200 chars to partly offset. Headroom reserved for
+    //     the upcoming Skatteverket tools.
     // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(32_000)
+    expect(approxTokens).toBeLessThan(36_000)
   })
 })

@@ -21,7 +21,7 @@ For internal Anthropic API usage (today only `extensions/general/invoice-inbox/l
 
 ## Payload-size watchdog
 
-`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling (currently 25,000 tokens). If the test fires, the right answer is rarely "raise the ceiling" — instead, trim descriptions or leverage `gnubok_search_tools` (already deployed; tool definitions can defer to it for discovery rather than enumerating in `tools/list`).
+`payload-size.bench.test.ts` enforces a `tools/list` JSON payload ceiling (currently 36,000 tokens — bumped from 32,000 when top-level `Tool.title` landed on all tools for Claude Connectors Directory readiness). If the test fires, the right answer is rarely "raise the ceiling" — instead, trim descriptions or leverage `gnubok_search_tools` (already deployed; tool definitions can defer to it for discovery rather than enumerating in `tools/list`).
 
 ## Where things live
 

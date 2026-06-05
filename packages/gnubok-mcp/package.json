@@ -22,6 +22,7 @@
     "node": ">=18"
   },
   "files": [
-    "index.mjs"
+    "index.mjs",
+    "README.md"
   ]
 }

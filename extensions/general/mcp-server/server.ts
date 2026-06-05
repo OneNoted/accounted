@@ -121,6 +121,10 @@ interface McpToolAnnotations {
 
 interface McpTool {
   name: string
+  // Top-level Tool.title per MCP spec 2025-06-18 (human-facing label for
+  // directory listings; distinct from annotations.title). Short Title Case
+  // noun phrase. Flows out via the tools/list serializer below.
+  title?: string
   description: string
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
@@ -1399,6 +1403,7 @@ function previousPeriodArgs(
 export const tools: McpTool[] = [
   {
     name: 'gnubok_search_tools',
+    title: 'Search MCP Tools',
     description: 'Search Accounted MCP tools by keyword and return their schemas at a chosen detail level. Call this first when looking for a capability — avoids loading every tool schema upfront.',
     inputSchema: {
       type: 'object',
@@ -1517,6 +1522,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_skills',
+    title: 'List Domain Skills',
     description: 'List available domain-knowledge skills filtered to this company (entity type, VAT, payroll). Workflow guides + loaded specialty atoms. Pass include_all=true to see hidden skills. Call gnubok_load_skill(slug) for any body.',
     inputSchema: {
       type: 'object',
@@ -1641,6 +1647,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_load_skill',
+    title: 'Load Domain Skill',
     description: 'Load a skill body by slug. Workflow slugs are flat (e.g. "month-end-close"); atom slugs match registry ids (e.g. "vertical/konsult-it", "modifier/holding-ab"). Call gnubok_list_skills to find slugs.',
     inputSchema: {
       type: 'object',
@@ -1704,7 +1711,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_remember_fact',
-    description: 'Capture a durable fact, preference, pattern, or correction about the company. Use mid-conversation when the user says something the agent should remember next time. Writes immediately — does not stage. Use sparingly for foundational signal, not for one-off context.',
+    title: 'Remember Company Fact',
+    description: 'Capture a durable fact, preference, or correction about the company. Use mid-conversation when the user says something to remember next time. Writes immediately — does not stage. Use sparingly.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -1818,6 +1826,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_forget_fact',
+    title: 'Forget Company Fact',
     description: 'Deactivate a memory entry by id. Use when the user explicitly asks to forget something or supersedes it. The row is kept for audit (is_active=false) but no longer surfaces in prompts.',
     inputSchema: {
       type: 'object',
@@ -1860,6 +1869,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_feedback',
+    title: 'Send Agent Feedback',
     description: 'Report agent-side feedback: missing tool, wrong description, skill gap, or a positive signal. Goes to event_log for product-team triage. Rate-limited 1/min/key.',
     inputSchema: {
       type: 'object',
@@ -1958,6 +1968,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_agent_briefing',
+    title: 'Get Agent Briefing',
     description: 'Bootstrap this company\'s specialized accountant context in one call: profile_summary, the atoms loaded for the company (metadata only — call gnubok_load_skill for bodies), and the top-30 active memories. Call once at session start.',
     inputSchema: {
       type: 'object',
@@ -2088,7 +2099,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_transactions',
-    description: 'Stage one or more transactions for the user to approve. Each item creates a separate pending operation; commit each via gnubok_approve_pending_operation when the user authorises. Useful for ingesting rows from external sources (Airtable, CSVs, etc.). Max 10 per call.',
+    title: 'Create Bank Transactions',
+    description: 'Stage one or more transactions for the user to approve. Each creates a separate pending operation; commit each via gnubok_approve_pending_operation. Use for ingesting external rows (Airtable, CSV). Max 10.',
     outputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2200,6 +2212,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_uncategorized_transactions',
+    title: 'List Uncategorized Transactions',
     description: 'List bank transactions with no journal entry yet, newest first. Paginated.',
     inputSchema: {
       type: 'object',
@@ -2270,6 +2283,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_transactions_without_documents',
+    title: 'List Transactions Missing Receipts',
     description: 'List BANK TRANSACTIONS booked without an attached underlag. For imported/manual verifikat (no bank tx row) call gnubok_list_verifikat_without_documents — this tool only covers bank-driven entries.',
     inputSchema: {
       type: 'object',
@@ -2349,6 +2363,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_verifikat_without_documents',
+    title: 'List Verifikat Missing Documents',
     description: 'List POSTED journal entries (verifikat) that have no document_attachments row. Covers SIE-imported, manual and salary vouchers that the transactions-based tool misses. Newest first, paginated.',
     inputSchema: {
       type: 'object',
@@ -2446,7 +2461,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_categorize_transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation when the user authorises. If the row has an attached underlag, the tool reads its extracted_data and rejects vat_treatment="reverse_charge" when the seller already charged VAT.',
+    title: 'Categorize Bank Transaction',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. If an underlag is attached it rejects vat_treatment="reverse_charge" when the seller already charged VAT.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2529,6 +2545,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_receipt_matcher',
+    title: 'Receipt Matcher Widget',
     description: 'Open an interactive widget for drag-and-drop receipt-to-transaction matching. Renders inline in compatible clients.',
     inputSchema: {
       type: 'object',
@@ -2581,6 +2598,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_customers',
+    title: 'List Customers',
     description: 'List all customers for the active company. Use to look up customer_id for invoice creation.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     outputSchema: {
@@ -2613,6 +2631,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_customer',
+    title: 'Create Customer',
     description: 'Stage a new customer. Stages for user approval — NOT created until approved in the web app. EU VAT numbers trigger VIES validation.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
@@ -2693,6 +2712,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_invoices',
+    title: 'List Customer Invoices',
     description: 'List invoices for the active company, newest first. Optional status filter.',
     inputSchema: {
       type: 'object',
@@ -2754,6 +2774,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_invoice',
+    title: 'Create Customer Invoice',
     description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Stages for user approval — invoice number assigned at approval.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
@@ -2898,6 +2919,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_trial_balance',
+    title: 'Trial Balance (Råbalans)',
     description: 'Trial balance (huvudbok) for a fiscal period — all account balances with debit/credit totals. Defaults to most recent period.',
     inputSchema: {
       type: 'object',
@@ -3016,6 +3038,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_vat_report',
+    title: 'VAT Declaration (Momsdeklaration)',
     description: 'VAT declaration (momsdeklaration, SKV 4700) for a period. Returns all rutor; ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to also open the review widget (claude.ai / Desktop).',
     outputSchema: VAT_REPORT_OUTPUT_SCHEMA,
     inputSchema: {
@@ -3053,6 +3076,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_review_widget',
+    title: 'VAT Review Widget',
     description: 'Open the interactive VAT review widget for a period. Equivalent to gnubok_get_vat_report(render_ui=true); kept as an alias for clients pinned to this tool name.',
     inputSchema: {
       type: 'object',
@@ -3079,7 +3103,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_vat_close_check',
-    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor + blocker scan (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts ≥ 4000 kr, reverse-charge mirroring) + period sanity ratios + Skatteverket deadline + ready_to_close.",
+    title: 'VAT Close Check (Momsdeklaration)',
+    description: "Answer 'can I close VAT?' in one call. Returns SKV 4700 rutor + blocker scan (uncategorized, unapproved supplier invoices, reconciliation diff, missing receipts ≥ 4000 kr, reverse-charge) + ready_to_close.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3129,6 +3154,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_kpi_report',
+    title: 'Business KPI Report',
     description: 'Business KPIs for a fiscal period: gross margin, net result, cash position, receivables, expense ratio, payment days, VAT liability, monthly trend.',
     inputSchema: {
       type: 'object',
@@ -3231,6 +3257,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_income_statement',
+    title: 'Income Statement (Resultaträkning)',
     description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category.',
     inputSchema: {
       type: 'object',
@@ -3287,6 +3314,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_paid',
+    title: 'Mark Invoice as Paid',
     description: 'Mark an invoice as paid and create the payment journal entry. Stages for approval. Status must be sent or overdue.',
     inputSchema: {
       type: 'object',
@@ -3344,6 +3372,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_send_invoice',
+    title: 'Send Invoice by Email',
     description: 'Send invoice via email with PDF attachment. Stages for approval. Requires customer email + email service configured.',
     inputSchema: {
       type: 'object',
@@ -3403,6 +3432,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_mark_invoice_as_sent',
+    title: 'Mark Invoice as Sent',
     description: 'Mark a draft invoice as sent without sending email (when delivered manually). Stages for approval. Status must be draft.',
     inputSchema: {
       type: 'object',
@@ -3456,6 +3486,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_suppliers',
+    title: 'List Suppliers (Leverantörer)',
     description: 'List all suppliers (leverantörer) with contact and payment details, sorted by name.',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     outputSchema: {
@@ -3488,7 +3519,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_supplier',
-    description: 'Stage a new supplier (leverantör). Stages for user approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
+    title: 'Create Supplier (Leverantör)',
+    description: 'Stage a new supplier (leverantör). Stages foruser approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -3623,7 +3655,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_supplier_invoices',
-    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
+    title: 'List Supplier Invoices',
+    description: 'List supplier invoices (leverantörsfakturor),sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3680,6 +3713,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_counterparty_templates',
+    title: 'List Counterparty Templates',
     description: 'List active counterparty categorization templates — learned patterns from prior categorizations used for auto-matching new transactions.',
     inputSchema: {
       type: 'object',
@@ -3728,6 +3762,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_suggest_categories',
+    title: 'Suggest Transaction Categories',
     description: 'Suggest categories for uncategorized transactions using mapping rules, pattern matching, history, and counterparty templates. Up to 20 transactions per call.',
     inputSchema: {
       type: 'object',
@@ -3830,6 +3865,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_accounts',
+    title: 'List Chart of Accounts (Kontoplan)',
     description: 'List chart of accounts (kontoplan). account_class: 1=assets, 2=liabilities, 3=revenue, 4–7=expenses, 8=financial.',
     inputSchema: {
       type: 'object',
@@ -3879,6 +3915,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_balance_sheet',
+    title: 'Balance Sheet (Balansräkning)',
     description: 'Balance sheet (balansräkning) for a fiscal period: assets, equity, and liabilities sections with totals + balance check.',
     inputSchema: {
       type: 'object',
@@ -3931,6 +3968,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_general_ledger',
+    title: 'General Ledger (Huvudbok)',
     description: 'General ledger (huvudbok) for a fiscal period: per-account opening balance, entries, closing balance. Optional account range filter. For ad-hoc cross-account, amount, or free-text line queries use gnubok_query_journal.',
     inputSchema: {
       type: 'object',
@@ -3973,6 +4011,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_query_journal',
+    title: 'Query Journal Lines',
     description: "Flexible journal-line query — replaces chained ledger calls for ad-hoc questions. Filters: accounts, date range, amount range, voucher series/number, source type, status, project, cost center, free-text. Returns lines with parent voucher metadata + totals.",
     inputSchema: {
       type: 'object',
@@ -4297,6 +4336,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_ar_ledger',
+    title: 'AR Ledger (Kundreskontra)',
     description: 'Accounts receivable ledger (kundreskontra): outstanding customer invoices with aging.',
     inputSchema: {
       type: 'object',
@@ -4320,6 +4360,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_supplier_ledger',
+    title: 'AP Ledger (Leverantörsreskontra)',
     description: 'Accounts payable ledger (leverantörsreskontra): outstanding supplier invoices with aging.',
     inputSchema: {
       type: 'object',
@@ -4345,6 +4386,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_transaction_to_invoice',
+    title: 'Match Transaction to Invoice',
     description: 'Match a bank transaction (income, amount>0) to a customer invoice. Confirm tx date/amount and invoice number/customer match before staging — preview mirrors what you pass. Supports partial payments and auto-storno of prior categorization.',
     inputSchema: {
       type: 'object',
@@ -4421,7 +4463,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_match_batch_allocate',
-    description: 'Allocate 1 bank tx across N customer OR N supplier invoices (samlingsbetalning, BFL 5 kap 6§). Use when one receipt covers many invoices, or one transfer pays many bills. Customer kind requires income tx; supplier kind requires expense. Never mix kinds. Stages.',
+    title: 'Batch-Allocate Payment',
+    description: 'Allocate 1 bank tx across N customer OR N supplier invoices (samlingsbetalning, BFL 5 kap 6§). Use when one receipt covers many invoices or one transfer pays many bills. Customer needs income, supplier expense. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4609,7 +4652,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_transaction_to_journal_entry',
-    description: 'Link 1 bank tx to an already-posted verifikat (no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
+    title: 'Link Transaction to Verifikat',
+    description: 'Link 1 bank tx to an already-posted verifikat(no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4762,7 +4806,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_bulk_book_transactions',
-    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Two paths: link N txs to an existing posted verifikat, or create a new verifikat from caller-supplied lines. All txs must share date + direction. Docs on the txs inherit. Stages.',
+    title: 'Bulk-Book Transactions',
+    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Either link N txs to an existing posted verifikat, or create a new verifikat from caller lines. All txs share date + direction. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4948,7 +4993,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_find_voucher_candidates_for_invoice',
-    description: 'List posted verifikat that credit kundfordran (1510) and could be the payment for this invoice. Use before gnubok_link_invoice_to_voucher when the user wants to mark a faktura paid against an existing verifikation (no new bokföring).',
+    title: 'Find Voucher Candidates (Invoice)',
+    description: 'List posted verifikat that credit kundfordran(1510) and could be the payment for this invoice. Use before gnubok_link_invoice_to_voucher when the user wants to mark a faktura paid against an existing verifikation (no new bokföring).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5013,7 +5059,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_invoice_to_voucher',
-    description: 'Markera en faktura som betald genom att länka till en befintlig verifikation som redan krediterar kundfordran (1510). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_invoice först.',
+    title: 'Link Invoice to Voucher',
+    description: 'Markera en faktura som betald genom att länkatill en befintlig verifikation som redan krediterar kundfordran (1510). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_invoice först.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5099,6 +5146,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_find_voucher_candidates_for_supplier_invoice',
+    title: 'Find Voucher Candidates (Supplier Invoice)',
     description: 'List posted verifikat that debit leverantörsskuld (2440) and could be the payment for this supplier invoice. Use before gnubok_link_supplier_invoice_to_voucher when marking a leverantörsfaktura paid against an existing verifikation (no new bokföring).',
     inputSchema: {
       type: 'object',
@@ -5164,6 +5212,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_link_supplier_invoice_to_voucher',
+    title: 'Link Supplier Invoice to Voucher',
     description: 'Markera en leverantörsfaktura som betald genom att länka till en befintlig verifikation som redan debiterar leverantörsskuld (2440). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_supplier_invoice först.',
     inputSchema: {
       type: 'object',
@@ -5250,7 +5299,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_auto_match_period',
-    description: "Bulk reconciliation: scan unmatched income transactions in a date range and propose invoice matches with confidence + reasoning. dry_run=true (default) previews without staging; dry_run=false stages every match above confidence_threshold as a pending operation.",
+    title: 'Auto-Match Period Income',
+    description: "Bulk reconciliation: scan unmatched income in a date range and propose invoice matches with confidence + reasoning. dry_run=true (default) previews; dry_run=false stages matches above confidence_threshold.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5440,6 +5490,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_fiscal_periods',
+    title: 'List Fiscal Periods',
     description: 'List all fiscal periods (räkenskapsperioder) with status: active (open), locked (no new entries), or closed (year-end completed).',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     outputSchema: {
@@ -5483,7 +5534,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_reconciliation_status',
-    description: 'Bank reconciliation status: matched/unmatched counts, match rate, bank vs ledger balance, difference. Optional date range.',
+    title: 'Bank Reconciliation Status',
+    description: 'Bank reconciliation status: matched/unmatchedcounts, match rate, bank vs ledger balance, difference. Optional date range.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5510,6 +5562,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_upload_document',
+    title: 'Upload Document to Inbox',
     description: 'Upload a PDF/JPEG/PNG/HEIC/WebP (max 20 MB) to the inbox. Runs deterministic field extraction on text-based PDFs.',
     inputSchema: {
       type: 'object',
@@ -5622,6 +5675,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_inbox_items',
+    title: 'List Inbox Items',
     description: 'List document inbox items. Each has a `processed` flag covering all terminal links (transaction match, supplier invoice, or journal entry), so a booked receipt counts as done. unprocessed_only=true returns only docs still needing handling.',
     inputSchema: {
       type: 'object',
@@ -5720,6 +5774,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_inbox_item',
+    title: 'Get Inbox Item',
     description: 'Get a single inbox item with complete extracted data, supplier match, email metadata, and timestamps.',
     inputSchema: {
       type: 'object',
@@ -5755,6 +5810,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_supplier_invoice_from_inbox',
+    title: 'Create Supplier Invoice from Inbox',
     description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier (matched or via org_number/name), assembles line items from extracted_data, applies VAT + FX, attaches the source document. Stages for human review; honors dry_run.",
     inputSchema: {
       type: 'object',
@@ -5946,6 +6002,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_unmatched_documents',
+    title: 'List Unmatched Documents',
     description: 'List inbox documents not yet attached to any bank transaction or supplier invoice. Returns vendor/amount/currency/date hints. The amount is in the invoice currency — FX-normalise before comparing to transactions.amount.',
     inputSchema: {
       type: 'object',
@@ -6100,6 +6157,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_get_document_content',
+    title: 'Get Document Content',
     description: 'Get a 5-minute signed download URL for a document so the agent can read its contents (e.g. with vision). Use after gnubok_list_unmatched_documents to inspect a specific PDF before deciding which transaction it matches.',
     inputSchema: {
       type: 'object',
@@ -6166,6 +6224,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_attach_document_to_transaction',
+    title: 'Attach Document to Transaction',
     description: 'Stage attaching a document to a bank transaction. Verify tx (date, amount, counterparty) and document (filename, vendor, amount) match first — the preview shown to the human reviewer mirrors what you pass here. Stages for approval.',
     inputSchema: {
       type: 'object',
@@ -6295,6 +6354,7 @@ export const tools: McpTool[] = [
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
     name: 'gnubok_list_employees',
+    title: 'List Employees',
     description: 'List employees for the active company. Personnummer returned masked (YYYYMMDD-XXXX).',
     inputSchema: {
       type: 'object',
@@ -6328,6 +6388,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_salary_run',
+    title: 'Get Salary Run',
     description: 'Get salary run with status, totals, per-employee breakdown (gross, tax, net, avgifter, vacation accrual) and step-by-step calculation breakdown.',
     inputSchema: {
       type: 'object',
@@ -6357,6 +6418,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_get_salary_journal',
+    title: 'Salary Journal (Lönejournal)',
     description: 'Salary journal (lönejournal) for a year: per-employee per-month rows + yearly totals.',
     inputSchema: {
       type: 'object',
@@ -6375,6 +6437,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_create_salary_run',
+    title: 'Create Salary Run',
     description: 'Stage creation of a draft salary run for a period + base lines for all active employees. Commit via gnubok_approve_pending_operation; then run gnubok_calculate_salary_run. Final booking happens in the web UI.',
     inputSchema: {
       type: 'object',
@@ -6430,6 +6493,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_calculate_salary_run',
+    title: 'Calculate Salary Run',
     description: 'Calculate a draft salary run: tax, avgifter, vacation accrual, totals. Run must be in draft status.',
     inputSchema: {
       type: 'object',
@@ -6475,6 +6539,7 @@ export const tools: McpTool[] = [
   },
   {
     name: 'gnubok_generate_agi',
+    title: 'Generate AGI Declaration',
     description: 'Stage AGI XML generation (Arbetsgivardeklaration) for a salary run. High-risk: produces statutory Skatteverket underlag (BFL 7-year retention). Commit via gnubok_approve_pending_operation.',
     inputSchema: {
       type: 'object',
@@ -6523,6 +6588,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_close_period',
+    title: 'Close Fiscal Period',
     description: 'Stage period close (irreversible per BFL). Requires period locked + year-end closing entry posted. High-risk — always staged, never auto-committed.',
     inputSchema: {
       type: 'object',
@@ -6578,6 +6644,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_lock_period',
+    title: 'Lock Fiscal Period',
     description: 'Stage period lock — blocks new entries. Requires zero unbooked business transactions. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -6645,6 +6712,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_uncategorize_transaction',
+    title: 'Uncategorize Transaction',
     description: 'Stage uncategorize: reverses linked journal entry via storno (never deletes) and clears the category. Stages for approval.',
     inputSchema: {
       type: 'object',
@@ -6710,6 +6778,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_export_sie',
+    title: 'Export SIE File',
     description: 'Generate SIE-4 file for a fiscal period (standard Swedish bookkeeping interchange format). Returns SIE text content.',
     inputSchema: {
       type: 'object',
@@ -6767,7 +6836,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_audit_package',
-    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal register, VAT) + receipts + audit log + voucher gaps, zipped. Returns a 1-hour signed download URL. Long-running on large datasets.",
+    title: 'Generate Audit Package',
+    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped. 1-hour signed URL.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6907,7 +6977,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_year_end_readiness',
-    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced trial balance, FX revaluation needed) + warnings + optional preview of the closing entry. Use this before staging year-end.",
+    title: 'Year-End Readiness Check',
+    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced TB, FX revaluation) + optional closing-entry preview.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7017,6 +7088,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_run_year_end',
+    title: 'Run Year-End Closing (Bokslut)',
     description: 'Stage year-end closing: zero result accounts (class 3–8) into 2099, lock period, create next period, seed opening balances. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -7061,6 +7133,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_set_opening_balances',
+    title: 'Set Opening Balances (Ingående Balans)',
     description: 'Stage opening-balance entry: copy class 1–2 closing balances from a closed period into the next period.',
     inputSchema: {
       type: 'object',
@@ -7110,6 +7183,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_run_currency_revaluation',
+    title: 'Run Currency Revaluation',
     description: 'Stage currency revaluation: revalue open FX receivables/payables to closing-date rate (posts 3960/7960). One per period max.',
     inputSchema: {
       type: 'object',
@@ -7143,6 +7217,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_list_voucher_gaps',
+    title: 'List Voucher Gaps',
     description: 'List voucher number gaps in a fiscal period (BFNAR 2013:2 audit requirement). Each gap shows whether it has an explanation.',
     inputSchema: {
       type: 'object',
@@ -7215,6 +7290,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_explain_voucher_gap',
+    title: 'Explain Voucher Gap',
     description: 'Stage explanation for a voucher gap (BFNAR 2013:2 compliance — every gap needs a documented reason).',
     inputSchema: {
       type: 'object',
@@ -7261,6 +7337,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_supplier_invoice',
+    title: 'Approve Supplier Invoice',
     description: 'Stage approval of a registered supplier invoice (registered → approved). High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -7303,6 +7380,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_credit_supplier_invoice',
+    title: 'Credit Supplier Invoice (Kreditfaktura)',
     description: 'Stage credit-note (kreditfaktura) for a supplier invoice: mirror invoice with negative effect + reverses registration JE (accrual).',
     inputSchema: {
       type: 'object',
@@ -7344,6 +7422,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_convert_invoice',
+    title: 'Convert Proforma to Invoice',
     description: 'Stage conversion of a proforma invoice to a real invoice. Allocates F-series number, copies items, marks proforma cancelled.',
     inputSchema: {
       type: 'object',
@@ -7386,6 +7465,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_unlock_period',
+    title: 'Unlock Fiscal Period',
     description: 'Stage period unlock — clears locked_at so entries can be posted again. Cannot unlock a closed period. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -7434,6 +7514,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_credit_invoice',
+    title: 'Credit Customer Invoice (Kreditfaktura)',
     description: 'Stage credit note (kreditfaktura) for a customer invoice: KR- prefixed mirror invoice + reverses original JE (accrual). Original must be sent/paid/overdue and not already credited.',
     inputSchema: {
       type: 'object',
@@ -7487,6 +7568,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_import_sie',
+    title: 'Import SIE File',
     description: 'Stage SIE-file import (types 1–4, CP437/UTF-8/Latin-1). On commit creates fiscal period, opening balances, and journal entries. High-risk, always staged.',
     inputSchema: {
       type: 'object',
@@ -7616,6 +7698,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_undo_sie_import',
+    title: 'Undo SIE Import',
     description: 'Stage undo of a completed SIE import: hard-deletes its entries (transactions + opening balance), detaches docs, resets voucher_sequences, marks the row \'undone\' so the file can be re-imported. Use after a botched import. Period must be open. HIGH risk.',
     inputSchema: {
       type: 'object',
@@ -7716,6 +7799,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_create_voucher',
+    title: 'Create Manual Voucher (Verifikation)',
     description: 'Stage a manual verifikation with arbitrary balanced lines. Use for capitalization (1010), period-end accruals, FX adjustments, rättelseposter outside categorize_transaction. Pass inbox_item_id to book a kvitto direct — links inbox + attaches doc. HIGH risk.',
     inputSchema: {
       type: 'object',
@@ -7951,7 +8035,8 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_correct_entry',
-    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ — storno + new corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645 while preserving the expense leg. Account drives momsdeklaration ruta, not tax_code. HIGH risk.',
+    title: 'Correct Posted Entry (Rättelse)',
+    description: 'Stage a rättelse for a posted verifikation per BFL 5 kap 5§ — storno + corrected entry in the original period (never in-place edit). Use for partial fixes like 2641 → 2614/2645. Account drives ruta. HIGH risk.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -8112,6 +8197,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reverse_journal_entry',
+    title: 'Reverse Journal Entry (Storno)',
     description: 'Stage a storno: inverts debits/credits; original stays visible per BFL 5 kap. Use only when the affärshändelse should never have been booked (duplicate, ghost, test). If booked wrong, use gnubok_correct_entry; for refunds, gnubok_credit_invoice. HIGH risk.',
     inputSchema: {
       type: 'object',
@@ -8264,6 +8350,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_dispositioner',
+    title: 'Propose Year-End Dispositioner',
     description:
       'Read-only proposal of bokslutsdispositioner for a fiscal period: periodiseringsfond (avsättning + obligatorisk återföring), överavskrivningar, SLP, bolagsskatt. Call before staging postings.',
     inputSchema: {
@@ -8289,6 +8376,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_accruals',
+    title: 'Propose Accruals (Periodiseringar)',
     description:
       'Read-only proposal of periodiseringar (förutbetalda/upplupna kostnader). Currently surfaces the vacation-liability change; manual prepaid/accrued entries are submitted by the UI form.',
     inputSchema: {
@@ -8311,6 +8399,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_propose_annual_depreciation',
+    title: 'Propose Annual Depreciation (Avskrivning)',
     description:
       'Read-only per-asset planenlig avskrivning proposal for a fiscal period. Reads the asset register and existing depreciation schedules. Call before staging the post.',
     inputSchema: {
@@ -8333,6 +8422,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_post_annual_depreciation',
+    title: 'Post Annual Depreciation (Avskrivning)',
     description:
       'Stage planenlig avskrivning posts — one journal entry per asset for independent reversibility. Mid-risk, always staged.',
     inputSchema: {
@@ -8417,6 +8507,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_preview_arsredovisning',
+    title: 'Preview Annual Report (Årsredovisning)',
     description:
       'Read-only K2 årsredovisning preview for a fiscal period. Returns flerårsöversikt, eget-kapital-förändring, RR, BR, K2 noter, signature slots. PDF download is via UI.',
     inputSchema: {
@@ -8439,6 +8530,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_preview_ef_declaration',
+    title: 'Preview EF Declaration (NE-bilaga)',
     description:
       'Read-only EF declaration preview: egenavgifter schablonavdrag, räntefördelning, periodiseringsfond, expansionsfond. All declaration-only, never booked. Pass kapitalunderlag and prior-year amounts as inputs.',
     inputSchema: {
@@ -8482,6 +8574,7 @@ export const tools: McpTool[] = [
   // Mirrors the /pending web UI for agents that self-review before committing.
   {
     name: 'gnubok_list_pending_operations',
+    title: 'List Pending Operations',
     description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Use to review the queue before calling gnubok_approve_pending_operation or gnubok_reject_pending_operation.',
     inputSchema: {
       type: 'object',
@@ -8539,6 +8632,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_approve_pending_operation',
+    title: 'Approve Pending Operation',
     description: "Commit a staged pending_operation when the user has explicitly authorised the operation_id. risk_level=high requires confirmed=true — surface the BFL 5 kap 5§ irreversibility to the user first. The /pending web UI offers an equivalent commit path.",
     inputSchema: {
       type: 'object',
@@ -8671,6 +8765,7 @@ export const tools: McpTool[] = [
 
   {
     name: 'gnubok_reject_pending_operation',
+    title: 'Reject Pending Operation',
     description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
     inputSchema: {
       type: 'object',
@@ -8770,6 +8865,7 @@ export const tools: McpTool[] = [
   // ── Bring-your-own-extraction for inbox items ────────────────
   {
     name: 'gnubok_set_inbox_extracted_data',
+    title: 'Set Inbox Extracted Data',
     description: 'Replace extracted_data on an inbox item with agent-supplied fields (bring-your-own-extraction). Use when your own pipeline parses the document better than Accounted\'s OCR. Follow with gnubok_create_supplier_invoice_from_inbox to stage.',
     inputSchema: {
       type: 'object',
@@ -9297,6 +9393,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         jsonRpc(id ?? null, {
           tools: allowedTools.map((t) => ({
             name: t.name,
+            ...(t.title ? { title: t.title } : {}),
             description: t.description,
             inputSchema: t.inputSchema,
             ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
