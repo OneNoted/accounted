@@ -3520,7 +3520,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_supplier',
     title: 'Create Supplier (Leverantör)',
-    description: 'Stage a new supplier (leverantör). Stages foruser approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
+    description: 'Stage a new supplier (leverantör). Stages for user approval — NOT created until approved in the web app. Use to add a vendor before booking a supplier invoice or matching expenses.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -3656,7 +3656,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_supplier_invoices',
     title: 'List Supplier Invoices',
-    description: 'List supplier invoices (leverantörsfakturor),sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
+    description: 'List supplier invoices (leverantörsfakturor), sorted by due date. Optional status filter; "to_pay" combines approved+overdue.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4653,7 +4653,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_link_transaction_to_journal_entry',
     title: 'Link Transaction to Verifikat',
-    description: 'Link 1 bank tx to an already-posted verifikat(no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
+    description: 'Link 1 bank tx to an already-posted verifikat (no new bokföring). Use when the user booked the affärshändelse manually. Pass invoice_id to also settle a kundfaktura. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4994,7 +4994,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_find_voucher_candidates_for_invoice',
     title: 'Find Voucher Candidates (Invoice)',
-    description: 'List posted verifikat that credit kundfordran(1510) and could be the payment for this invoice. Use before gnubok_link_invoice_to_voucher when the user wants to mark a faktura paid against an existing verifikation (no new bokföring).',
+    description: 'List posted verifikat that credit kundfordran (1510) and could be the payment for this invoice. Use before gnubok_link_invoice_to_voucher when the user wants to mark a faktura paid against an existing verifikation (no new bokföring).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5060,7 +5060,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_link_invoice_to_voucher',
     title: 'Link Invoice to Voucher',
-    description: 'Markera en faktura som betald genom att länkatill en befintlig verifikation som redan krediterar kundfordran (1510). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_invoice först.',
+    description: 'Markera en faktura som betald genom att länka till en befintlig verifikation som redan krediterar kundfordran (1510). Ingen ny verifikation skapas. Hitta kandidater med gnubok_find_voucher_candidates_for_invoice först.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5535,7 +5535,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_reconciliation_status',
     title: 'Bank Reconciliation Status',
-    description: 'Bank reconciliation status: matched/unmatchedcounts, match rate, bank vs ledger balance, difference. Optional date range.',
+    description: 'Bank reconciliation status: matched/unmatched counts, match rate, bank vs ledger balance, difference. Optional date range.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
