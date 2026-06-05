@@ -2,13 +2,18 @@
  * pg-real test for the SECURITY DEFINER write-RPC tenant guards
  * (20260619130100_securitydefiner_write_rpc_tenant_guards.sql).
  *
- * Six SECURITY DEFINER write RPCs are EXECUTE-able by `authenticated` and so,
+ * Four SECURITY DEFINER write RPCs are EXECUTE-able by `authenticated` and so,
  * without an in-function tenant guard, an authenticated user could call them via
  * PostgREST with ANOTHER company's p_company_id. The migration adds the canonical
  * claims-based guard (mirrors 20260615120000_link_voucher_rpcs_tenant_guard.sql):
  * for anon/authenticated callers, membership of p_company_id is required, else
  * RAISE 42501; service_role / no-claims callers bypass BY DESIGN (MCP / API-key /
  * migration / pg-harness paths whose company scoping happens elsewhere).
+ *
+ * bulk_book_transactions and match_batch_allocate are deliberately NOT guarded:
+ * they already enforce membership in-function and return structured domain
+ * errors (BULK_BOOK_UNAUTHORIZED / BATCH_UNAUTHORIZED) that routes, MCP tools,
+ * and their existing pg tests branch on — see the migration header.
  *
  * What each case asserts:
  *   - cross-tenant (userA's session, companyB's id) → RAISE with SQLSTATE 42501.
@@ -106,58 +111,12 @@ async function insertPostedManualIb(params: {
   return id
 }
 
-const BULK_BOOK = `SELECT public.bulk_book_transactions($1::uuid[], $2, $3::jsonb, $4)`
-const MATCH_BATCH = `SELECT public.match_batch_allocate($1, $2::jsonb, $3)`
 const MARK_OB = `SELECT public.mark_entry_as_opening_balance($1, $2)`
 const RESERVE = `SELECT public.reserve_voucher_range($1, $2, $3, $4)`
 const RELEASE = `SELECT public.release_voucher_range($1, $2, $3, $4, $5)`
 const ROTATE = `SELECT public.rotate_company_inbox($1)`
 
 describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
-  it('bulk_book_transactions: blocks cross-company, passes own, bypasses for no-claims', async () => {
-    const a = await seedCompany()
-    const b = await seedCompany()
-    const newEntry = {
-      description: 'x',
-      lines: [
-        { account_number: '1930', debit_amount: 100, credit_amount: 0, currency: 'SEK' },
-        { account_number: '3001', debit_amount: 0, credit_amount: 100, currency: 'SEK' },
-      ],
-    }
-    const txIds = [randomUUID()] // non-existent — guard runs first regardless.
-
-    // userA session targeting companyB → 42501.
-    const cross = await callAsUser(a.userId, BULK_BOOK, [txIds, null, JSON.stringify(newEntry), b.companyId])
-    expect(cross?.code).toBe('42501')
-
-    // userA session targeting own companyA → guard passes; the call then fails a
-    // DOMAIN check (txs not found), returned as jsonb, NOT a 42501 raise.
-    const own = await callAsUser(a.userId, BULK_BOOK, [txIds, null, JSON.stringify(newEntry), a.companyId])
-    expect(own).toBeNull()
-
-    // No-claims bare pool targeting companyB → guard bypassed (no 42501); the
-    // membership check inside the body then short-circuits to a jsonb result.
-    const bare = await callBare(BULK_BOOK, [txIds, null, JSON.stringify(newEntry), b.companyId])
-    expect(bare).toBeNull()
-  })
-
-  it('match_batch_allocate: blocks cross-company, passes own, bypasses for no-claims', async () => {
-    const a = await seedCompany()
-    const b = await seedCompany()
-    const allocations = [{ kind: 'customer_invoice', invoice_id: randomUUID(), amount: 100 }]
-    const txId = randomUUID()
-
-    const cross = await callAsUser(a.userId, MATCH_BATCH, [txId, JSON.stringify(allocations), b.companyId])
-    expect(cross?.code).toBe('42501')
-
-    // Own company: guard passes; BATCH_TX_NOT_FOUND returned as jsonb (no raise).
-    const own = await callAsUser(a.userId, MATCH_BATCH, [txId, JSON.stringify(allocations), a.companyId])
-    expect(own).toBeNull()
-
-    const bare = await callBare(MATCH_BATCH, [txId, JSON.stringify(allocations), b.companyId])
-    expect(bare).toBeNull()
-  })
-
   it('mark_entry_as_opening_balance: blocks cross-company, passes own, bypasses for no-claims', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
