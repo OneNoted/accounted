@@ -1,20 +1,20 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
-
 /**
- * Transaction-scoped actor context for journal-entry commits.
+ * Transaction-scoped actor context for journal-entry commits — isomorphic half.
  *
- * Carries WHO is relaying a commit (api_key | user | agent_chat | cron | …)
- * from the approval entry points (MCP approve tool, web approve routes) down
- * to commitEntry() without threading a parameter through every pending-
- * operation executor and entry-generator in between. commitEntry() reads it
- * as a fallback and forwards it to the commit_journal_entry RPC, which stamps
- * journal_entries.committed_actor_* and the audit_log COMMIT row
- * (migration 20260619120000).
+ * Carries WHO is relaying a commit (api_key | user | agent_chat | …) from the
+ * approval entry points down to commitEntry() without threading a parameter
+ * through every pending-operation executor and entry-generator in between.
+ * commitEntry() reads it as a fallback and forwards it to the
+ * commit_journal_entry RPC, which stamps journal_entries.committed_actor_* and
+ * the audit_log COMMIT row (migration 20260619120000).
  *
- * Outside a runWithActor() scope getActor() returns undefined and the RPC
- * params stay NULL — byte-identical to pre-attribution behaviour. Keep this
- * tightly scoped to the commit path; it is not a general-purpose request
- * context.
+ * engine.ts is reachable from client component bundles (e.g. the invoice
+ * detail page), and client chunks cannot load node:async_hooks — so this
+ * module holds only the type + a storage registry, and the AsyncLocalStorage
+ * implementation lives in ./actor-context-node (server-only, imported by the
+ * approval paths). In a client bundle the registry stays empty and getActor()
+ * returns undefined — the same no-attribution default as a server call
+ * outside a runWithActor() scope.
  */
 export interface CommitActor {
   /** Matches the journal_entries.committed_actor_type CHECK constraint. */
@@ -23,14 +23,18 @@ export interface CommitActor {
   label?: string
 }
 
-const actorStorage = new AsyncLocalStorage<CommitActor>()
+export interface ActorStore {
+  getStore(): CommitActor | undefined
+}
 
-/** Run fn with the given actor visible to getActor() across awaits. */
-export function runWithActor<T>(actor: CommitActor, fn: () => Promise<T>): Promise<T> {
-  return actorStorage.run(actor, fn)
+let store: ActorStore | null = null
+
+/** Bind the server-side AsyncLocalStorage. Called by ./actor-context-node. */
+export function bindActorStore(s: ActorStore): void {
+  store = s
 }
 
 /** The actor for the current async execution scope, if any. */
 export function getActor(): CommitActor | undefined {
-  return actorStorage.getStore()
+  return store?.getStore()
 }

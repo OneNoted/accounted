@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { runWithActor, getActor } from '../actor-context'
+import { runWithActor } from '../actor-context-node'
+import { getActor } from '../actor-context'
 
 describe('actor-context (AsyncLocalStorage commit attribution)', () => {
   it('returns undefined outside a runWithActor scope', () => {

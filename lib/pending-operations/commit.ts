@@ -28,7 +28,8 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { runWithActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { closePeriod, lockPeriod, unlockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {

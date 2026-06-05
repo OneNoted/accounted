@@ -16,7 +16,7 @@ vi.mock('@/lib/logger', () => ({
 }))
 
 import { commitEntry, getNextVoucherNumber, createJournalEntry } from '../engine'
-import { runWithActor } from '../actor-context'
+import { runWithActor } from '../actor-context-node'
 import { BookkeepingDatabaseError } from '../errors'
 
 describe('voucher number atomicity', () => {
