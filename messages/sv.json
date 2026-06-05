@@ -3726,7 +3726,8 @@
     "suggested_confirm": "Bekräfta",
     "suggested_view": "Visa transaktionen",
     "suggested_confirmed_toast": "Matchning bokförd",
-    "suggested_failed_toast": "Matchningen misslyckades"
+    "suggested_failed_toast": "Matchningen misslyckades",
+    "row_deadlines": "Moms- och skattedeadlines"
   },
   "reports": {
     "title": "Rapporter",

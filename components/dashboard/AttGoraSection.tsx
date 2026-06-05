@@ -13,6 +13,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   ArrowLeftRight,
   ArrowRight,
+  CalendarClock,
   CheckCircle2,
   ChevronRight,
   Eye,
@@ -105,13 +106,18 @@ export default function AttGoraSection({
   async function refetchCounts() {
     try {
       const res = await fetch('/api/worklist/counts')
+      if (!res.ok) throw new Error(`worklist counts refetch failed: ${res.status}`)
       const json = (await res.json().catch(() => ({}))) as { data?: WorklistCounts }
       if (json.data) {
         setCounts(json.data.counts)
         setTotal(json.data.total)
       }
-    } catch {
-      // Stale counts self-correct on the next page load — never block the flow.
+    } catch (err) {
+      // Stale counts self-correct on the next page load — never block the
+      // flow, but keep the failure observable (Sentry captures console.error)
+      // so a systematically broken counts endpoint doesn't hide behind
+      // silently frozen numbers.
+      console.error('[att-gora] worklist counts refetch failed', err)
     }
   }
 
@@ -165,15 +171,23 @@ export default function AttGoraSection({
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
     counts.pending_operations > 0
-  const bevakaRows = counts.overdue_invoice > 0 || expiringBankConnections.length > 0
+  const bevakaRows =
+    counts.overdue_invoice > 0 ||
+    counts.deadline_action > 0 ||
+    expiringBankConnections.length > 0
   const allClear = !bokforRows && !granskaRows && !bevakaRows
+
+  // The header total must equal what the section actually shows: the worklist
+  // total plus expiring bank connections, which are dashboard-only (not a
+  // lib/worklist category). Every count that feeds this number has a row.
+  const displayTotal = total + expiringBankConnections.length
 
   return (
     <section aria-label={t('att_gora_title')}>
       <div className="flex items-baseline justify-between mb-4">
         <h2 className="font-display text-lg">{t('att_gora_title')}</h2>
         <p className="text-sm text-muted-foreground tabular-nums" role="status" aria-live="polite">
-          {allClear ? t('all_done') : t('att_gora_left', { count: total })}
+          {allClear ? t('all_done') : t('att_gora_left', { count: displayTotal })}
         </p>
       </div>
 
@@ -330,6 +344,14 @@ export default function AttGoraSection({
                         icon={Receipt}
                         label={t('row_overdue_invoices')}
                         count={counts.overdue_invoice}
+                      />
+                    )}
+                    {counts.deadline_action > 0 && (
+                      <WorklistRow
+                        href="/deadlines"
+                        icon={CalendarClock}
+                        label={t('row_deadlines')}
+                        count={counts.deadline_action}
                       />
                     )}
                     {expiringBankConnections.length > 0 && (

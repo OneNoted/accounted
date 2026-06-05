@@ -110,8 +110,10 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
     }).format(amount)
   }
 
-  // One number, one source: the worklist total (same as the sidebar badges).
-  const todoCount = worklist.total
+  // One number, one source: the worklist total plus expiring bank connections
+  // (dashboard-only, not a lib/worklist category). Must match AttGoraSection's
+  // header so the tile and the section never disagree.
+  const todoCount = worklist.total + (summary.expiringBankConnections?.length ?? 0)
 
   const slim = getBranding().navDensity === 'slim'
 
