@@ -44,6 +44,7 @@ export default function NewEmployeePage() {
       personnummer: personnummer.replace(/\D/g, ''),
       employment_type: employmentType,
       employment_start: form.get('employment_start') as string,
+      employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
       salary_type: salaryType,
       monthly_salary: salaryType === 'monthly' ? (parseFloat(form.get('monthly_salary') as string) || undefined) : undefined,
@@ -184,6 +185,10 @@ export default function NewEmployeePage() {
               <div className="space-y-2">
                 <Label htmlFor="employment_start">Anställningsdatum<RequiredMark /></Label>
                 <Input id="employment_start" name="employment_start" type="date" required />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="employment_end">Slutdatum</Label>
+                <Input id="employment_end" name="employment_end" type="date" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="employment_degree">Sysselsättningsgrad (%)</Label>

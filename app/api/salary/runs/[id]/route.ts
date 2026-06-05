@@ -121,3 +121,57 @@ export async function PATCH(
 
   return NextResponse.json({ data: updated })
 }
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const writeCheck = await requireWritePermission(supabase, user.id)
+  if (!writeCheck.ok) return writeCheck.response
+
+  const companyId = await requireCompanyId(supabase, user.id)
+
+  // Only draft runs can be deleted. Once a run reaches review/approved/paid/
+  // booked it carries compliance weight — a booked run created immutable
+  // verifikat (storno to undo, never delete) and review+ may carry an AGI
+  // individuppgift. A draft has produced no journal entries and no AGI, so
+  // removing it touches no posted accounting data.
+  const { data: run, error: fetchError } = await supabase
+    .from('salary_runs')
+    .select('id, status')
+    .eq('id', id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !run) {
+    return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
+  }
+
+  if (run.status !== 'draft') {
+    return NextResponse.json(
+      { error: 'Bara utkast kan raderas. En bokförd lönekörning måste vändas (storno).' },
+      { status: 400 }
+    )
+  }
+
+  // salary_run_employees and their salary_line_items are removed via
+  // ON DELETE CASCADE. An agi_declarations row — never present on a draft —
+  // would block the delete via its RESTRICT FK, the safety net for the
+  // impossible case.
+  const { error } = await supabase
+    .from('salary_runs')
+    .delete()
+    .eq('id', id)
+    .eq('company_id', companyId)
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ data: { id, deleted: true } })
+}

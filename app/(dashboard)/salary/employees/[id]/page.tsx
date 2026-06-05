@@ -64,6 +64,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       first_name: form.get('first_name') as string,
       last_name: form.get('last_name') as string,
       employment_type: employmentType,
+      employment_start: form.get('employment_start') as string || undefined,
+      employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
       salary_type: salaryType,
       f_skatt_status: tax?.f_skatt_status,
@@ -235,6 +237,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <div className="space-y-2">
                 <Label htmlFor="employment_degree">Sysselsättningsgrad (%)</Label>
                 <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" disabled={!canWrite} />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="employment_start">Anställningsdatum<RequiredMark /></Label>
+                <Input id="employment_start" name="employment_start" type="date" defaultValue={employee.employment_start || ''} required disabled={!canWrite} />
+                <p className="text-xs text-muted-foreground">Lönen proportioneras automatiskt om anställningen börjar eller slutar mitt i en löneperiod.</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="employment_end">Slutdatum</Label>
+                <Input id="employment_end" name="employment_end" type="date" defaultValue={employee.employment_end || ''} disabled={!canWrite} />
+                <p className="text-xs text-muted-foreground">Lämna tomt för pågående anställning.</p>
               </div>
             </div>
           </CardContent>

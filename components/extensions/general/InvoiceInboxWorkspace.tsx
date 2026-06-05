@@ -1630,13 +1630,15 @@ function FieldsRail({
         ) : (
           <>
             {/* Unmatched state: the canonical next step is to find the bank
-                transaction this underlag belongs to. "Skapa leverantörs-
-                faktura" stays as an escape hatch for users who want
-                supplier-invoice tracking (accrual flow). The old "Bokför
-                direkt" escape hatch was removed — its label was unclear
-                and the deterministic-book-without-bank-tx use case is
-                covered by "Matcha mot transaktion" → "Bokför manuellt"
-                (matched state). */}
+                transaction this underlag belongs to. Two escape hatches sit
+                below it — "Skapa leverantörsfaktura" for users who want
+                supplier-invoice tracking (accrual flow), and "Bokför som
+                verifikat" for underlag that aren't a supplier invoice at all
+                (bank fees, owner expenses, the underlag for a correction). The
+                latter opens the same BookDirectlyDialog as the matched state,
+                which works without a bank transaction and lets the user attach
+                one if they want. Per BFL 5 kap 6-7 § the underlag must be
+                bookable as a verifikat, not forced into a supplier invoice. */}
             <Button
               variant="default"
               size="sm"
@@ -1650,6 +1652,14 @@ function FieldsRail({
                 Skapa leverantörsfaktura
               </Button>
             </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={onBookDirect}
+            >
+              Bokför som verifikat
+            </Button>
           </>
         )}
         <Button

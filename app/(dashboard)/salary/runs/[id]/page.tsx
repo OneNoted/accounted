@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   ArrowLeft, Calculator, Eye, Check, CreditCard, BookOpen,
-  ArrowLeftCircle, Loader2, Download, FileDown,
+  ArrowLeftCircle, Loader2, Download, FileDown, Trash2,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -122,6 +122,26 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         variant: 'destructive',
       })
     }
+    setActionLoading(null)
+  }
+
+  async function handleDelete() {
+    if (!run) return
+    const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+    if (!confirm(`Radera utkastet för ${period}? Alla anställda och beräkningar i körningen tas bort. Detta kan inte ångras.`)) return
+    setActionLoading('delete')
+    const res = await fetch(`/api/salary/runs/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      toast({ title: 'Utkast raderat' })
+      router.push('/salary')
+      return
+    }
+    const result = await res.json()
+    toast({
+      title: 'Kunde inte radera utkast',
+      description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+      variant: 'destructive',
+    })
     setActionLoading(null)
   }
 
@@ -573,6 +593,10 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
         <div className="flex flex-wrap gap-3 justify-end">
           {run.status === 'draft' && (
             <>
+              <Button variant="outline" onClick={handleDelete} disabled={!!actionLoading} className="text-destructive hover:text-destructive mr-auto">
+                {actionLoading === 'delete' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                Radera utkast
+              </Button>
               <Button variant="outline" onClick={handleCalculate} disabled={!!actionLoading || employees.length === 0}>
                 {actionLoading === 'calculate' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Calculator className="mr-2 h-4 w-4" />}
                 Beräkna

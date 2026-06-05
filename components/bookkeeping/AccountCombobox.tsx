@@ -206,7 +206,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {isOpen && flatList.length > 0 && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 min-w-[20rem] w-[max(100%,28rem)] max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
+          className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
         >
           {groupedAccounts.map((group) => (
             <div key={group.className}>
@@ -231,7 +231,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
                     onMouseEnter={() => setHighlightedIndex(flatIndex)}
                   >
                     <span className="font-mono shrink-0">{account.account_number}</span>
-                    <span className="break-words">{account.account_name}</span>
+                    <span className="flex-1 min-w-0 break-words">{account.account_name}</span>
                   </button>
                 )
               })}
@@ -242,7 +242,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
 
       {/* Empty state */}
       {isOpen && search.trim() && flatList.length === 0 && (
-        <div className="absolute z-50 top-full left-0 mt-1 min-w-[20rem] w-[max(100%,28rem)] rounded-md border border-input bg-card shadow-md p-3">
+        <div className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] rounded-md border border-input bg-card shadow-md p-3">
           <p className="text-sm text-muted-foreground">
             Hittade inget konto som matchar.
           </p>
