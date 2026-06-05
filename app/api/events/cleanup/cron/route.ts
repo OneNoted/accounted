@@ -13,6 +13,8 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
  *   skill-load correlation need more than one month of signal — a 30-day
  *   window made it impossible to tell whether a tool or skill change actually
  *   moved failure rates.
+ *
+ * Retention is declared in .compliance/ropa.yaml (id: mcp.telemetry).
  */
 const DELIVERY_RETENTION_DAYS = 30
 const TELEMETRY_RETENTION_DAYS = 180

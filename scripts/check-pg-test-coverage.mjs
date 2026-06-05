@@ -15,10 +15,15 @@
  * "covered-by" when an existing test already exercises the changed object,
  * "skip" when the change is genuinely untestable (e.g. a NOTIFY-only fixup).
  *
+ * Scope: the gate is PR-level, not per-migration — ANY *.pg.test.ts change
+ * satisfies it. With multiple risky migrations in one PR, reviewers must
+ * still confirm each one is actually covered (or carries an escape hatch);
+ * mapping tests to migrations automatically would be guesswork.
+ *
  * Usage: node scripts/check-pg-test-coverage.mjs
  *   PG_GATE_BASE — git ref to diff against (default: origin/main)
  */
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 
 const base = process.env.PG_GATE_BASE || 'origin/main'
@@ -26,8 +31,10 @@ const base = process.env.PG_GATE_BASE || 'origin/main'
 let changed
 try {
   // Three-dot diff: changes on the PR side since the merge-base with `base`.
-  // --diff-filter=ACMR skips deletions (a deleted migration has no content to scan).
-  changed = execSync(`git diff --name-only --diff-filter=ACMR ${base}...HEAD`, {
+  // --diff-filter=ACMR skips deletions (a deleted migration has no content to
+  // scan). execFileSync with an argv array — no shell, so a hostile base-ref
+  // string can't inject (git just rejects an invalid rev via the catch below).
+  changed = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', `${base}...HEAD`], {
     encoding: 'utf8',
   })
     .trim()
