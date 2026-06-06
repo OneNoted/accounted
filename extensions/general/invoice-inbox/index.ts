@@ -1718,6 +1718,55 @@ export const invoiceInboxExtension: Extension = {
           .single()
 
         if (invoiceError || !invoice) {
+          // A unique-index hit on (company_id, supplier_id,
+          // supplier_invoice_number) is a recoverable conflict — the user
+          // already registered this invoice (often manually, then tried to
+          // convert the same inbox document). Mirror the main
+          // /api/supplier-invoices route and return a friendly 409 with the
+          // existing invoice, instead of letting the raw Postgres message
+          // surface as a generic 500 ("Ett oväntat serverfel uppstod").
+          const pgErr = invoiceError as { code?: string; message?: string } | null
+          const isDuplicateNumber =
+            pgErr?.code === '23505' &&
+            (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
+
+          if (isDuplicateNumber) {
+            const { data: existing } = await ctx.supabase
+              .from('supplier_invoices')
+              .select('id, supplier_invoice_number, status')
+              .eq('company_id', ctx.companyId)
+              .eq('supplier_id', body.supplier_id)
+              .eq('supplier_invoice_number', body.supplier_invoice_number)
+              .maybeSingle()
+
+            let creditNoteId: string | null = null
+            if (existing?.status === 'credited') {
+              const { data: creditNote } = await ctx.supabase
+                .from('supplier_invoices')
+                .select('id')
+                .eq('company_id', ctx.companyId)
+                .eq('credited_invoice_id', existing.id)
+                .eq('is_credit_note', true)
+                .maybeSingle()
+              creditNoteId = creditNote?.id ?? null
+            }
+
+            return errorResponseFromCode('SI_CREATE_DUPLICATE_INVOICE_NUMBER', ctx.log, {
+              details: {
+                supplierId: body.supplier_id,
+                supplierInvoiceNumber: body.supplier_invoice_number,
+                existing: existing
+                  ? {
+                      id: existing.id,
+                      supplier_invoice_number: existing.supplier_invoice_number,
+                      status: existing.status,
+                      credit_note_id: creditNoteId,
+                    }
+                  : null,
+              },
+            })
+          }
+
           return NextResponse.json({ error: invoiceError?.message || 'Failed to create invoice' }, { status: 500 })
         }
 
