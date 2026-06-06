@@ -158,12 +158,16 @@ describe('POST /items/:id/convert', () => {
     })
     const res = await route.handler(request, ctx)
     const { status, body } = await parseJsonResponse<{
-      error: { code: string; details?: { existing?: { id: string } } }
+      error: { code: string; details?: Record<string, unknown> & { existing?: { id: string } } }
     }>(res)
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('SI_CREATE_DUPLICATE_INVOICE_NUMBER')
     expect(body.error.details?.existing?.id).toBe('existing-1')
+    // Data minimisation: the raw request body must NOT be echoed back into the
+    // error envelope — only the server-authoritative `existing` row.
+    expect(body.error.details).not.toHaveProperty('supplierId')
+    expect(body.error.details).not.toHaveProperty('supplierInvoiceNumber')
   })
 
   it('successfully converts inbox item to supplier invoice', async () => {

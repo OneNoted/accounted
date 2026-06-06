@@ -1731,6 +1731,13 @@ export const invoiceInboxExtension: Extension = {
             (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
 
           if (isDuplicateNumber) {
+            // Tenancy: ctx.supabase is the cookie-scoped RLS client and the
+            // supplier_invoices SELECT policy is
+            // `company_id IN (SELECT user_company_ids())`. Combined with the
+            // explicit company_id filter below, this lookup can only ever
+            // resolve an invoice the caller's own company owns — the returned
+            // details are never cross-tenant (OWASP ASVS V8.2.1; ISO 27001
+            // A.8.3; GDPR art.25(2)).
             const { data: existing } = await ctx.supabase
               .from('supplier_invoices')
               .select('id, supplier_invoice_number, status')
@@ -1751,10 +1758,16 @@ export const invoiceInboxExtension: Extension = {
               creditNoteId = creditNote?.id ?? null
             }
 
+            // Return ONLY server-authoritative fields the recovery dialog needs
+            // (the existing row, read under RLS). The raw request body
+            // (supplier_id / supplier_invoice_number) is deliberately not
+            // echoed back: the client already holds it from its own form state,
+            // and reflecting user-supplied values widens the response surface
+            // for no benefit (GDPR art.5(1)(c) data minimisation; OWASP ASVS
+            // V4.5). The Postgres constraint name is used only to classify the
+            // error above and is never placed in the response.
             return errorResponseFromCode('SI_CREATE_DUPLICATE_INVOICE_NUMBER', ctx.log, {
               details: {
-                supplierId: body.supplier_id,
-                supplierInvoiceNumber: body.supplier_invoice_number,
                 existing: existing
                   ? {
                       id: existing.id,
