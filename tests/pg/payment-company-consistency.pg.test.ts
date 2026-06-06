@@ -124,6 +124,24 @@ describe('invoice_payments — company-consistency trigger', () => {
       ]),
     ).rejects.toThrow(/does not match invoices\.company_id/i)
   })
+
+  it('rejects rerouting invoice_id to a foreign tenant invoice (UPDATE OF invoice_id path)', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const invoiceA = await seedCustomerInvoice({ userId: a.userId, companyId: a.companyId })
+    const invoiceB = await seedCustomerInvoice({ userId: b.userId, companyId: b.companyId })
+    const ins = await getPool().query(INSERT_INVOICE_PAYMENT, [a.userId, a.companyId, invoiceA])
+    const paymentId = ins.rows[0].id as string
+
+    // company_id stays A; only the parent FK is rerouted to B's invoice —
+    // exercises the UPDATE OF invoice_id leg of the trigger column filter.
+    await expect(
+      getPool().query(`UPDATE public.invoice_payments SET invoice_id = $1 WHERE id = $2`, [
+        invoiceB,
+        paymentId,
+      ]),
+    ).rejects.toThrow(/does not match invoices\.company_id/i)
+  })
 })
 
 describe('supplier_invoice_payments — company-consistency trigger', () => {
@@ -164,6 +182,22 @@ describe('supplier_invoice_payments — company-consistency trigger', () => {
         b.companyId,
         paymentId,
       ]),
+    ).rejects.toThrow(/does not match supplier_invoices\.company_id/i)
+  })
+
+  it('rejects rerouting supplier_invoice_id to a foreign tenant invoice (UPDATE OF supplier_invoice_id path)', async () => {
+    const a = await seedCompany()
+    const b = await seedCompany()
+    const siA = await seedSupplierInvoice({ userId: a.userId, companyId: a.companyId })
+    const siB = await seedSupplierInvoice({ userId: b.userId, companyId: b.companyId })
+    const ins = await getPool().query(INSERT_SUPPLIER_PAYMENT, [a.userId, a.companyId, siA])
+    const paymentId = ins.rows[0].id as string
+
+    await expect(
+      getPool().query(
+        `UPDATE public.supplier_invoice_payments SET supplier_invoice_id = $1 WHERE id = $2`,
+        [siB, paymentId],
+      ),
     ).rejects.toThrow(/does not match supplier_invoices\.company_id/i)
   })
 })

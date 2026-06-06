@@ -31,6 +31,14 @@
 -- GRANTs are re-applied because CREATE OR REPLACE preserves privileges but a
 -- DROP+CREATE resets them.
 --
+-- The two voucher-range RPCs additionally gain (Swedish compliance review on
+-- PR #680): a period-lock guard (BFL 5 kap 5§ — the sequence of a closed or
+-- locked period is räkenskapsinformation, mirroring mark_entry_as_opening_balance)
+-- and, on release, a sequence-integrity assert (BFL 5 kap 6–7§ — never roll
+-- last_number back below an existing verifikat). Neither fires in the legit
+-- SIE-import flow, which only releases numbers above its highest inserted
+-- verifikat into an open period.
+--
 --   mark_entry_as_opening_balance   — latest 20260613120000_mark_entry_as_opening_balance.sql
 --   reserve_voucher_range           — latest 20260402075153_fix_reserve_voucher_range.sql
 --   release_voucher_range           — latest 20260402075153_fix_reserve_voucher_range.sql
@@ -171,6 +179,8 @@ SET search_path = public
 AS $$
 DECLARE
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_is_closed boolean;
+  v_locked_at timestamptz;
 BEGIN
   -- Tenant guard: anon/authenticated may only act on their own companies;
   -- service_role / direct access (no JWT role) bypasses BY DESIGN.
@@ -178,6 +188,16 @@ BEGIN
      AND p_company_id NOT IN (SELECT public.user_company_ids()) THEN
     RAISE EXCEPTION 'unauthorized: caller is not a member of company %', p_company_id
       USING ERRCODE = '42501';
+  END IF;
+
+  -- Period-lock guard (BFL 5 kap 5§ / BFNAR 2013:2): the voucher sequence of a
+  -- closed or locked period is part of its räkenskapsinformation — refuse to
+  -- mutate it, mirroring mark_entry_as_opening_balance. (An unknown period id
+  -- leaves both NULL and falls through to the FK violation, as before.)
+  SELECT fp.is_closed, fp.locked_at INTO v_is_closed, v_locked_at
+  FROM public.fiscal_periods fp WHERE fp.id = p_fiscal_period_id;
+  IF v_is_closed OR v_locked_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Cannot reserve voucher numbers in a closed/locked fiscal period';
   END IF;
 
   INSERT INTO public.voucher_sequences (company_id, user_id, fiscal_period_id, voucher_series, last_number)
@@ -209,6 +229,8 @@ SET search_path = public
 AS $$
 DECLARE
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
+  v_is_closed boolean;
+  v_locked_at timestamptz;
 BEGIN
   -- Tenant guard: anon/authenticated may only act on their own companies;
   -- service_role / direct access (no JWT role) bypasses BY DESIGN.
@@ -216,6 +238,31 @@ BEGIN
      AND p_company_id NOT IN (SELECT public.user_company_ids()) THEN
     RAISE EXCEPTION 'unauthorized: caller is not a member of company %', p_company_id
       USING ERRCODE = '42501';
+  END IF;
+
+  -- Period-lock guard (BFL 5 kap 5§ / BFNAR 2013:2), mirroring
+  -- mark_entry_as_opening_balance. NOTE: the SIE-import caller does not treat a
+  -- failed release as fatal — the sequence then simply stays at the reserved
+  -- ceiling and the voucher-gap machinery documents the gap.
+  SELECT fp.is_closed, fp.locked_at INTO v_is_closed, v_locked_at
+  FROM public.fiscal_periods fp WHERE fp.id = p_fiscal_period_id;
+  IF v_is_closed OR v_locked_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Cannot release voucher numbers in a closed/locked fiscal period';
+  END IF;
+
+  -- Sequence-integrity guard (BFL 5 kap 6–7§): never roll last_number back
+  -- below an existing verifikat — releasing a range that contains posted
+  -- numbers would let the sequence re-issue them (duplicate verifikationsnummer)
+  -- or imply gaps where none should exist.
+  IF EXISTS (
+    SELECT 1 FROM public.journal_entries je
+    WHERE je.company_id = p_company_id
+      AND je.fiscal_period_id = p_fiscal_period_id
+      AND je.voucher_series = p_series
+      AND je.voucher_number > p_actual_last
+      AND je.voucher_number <= p_reserved_highest
+  ) THEN
+    RAISE EXCEPTION 'Cannot release voucher range (%, %]: verifikat exist in the released range', p_actual_last, p_reserved_highest;
   END IF;
 
   -- Only release within the range this import originally reserved.

@@ -31,7 +31,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { seedCompany } from './fixtures'
+import { insertDraftJournalEntry, seedCompany } from './fixtures'
 
 interface PgError extends Error {
   code?: string
@@ -195,5 +195,61 @@ describe('SECURITY DEFINER write RPCs — tenant-isolation guard', () => {
     // message: the bypass is proven by the new guard's message NOT appearing.
     const bare = await callBare(ROTATE, [b.companyId])
     expect(bare?.message ?? '').not.toMatch(/caller is not a member of company/i)
+  })
+})
+
+describe('voucher-range RPCs — period-lock + sequence-integrity guards (BFL 5 kap)', () => {
+  it('reserve_voucher_range refuses a closed fiscal period', async () => {
+    const a = await seedCompany({ isClosed: true })
+    const err = await callBare(RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
+    expect(err?.message).toMatch(/closed\/locked fiscal period/i)
+  })
+
+  it('reserve_voucher_range refuses a locked fiscal period', async () => {
+    const a = await seedCompany()
+    await getPool().query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [
+      a.fiscalPeriodId,
+    ])
+    const err = await callBare(RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
+    expect(err?.message).toMatch(/closed\/locked fiscal period/i)
+  })
+
+  it('release_voucher_range refuses when verifikat exist in the released range', async () => {
+    const a = await seedCompany()
+    await insertDraftJournalEntry({
+      userId: a.userId,
+      companyId: a.companyId,
+      fiscalPeriodId: a.fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 5, // inside (3, 10] — rolling back to 3 would orphan it
+    })
+    const err = await callBare(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
+    expect(err?.message).toMatch(/verifikat exist in the released range/i)
+  })
+
+  it('release_voucher_range succeeds when the released range is empty (legit SIE-import path)', async () => {
+    const a = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.voucher_sequences (company_id, user_id, fiscal_period_id, voucher_series, last_number)
+       VALUES ($1, $2, $3, 'A', 10)`,
+      [a.companyId, a.userId, a.fiscalPeriodId],
+    )
+    // Highest inserted verifikat is 3 — numbers (3, 10] were reserved but unused.
+    await insertDraftJournalEntry({
+      userId: a.userId,
+      companyId: a.companyId,
+      fiscalPeriodId: a.fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 3,
+    })
+    const err = await callBare(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
+    expect(err).toBeNull()
+
+    const { rows } = await getPool().query(
+      `SELECT last_number FROM public.voucher_sequences
+       WHERE company_id = $1 AND fiscal_period_id = $2 AND voucher_series = 'A'`,
+      [a.companyId, a.fiscalPeriodId],
+    )
+    expect(rows[0]?.last_number).toBe(3)
   })
 })
