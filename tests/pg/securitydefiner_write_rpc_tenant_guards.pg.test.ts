@@ -242,8 +242,9 @@ describe('voucher-range RPCs — period-lock + sequence-integrity guards (BFL 5 
       status: 'posted',
       voucherNumber: 3,
     })
-    const err = await callBare(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
-    expect(err).toBeNull()
+    // Direct pool call (NOT callBare, which wraps in BEGIN…ROLLBACK and would
+    // undo the release before the assertion below reads the sequence).
+    await getPool().query(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
 
     const { rows } = await getPool().query(
       `SELECT last_number FROM public.voucher_sequences
