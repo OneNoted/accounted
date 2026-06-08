@@ -167,6 +167,29 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
     setActionLoading(null)
   }
 
+  // Remove an employee from a draft run. The DELETE endpoint is draft-only and
+  // cascades to the employee's line items; the button is only rendered while the
+  // run is a draft, matching that guard.
+  async function handleRemoveEmployee(employeeId: string, name: string) {
+    if (!confirm(`Ta bort ${name} från lönekörningen?`)) return
+    setActionLoading(`remove-${employeeId}`)
+    const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
+      method: 'DELETE',
+    })
+    if (res.ok) {
+      await loadRun()
+      toast({ title: 'Anställd borttagen' })
+    } else {
+      const result = await res.json()
+      toast({
+        title: 'Kunde inte ta bort anställd',
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    }
+    setActionLoading(null)
+  }
+
   // Edit this month's monthly salary for one employee (draft only). The engine
   // reads this per-run value at calc time, so each month's gross can differ
   // without changing the employee's standard pay. Saved on blur; the user then
@@ -317,6 +340,9 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
   const employees = (run.employees || []) as SalaryRunEmployee[]
   const addedEmployeeIds = new Set(employees.map(e => e.employee_id))
   const notAdded = availableEmployees.filter(e => !addedEmployeeIds.has(e.id))
+  // Employees can only be removed while the run is a draft (matches the DELETE
+  // endpoint's guard); gate the row action column on the same condition.
+  const canRemoveEmployee = run.status === 'draft' && canWrite
 
   // calculation_params is frozen only when the run has been calculated, so it
   // distinguishes "not yet calculated" from "calculated to 0" (a nollkörning).
@@ -464,6 +490,7 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                   <TableHead className="hidden lg:table-cell text-right">Avgifter</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Semester</TableHead>
                   <TableHead className="text-right w-[80px]">Lönespec</TableHead>
+                  {canRemoveEmployee && <TableHead className="w-[48px]"><span className="sr-only">Ta bort</span></TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -530,6 +557,28 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
                           Visa PDF
                         </a>
                       </TableCell>
+                      {canRemoveEmployee && (
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRemoveEmployee(sre.employee_id, name)
+                            }}
+                            disabled={actionLoading === `remove-${sre.employee_id}`}
+                            aria-label={`Ta bort ${name} från lönekörningen`}
+                            title="Ta bort från lönekörningen"
+                          >
+                            {actionLoading === `remove-${sre.employee_id}` ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TableCell>
+                      )}
                     </TableRow>
                   )
                 })}
