@@ -19,7 +19,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
-import { proposePaymentLines } from '@/lib/bookkeeping/propose-payment-lines'
+import { proposePaymentLines, resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
@@ -44,6 +44,9 @@ interface DuplicateCandidate {
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
   items: InvoiceItem[]
+  // Present once an issuance verifikat has been booked (faktureringsmetoden);
+  // absent on kontantmetoden invoices that recognise revenue at payment.
+  journal_entry_id?: string | null
 }
 
 interface PaymentBookingDialogProps {
@@ -80,6 +83,11 @@ export default function PaymentBookingDialog({
   const [isInitialized, setIsInitialized] = useState(false)
   const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[] | null>(null)
   const [tab, setTab] = useState<'new' | 'existing'>('new')
+  // source_type the booking will use — drives the voucher-series preview so the
+  // number shown matches what mark-paid will actually create.
+  const [sourceType, setSourceType] =
+    useState<'invoice_cash_payment' | 'invoice_paid' | null>(null)
+  const [nextVoucher, setNextVoucher] = useState<{ series: string; next: number | null } | null>(null)
 
   // Load accounts and settings when dialog opens
   useEffect(() => {
@@ -87,6 +95,8 @@ export default function PaymentBookingDialog({
       setIsInitialized(false)
       setDuplicateCandidates(null)
       setTab('new')
+      setSourceType(null)
+      setNextVoucher(null)
       return
     }
 
@@ -116,6 +126,13 @@ export default function PaymentBookingDialog({
 
         const accountingMethod = (settings?.accounting_method || 'accrual') as 'accrual' | 'cash'
         const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+
+        setSourceType(
+          resolveInvoicePaymentSourceType({
+            invoiceAlreadyBooked: !!invoice.journal_entry_id,
+            accountingMethod,
+          }),
+        )
 
         const proposed = proposePaymentLines({
           invoice: {
@@ -152,6 +169,25 @@ export default function PaymentBookingDialog({
     init()
     return () => { cancelled = true }
   }, [open, invoice.id, company?.id])
+
+  // Voucher-series preview: resolve the upcoming serie + nummer the same way the
+  // booking engine will, so a misconfigured series is visible before confirming.
+  // Re-runs when the payment date changes (vouchers are numbered per period).
+  useEffect(() => {
+    if (!open || !sourceType) return
+    let cancelled = false
+    const qs = new URLSearchParams({ source_type: sourceType, date: paymentDate })
+    fetch(`/api/bookkeeping/voucher-sequences/next?${qs}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (cancelled || !json?.data) return
+        setNextVoucher({ series: json.data.series, next: json.data.next })
+      })
+      .catch(() => {
+        if (!cancelled) setNextVoucher(null)
+      })
+    return () => { cancelled = true }
+  }, [open, sourceType, paymentDate])
 
   // Balance computation
   const { totalDebit, totalCredit, isBalanced } = useMemo(() => {
@@ -258,7 +294,14 @@ export default function PaymentBookingDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
-          <DialogTitle>{t('title')}{invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}</DialogTitle>
+          <DialogTitle>
+            {t('title')}{invoice.invoice_number ? t('title_suffix', { number: invoice.invoice_number }) : ''}
+            {nextVoucher && (
+              <span className="ml-1 text-muted-foreground tabular-nums">
+                ({nextVoucher.series}{nextVoucher.next})
+              </span>
+            )}
+          </DialogTitle>
           <DialogDescription>
             {formatCurrency(invoice.total, invoice.currency)}
             {invoice.currency !== 'SEK' && invoice.total_sek && (

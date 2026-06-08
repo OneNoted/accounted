@@ -36,6 +36,25 @@ function toFormAmount(n: number): string {
 }
 
 /**
+ * Resolve the journal_entries.source_type used when booking an invoice payment.
+ *
+ * Mirrors the branching in app/api/invoices/[id]/mark-paid/route.ts: revenue is
+ * only recognised at payment (kontantmetoden / invoice_cash_payment) when the
+ * invoice has no prior issuance verifikat AND the company is on the cash method.
+ * Otherwise the payment clears the receivable (invoice_paid).
+ *
+ * Shared so the dialog's voucher preview and the route's actual booking always
+ * resolve the same series — they must not drift.
+ */
+export function resolveInvoicePaymentSourceType(opts: {
+  invoiceAlreadyBooked: boolean
+  accountingMethod: 'accrual' | 'cash'
+}): 'invoice_cash_payment' | 'invoice_paid' {
+  const useCashEntry = !opts.invoiceAlreadyBooked && opts.accountingMethod === 'cash'
+  return useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
+}
+
+/**
  * Propose journal entry lines for an invoice payment.
  *
  * Accrual: Debit paymentAccount, Credit 1510, optional exchange rate diff.
