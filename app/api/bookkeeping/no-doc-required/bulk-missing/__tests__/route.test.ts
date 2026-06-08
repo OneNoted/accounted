@@ -54,6 +54,16 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     expect((await parseJsonResponse(res)).status).toBe(400)
   })
 
+  it('returns 400 for a shaped-but-invalid date', async () => {
+    const res = await POST(makeReq({ date_from: '9999-99-99' }))
+    expect((await parseJsonResponse(res)).status).toBe(400)
+  })
+
+  it('returns 400 for an invalid series filter', async () => {
+    const res = await POST(makeReq({ series: 'all' }))
+    expect((await parseJsonResponse(res)).status).toBe(400)
+  })
+
   it('dry_run counts only entries that are missing AND not exempt', async () => {
     enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
     enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a has a document

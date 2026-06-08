@@ -7,13 +7,29 @@ import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+// A real calendar date in YYYY-MM-DD form. Rejects shaped-but-invalid values
+// (e.g. 9999-99-99 or 2026-02-30) that a bare /^\d{4}-\d{2}-\d{2}$/ regex would
+// let through and that would otherwise reach the query layer.
+const isoDate = z.string().refine(
+  (v) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false
+    const [y, m, d] = v.split('-').map(Number)
+    const date = new Date(Date.UTC(y, m - 1, d))
+    return (
+      date.getUTCFullYear() === y &&
+      date.getUTCMonth() + 1 === m &&
+      date.getUTCDate() === d
+    )
+  },
+  { message: 'Ogiltigt datum (förväntat YYYY-MM-DD)' },
+)
 
 const BulkMissingSchema = z.object({
   period_id: z.string().uuid().nullable().optional(),
-  series: z.string().nullable().optional(),
-  date_from: z.string().nullable().optional(),
-  date_to: z.string().nullable().optional(),
+  // Single uppercase verifikationsserie (A–Z); the list sends null for "all".
+  series: z.string().regex(/^[A-Z]$/).nullable().optional(),
+  date_from: isoDate.nullable().optional(),
+  date_to: isoDate.nullable().optional(),
   search: z.string().max(200).nullable().optional(),
   reason: z.string().trim().max(200).nullable().optional(),
   // When true, only count the matching verifikat (no writes) so the UI can
@@ -38,16 +54,12 @@ export const POST = withRouteContext(
     const validation = await validateBody(request, BulkMissingSchema)
     if (!validation.success) return validation.response
 
+    // All formats are enforced by the schema above, so these are already valid
+    // (or null). No re-validation needed before they reach the query layer.
     const { period_id, reason, dry_run } = validation.data
-    const series = validation.data.series && /^[A-Z]$/.test(validation.data.series)
-      ? validation.data.series
-      : null
-    const dateFrom = validation.data.date_from && ISO_DATE.test(validation.data.date_from)
-      ? validation.data.date_from
-      : null
-    const dateTo = validation.data.date_to && ISO_DATE.test(validation.data.date_to)
-      ? validation.data.date_to
-      : null
+    const series = validation.data.series ?? null
+    const dateFrom = validation.data.date_from ?? null
+    const dateTo = validation.data.date_to ?? null
     const search = validation.data.search?.trim() || null
 
     // Candidate entries: posted, document-requiring, matching the active filters.
