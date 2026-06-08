@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
+import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 
 const BatchNoDocSchema = z.object({
   journal_entry_ids: z.array(z.string().uuid()).min(1).max(500),
@@ -35,6 +36,7 @@ export const POST = withRouteContext(
         .select('id')
         .eq('company_id', companyId)
         .eq('status', 'posted')
+        .in('source_type', [...NEEDS_DOC_SOURCE_TYPES])
         .in('id', chunk)
 
       if (error) {

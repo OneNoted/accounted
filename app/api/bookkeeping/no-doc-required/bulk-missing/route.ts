@@ -70,32 +70,44 @@ export const POST = withRouteContext(
       return NextResponse.json({ data: dry_run ? { count: 0 } : { exempted: 0 } })
     }
 
-    const [docs, exemptions] = await Promise.all([
-      fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
+    // Resolve which candidates already have a document or an exemption by
+    // querying ONLY for the candidate ids (chunked), rather than loading the
+    // company's full document_attachments + journal_entry_no_doc_required tables
+    // into memory. Data minimisation + bounded memory for large migrations.
+    const candidateIds = candidates.map((e) => e.id)
+    const withDoc = new Set<string>()
+    const exempt = new Set<string>()
+    const LOOKUP_CHUNK = 300
+    for (let i = 0; i < candidateIds.length; i += LOOKUP_CHUNK) {
+      const chunk = candidateIds.slice(i, i + LOOKUP_CHUNK)
+      const [docRes, exemptRes] = await Promise.all([
         supabase
           .from('document_attachments')
           .select('journal_entry_id')
           .eq('company_id', companyId)
           .eq('is_current_version', true)
-          .not('journal_entry_id', 'is', null)
-          .order('id')
-          .range(from, to),
-      ),
-      fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
+          .in('journal_entry_id', chunk),
         supabase
           .from('journal_entry_no_doc_required')
           .select('journal_entry_id')
           .eq('company_id', companyId)
-          .order('journal_entry_id')
-          .range(from, to),
-      ),
-    ])
+          .in('journal_entry_id', chunk),
+      ])
+      if (docRes.error) {
+        return NextResponse.json({ error: docRes.error.message }, { status: 400 })
+      }
+      if (exemptRes.error) {
+        return NextResponse.json({ error: exemptRes.error.message }, { status: 400 })
+      }
+      for (const r of (docRes.data ?? []) as { journal_entry_id: string }[]) {
+        withDoc.add(r.journal_entry_id)
+      }
+      for (const r of (exemptRes.data ?? []) as { journal_entry_id: string }[]) {
+        exempt.add(r.journal_entry_id)
+      }
+    }
 
-    const withDoc = new Set(docs.map((d) => d.journal_entry_id))
-    const exempt = new Set(exemptions.map((e) => e.journal_entry_id))
-    const missingIds = candidates
-      .map((e) => e.id)
-      .filter((id) => !withDoc.has(id) && !exempt.has(id))
+    const missingIds = candidateIds.filter((id) => !withDoc.has(id) && !exempt.has(id))
 
     if (dry_run) {
       return NextResponse.json({ data: { count: missingIds.length } })

@@ -739,7 +739,12 @@ export default function JournalEntryForm({
         </Button>
         <Button onClick={handleConfirm} disabled={isSubmitting}>
           {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          {t('review_confirm')}
+          {/* No underlag attached → explicit acknowledgement, equivalent to the
+              blocking "Bokför utan underlag" dialog in the non-bare flow (BFL
+              5 kap 6-7 §§). With a document it's the normal create label. */}
+          {uploadedFiles.some((f) => f.status === 'uploaded')
+            ? t('review_confirm')
+            : t('no_doc_confirm')}
         </Button>
       </div>
     </div>
