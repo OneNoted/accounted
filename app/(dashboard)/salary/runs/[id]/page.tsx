@@ -50,8 +50,8 @@ interface EntryPreview {
 }
 
 interface PreviewData {
-  salaryEntry: EntryPreview
-  avgifterEntry: EntryPreview
+  salaryEntry: EntryPreview | null
+  avgifterEntry: EntryPreview | null
   vacationEntry: EntryPreview | null
 }
 
@@ -631,31 +631,47 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
             <CardTitle className="text-base">Förhandsgranskning — verifikationer</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            {[preview.salaryEntry, preview.avgifterEntry, preview.vacationEntry, (preview as unknown as Record<string, EntryPreview | null>).pensionEntry].filter(Boolean).map((entry, idx) => (
-              <div key={idx} className="space-y-2">
-                <h4 className="text-sm font-medium">{entry!.description}</h4>
-                <table className="w-full text-xs">
-                  <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                    <tr className="border-b">
-                      <th className="text-left py-1">Konto</th>
-                      <th className="text-left py-1">Beskrivning</th>
-                      <th className="text-right py-1">Debet</th>
-                      <th className="text-right py-1">Kredit</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entry!.lines.map((line, li) => (
-                      <tr key={li} className="border-t border-border/30">
-                        <td className="py-1.5 tabular-nums font-mono">{line.account_number}</td>
-                        <td className="py-1.5 text-muted-foreground">{line.line_description}</td>
-                        <td className="py-1.5 text-right tabular-nums">{line.debit_amount ? formatCurrency(line.debit_amount) : ''}</td>
-                        <td className="py-1.5 text-right tabular-nums">{line.credit_amount ? formatCurrency(line.credit_amount) : ''}</td>
+            {(() => {
+              const entries = [
+                preview.salaryEntry,
+                preview.avgifterEntry,
+                preview.vacationEntry,
+                (preview as unknown as Record<string, EntryPreview | null>).pensionEntry,
+              ].filter(Boolean) as EntryPreview[]
+              if (entries.length === 0) {
+                return (
+                  <p className="text-sm text-muted-foreground">
+                    Nollkörning — inga verifikat bokförs för perioden. Endast en
+                    AGI-nolldeklaration lämnas till Skatteverket.
+                  </p>
+                )
+              }
+              return entries.map((entry, idx) => (
+                <div key={idx} className="space-y-2">
+                  <h4 className="text-sm font-medium">{entry.description}</h4>
+                  <table className="w-full text-xs">
+                    <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+                      <tr className="border-b">
+                        <th className="text-left py-1">Konto</th>
+                        <th className="text-left py-1">Beskrivning</th>
+                        <th className="text-right py-1">Debet</th>
+                        <th className="text-right py-1">Kredit</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
+                    </thead>
+                    <tbody>
+                      {entry.lines.map((line, li) => (
+                        <tr key={li} className="border-t border-border/30">
+                          <td className="py-1.5 tabular-nums font-mono">{line.account_number}</td>
+                          <td className="py-1.5 text-muted-foreground">{line.line_description}</td>
+                          <td className="py-1.5 text-right tabular-nums">{line.debit_amount ? formatCurrency(line.debit_amount) : ''}</td>
+                          <td className="py-1.5 text-right tabular-nums">{line.credit_amount ? formatCurrency(line.credit_amount) : ''}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))
+            })()}
           </CardContent>
         </Card>
       )}

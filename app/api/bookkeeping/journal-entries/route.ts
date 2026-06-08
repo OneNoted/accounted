@@ -32,6 +32,10 @@ export async function GET(request: Request) {
   // other value is passed (defense against trivial injection / typos).
   const seriesRaw = searchParams.get('series')
   const seriesFilter = seriesRaw && /^[A-Z]$/.test(seriesRaw) ? seriesRaw : null
+  // Free-text search over the voucher description (verifikationstext). When set,
+  // we take the direct-query path below (the include_related RPC can't search),
+  // so search is scoped to the selected fiscal period / company.
+  const search = searchParams.get('search')?.trim() || null
   // 'date_desc' (default) | 'date_asc' | 'voucher_asc' | 'voucher_desc'
   // sort_by overrides sort_date when present. sort_date is kept for backwards
   // compatibility with older clients.
@@ -55,7 +59,7 @@ export async function GET(request: Request) {
   // belonging to a different year's series would be misleading. The trade-off
   // is that the visible row count may differ between sort modes for the same
   // period; the strict count is the BFL-compliant view of that year.
-  if (periodId && includeRelated && !isVoucherSort) {
+  if (periodId && includeRelated && !isVoucherSort && !search) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
       p_period_id: periodId,
@@ -131,6 +135,12 @@ export async function GET(request: Request) {
 
   if (seriesFilter) {
     query = query.eq('voucher_series', seriesFilter)
+  }
+
+  if (search) {
+    // Escape LIKE wildcards so % and _ in user input are matched literally.
+    const escaped = search.replace(/[\\%_]/g, (c) => `\\${c}`)
+    query = query.ilike('description', `%${escaped}%`)
   }
 
   const { data, error, count } = await query
