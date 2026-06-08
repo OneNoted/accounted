@@ -2167,8 +2167,11 @@ async function commitSubmitAgi(
         error: 'Skatteverket bearbetar fortfarande AGI-underlaget. Försök igen om en stund.' }
     }
     if (kontroll.data.status === 'DONE_REJECTED' || kontroll.data.status === 'DONE_FAILED') {
+      // Scope by salary_run_id, not just period: a correction run sharing the
+      // period must not have its (still-valid) declaration flipped to rejected.
       await supabase.from('agi_declarations').update({ status: 'rejected' })
-        .eq('company_id', companyId).eq('period_year', periodYear).eq('period_month', periodMonth)
+        .eq('company_id', companyId).eq('salary_run_id', salaryRunId)
+        .eq('period_year', periodYear).eq('period_month', periodMonth)
         .in('status', ['generated', 'pending_signature', 'exported'])
       return { ok: false, code: 'AGI_KONTROLL_REJECTED', http_status: 422, recoverable: false,
         error: 'Skatteverket avvisade AGI-underlaget vid kontroll. Åtgärda felen och generera om AGI:n.' }
@@ -2204,9 +2207,12 @@ async function commitSubmitAgi(
         error: gransk.data.meddelande || 'Skatteverket bearbetar fortfarande underlaget. Försök igen om en stund.' }
     }
 
-    // Flip the declaration to pending_signature (monotonic guard, mirrors route).
+    // Flip the declaration to pending_signature (monotonic guard). Scoped by
+    // salary_run_id so a correction run in the same period isn't co-flipped —
+    // more precise than the period-only route handler, which has no run id.
     await supabase.from('agi_declarations').update({ status: 'pending_signature' })
-      .eq('company_id', companyId).eq('period_year', periodYear).eq('period_month', periodMonth)
+      .eq('company_id', companyId).eq('salary_run_id', salaryRunId)
+      .eq('period_year', periodYear).eq('period_month', periodMonth)
       .in('status', ['generated', 'rejected'])
 
     return {
