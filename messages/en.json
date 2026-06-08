@@ -2867,6 +2867,8 @@
     "filter_section_series": "Voucher series",
     "filter_section_date": "Date range",
     "clear_date_filter": "Clear date filter",
+    "scope_label": "Showing:",
+    "scope_all_years": "All fiscal years",
     "out_of_period_label": "Subsequent",
     "out_of_period_tooltip": "Posted in a later fiscal year, but relates to the selected year (e.g. payment of an invoice issued in the selected year).",
     "out_of_period_tooltip_mobile": "Posted in a later fiscal year, but relates to the selected year.",

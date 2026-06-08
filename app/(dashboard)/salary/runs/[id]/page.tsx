@@ -641,8 +641,9 @@ export default function SalaryRunDetailPage({ params }: { params: Promise<{ id: 
               if (entries.length === 0) {
                 return (
                   <p className="text-sm text-muted-foreground">
-                    Nollkörning — inga verifikat bokförs för perioden. Endast en
-                    AGI-nolldeklaration lämnas till Skatteverket.
+                    Nollkörning — inga verifikat bokförs för den här körningen.
+                    Kontrollera att övriga lönekörningar för perioden täcker
+                    arbetsgivardeklarationen till Skatteverket.
                   </p>
                 )
               }

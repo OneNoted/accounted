@@ -2867,6 +2867,8 @@
     "filter_section_series": "Verifikationsserie",
     "filter_section_date": "Datumintervall",
     "clear_date_filter": "Rensa datumfilter",
+    "scope_label": "Visar:",
+    "scope_all_years": "Alla räkenskapsår",
     "out_of_period_label": "Efterföljande",
     "out_of_period_tooltip": "Bokförd i ett senare räkenskapsår, men avser det valda året (t.ex. betalning av en faktura utställd i det valda året).",
     "out_of_period_tooltip_mobile": "Bokförd i ett senare räkenskapsår, men avser det valda året.",

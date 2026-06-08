@@ -39,7 +39,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import type { JournalEntry, JournalEntryLine } from '@/types'
+import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
 
 const NEEDS_ATTACHMENT = new Set([
   'manual',
@@ -78,6 +78,7 @@ export default function JournalEntryList() {
   const [sortHydrated, setSortHydrated] = useState(false)
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [periodHydrated, setPeriodHydrated] = useState(false)
+  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [filterOpen, setFilterOpen] = useState(false)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -188,10 +189,40 @@ export default function JournalEntryList() {
     setPeriodHydrated(true)
   }, [company?.id])
 
-  // Debounce the free-text search before it reaches the API.
+  // Fetch fiscal periods so the active räkenskapsår can be labelled on the
+  // filter bar without opening the dialog (BFL period-orientation: the user
+  // should always see which year the ledger is scoped to). Read-only — the
+  // dialog's FiscalYearSelector still owns selection; this copy resolves the
+  // name for display.
+  useEffect(() => {
+    if (!company?.id) {
+      setPeriods([])
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/bookkeeping/fiscal-periods')
+        if (!res.ok) return
+        const { data } = await res.json()
+        if (!cancelled) setPeriods((data || []) as FiscalPeriod[])
+      } catch {
+        // Non-critical — the chip falls back to the active-filter count badge.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id])
+
+  // Debounce the free-text search before it reaches the API. Require ≥2 chars:
+  // a single character matches almost every verifikationstext and isn't a useful
+  // filter, so 0–1 chars are treated as "no search" instead of firing a query on
+  // every keystroke (ASVS V2.4).
   useEffect(() => {
     const handle = setTimeout(() => {
-      setSearch(searchInput.trim())
+      const trimmed = searchInput.trim()
+      setSearch(trimmed.length >= 2 ? trimmed : '')
       setPage(0)
     }, 300)
     return () => clearTimeout(handle)
@@ -284,6 +315,14 @@ export default function JournalEntryList() {
   // with zero results, so the user can edit or clear their query. The pristine
   // "no entries yet" state below only applies to an untouched, empty ledger.
   const hasActiveFilters = Boolean(search) || activeFilterCount > 0
+
+  // Resolve the active fiscal-year scope for the bar chip. "All years" (periodId
+  // null) renders immediately; a specific period waits until its name resolves
+  // from the fetched list (scopeLabel stays null meanwhile, so the chip never
+  // flashes the wrong scope). Surfacing this keeps the period visible per BFL
+  // without the user having to open the filter dialog.
+  const activePeriod = periodId ? periods.find((p) => p.id === periodId) ?? null : null
+  const scopeLabel = periodId ? activePeriod?.name ?? null : t('scope_all_years')
 
   // Apply a fiscal-year selection from the dialog. The FiscalYearSelector
   // persists the choice to localStorage itself; here we only mirror it into
@@ -519,6 +558,25 @@ export default function JournalEntryList() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Active fiscal-year scope — visible without opening the filter dialog so
+          the user always sees which räkenskapsår the ledger is scoped to (BFL
+          period-correctness). Clicking it opens the dialog to change the scope. */}
+      {periodHydrated && scopeLabel && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{t('scope_label')}</span>
+          <button
+            type="button"
+            onClick={() => setFilterOpen(true)}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2 font-medium text-foreground transition-colors duration-150 hover:bg-secondary/60"
+          >
+            {scopeLabel}
+            {(activePeriod?.locked_at || activePeriod?.is_closed) && (
+              <Lock className="h-3 w-3 text-muted-foreground" />
+            )}
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <Card>
