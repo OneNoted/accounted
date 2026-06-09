@@ -2826,9 +2826,10 @@ export const tools: McpTool[] = [
       if (!args.include_inactive) q = q.eq('active', true)
 
       // Strip PostgREST filter metacharacters before interpolating into .or() —
-      // commas/parens would otherwise let a query inject extra or-conditions.
+      // commas/parens would otherwise let a query inject extra or-conditions, and
+      // the ILIKE wildcards % and _ would turn a stray char into a match-all.
       const raw = typeof args.query === 'string' ? args.query : ''
-      const safe = raw.replace(/[%,()\\*]/g, ' ').trim()
+      const safe = raw.replace(/[%_,()\\*]/g, ' ').trim()
       if (safe) {
         q = q.or(`name.ilike.%${safe}%,article_number.ilike.%${safe}%`)
       }
