@@ -11,6 +11,8 @@ export const API_KEY_SCOPES = {
   'transactions:write': { label: 'Transaktioner — skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura (4 verktyg)' },
   'customers:read':     { label: 'Kunder — läs',         description: 'Lista kunder (1 verktyg)' },
   'customers:write':    { label: 'Kunder — skriv',       description: 'Skapa kunder (1 verktyg)' },
+  'articles:read':      { label: 'Artiklar — läs',       description: 'Lista artiklar i artikelregistret (1 verktyg)' },
+  'articles:write':     { label: 'Artiklar — skriv',     description: 'Skapa och uppdatera artiklar (2 verktyg)' },
   'invoices:read':      { label: 'Fakturor — läs',       description: 'Lista fakturor (1 verktyg)' },
   'invoices:write':     { label: 'Fakturor — skriv',     description: 'Skapa, skicka, markera betald/skickad (4 verktyg)' },
   'suppliers:read':     { label: 'Leverantörer — läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater (3 verktyg)' },
@@ -42,6 +44,7 @@ export const ALL_SCOPES: ApiKeyScope[] = Object.keys(API_KEY_SCOPES) as ApiKeySc
 export const DEFAULT_SCOPES: ApiKeyScope[] = [
   'transactions:read',
   'customers:read',
+  'articles:read',
   'invoices:read',
   'suppliers:read',
   'reports:read',
@@ -71,6 +74,7 @@ export const DEFAULT_SCOPES: ApiKeyScope[] = [
 export const DEFAULT_OAUTH_SCOPES: ApiKeyScope[] = [
   'transactions:read',
   'customers:read',
+  'articles:read',
   'invoices:read',
   'suppliers:read',
   'reports:read',
@@ -109,6 +113,7 @@ export const PUBLIC_OAUTH_METADATA_SCOPES: ApiKeyScope[] = [...DEFAULT_OAUTH_SCO
 export const STAGING_SCOPES: ApiKeyScope[] = [
   'transactions:write',
   'customers:write',
+  'articles:write',
   'invoices:write',
   'suppliers:write',
   'bookkeeping:write',
@@ -140,6 +145,7 @@ export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | n
 export const SCOPE_GROUPS = [
   { domain: 'transactions',        label: 'Transaktioner',        read: 'transactions:read' as const,        write: 'transactions:write' as const },
   { domain: 'customers',           label: 'Kunder',               read: 'customers:read' as const,           write: 'customers:write' as const },
+  { domain: 'articles',            label: 'Artiklar',             read: 'articles:read' as const,            write: 'articles:write' as const },
   { domain: 'invoices',            label: 'Fakturor',             read: 'invoices:read' as const,            write: 'invoices:write' as const },
   { domain: 'suppliers',           label: 'Leverantörer',         read: 'suppliers:read' as const,           write: 'suppliers:write' as const },
   { domain: 'reports',             label: 'Rapporter',            read: 'reports:read' as const,             write: null },
@@ -168,6 +174,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Customers
   gnubok_list_customers:                  'customers:read',
   gnubok_create_customer:                 'customers:write',
+  // Articles (artikelregister)
+  gnubok_list_articles:                   'articles:read',
+  gnubok_create_article:                  'articles:write',
+  gnubok_update_article:                  'articles:write',
   // Invoices
   gnubok_list_invoices:                   'invoices:read',
   gnubok_create_invoice:                  'invoices:write',

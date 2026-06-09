@@ -580,6 +580,57 @@ export interface Supplier {
   updated_at: string
 }
 
+// Article (artikelregister) — reusable invoice-line preset. NON-INVENTORY:
+// no stock fields and no inventory postings, by deliberate design.
+export type ArticleType = 'vara' | 'tjanst'
+
+export interface Article {
+  id: string
+  company_id: string
+  user_id: string
+
+  /** Auto-numbered per company (generate_article_number RPC); user-overridable. */
+  article_number: string | null
+  name: string
+  /** English benämning for English-language invoices. */
+  name_en: string | null
+  type: ArticleType
+  unit: string
+  /** Always stored EXCLUDING VAT. */
+  price_excl_vat: number
+  /** Default line VAT rate as an integer percent: 25 | 12 | 6 | 0. */
+  vat_rate: number
+  /** Optional BAS class-3 revenue account override. null = derive from VAT treatment. */
+  revenue_account: string | null
+  /** Margin/display only — never posted to the ledger. */
+  cost_price: number | null
+  ean: string | null
+  /** ROT/RUT arbetstypskod (tjänst only); pre-fills the invoice line. */
+  housework_type: string | null
+  notes: string | null
+  /** Soft-delete flag. Inactive articles are hidden from pickers but keep history. */
+  active: boolean
+
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateArticleInput {
+  name: string
+  type?: ArticleType
+  unit?: string
+  price_excl_vat: number
+  vat_rate?: number
+  revenue_account?: string | null
+  cost_price?: number | null
+  ean?: string | null
+  housework_type?: string | null
+  name_en?: string | null
+  notes?: string | null
+  /** Optional manual article number; omit to auto-generate. */
+  article_number?: string | null
+}
+
 // Supplier Invoice
 export interface SupplierInvoice {
   id: string
@@ -826,6 +877,14 @@ export interface InvoiceItem {
   vat_rate: number
   vat_amount: number
 
+  // Article linkage. `article_id` is a soft back-reference to the source
+  // article (for the "Affärshändelser" history view); `revenue_account` is the
+  // BAS class-3 account frozen-copied from the article at line-create time.
+  // null `revenue_account` preserves the legacy "derive from VAT treatment"
+  // booking in generatePerRateLines().
+  article_id?: string | null
+  revenue_account?: string | null
+
   // ROT/RUT-avdrag (Sweden's tax deduction for household services / home
   // renovation). When `deduction_type` is set, the system computes
   // `deduction_amount` from the rules in lib/invoices/rot-rut-rules.ts
@@ -1019,6 +1078,10 @@ export interface CreateInvoiceItemInput {
   unit: string
   unit_price: number
   vat_rate?: number
+  /** Source article (optional). Free-text lines omit it. */
+  article_id?: string | null
+  /** BAS class-3 revenue account override copied from the article. null = derive from VAT treatment. */
+  revenue_account?: string | null
   /** ROT/RUT toggle. null/undefined = no deduction. */
   deduction_type?: 'rot' | 'rut' | null
   labor_hours?: number | null
@@ -1552,6 +1615,8 @@ export interface CreateFiscalPeriodInput {
 export type PendingOperationType =
   | 'categorize_transaction'
   | 'create_customer'
+  | 'create_article'
+  | 'update_article'
   | 'create_supplier'
   | 'create_invoice'
   | 'mark_invoice_paid'

@@ -70,6 +70,9 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
+import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
+import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
 import type {
   Transaction,
@@ -80,6 +83,7 @@ import type {
   Invoice,
   Customer,
   Supplier,
+  Article,
   SupplierInvoice,
   SupplierInvoiceItem,
   PendingOperation,
@@ -427,6 +431,112 @@ async function commitCreateCustomer(
   return { data: { customer_id: data.id } }
 }
 
+async function commitCreateArticle(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so a
+  // tampered pending_operations row cannot inject unexpected fields (ASVS V4.5).
+  let validated
+  try {
+    validated = CreateArticleParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  if (validated.revenue_account) {
+    const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
+    if (!ok) return { error: 'Revenue account is not an active class-3 account', status: 400 }
+  }
+
+  const { data, error } = await supabase
+    .from('articles')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      name: validated.name,
+      name_en: validated.name_en ?? null,
+      type: validated.type,
+      unit: validated.unit ?? 'st',
+      price_excl_vat: validated.price_excl_vat,
+      vat_rate: validated.vat_rate,
+      revenue_account: validated.revenue_account ?? null,
+      cost_price: validated.cost_price ?? null,
+      ean: validated.ean ?? null,
+      housework_type: validated.housework_type ?? null,
+      notes: validated.notes ?? null,
+      article_number: validated.article_number ?? null,
+    })
+    .select()
+    .single()
+
+  if (error) return { error: error.message, status: 500 }
+
+  if (!data.article_number) {
+    try {
+      data.article_number = await ensureArticleNumber(supabase, companyId, data.id)
+    } catch (err) {
+      log.warn('article number assignment failed (staged create):', err)
+    }
+  }
+
+  await eventBus.emit({ type: 'article.created', payload: { article: data as Article, userId, companyId } })
+
+  return { data: { article_id: data.id, article_number: data.article_number } }
+}
+
+async function commitUpdateArticle(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = UpdateArticleParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  if (validated.revenue_account) {
+    const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
+    if (!ok) return { error: 'Revenue account is not an active class-3 account', status: 400 }
+  }
+
+  const { article_id, ...rest } = validated
+  const updateData: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(rest)) {
+    if (value !== undefined) updateData[key] = value
+  }
+
+  const { data, error } = await supabase
+    .from('articles')
+    .update(updateData)
+    .eq('id', article_id)
+    .eq('company_id', companyId)
+    .select()
+    .single()
+
+  if (error) {
+    if (error.code === 'PGRST116') return { error: 'Article not found', status: 404 }
+    return { error: error.message, status: 500 }
+  }
+
+  await eventBus.emit({ type: 'article.updated', payload: { article: data as Article, userId, companyId } })
+
+  return { data: { article_id: data.id } }
+}
+
 async function commitCreateSupplier(
   supabase: SupabaseClient,
   userId: string,
@@ -539,6 +649,7 @@ async function commitCreateInvoice(
   const customerId = params.customer_id as string
   const items = params.items as Array<{
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
+    article_id?: string | null; revenue_account?: string | null
   }>
 
   const { data: customer, error: customerError } = await supabase
@@ -562,6 +673,17 @@ async function commitCreateInvoice(
     }
     const lineTotal = item.quantity * item.unit_price
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
+  }
+
+  // Validate any per-line revenue-account override (defense in depth — the field
+  // is frozen onto invoice_items and flows to generatePerRateLines()).
+  const overrideAccounts = Array.from(
+    new Set(items.map((i) => i.revenue_account).filter((a): a is string => !!a)),
+  )
+  for (const acct of overrideAccounts) {
+    if (!(await isValidRevenueAccount(supabase, companyId, acct))) {
+      return { error: `Försäljningskonto ${acct} är inte ett aktivt intäktskonto (klass 3)`, status: 400 }
+    }
   }
 
   const total = subtotal + vatAmount
@@ -632,6 +754,10 @@ async function commitCreateInvoice(
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
+      // Frozen per-line override so generatePerRateLines() books to the article's
+      // account; null falls back to the VAT-treatment-derived account.
+      article_id: item.article_id ?? null,
+      revenue_account: item.revenue_account ?? null,
     }
   })
 
@@ -2099,6 +2225,8 @@ async function commitCreditInvoice(
     line_total: number
     vat_rate?: number
     vat_amount?: number
+    revenue_account?: string | null
+    article_id?: string | null
   }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
@@ -2109,6 +2237,10 @@ async function commitCreditInvoice(
     line_total: -Math.abs(item.line_total),
     vat_rate: item.vat_rate ?? 0,
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+    // Reverse to the SAME account the original credited (e.g. 3041, not the
+    // VAT-derived 3001) so the override account doesn't keep a dangling balance.
+    revenue_account: item.revenue_account ?? null,
+    article_id: item.article_id ?? null,
   }))
 
   const { error: itemsError } = await supabase
@@ -2257,6 +2389,13 @@ async function commitConvertInvoice(
     unit: item.unit,
     unit_price: item.unit_price,
     line_total: item.line_total,
+    // Preserve per-line VAT and any article/revenue-account override from the
+    // proforma so the converted invoice books exactly as the proforma showed
+    // (mixed rates + per-article accounts both rely on these per-line fields).
+    vat_rate: item.vat_rate ?? 0,
+    vat_amount: item.vat_amount ?? 0,
+    revenue_account: item.revenue_account ?? null,
+    article_id: item.article_id ?? null,
   }))
 
   if (items.length > 0) {
@@ -3162,6 +3301,12 @@ async function commitPendingOperationInner(
         break
       case 'create_customer':
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_article':
+        result = await commitCreateArticle(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_article':
+        result = await commitUpdateArticle(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)

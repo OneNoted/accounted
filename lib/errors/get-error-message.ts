@@ -24,6 +24,7 @@ type ErrorContext =
   | 'invoice'
   | 'supplier_invoice'
   | 'customer'
+  | 'article'
   | 'supplier'
   | 'transaction'
   | 'journal_entry'
@@ -78,6 +79,7 @@ const CONTEXT_FALLBACKS: Record<ErrorContext, Bilingual> = {
   invoice: { sv: 'Kunde inte hantera fakturan. Försök igen.', en: 'Could not process the invoice. Please try again.' },
   supplier_invoice: { sv: 'Kunde inte hantera leverantörsfakturan. Försök igen.', en: 'Could not process the supplier invoice. Please try again.' },
   customer: { sv: 'Kunde inte hantera kunden. Försök igen.', en: 'Could not process the customer. Please try again.' },
+  article: { sv: 'Kunde inte hantera artikeln. Försök igen.', en: 'Could not process the article. Please try again.' },
   supplier: { sv: 'Kunde inte hantera leverantören. Försök igen.', en: 'Could not process the supplier. Please try again.' },
   transaction: { sv: 'Kunde inte hantera transaktionen. Försök igen.', en: 'Could not process the transaction. Please try again.' },
   journal_entry: { sv: 'Kunde inte hantera verifikationen. Försök igen.', en: 'Could not process the journal entry. Please try again.' },

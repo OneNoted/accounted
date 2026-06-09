@@ -29,6 +29,7 @@ import {
   ClipboardCheck,
   HandCoins,
   Package,
+  Tag,
   ChevronsUpDown,
   Sparkles,
 } from 'lucide-react'
@@ -81,6 +82,7 @@ type NavLabelKey =
   | 'invoice_inbox'
   | 'invoices'
   | 'customers'
+  | 'articles'
   | 'supplier_invoices'
   | 'suppliers'
   | 'review'
@@ -128,6 +130,7 @@ const navItems: NavItem[] = [
   // Försäljning dropdown
   { href: '/invoices', labelKey: 'invoices', icon: Receipt, group: 'försäljning' },
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
+  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'försäljning' },
   // Inköp dropdown
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'inköp' },
   { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp' },

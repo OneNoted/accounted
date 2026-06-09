@@ -39,10 +39,16 @@ import {
   RUT_MAX,
   computeDeduction,
 } from '@/lib/invoices/rot-rut-rules'
-import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType } from '@/types'
+import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
+
+// Subset of Article fields the line picker needs to pre-fill a row.
+type ArticleOption = Pick<
+  Article,
+  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account'
+>
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
@@ -67,6 +73,9 @@ export default function NewInvoicePage() {
       unit: z.string().min(1, t('validation_unit_required')),
       unit_price: z.number().min(0, t('validation_price_positive')),
       vat_rate: z.number().min(0).max(25),
+      // Article linkage (artikelregister). Optional — free-text lines omit them.
+      article_id: z.string().nullable().optional(),
+      revenue_account: z.string().nullable().optional(),
       // ROT/RUT-avdrag per line. Optional — null means "no deduction".
       deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
       labor_hours: z.number().nonnegative().nullable().optional(),
@@ -120,6 +129,9 @@ export default function NewInvoicePage() {
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
+  // Artikelregister: active articles for the line picker + which line is mid quick-create.
+  const [articles, setArticles] = useState<ArticleOption[]>([])
+  const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
   // True only when the user had zero invoices when this page loaded. The
   // post-create flow uses this to offer a one-shot "upload a logo?" prompt
   // — issue #520. Self-limits: once count > 0 it stays false.
@@ -152,6 +164,8 @@ export default function NewInvoicePage() {
         unit: 'st',
         unit_price: 0,
         vat_rate: 25,
+        article_id: null,
+        revenue_account: null,
         deduction_type: null,
         labor_hours: null,
         work_type: null,
@@ -194,7 +208,84 @@ export default function NewInvoicePage() {
     if (!company?.id) return
     fetchCustomers()
     fetchDefaultNotes()
+    fetchArticles()
   }, [company?.id])
+
+  async function fetchArticles() {
+    if (!company?.id) return
+    const { data } = await supabase
+      .from('articles')
+      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account')
+      .eq('company_id', company.id)
+      .eq('active', true)
+      .order('name')
+    setArticles((data ?? []) as ArticleOption[])
+  }
+
+  // Apply a chosen article's defaults onto a line. Selecting "none" detaches the
+  // article link (and its account override) but keeps the typed text/price so the
+  // row becomes an editable free-text line.
+  function applyArticle(index: number, articleId: string) {
+    if (articleId === 'none') {
+      setValue(`items.${index}.article_id`, null, { shouldDirty: true })
+      setValue(`items.${index}.revenue_account`, null, { shouldDirty: true })
+      return
+    }
+    const a = articles.find((x) => x.id === articleId)
+    if (!a) return
+    setValue(`items.${index}.article_id`, a.id, { shouldDirty: true })
+    setValue(`items.${index}.description`, a.name, { shouldValidate: true, shouldDirty: true })
+    if (a.unit) setValue(`items.${index}.unit`, a.unit, { shouldDirty: true })
+    setValue(`items.${index}.unit_price`, Number(a.price_excl_vat) || 0, { shouldValidate: true, shouldDirty: true })
+    // Only adopt the article's VAT rate when it's allowed for this customer
+    // (and the rate isn't locked, e.g. reverse charge / export). Otherwise keep
+    // the line's current rate so the API's per-customer VAT rule isn't violated.
+    if (!isRateLocked && availableRates.some((r) => r.rate === a.vat_rate)) {
+      setValue(`items.${index}.vat_rate`, a.vat_rate, { shouldValidate: true, shouldDirty: true })
+    }
+    // The account override rides along regardless of rate; the engine ignores it
+    // for reverse-charge/export and validates it against the chart of accounts.
+    setValue(`items.${index}.revenue_account`, a.revenue_account ?? null, { shouldDirty: true })
+  }
+
+  // "Spara som artikel": persist the current free-text line into the register and
+  // back-fill the article_id so the row is now catalog-linked.
+  async function saveLineAsArticle(index: number) {
+    const item = watchItems[index]
+    if (!item?.description?.trim()) {
+      toast({ title: t('save_article_need_description'), variant: 'destructive' })
+      return
+    }
+    setSavingArticleIndex(index)
+    try {
+      const response = await fetch('/api/articles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: item.description.trim(),
+          unit: item.unit || 'st',
+          price_excl_vat: Number(item.unit_price) || 0,
+          vat_rate: item.vat_rate ?? 25,
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(getErrorMessage(result, { context: 'article', statusCode: response.status }))
+      }
+      const created = result.data as ArticleOption
+      setArticles((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'sv')))
+      setValue(`items.${index}.article_id`, created.id, { shouldDirty: true })
+      toast({ title: t('article_saved_title'), description: created.name })
+    } catch (error) {
+      toast({
+        title: t('save_article_failed'),
+        description: getErrorMessage(error, { context: 'article' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingArticleIndex(null)
+    }
+  }
 
   async function fetchDefaultNotes() {
     if (!company?.id) return
@@ -864,6 +955,55 @@ export default function NewInvoicePage() {
                       key={field.id}
                       className="rounded-lg border bg-card p-4 space-y-3 relative md:rounded-none md:border-0 md:bg-transparent md:p-0 md:space-y-0 md:grid md:grid-cols-12 md:gap-4 md:items-start"
                     >
+                      {/* Article picker (artikelregister). Optional — leave on
+                          "Egen rad" to type a free-text line. Selecting an
+                          article pre-fills description, unit, price, VAT and any
+                          revenue-account override. */}
+                      <div className="md:col-span-12 flex flex-wrap items-end gap-2">
+                        <div className="flex-1 min-w-[180px] space-y-1 md:space-y-2">
+                          <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('article_label')}</Label>
+                          <Controller
+                            name={`items.${index}.article_id`}
+                            control={control}
+                            render={({ field }) => (
+                              <Select
+                                value={field.value ?? 'none'}
+                                onValueChange={(v) => applyArticle(index, v)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder={t('article_placeholder')} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="none">{t('article_free_text')}</SelectItem>
+                                  {articles.map((a) => (
+                                    <SelectItem key={a.id} value={a.id}>
+                                      {a.article_number ? `${a.article_number} — ${a.name}` : a.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                          />
+                        </div>
+                        {canWrite && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-10 shrink-0"
+                            onClick={() => saveLineAsArticle(index)}
+                            disabled={savingArticleIndex === index}
+                          >
+                            {savingArticleIndex === index ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Plus className="h-4 w-4 md:mr-1" />
+                            )}
+                            <span className="hidden md:inline">{t('save_as_article')}</span>
+                          </Button>
+                        )}
+                      </div>
+
                       {/* Description + mobile delete button */}
                       <div className="flex items-start gap-2 md:contents">
                         <div className="flex-1 space-y-1 md:col-span-3 md:space-y-2">
@@ -1106,6 +1246,8 @@ export default function NewInvoicePage() {
                       unit: 'st',
                       unit_price: 0,
                       vat_rate: availableRates[0]?.rate ?? 25,
+                      article_id: null,
+                      revenue_account: null,
                       deduction_type: null,
                       labor_hours: null,
                       work_type: null,

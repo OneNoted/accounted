@@ -21,6 +21,12 @@ export type RiskLevel = 'low' | 'medium' | 'high'
 export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Low: pure data, no booking impact ─────────────────────────────
   create_customer: 'low',
+  // Article catalog (artikelregister) is app-level master data — no journal
+  // impact, no external side-effect. Unlike create_supplier it carries no
+  // payment-routing fields, so there's no BEC/fraud surface; both create and
+  // update sit at the lowest tier next to create_customer.
+  create_article: 'low',
+  update_article: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',

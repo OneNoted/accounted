@@ -28,6 +28,14 @@ const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactl
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
 
+/** BAS class-3 revenue account — exactly 4 digits starting with 3 (försäljning/intäkt). */
+const revenueAccount = z
+  .string()
+  .regex(/^3\d{3}$/, 'Revenue account must be a 4-digit BAS class-3 account (3xxx)')
+
+/** Swedish VAT rate as an integer percent. */
+const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
+
 /** Time string (HH:MM or HH:MM:SS) */
 const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
 
@@ -190,6 +198,11 @@ export const CreateInvoiceItemSchema = z.object({
   unit: z.string().min(1, 'Unit is required'),
   unit_price: z.number(),
   vat_rate: z.number().min(0).max(100).optional(),
+  // Article linkage. `article_id` ties the line to a catalog article (free-text
+  // lines omit it). `revenue_account` is the optional BAS class-3 override the
+  // engine books to; the API validates it against chart_of_accounts before use.
+  article_id: uuid.nullable().optional(),
+  revenue_account: revenueAccount.nullable().optional(),
   // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
   // the client schema — the API computes it from rot-rut-rules.ts so a
   // tampered client can't expand the 1513 receivable beyond the line total.
@@ -230,6 +243,37 @@ export const CreateInvoiceSchema = z.object({
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,
   reason: z.string().optional(),
+})
+
+// ============================================================
+// Articles (artikelregister)
+// ============================================================
+
+export const ArticleTypeSchema = z.enum(['vara', 'tjanst'])
+
+export const CreateArticleSchema = z.object({
+  name: z.string().min(1, 'Article name is required').max(200),
+  type: ArticleTypeSchema.optional(),
+  unit: z.string().min(1).max(32).optional(),
+  price_excl_vat: nonNegativeAmount,
+  vat_rate: vatRatePercent.optional(),
+  // Optional BAS class-3 revenue-account override. Null/omitted = derive from
+  // the invoice's VAT treatment (current behaviour).
+  revenue_account: revenueAccount.nullable().optional(),
+  // Margin/display only; never posted.
+  cost_price: nonNegativeAmount.nullable().optional(),
+  ean: z.string().max(32).nullable().optional(),
+  // ROT/RUT arbetstyp; only meaningful for type === 'tjanst'.
+  housework_type: z.string().max(64).nullable().optional(),
+  name_en: z.string().max(200).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  // Manual article number; omit to auto-generate via generate_article_number.
+  article_number: z.string().max(64).nullable().optional(),
+})
+
+// PATCH allows every create field plus toggling the soft-delete flag.
+export const UpdateArticleSchema = CreateArticleSchema.partial().extend({
+  active: z.boolean().optional(),
 })
 
 // Self-billing received (mottagen självfaktura, ML 17 kap 15§). The customer

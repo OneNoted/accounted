@@ -108,29 +108,65 @@ function generatePerRateLines(
     return lines
   }
 
-  // Group items by vat_rate
-  const rateGroups = new Map<number, { subtotal: number; vatAmount: number }>()
+  // Group items by vat_rate (preserve first-seen rate order). Within each rate,
+  // sub-group revenue by the resolved BAS account so a per-line/article account
+  // override produces its own credit line. VAT stays aggregated per rate (the
+  // VAT account is a function of the treatment, never of the revenue override).
+  type RateGroup = {
+    vatAmount: number
+    // resolved revenue account -> summed line_total (first-seen account order)
+    byAccount: Map<string, number>
+  }
+  const rateGroups = new Map<number, RateGroup>()
+
   for (const item of items) {
     const rate = item.vat_rate ?? 0
-    const group = rateGroups.get(rate) || { subtotal: 0, vatAmount: 0 }
-    group.subtotal += item.line_total
+    const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
+      ? invoiceVatTreatment
+      : getVatTreatmentForRate(rate)
+    // reverse_charge / export force the statutory revenue account (3308/3305);
+    // a per-line override only applies to ordinary domestic rates so EU/export
+    // sales keep landing in the right VAT-declaration ruta.
+    const isSpecialTreatment = treatment === 'reverse_charge' || treatment === 'export'
+    const account = !isSpecialTreatment && item.revenue_account
+      ? item.revenue_account
+      : getRevenueAccount(treatment, entityType)
+
+    const group = rateGroups.get(rate) ?? { vatAmount: 0, byAccount: new Map<string, number>() }
     group.vatAmount += item.vat_amount || 0
+    group.byAccount.set(account, (group.byAccount.get(account) ?? 0) + item.line_total)
     rateGroups.set(rate, group)
   }
 
-  // Generate revenue + VAT lines per rate group
+  // Generate revenue + VAT lines per rate group.
   for (const [rate, group] of rateGroups) {
     const treatment = rate === 0 && (invoiceVatTreatment === 'reverse_charge' || invoiceVatTreatment === 'export')
       ? invoiceVatTreatment
       : getVatTreatmentForRate(rate)
-    const revenueAccount = getRevenueAccount(treatment, entityType)
-    const roundedSubtotal = Math.round(toSek(group.subtotal) * 100) / 100
 
-    lines.push({
-      account_number: revenueAccount,
-      debit_amount: 0,
-      credit_amount: roundedSubtotal,
-      line_description: `Försäljning faktura ${invoiceTagText}`,
+    // The rate-level rounded subtotal is the balance anchor — identical to the
+    // pre-override single-account behaviour. When a rate splits across multiple
+    // accounts, distribute that exact total so independent per-account rounding
+    // can never introduce a 1-öre imbalance against the 1510 debit: every
+    // account but the last rounds normally; the last absorbs the remainder.
+    const rateSubtotalSek = Math.round(
+      toSek(Array.from(group.byAccount.values()).reduce((sum, v) => sum + v, 0)) * 100
+    ) / 100
+
+    const accounts = Array.from(group.byAccount.entries())
+    let allocated = 0
+    accounts.forEach(([account, subtotal], idx) => {
+      const isLast = idx === accounts.length - 1
+      const credit = isLast
+        ? Math.round((rateSubtotalSek - allocated) * 100) / 100
+        : Math.round(toSek(subtotal) * 100) / 100
+      allocated = Math.round((allocated + credit) * 100) / 100
+      lines.push({
+        account_number: account,
+        debit_amount: 0,
+        credit_amount: credit,
+        line_description: `Försäljning faktura ${invoiceTagText}`,
+      })
     })
 
     const roundedVat = Math.round(toSek(group.vatAmount) * 100) / 100

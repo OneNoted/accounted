@@ -145,6 +145,41 @@ export const POST = withRouteContext(
     }
     const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
 
+    // Validate any per-line revenue-account override against the company's chart
+    // of accounts. Zod already constrains the shape to a 3xxx string; here we
+    // confirm each is a real, active class-3 account so a typo or a non-revenue
+    // account can never be booked. Never trust the client — same posture as the
+    // server-recomputed ROT/RUT amounts.
+    const overrideAccounts = Array.from(
+      new Set(
+        invoiceInput.items
+          .map((item) => item.revenue_account)
+          .filter((a): a is string => !!a),
+      ),
+    )
+    if (overrideAccounts.length > 0) {
+      const { data: validAccounts, error: accountsError } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number')
+        .eq('company_id', companyId!)
+        .eq('account_class', 3)
+        .eq('is_active', true)
+        .in('account_number', overrideAccounts)
+
+      if (accountsError) {
+        log.error('revenue account validation query failed', accountsError)
+        return errorResponse(accountsError, log, { requestId })
+      }
+      const validSet = new Set((validAccounts ?? []).map((a) => a.account_number))
+      const invalid = overrideAccounts.filter((a) => !validSet.has(a))
+      if (invalid.length > 0) {
+        return errorResponseFromCode('INVOICE_CREATE_REVENUE_ACCOUNT_INVALID', log, {
+          requestId,
+          details: { invalidAccounts: invalid },
+        })
+      }
+    }
+
     // ROT/RUT-avdrag: validate prerequisites and compute the per-item +
     // invoice-level deduction. Computed server-side (never trusted from
     // the client) so a tampered request can't expand the 1513 receivable.
@@ -294,6 +329,11 @@ export const POST = withRouteContext(
         line_total: lineTotal,
         vat_rate: itemRate,
         vat_amount: itemVat,
+        // Article linkage. revenue_account is frozen-copied here so a later
+        // article edit never re-books this line; null falls through to the
+        // VAT-treatment-derived account in generatePerRateLines().
+        article_id: item.article_id ?? null,
+        revenue_account: item.revenue_account ?? null,
         deduction_type: deductionType,
         deduction_amount: deductionAmount,
         labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,
@@ -469,7 +509,7 @@ async function createCreditNote(
     })
   }
 
-  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number }) => ({
+  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number; revenue_account?: string | null; article_id?: string | null }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
     description: item.description,
@@ -479,6 +519,12 @@ async function createCreditNote(
     line_total: -Math.abs(item.line_total),
     vat_rate: item.vat_rate ?? 0,
     vat_amount: -(item.vat_amount ? Math.abs(item.vat_amount) : 0),
+    // Carry the original's per-line revenue-account override so the reversal
+    // hits the SAME account it originally credited (e.g. 3041, not the
+    // VAT-derived 3001) — otherwise the override account keeps a dangling
+    // balance. article_id is preserved for the usage history.
+    revenue_account: item.revenue_account ?? null,
+    article_id: item.article_id ?? null,
   }))
 
   const { error: itemsError } = await supabase.from('invoice_items').insert(creditNoteItems)
