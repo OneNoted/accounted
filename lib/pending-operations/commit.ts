@@ -552,6 +552,18 @@ async function commitCreateInvoice(
   const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
   const allowedRates = new Set(availableRates.map((r) => r.rate))
 
+  // VAT registration gate (mirrors app/api/invoices/route.ts). A
+  // non-momsregistrerad company books no output VAT: force every line to 0%
+  // (momsfri → treatment 'exempt'). 0% is allowed for every customer type, so
+  // the allowedRates guard below still passes.
+  const { data: vatSettings } = await supabase
+    .from('company_settings')
+    .select('vat_registered')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const notVatRegistered = vatSettings?.vat_registered === false
+  if (notVatRegistered) for (const item of items) item.vat_rate = 0
+
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
 
   let vatAmount = 0
@@ -605,10 +617,10 @@ async function commitCreateInvoice(
       vat_amount_sek: vatAmountSek,
       total,
       total_sek: totalSek,
-      vat_treatment: vatRules.treatment,
+      vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
       vat_rate: isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate),
-      moms_ruta: vatRules.momsRuta,
-      reverse_charge_text: vatRules.reverseChargeText || null,
+      moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
+      reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
       our_reference: (params.our_reference as string) || null,
       your_reference: (params.your_reference as string) || null,
       notes: (params.notes as string) || null,
@@ -2092,6 +2104,7 @@ async function commitCreditInvoice(
 
   const creditItems = (original.items || []).map((item: {
     sort_order: number
+    line_type?: 'product' | 'text'
     description: string
     quantity: number
     unit: string
@@ -2102,6 +2115,7 @@ async function commitCreditInvoice(
   }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
+    line_type: item.line_type ?? 'product',
     description: item.description,
     quantity: -Math.abs(item.quantity),
     unit: item.unit,
@@ -2252,6 +2266,7 @@ async function commitConvertInvoice(
   const items = (proforma.items ?? []).map((item: Record<string, unknown>) => ({
     invoice_id: invoice.id,
     sort_order: item.sort_order,
+    line_type: item.line_type ?? 'product',
     description: item.description,
     quantity: item.quantity,
     unit: item.unit,

@@ -123,11 +123,32 @@ export const POST = withRouteContext(
     const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
     const allowedRates = new Set(availableRates.map((r) => r.rate))
 
-    const subtotal = invoiceInput.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+    // VAT registration gate (defense in depth — the invoice form already hides
+    // the Moms column when vat_registered is false). A non-momsregistrerad
+    // company books no output VAT: zero every line rate so the sale lands as
+    // momsfri (treatment 'exempt' → revenue 3004/3100, no 2611). 0% is a valid
+    // rate for every customer type, so the allowedRates guard below still
+    // passes. Mirrors lib/pending-operations/commit.ts commitCreateInvoice.
+    const { data: vatSettings } = await supabase
+      .from('company_settings')
+      .select('vat_registered')
+      .eq('company_id', companyId!)
+      .maybeSingle()
+    const notVatRegistered = vatSettings?.vat_registered === false
+    if (notVatRegistered && documentType !== 'delivery_note') {
+      for (const item of invoiceInput.items) item.vat_rate = 0
+    }
+
+    // Free-text rows carry no amounts and are excluded from totals + VAT.
+    const subtotal = invoiceInput.items.reduce(
+      (sum, item) => (item.line_type === 'text' ? sum : sum + item.quantity * item.unit_price),
+      0,
+    )
 
     let vatAmount = 0
     if (documentType !== 'delivery_note') {
       for (const item of invoiceInput.items) {
+        if (item.line_type === 'text') continue
         const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
         if (!allowedRates.has(itemRate)) {
           return errorResponseFromCode('INVOICE_CREATE_VAT_RULE_VIOLATION', log, {
@@ -190,7 +211,11 @@ export const POST = withRouteContext(
       }
     }
 
-    const uniqueRates = new Set(invoiceInput.items.map((item) => item.vat_rate ?? vatRules.rate))
+    const uniqueRates = new Set(
+      invoiceInput.items
+        .filter((item) => item.line_type !== 'text')
+        .map((item) => item.vat_rate ?? vatRules.rate),
+    )
     const isMixedRate = uniqueRates.size > 1
 
     let exchangeRate: number | null = null
@@ -245,10 +270,10 @@ export const POST = withRouteContext(
         // Proformas, delivery notes and quotes have no payment obligation,
         // so they keep the 0 default.
         remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
-        vat_treatment: vatRules.treatment,
+        vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
         vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
-        moms_ruta: vatRules.momsRuta,
-        reverse_charge_text: vatRules.reverseChargeText || null,
+        moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
+        reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
         your_reference: invoiceInput.your_reference,
         our_reference: invoiceInput.our_reference,
         notes: invoiceInput.notes,
@@ -269,6 +294,28 @@ export const POST = withRouteContext(
     }
 
     const items = invoiceInput.items.map((item, index) => {
+      // Free-text / blank rows carry no amounts and never book — store the
+      // description only and zero everything else.
+      if (item.line_type === 'text') {
+        return {
+          invoice_id: invoice.id,
+          sort_order: index,
+          line_type: 'text',
+          description: item.description ?? '',
+          quantity: 0,
+          unit: '',
+          unit_price: 0,
+          line_total: 0,
+          vat_rate: 0,
+          vat_amount: 0,
+          deduction_type: null,
+          deduction_amount: 0,
+          labor_hours: null,
+          work_type: null,
+          housing_designation: null,
+          apartment_number: null,
+        }
+      }
       const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
       const lineTotal = item.quantity * item.unit_price
       const itemVat = documentType === 'delivery_note' ? 0 : Math.round(lineTotal * itemRate / 100 * 100) / 100
@@ -287,6 +334,7 @@ export const POST = withRouteContext(
       return {
         invoice_id: invoice.id,
         sort_order: index,
+        line_type: 'product',
         description: item.description,
         quantity: item.quantity,
         unit: item.unit,
@@ -469,9 +517,10 @@ async function createCreditNote(
     })
   }
 
-  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number }) => ({
+  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
+    line_type: item.line_type ?? 'product',
     description: item.description,
     quantity: -Math.abs(item.quantity),
     unit: item.unit,

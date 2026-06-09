@@ -153,16 +153,18 @@ function proposeCashLines(
     return amount
   }
 
-  // Build credit lines per VAT rate group
+  // Build credit lines per VAT rate group. Free-text / blank rows carry no
+  // amounts and never book — drop them first.
   const creditLines: FormLine[] = []
+  const billableItems = (invoice.items ?? []).filter((item) => item.line_type !== 'text')
 
-  if (invoice.items && invoice.items.length > 0) {
-    const hasPerLineVat = invoice.items.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
+  if (billableItems.length > 0) {
+    const hasPerLineVat = billableItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
 
     if (!hasPerLineVat) {
       // Legacy: single rate from invoice level
       const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
-      const subtotal = invoice.items.reduce((sum, item) => sum + item.line_total, 0)
+      const subtotal = billableItems.reduce((sum, item) => sum + item.line_total, 0)
       creditLines.push({
         account_number: revenueAccount,
         debit_amount: '',
@@ -170,7 +172,7 @@ function proposeCashLines(
         line_description: (invoice.invoice_number ? `Försäljning faktura ${invoice.invoice_number}` : 'Försäljning faktura'),
       })
 
-      const totalVat = invoice.items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
+      const totalVat = billableItems.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
       if (totalVat > 0) {
         const vatAccount = getOutputVatAccount(invoice.vat_treatment)
         creditLines.push({
@@ -183,7 +185,7 @@ function proposeCashLines(
     } else {
       // Group items by vat_rate
       const rateGroups = new Map<number, { subtotal: number; vatAmount: number }>()
-      for (const item of invoice.items) {
+      for (const item of billableItems) {
         const rate = item.vat_rate ?? 0
         const group = rateGroups.get(rate) || { subtotal: 0, vatAmount: 0 }
         group.subtotal += item.line_total

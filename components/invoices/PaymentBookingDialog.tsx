@@ -83,6 +83,9 @@ export default function PaymentBookingDialog({
   const [isInitialized, setIsInitialized] = useState(false)
   const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[] | null>(null)
   const [tab, setTab] = useState<'new' | 'existing'>('new')
+  // Drives the "Befintlig verifikation" picker copy: cash links against a 19xx
+  // debit, accrual against a 1510 credit.
+  const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   // source_type the booking will use — drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =
@@ -126,6 +129,8 @@ export default function PaymentBookingDialog({
 
         const accountingMethod = (settings?.accounting_method || 'accrual') as 'accrual' | 'cash'
         const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+
+        setAccountingMethod(accountingMethod)
 
         setSourceType(
           resolveInvoicePaymentSourceType({
@@ -371,6 +376,7 @@ export default function PaymentBookingDialog({
               <LinkVoucherPicker
                 invoiceId={invoice.id}
                 invoiceCurrency={invoice.currency}
+                accountingMethod={accountingMethod}
                 onLinked={() => {
                   onOpenChange(false)
                   onSuccess()
@@ -483,7 +489,7 @@ export default function PaymentBookingDialog({
                     placeholder="0,00"
                     value={line.debit_amount}
                     onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    className="font-mono text-right h-8"
+                    className="font-mono text-right"
                   />
                   <Input
                     type="number"
@@ -492,7 +498,7 @@ export default function PaymentBookingDialog({
                     placeholder="0,00"
                     value={line.credit_amount}
                     onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    className="font-mono text-right h-8"
+                    className="font-mono text-right"
                   />
                   <Button
                     type="button"
