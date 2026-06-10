@@ -282,12 +282,15 @@ processing_activities:
     name: MCP/agent-telemetri i event_log
     purpose: >-
       Varje MCP-verktygsanrop loggar metadata (verktygsnamn, felkod,
-      felmeddelande max 500 tecken, latens, aktör, session) och varje
-      skill-laddning loggar slug/tier till event_log. Syftet är
-      tillförlitlighetsanalys av agentgränssnittet: felfrekvens per verktyg,
-      korrelation mellan laddade skills och efterföljande fel, samt agenters
-      egenrapporterade feedback (agent.feedback). Inga verktygsargument
-      eller verktygsresultat persisteras.
+      felmeddelande max 500 tecken, latens, aktör, session, frivillig
+      distributionskanal-markör — t.ex. 'openclaw' via X-Gnubok-Client-header
+      eller ?client=-parameter, sanerad mot allow-list och aldrig använd för
+      auktorisation) och varje skill-laddning loggar slug/tier till event_log.
+      Syftet är tillförlitlighetsanalys av agentgränssnittet: felfrekvens per
+      verktyg, adoption per distributionskanal, korrelation mellan laddade
+      skills och efterföljande fel, samt agenters egenrapporterade feedback
+      (agent.feedback). Inga verktygsargument eller verktygsresultat
+      persisteras.
     lawful_basis: art_6_1_f   # legitimate interest (service reliability/improvement)
     special_category_basis: null
     controller: gnubok-tenant

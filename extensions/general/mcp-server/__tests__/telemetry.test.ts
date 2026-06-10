@@ -334,6 +334,21 @@ describe('client marker telemetry', () => {
     expect(event.client).toBe('openclaw')
   })
 
+  it('runs the allow-list on the percent-decoded query param value', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    // URLSearchParams.get() percent-decodes before our regex runs, so encoded
+    // payloads can't smuggle disallowed characters past the allow-list.
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?client=open%63law',
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('openclaw')
+  })
+
   it('drops markers that fail the charset/length sanitation and reports null', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
