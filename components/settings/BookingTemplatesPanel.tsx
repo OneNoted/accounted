@@ -515,9 +515,11 @@ function TemplateForm({
   // approachable for non-accountants; it stays 1.0 under the hood.
   const businessLineCount = lines.filter((l) => l.type === 'business').length
   const showRatio = businessLineCount > 1
-  const firstRatioIndex = showRatio
-    ? lines.findIndex((l) => l.type === 'business' || l.type === 'settlement')
-    : -1
+  // The ratio only validates against cost/revenue lines (businessRatioSum), so
+  // only those get an editable input. The settlement leg is the full counter-
+  // amount (ratio 1.0) and is shown in the live preview, not as a control —
+  // an editable settlement ratio that doesn't feed the sum check would mislead.
+  const firstRatioIndex = showRatio ? lines.findIndex((l) => l.type === 'business') : -1
   const businessRatioSum = lines
     .filter((l) => l.type === 'business')
     .reduce((sum, l) => sum + (l.ratio ?? 1), 0)
@@ -640,7 +642,7 @@ function TemplateForm({
         <Label>{t('lines_label')}</Label>
         <div className="space-y-2 mt-1">
           {lines.map((line, i) => {
-            const showRatioInput = showRatio && (line.type === 'business' || line.type === 'settlement')
+            const showRatioInput = showRatio && line.type === 'business'
             return (
             <div key={i} className="rounded-md border border-border p-2 space-y-1.5">
               <div className="flex items-center gap-2">
