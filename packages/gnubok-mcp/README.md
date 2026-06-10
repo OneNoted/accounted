@@ -42,6 +42,7 @@ Restart Claude Desktop. The Accounted tools appear in the client and you can sta
 |---|---|---|---|
 | `GNUBOK_API_KEY` | yes | — | Your `gnubok_sk_*` API key. |
 | `GNUBOK_URL` | no | `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp` | Override the MCP endpoint (e.g. for self-hosted Accounted). |
+| `GNUBOK_CLIENT` | no | — | Distribution-channel marker (e.g. `openclaw`), sent as `X-Gnubok-Client`. Telemetry only — never affects auth or behavior. |
 
 ## Alternative: claude.ai connector (no API key)
 

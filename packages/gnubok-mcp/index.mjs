@@ -20,6 +20,9 @@
 
 const API_KEY = process.env.GNUBOK_API_KEY
 const MCP_URL = process.env.GNUBOK_URL || 'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
+// Optional distribution-channel marker (e.g. 'openclaw'). Forwarded as
+// X-Gnubok-Client and recorded in server telemetry only — never affects auth.
+const CLIENT = process.env.GNUBOK_CLIENT
 
 if (!API_KEY) {
   process.stderr.write(
@@ -82,6 +85,7 @@ async function handleMessage(line) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${API_KEY}`,
+        ...(CLIENT ? { 'X-Gnubok-Client': CLIENT } : {}),
       },
       body: line,
     })

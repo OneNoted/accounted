@@ -103,6 +103,12 @@ interface ActorContext {
    * single agent conversation. Not used for auth.
    */
   sessionId?: string | null
+  /**
+   * Distribution-channel marker from the `X-Gnubok-Client` header or the
+   * `client` query param on the endpoint URL (e.g. 'openclaw'). Telemetry-only
+   * — same trust level as Mcp-Session-Id, never used for auth or behavior.
+   */
+  client?: string | null
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -9631,6 +9637,7 @@ function emitToolCallTelemetry(payload: {
         userId: payload.userId,
         companyId: payload.companyId,
         sessionId: payload.actor.sessionId ?? null,
+        client: payload.actor.client ?? null,
       },
     })
     .catch((err) => {
@@ -9662,6 +9669,7 @@ function emitToolsListTelemetry(payload: {
         userId: payload.userId,
         companyId: payload.companyId,
         sessionId: payload.actor.sessionId ?? null,
+        client: payload.actor.client ?? null,
       },
     })
     .catch((err) => {
@@ -9697,6 +9705,7 @@ function emitResourceReadTelemetry(payload: {
         userId: payload.userId,
         companyId: payload.companyId,
         sessionId: payload.actor.sessionId ?? null,
+        client: payload.actor.client ?? null,
       },
     })
     .catch((err) => {
@@ -9872,11 +9881,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // followed metric. It is NOT used for auth.
   const rawSessionId = request.headers.get('mcp-session-id')
   const sessionId = rawSessionId && /^[A-Za-z0-9_-]{1,128}$/.test(rawSessionId) ? rawSessionId : null
+  // Distribution-channel marker: `X-Gnubok-Client` header (gnubok-mcp bridge
+  // ≥1.1 forwards GNUBOK_CLIENT) or a `client` query param on the endpoint URL
+  // (works with any bridge version and direct HTTP clients). Lets us measure
+  // per-channel adoption (e.g. an OpenClaw skill) in event_log without auth
+  // implications.
+  const rawClient = request.headers.get('x-gnubok-client') ?? new URL(request.url).searchParams.get('client')
+  const client = rawClient && /^[A-Za-z0-9._-]{1,64}$/.test(rawClient) ? rawClient.toLowerCase() : null
   const actor: ActorContext = {
     type: 'api_key',
     id: apiKeyId,
     label: apiKeyName ?? 'Unnamed API key',
     sessionId,
+    client,
   }
 
   // ── Parse JSON-RPC ──

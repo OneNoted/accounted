@@ -78,10 +78,15 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 
 import { handleMcpRequest } from '../server'
 
-function mcpRequest(method: string, params?: Record<string, unknown>, id: number | string = 1): Request {
-  return new Request('http://localhost:3000/api/extensions/ext/mcp-server/mcp', {
+function mcpRequest(
+  method: string,
+  params?: Record<string, unknown>,
+  id: number | string = 1,
+  opts: { url?: string; headers?: Record<string, string> } = {}
+): Request {
+  return new Request(opts.url ?? 'http://localhost:3000/api/extensions/ext/mcp-server/mcp', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-token' },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer test-token', ...opts.headers },
     body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
   })
 }
@@ -101,6 +106,7 @@ interface ToolCalledPayload {
   requestId: string | number | null
   userId: string
   companyId: string
+  client: string | null
 }
 
 interface ToolsListCalledPayload {
@@ -112,6 +118,7 @@ interface ToolsListCalledPayload {
   requestId: string | number | null
   userId: string
   companyId: string
+  client: string | null
 }
 
 interface ResourceReadPayload {
@@ -126,6 +133,7 @@ interface ResourceReadPayload {
   requestId: string | number | null
   userId: string
   companyId: string
+  client: string | null
 }
 
 async function captureNextToolCalledEvent(): Promise<ToolCalledPayload> {
@@ -277,6 +285,77 @@ describe('mcp.tool_called telemetry', () => {
     expect(response.status).toBe(200)
     expect(json.error).toBeUndefined()
     expect(json.result).toBeDefined()
+  })
+})
+
+describe('client marker telemetry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('records a lowercased X-Gnubok-Client header on mcp.tool_called', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'X-Gnubok-Client': 'OpenClaw' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('openclaw')
+  })
+
+  it('falls back to the ?client= query param when no header is present', async () => {
+    const eventPromise = captureNextToolsListEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/list', undefined, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?client=openclaw',
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('openclaw')
+  })
+
+  it('prefers the header over the query param when both are present', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?client=other',
+        headers: { 'X-Gnubok-Client': 'openclaw' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('openclaw')
+  })
+
+  it('drops markers that fail the charset/length sanitation and reports null', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'X-Gnubok-Client': 'bad client!<script>' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBeNull()
+  })
+
+  it('reports null when no marker is sent (existing clients unchanged)', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBeNull()
   })
 })
 
