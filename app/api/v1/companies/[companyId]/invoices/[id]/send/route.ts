@@ -154,7 +154,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_SEND_RESPONSE_COLUMNS}, customer:customers(id, name, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount)`,
+        `${INVOICE_SEND_RESPONSE_COLUMNS}, customer:customers(id, name, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account)`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)

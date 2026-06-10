@@ -298,6 +298,113 @@ describe('createInvoiceJournalEntry — per-line VAT', () => {
   })
 })
 
+describe('createInvoiceJournalEntry — per-article revenue account override', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('without an override, two 25% lines collapse into one 3001 revenue line (unchanged behaviour)', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      vat_rate: null as unknown as number,
+      items: [
+        makeItem({ description: 'A', unit_price: 600, line_total: 600, vat_rate: 25, vat_amount: 150 }),
+        makeItem({ id: 'item-2', description: 'B', unit_price: 400, line_total: 400, vat_rate: 25, vat_amount: 100 }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const rev3001 = input.lines.filter((l) => l.account_number === '3001')
+    expect(rev3001).toHaveLength(1)
+    expect(rev3001[0].credit_amount).toBe(1000)
+    const vat2611 = input.lines.filter((l) => l.account_number === '2611')
+    expect(vat2611).toHaveLength(1)
+    expect(vat2611[0].credit_amount).toBe(250)
+  })
+
+  it('splits one rate into two revenue accounts but keeps a single VAT line, balanced', async () => {
+    const invoice = makeInvoice({
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      vat_treatment: 'standard_25',
+      vat_rate: null as unknown as number,
+      items: [
+        makeItem({ description: 'Goods', unit_price: 600, line_total: 600, vat_rate: 25, vat_amount: 150 }), // no override → 3001
+        makeItem({ id: 'item-2', description: 'Consulting', unit_price: 400, line_total: 400, vat_rate: 25, vat_amount: 100, revenue_account: '3041' }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((l) => l.account_number === '3001')?.credit_amount).toBe(600)
+    expect(input.lines.find((l) => l.account_number === '3041')?.credit_amount).toBe(400)
+    const vat = input.lines.filter((l) => l.account_number === '2611')
+    expect(vat).toHaveLength(1)
+    expect(vat[0].credit_amount).toBe(250)
+
+    const debit = input.lines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = input.lines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(debit).toBe(credit)
+    expect(debit).toBe(1250)
+  })
+
+  it('ignores a per-line override on reverse charge — revenue stays on 3308', async () => {
+    const invoice = makeInvoice({
+      subtotal: 5000,
+      vat_amount: 0,
+      total: 5000,
+      vat_treatment: 'reverse_charge',
+      vat_rate: 0,
+      items: [
+        makeItem({ unit_price: 5000, line_total: 5000, vat_rate: 0, vat_amount: 0, revenue_account: '3041' }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((l) => l.account_number === '3308')?.credit_amount).toBe(5000)
+    expect(input.lines.find((l) => l.account_number === '3041')).toBeUndefined()
+  })
+
+  it('absorbs rounding on the last account so a split rate still balances against 1510', async () => {
+    // Two 25% lines to different accounts whose individual SEK rounding would
+    // otherwise drift from the rate-level total (10.005 → 10.01 each = 20.02,
+    // but the rate total is round(20.01) = 20.01).
+    const invoice = makeInvoice({
+      subtotal: 20.01,
+      vat_amount: 5.0,
+      total: 25.01,
+      vat_treatment: 'standard_25',
+      vat_rate: null as unknown as number,
+      items: [
+        makeItem({ description: 'A', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5 }),
+        makeItem({ id: 'item-2', description: 'B', unit_price: 10.005, line_total: 10.005, vat_rate: 25, vat_amount: 2.5, revenue_account: '3041' }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const revSum = input.lines
+      .filter((l) => l.account_number === '3001' || l.account_number === '3041')
+      .reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.round(revSum * 100) / 100).toBe(20.01)
+
+    const debit = Math.round(input.lines.reduce((s, l) => s + l.debit_amount, 0) * 100) / 100
+    const credit = Math.round(input.lines.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
+    expect(debit).toBe(credit)
+    expect(debit).toBe(25.01)
+  })
+})
+
 describe('createCreditNoteJournalEntry — per-line VAT', () => {
   beforeEach(() => {
     vi.clearAllMocks()
