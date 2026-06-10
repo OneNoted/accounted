@@ -275,14 +275,61 @@ describe('parseSIEFile', () => {
       expect(v1.lines[2]).toMatchObject({ account: '2611', amount: -2500 })
     })
 
-    it('handles object lists in braces', () => {
+    it('handles object lists in braces and captures dimensions', () => {
       const result = parseSIEFile(SIE_WITH_OBJECT_LIST)
       expect(result.vouchers).toHaveLength(1)
 
       const v = result.vouchers[0]
       expect(v.lines).toHaveLength(2)
-      expect(v.lines[0]).toMatchObject({ account: '5010', amount: 15000 })
+      // Dimension 1 (kostnadsställe) is captured onto cost_center; the amount
+      // after the object list still parses correctly.
+      expect(v.lines[0]).toMatchObject({ account: '5010', amount: 15000, cost_center: 'Kontor' })
+      // Empty object list {} leaves dimensions unset
       expect(v.lines[1]).toMatchObject({ account: '1930', amount: -15000 })
+      expect(v.lines[1].cost_center).toBeUndefined()
+      expect(v.lines[1].project).toBeUndefined()
+    })
+
+    it('captures both kostnadsställe (#DIM 1) and projekt (#DIM 6) from a #TRANS object list', () => {
+      const sie = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#FNAMN "Dimensions AB"',
+        '#RAR 0 20240101 20241231',
+        '#KONTO 5010 "Lokalhyra"',
+        '#KONTO 1930 "Företagskonto"',
+        '#DIM 1 "Kostnadsställe"',
+        '#DIM 6 "Projekt"',
+        '#OBJEKT 1 "K10" "Kontor Stockholm"',
+        '#OBJEKT 6 "P-2024" "Projekt Alpha"',
+        '#VER A 1 20240115 "Hyra"',
+        '{',
+        '#TRANS 5010 {1 "K10" 6 "P-2024"} 15000.00',
+        '#TRANS 1930 {} -15000.00',
+        '}',
+      ].join('\n')
+
+      const result = parseSIEFile(sie)
+      const v = result.vouchers[0]
+      expect(v.lines[0]).toMatchObject({
+        account: '5010',
+        amount: 15000,
+        cost_center: 'K10',
+        project: 'P-2024',
+      })
+      // #DIM / #OBJEKT definition lines are not treated as unknown-tag issues
+      expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0)
+
+      // #OBJEKT records are captured into the dimension catalog
+      expect(result.dimensionObjects).toEqual([
+        { dimension: 1, code: 'K10', name: 'Kontor Stockholm' },
+        { dimension: 6, code: 'P-2024', name: 'Projekt Alpha' },
+      ])
+    })
+
+    it('defaults dimensionObjects to an empty array when no #OBJEKT records exist', () => {
+      const result = parseSIEFile(SIE_WITH_VOUCHERS)
+      expect(result.dimensionObjects).toEqual([])
     })
 
     it('parses quoted VER fields (series, number, date)', () => {

@@ -18,6 +18,7 @@ import type {
   SIEBalance,
   SIEVoucher,
   SIETransactionLine,
+  SIEDimensionObject,
   ParsedSIEFile,
   ParseIssue,
   ParseIssueSeverity,
@@ -279,6 +280,56 @@ function parseNumberField(field: string): number {
 }
 
 /**
+ * Parse a SIE dimension/object list like `{1 "Kontor" 6 "P-2024"}` into a map
+ * of dimension number → object code.
+ *
+ * SIE4 tags each #TRANS line with zero or more (dimension, object) pairs inside
+ * braces (spec §8.18). Dimension 1 = kostnadsställe, 6 = projekt — the two the
+ * app stores on journal_entry_lines and re-emits in sie-export.ts. Object
+ * values may be quoted ("Kontor Stockholm") or bare (Kontor).
+ *
+ * The whole `{...}` arrives as a single field thanks to the brace-aware
+ * splitter in splitSIELine, so we only tokenize the interior here.
+ */
+function parseObjectList(field: string): Map<number, string> {
+  const result = new Map<number, string>()
+  const inner = field.replace(/^\{/, '').replace(/\}$/, '').trim()
+  if (!inner) return result
+
+  // Tokenize respecting quoted strings (object codes/names may contain spaces)
+  const tokens: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < inner.length; i++) {
+    const char = inner[i]
+    if (char === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+    if ((char === ' ' || char === '\t') && !inQuotes) {
+      if (current) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+  if (current) tokens.push(current)
+
+  // Pair tokens as (dimensionNumber, objectCode). A trailing unpaired token
+  // (malformed list) is ignored rather than throwing.
+  for (let i = 0; i + 1 < tokens.length; i += 2) {
+    const dim = parseInt(tokens[i], 10)
+    const value = tokens[i + 1]
+    if (!Number.isNaN(dim) && value) {
+      result.set(dim, value)
+    }
+  }
+  return result
+}
+
+/**
  * Split a SIE line into fields, respecting quoted strings and braced object lists
  */
 function splitSIELine(line: string): string[] {
@@ -385,6 +436,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
   const closingBalances: SIEBalance[] = []
   const resultBalances: SIEBalance[] = []
   const vouchers: SIEVoucher[] = []
+  const dimensionObjects: SIEDimensionObject[] = []
 
   // Track current voucher being parsed (inside #VER { ... })
   let currentVoucher: SIEVoucher | null = null
@@ -533,6 +585,20 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           break
         }
 
+        case 'OBJEKT': {
+          // #OBJEKT <dimensionNo> "<objectCode>" "<objectName>"
+          // Dimension catalog entry. Stored so imported #TRANS tags resolve to
+          // named kostnadsställen (dim 1) / projekt (dim 6); other dimensions
+          // are captured here too but have no destination table on import.
+          const dim = parseInt(fields[1], 10)
+          const code = parseStringField(fields[2])
+          const name = parseStringField(fields[3])
+          if (!Number.isNaN(dim) && code) {
+            dimensionObjects.push({ dimension: dim, code, name: name || code })
+          }
+          break
+        }
+
         case 'IB': {
           // #IB yearIndex accountNumber amount [quantity]
           const yearIndex = parseInt(fields[1], 10)
@@ -644,12 +710,16 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             break
           }
 
-          // Parse account and skip object list (in braces)
+          // Parse account and capture the dimension object list (in braces)
           let fieldIndex = 1
           const account = parseStringField(fields[fieldIndex++])
 
-          // Skip object list if present (now a single field thanks to brace-aware splitting)
+          // Capture dimension object list if present (now a single field thanks
+          // to brace-aware splitting). Dimensions 1/6 are stored on the journal
+          // line below; others have no storage and are dropped.
+          let dimensions: Map<number, string> | null = null
           if (fields[fieldIndex]?.startsWith('{')) {
+            dimensions = parseObjectList(fields[fieldIndex])
             fieldIndex++
           }
 
@@ -680,13 +750,22 @@ export function parseSIEFile(content: string): ParsedSIEFile {
             transLine.signature = parseStringField(fields[fieldIndex++])
           }
 
+          // Map SIE dimensions 1 → kostnadsställe and 6 → projekt onto the line
+          // (mirrors sie-export.ts; other dimension numbers are not stored).
+          if (dimensions && dimensions.size > 0) {
+            const costCenter = dimensions.get(1)
+            const project = dimensions.get(6)
+            if (costCenter) transLine.cost_center = costCenter
+            if (project) transLine.project = project
+          }
+
           currentVoucher.lines.push(transLine)
           break
         }
 
         default:
           // Unknown tag - add info issue for notable ones
-          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'DIM', 'OBJEKT', 'OIB', 'OUB', 'PBUDGET', 'PSALDO'].includes(tag)) {
+          if (!['KSUMMA', 'BKOD', 'TAXAR', 'OMFATTN', 'DIM', 'OIB', 'OUB', 'PBUDGET', 'PSALDO'].includes(tag)) {
             addIssue(issues, 'info', lineNum, `Okänd tagg: #${tag} — ignoreras`, tag)
           }
       }
@@ -766,6 +845,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
     closingBalances,
     resultBalances,
     vouchers,
+    dimensionObjects,
     issues,
     stats: {
       totalAccounts: accounts.length,

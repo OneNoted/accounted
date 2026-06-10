@@ -84,6 +84,23 @@ export interface SIETransactionLine {
   quantity?: number
   signature?: string
   objectId?: string
+  // Dimension object codes from the #TRANS brace list (e.g. {1 "K10" 6 "P-24"}).
+  // SIE dimension 1 = kostnadsställe → cost_center, 6 = projekt → project;
+  // these map to the journal_entry_lines text columns and round-trip with
+  // sie-export.ts. Other dimensions have nowhere to be stored and are ignored.
+  cost_center?: string
+  project?: string
+}
+
+/**
+ * Dimension object from an #OBJEKT record (e.g. `#OBJEKT 1 "K10" "Kontor"`).
+ * `dimension` is the SIE dimension number (1 = kostnadsställe, 6 = projekt);
+ * `code` is the object value tagged on #TRANS lines, `name` its label.
+ */
+export interface SIEDimensionObject {
+  dimension: number
+  code: string
+  name: string
 }
 
 /**
@@ -126,6 +143,11 @@ export interface ParsedSIEFile {
 
   // Transactions (SIE4 only)
   vouchers: SIEVoucher[]
+
+  // Dimension catalog from #OBJEKT records (kostnadsställen / projekt).
+  // Optional for backwards-compatibility with hand-built ParsedSIEFile fixtures;
+  // the parser always populates it (empty array when the file declares none).
+  dimensionObjects?: SIEDimensionObject[]
 
   // Parse issues
   issues: ParseIssue[]
