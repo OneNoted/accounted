@@ -579,6 +579,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Momssatsen är inte tillåten för denna kundtyp.',
     message_en: 'The VAT rate is not allowed for this customer type.',
   },
+  INVOICE_CREATE_REVENUE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Ett angivet försäljningskonto finns inte eller är inte ett aktivt intäktskonto (klass 3).',
+    message_en: 'A supplied revenue account does not exist or is not an active class-3 income account.',
+  },
   INVOICE_CREATE_ROT_RUT_VALIDATION: {
     httpStatus: 400,
     message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',
@@ -1421,6 +1426,34 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Kunden har fakturor och kan inte tas bort.',
     message_en: 'Customer cannot be deleted while invoices reference it.',
+  },
+}
+
+const ARTICLE: Record<string, StructuredErrorEntry> = {
+  ARTICLE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Artikeln kunde inte hittas.',
+    message_en: 'Article not found.',
+  },
+  ARTICLE_DUPLICATE_NUMBER: {
+    httpStatus: 409,
+    message_sv: 'En artikel med samma artikelnummer finns redan.',
+    message_en: 'An article with that article number already exists.',
+  },
+  ARTICLE_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Artikeln kunde inte skapas.',
+    message_en: 'Failed to create article.',
+  },
+  ARTICLE_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Artikeln kunde inte uppdateras.',
+    message_en: 'Failed to update article.',
+  },
+  ARTICLE_REVENUE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Försäljningskontot finns inte eller är inte ett aktivt intäktskonto (klass 3).',
+    message_en: 'The revenue account does not exist or is not an active class-3 income account.',
   },
 }
 
@@ -2271,6 +2304,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...PROVIDER_MIGRATION,
   ...DOCUMENT,
   ...CUSTOMER,
+  ...ARTICLE,
   ...SUPPLIER,
   ...SUPPLIER_INVOICE_WAVE4,
   ...SALARY,

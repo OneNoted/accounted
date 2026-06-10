@@ -2789,6 +2789,187 @@ export const tools: McpTool[] = [
     },
   },
 
+  // ── Article tools (artikelregister) ──────────────────────────
+
+  {
+    name: 'gnubok_list_articles',
+    title: 'List Articles',
+    description: "List the active company's catalog articles (artikelregister). Use to look up an article to add to an invoice line. Active articles only by default.",
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        query: { type: 'string', description: 'Optional case-insensitive filter on name or article_number.' },
+        include_inactive: { type: 'boolean', description: 'Include deactivated articles (default false).' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        articles: { type: 'array', items: { type: 'object' } },
+        count: { type: 'number' },
+      },
+      required: ['articles', 'count'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      let q = supabase
+        .from('articles')
+        .select('id, article_number, name, name_en, type, unit, price_excl_vat, vat_rate, revenue_account, housework_type, active')
+        .eq('company_id', companyId)
+      if (!args.include_inactive) q = q.eq('active', true)
+
+      // Strip PostgREST filter metacharacters before interpolating into .or() —
+      // commas/parens would otherwise let a query inject extra or-conditions, and
+      // the ILIKE wildcards % and _ would turn a stray char into a match-all.
+      const raw = typeof args.query === 'string' ? args.query : ''
+      const safe = raw.replace(/[%_,()\\*]/g, ' ').trim()
+      if (safe) {
+        q = q.or(`name.ilike.%${safe}%,article_number.ilike.%${safe}%`)
+      }
+
+      const { data, error } = await q.order('name')
+      if (error) throw new Error(`Database error: ${error.message}`)
+      return { articles: data, count: data?.length ?? 0 }
+    },
+  },
+
+  {
+    name: 'gnubok_create_article',
+    title: 'Create Article',
+    description: 'Stage a new catalog article (artikelregister). Stages for approval — not created until approved. Article number auto-assigned. Reuse on invoice lines via gnubok_create_invoice.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'Article name (prints on the invoice line).' },
+        type: { type: 'string', enum: ['vara', 'tjanst'], description: 'Good (vara) or service (tjanst). Default tjanst.' },
+        unit: { type: 'string', description: 'Unit, e.g. st, tim, kg. Default st.' },
+        price_excl_vat: { type: 'number', description: 'Unit price EXCLUDING VAT.' },
+        vat_rate: { type: 'number', enum: [0, 6, 12, 25], description: 'VAT rate percent. Default 25.' },
+        revenue_account: { type: 'string', description: 'Optional BAS class-3 revenue account (e.g. 3041). Omit to derive from VAT.' },
+        cost_price: { type: 'number', description: 'Optional cost price (margin only; never booked).' },
+        ean: { type: 'string', description: 'Barcode / EAN.' },
+        housework_type: { type: 'string', description: 'ROT/RUT arbetstyp (services only).' },
+        name_en: { type: 'string', description: 'English name for English-language invoices.' },
+        notes: { type: 'string' },
+        article_number: { type: 'string', description: 'Optional manual number; omit to auto-generate.' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
+        idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
+      },
+      required: ['name', 'price_excl_vat'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const name = (args.name as string)?.trim()
+      if (!name) throw new Error('Article name is required.')
+      if (typeof args.price_excl_vat !== 'number') {
+        throw new Error('price_excl_vat is required and must be a number.')
+      }
+
+      const params: Record<string, unknown> = {
+        name,
+        type: (args.type as string) || 'tjanst',
+        unit: (args.unit as string) || undefined,
+        price_excl_vat: args.price_excl_vat,
+        vat_rate: typeof args.vat_rate === 'number' ? args.vat_rate : 25,
+        revenue_account: (args.revenue_account as string) || null,
+        cost_price: typeof args.cost_price === 'number' ? args.cost_price : null,
+        ean: (args.ean as string) || null,
+        housework_type: (args.housework_type as string) || null,
+        name_en: (args.name_en as string) || null,
+        notes: (args.notes as string) || null,
+        article_number: (args.article_number as string) || null,
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_article',
+        `Ny artikel: ${name}`,
+        params,
+        params, // params ARE the preview
+        actor,
+        {
+          description: 'Once approved, add it to an invoice with gnubok_create_invoice using the returned article fields.',
+          tool: 'gnubok_create_invoice',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_update_article',
+    title: 'Update Article',
+    description: 'Stage an edit to a catalog article (price, name, account, etc.) or deactivate it via active:false. Stages for approval. Find article_id with gnubok_list_articles.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        article_id: { type: 'string', description: 'UUID of the article to update.' },
+        name: { type: 'string' },
+        type: { type: 'string', enum: ['vara', 'tjanst'] },
+        unit: { type: 'string' },
+        price_excl_vat: { type: 'number' },
+        vat_rate: { type: 'number', enum: [0, 6, 12, 25] },
+        revenue_account: { type: 'string', description: 'BAS class-3 revenue account, or omit to leave unchanged.' },
+        cost_price: { type: 'number' },
+        ean: { type: 'string' },
+        housework_type: { type: 'string' },
+        name_en: { type: 'string' },
+        notes: { type: 'string' },
+        active: { type: 'boolean', description: 'Set false to deactivate (hide from pickers, keep history).' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['article_id'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const articleId = args.article_id as string
+      if (!articleId) throw new Error('article_id is required.')
+
+      const params: Record<string, unknown> = { article_id: articleId }
+      for (const key of [
+        'name', 'type', 'unit', 'price_excl_vat', 'vat_rate', 'revenue_account',
+        'cost_price', 'ean', 'housework_type', 'name_en', 'notes', 'active',
+      ]) {
+        if (args[key] !== undefined) params[key] = args[key]
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'update_article',
+        `Uppdatera artikel ${(args.name as string)?.trim() || articleId}`,
+        params,
+        params,
+        actor,
+        undefined,
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
   // ── Invoice tools ────────────────────────────────────────────
 
   {
