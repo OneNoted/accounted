@@ -943,7 +943,7 @@ export async function importVouchers(
     // 'import' for ordinary migrated vouchers; 'opening_balance' for a #VER that
     // is really the year's ingående balans (see isLikelyOpeningBalance below).
     sourceType: 'import' | 'opening_balance'
-    lines: { account_number: string; debit_amount: number; credit_amount: number; line_description: string | null }[]
+    lines: { account_number: string; debit_amount: number; credit_amount: number; line_description: string | null; cost_center?: string | null; project?: string | null }[]
   }
 
   const preparedVouchers: PreparedVoucher[] = []
@@ -984,13 +984,17 @@ export async function importVouchers(
         continue
       }
 
-      // In SIE, amount is positive for debit, negative for credit
+      // In SIE, amount is positive for debit, negative for credit.
+      // Dimensions (kostnadsställe/projekt) from the #TRANS object list are
+      // carried through to the journal line so they survive the migration.
       if (line.amount > 0) {
         lines.push({
           account_number: targetAccount,
           debit_amount: Math.round(line.amount * 100) / 100,
           credit_amount: 0,
           line_description: line.description || null,
+          cost_center: line.cost_center ?? null,
+          project: line.project ?? null,
         })
       } else if (line.amount < 0) {
         lines.push({
@@ -998,6 +1002,8 @@ export async function importVouchers(
           debit_amount: 0,
           credit_amount: Math.round(Math.abs(line.amount) * 100) / 100,
           line_description: line.description || null,
+          cost_center: line.cost_center ?? null,
+          project: line.project ?? null,
         })
       }
       // Note: lines with amount === 0 are silently dropped
@@ -1265,6 +1271,8 @@ export async function importVouchers(
       currency: string
       line_description: string | null
       sort_order: number
+      cost_center: string | null
+      project: string | null
     }[] = []
 
     for (let i = 0; i < batch.length; i++) {
@@ -1283,6 +1291,8 @@ export async function importVouchers(
           currency: 'SEK',
           line_description: line.line_description,
           sort_order: lineIndex,
+          cost_center: line.cost_center ?? null,
+          project: line.project ?? null,
         })
       })
 
@@ -1839,6 +1849,64 @@ export async function loadMappings(supabase: SupabaseClient, companyId: string):
 }
 
 /**
+ * Reconstruct the dimension catalog (kostnadsställen / projekt) from the file's
+ * #OBJEKT records so the dimension tags captured on imported journal lines
+ * resolve to named objects — and a later SIE re-export emits well-formed
+ * #DIM/#OBJEKT headers instead of referencing undefined objects.
+ *
+ * Best-effort and idempotent: inserts on (company_id, code) with
+ * ignoreDuplicates so an existing (possibly user-renamed) object is never
+ * clobbered, and never throws — a catalog hiccup must not fail an otherwise
+ * good import, since the per-line tags are already preserved regardless.
+ * SIE dimension 1 → cost_centers, 6 → projects; other dimensions have no home
+ * table and are skipped (mirrors the per-line capture in sie-parser.ts).
+ *
+ * Returns the count of newly-created rows per table (existing ones are skipped).
+ */
+export async function seedDimensionCatalog(
+  supabase: SupabaseClient,
+  companyId: string,
+  parsed: ParsedSIEFile
+): Promise<{ costCenters: number; projects: number }> {
+  const objects = parsed.dimensionObjects ?? []
+  if (objects.length === 0) return { costCenters: 0, projects: 0 }
+
+  // Collect distinct codes per dimension (defensive against duplicate #OBJEKT)
+  const rowsForDimension = (dim: number) => {
+    const byCode = new Map<string, { company_id: string; code: string; name: string }>()
+    for (const o of objects) {
+      if (o.dimension !== dim || !o.code) continue
+      if (!byCode.has(o.code)) {
+        byCode.set(o.code, { company_id: companyId, code: o.code, name: o.name || o.code })
+      }
+    }
+    return [...byCode.values()]
+  }
+
+  const seedTable = async (table: 'cost_centers' | 'projects', rows: ReturnType<typeof rowsForDimension>) => {
+    if (rows.length === 0) return 0
+    // .select() with ignoreDuplicates returns only the rows actually inserted
+    // (ON CONFLICT DO NOTHING ... RETURNING), so the count excludes pre-existing.
+    const { data, error } = await supabase
+      .from(table)
+      .upsert(rows, { onConflict: 'company_id,code', ignoreDuplicates: true })
+      .select('id')
+    if (error || !data) {
+      // Don't fail the import, but make the failure observable rather than
+      // silent — a constraint/RLS error here is otherwise indistinguishable
+      // from "file had no #OBJEKT".
+      if (error) console.error(`[sie-import] failed to seed ${table} from #OBJEKT`, error.message)
+      return 0
+    }
+    return data.length
+  }
+
+  const costCenters = await seedTable('cost_centers', rowsForDimension(1))
+  const projects = await seedTable('projects', rowsForDimension(6))
+  return { costCenters, projects }
+}
+
+/**
  * Execute the full SIE import
  *
  * `onExistingPeriod` controls how a prior completed import that overlaps
@@ -2292,6 +2360,26 @@ export async function executeSIEImport(
 
       // Ensure öresutjämning account 3741 exists in the user's chart
       await ensureAccountExists(supabase, companyId, userId, '3741', 'Öresutjämning vid import')
+
+      // Reconstruct the dimension catalog (kostnadsställen/projekt) from the
+      // file's #OBJEKT records so the tags carried onto journal lines resolve to
+      // named objects. Best-effort: never let a catalog hiccup fail the import.
+      try {
+        const dims = await seedDimensionCatalog(supabase, companyId, parsed)
+        if (dims.costCenters > 0 || dims.projects > 0) {
+          const parts: string[] = []
+          if (dims.costCenters > 0) parts.push(`${dims.costCenters} kostnadsställe${dims.costCenters === 1 ? '' : 'n'}`)
+          if (dims.projects > 0) parts.push(`${dims.projects} projekt`)
+          result.warnings.push(`Dimensioner från filen: ${parts.join(' och ')} skapades från #OBJEKT-poster.`)
+        }
+      } catch (err) {
+        // Non-fatal — per-line dimension tags are preserved regardless — but
+        // surface the failure (logged + user-visible) instead of swallowing it.
+        console.error('[sie-import] dimension catalog seeding failed', err)
+        result.warnings.push(
+          'Dimensionskatalogen (kostnadsställen/projekt) kunde inte återskapas från #OBJEKT-poster — verifikationsraderna behåller ändå sina dimensionskoder.'
+        )
+      }
 
       const voucherResults = await importVouchers(
         supabase,

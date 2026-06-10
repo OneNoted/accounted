@@ -8,6 +8,7 @@ import {
   computeVoucherNumberRanges,
   linkOpeningBalanceEntryToPeriod,
   companyHasPriorActivity,
+  seedDimensionCatalog,
 } from '../sie-import'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ParsedSIEFile, AccountMapping } from '../types'
@@ -887,7 +888,7 @@ describe('importVouchers — per-voucher series preservation', () => {
   function makeVoucher(
     series: string,
     number: number,
-    lines: Array<{ account: string; amount: number }> = [
+    lines: Array<{ account: string; amount: number; cost_center?: string; project?: string }> = [
       { account: '1510', amount: 1000 },
       { account: '3001', amount: -1000 },
     ],
@@ -960,6 +961,36 @@ describe('importVouchers — per-voucher series preservation', () => {
     expect(result.created).toBe(2)
     expect(result.seriesUsed).toEqual(['V'])
     expect(journalEntryInserts.every((r) => r.voucher_series === 'V')).toBe(true)
+  })
+
+  it('carries #TRANS dimensions (kostnadsställe/projekt) through to journal_entry_lines', async () => {
+    const { supabase, journalEntryLineInserts } = buildCapturingSupabase()
+    const parsed = makeParsedFile({
+      vouchers: [
+        makeVoucher('A', 1, [
+          { account: '1510', amount: 1000, cost_center: 'K10', project: 'P-2024' },
+          { account: '3001', amount: -1000 },
+        ]),
+      ],
+    })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      parsed,
+      baseMap,
+      'A',
+    )
+
+    expect(result.created).toBe(1)
+    // The dimensioned line preserves both codes; the undimensioned line is null
+    // (not omitted) so the bulk insert has a uniform column set.
+    const dimLine = journalEntryLineInserts.find((r) => r.account_number === '1510')
+    const plainLine = journalEntryLineInserts.find((r) => r.account_number === '3001')
+    expect(dimLine).toMatchObject({ cost_center: 'K10', project: 'P-2024' })
+    expect(plainLine).toMatchObject({ cost_center: null, project: null })
   })
 
   it('records source series in voucherNumberMapping for audit trail', async () => {
@@ -1237,5 +1268,66 @@ describe('IB derivation from #UB -1 (issue #675)', () => {
       expect(result.roundingAdjustment).toBe(7400.78)
       expect(result.fileImbalance).toBe(7400.78)
     })
+  })
+})
+
+describe('seedDimensionCatalog — rebuild dimension catalog from #OBJEKT', () => {
+  // Minimal supabase mock that captures upsert rows per table and reports back
+  // only the 'newly inserted' rows (ignoreDuplicates semantics).
+  function buildCatalogMock(existingCodes: Record<string, string[]> = {}) {
+    const upserts: Record<string, Array<Record<string, unknown>>> = {}
+    const supabase = {
+      from: vi.fn((table: string) => ({
+        upsert: (rows: Array<Record<string, unknown>>) => {
+          upserts[table] = [...(upserts[table] ?? []), ...rows]
+          return {
+            select: () => {
+              const existing = new Set(existingCodes[table] ?? [])
+              const inserted = rows.filter((r) => !existing.has(r.code as string))
+              return Promise.resolve({ data: inserted.map(() => ({ id: 'x' })), error: null })
+            },
+          }
+        },
+      })),
+    }
+    return { supabase: supabase as unknown as SupabaseClient, upserts }
+  }
+
+  const objects = [
+    { dimension: 1, code: 'K10', name: 'Kontor' },
+    { dimension: 6, code: 'P-2024', name: 'Projekt Alpha' },
+    { dimension: 2, code: 'B5', name: 'Kostnadsbärare' },
+  ]
+
+  it('routes dim 1 → cost_centers and dim 6 → projects, skipping unsupported dims', async () => {
+    const { supabase, upserts } = buildCatalogMock()
+    const parsed = makeParsedFile({ dimensionObjects: objects })
+
+    const result = await seedDimensionCatalog(supabase, 'company-1', parsed)
+
+    expect(result).toEqual({ costCenters: 1, projects: 1 })
+    expect(upserts['cost_centers']).toEqual([{ company_id: 'company-1', code: 'K10', name: 'Kontor' }])
+    expect(upserts['projects']).toEqual([{ company_id: 'company-1', code: 'P-2024', name: 'Projekt Alpha' }])
+    // dimension 2 (kostnadsbärare) has no destination table
+    expect(upserts['kostnadsbarare']).toBeUndefined()
+  })
+
+  it('counts only newly-inserted rows (existing objects are not clobbered)', async () => {
+    const { supabase } = buildCatalogMock({ cost_centers: ['K10'] })
+    const parsed = makeParsedFile({ dimensionObjects: objects })
+
+    const result = await seedDimensionCatalog(supabase, 'company-1', parsed)
+
+    expect(result).toEqual({ costCenters: 0, projects: 1 })
+  })
+
+  it('no-ops when the file declares no dimension objects', async () => {
+    const { supabase, upserts } = buildCatalogMock()
+    const parsed = makeParsedFile({ dimensionObjects: [] })
+
+    const result = await seedDimensionCatalog(supabase, 'company-1', parsed)
+
+    expect(result).toEqual({ costCenters: 0, projects: 0 })
+    expect(Object.keys(upserts)).toHaveLength(0)
   })
 })
