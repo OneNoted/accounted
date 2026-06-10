@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,9 +17,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Building2, Users, Globe } from 'lucide-react'
-import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
+import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Building2, Users, Globe, Pencil, Copy } from 'lucide-react'
+import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { formatCurrency } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateCategory, BookingTemplateLibraryLine } from '@/types'
 
 export function BookingTemplatesPanel() {
@@ -38,6 +40,9 @@ export function BookingTemplatesPanel() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  // Shared dialog for editing a company/team template or customizing (duplicating)
+  // a read-only system template. Mode is derived from is_system.
+  const [activeTemplate, setActiveTemplate] = useState<BookingTemplateLibrary | null>(null)
   const importRef = useRef<HTMLInputElement>(null)
 
   const fetchTemplates = useCallback(async () => {
@@ -119,7 +124,12 @@ export function BookingTemplatesPanel() {
   const teamTemplates = templates.filter((tt) => tt.team_id && !tt.is_system)
   const companyTemplates = templates.filter((tt) => tt.company_id && !tt.is_system)
 
+  // Names of existing company templates — used for a soft "name already exists"
+  // hint when creating or customizing (never blocks save).
+  const companyTemplateNames = companyTemplates.map((tt) => tt.name)
+
   return (
+    <>
     <Card>
       <CardHeader>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -157,9 +167,11 @@ export function BookingTemplatesPanel() {
                   <DialogHeader>
                     <DialogTitle>{t('create_dialog_title')}</DialogTitle>
                   </DialogHeader>
-                  <CreateTemplateForm
+                  <TemplateForm
+                    mode="create"
                     entityLabels={ENTITY_LABELS}
-                    onCreated={() => {
+                    duplicateNamePool={companyTemplateNames}
+                    onSaved={() => {
                       setShowCreate(false)
                       fetchTemplates()
                     }}
@@ -192,6 +204,9 @@ export function BookingTemplatesPanel() {
                 deletingId={deletingId}
                 onDelete={handleDelete}
                 canDelete={false}
+                canEdit={false}
+                canCustomize={canWrite}
+                onCustomize={setActiveTemplate}
                 entityLabels={ENTITY_LABELS}
               />
             )}
@@ -207,6 +222,8 @@ export function BookingTemplatesPanel() {
                 deletingId={deletingId}
                 onDelete={handleDelete}
                 canDelete={canWrite}
+                canEdit={canWrite}
+                onEdit={setActiveTemplate}
                 entityLabels={ENTITY_LABELS}
               />
             )}
@@ -222,6 +239,8 @@ export function BookingTemplatesPanel() {
                 deletingId={deletingId}
                 onDelete={handleDelete}
                 canDelete={canWrite}
+                canEdit={canWrite}
+                onEdit={setActiveTemplate}
                 entityLabels={ENTITY_LABELS}
               />
             )}
@@ -229,6 +248,34 @@ export function BookingTemplatesPanel() {
         )}
       </CardContent>
     </Card>
+
+    {/* Shared edit / customize dialog. Editing a company or team template uses
+        PUT; customizing a read-only system template creates a company-scoped
+        copy via POST. The form is keyed by template id so it re-seeds state when
+        switching between rows. */}
+    <Dialog open={!!activeTemplate} onOpenChange={(open) => { if (!open) setActiveTemplate(null) }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {activeTemplate?.is_system ? t('customize_dialog_title') : t('edit_dialog_title')}
+          </DialogTitle>
+        </DialogHeader>
+        {activeTemplate && (
+          <TemplateForm
+            key={activeTemplate.id}
+            mode={activeTemplate.is_system ? 'duplicate' : 'edit'}
+            initialTemplate={activeTemplate}
+            entityLabels={ENTITY_LABELS}
+            duplicateNamePool={companyTemplateNames}
+            onSaved={() => {
+              setActiveTemplate(null)
+              fetchTemplates()
+            }}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }
 
@@ -241,6 +288,10 @@ function TemplateSection({
   deletingId,
   onDelete,
   canDelete,
+  canEdit = false,
+  canCustomize = false,
+  onEdit,
+  onCustomize,
   entityLabels,
 }: {
   title: string
@@ -251,6 +302,10 @@ function TemplateSection({
   deletingId: string | null
   onDelete: (id: string) => void
   canDelete: boolean
+  canEdit?: boolean
+  canCustomize?: boolean
+  onEdit?: (template: BookingTemplateLibrary) => void
+  onCustomize?: (template: BookingTemplateLibrary) => void
   entityLabels: Record<string, string>
 }) {
   const t = useTranslations('settings_booking_templates')
@@ -296,6 +351,30 @@ function TemplateSection({
                     </div>
                   </div>
                 </button>
+                {canCustomize && onCustomize && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onCustomize(tt)}
+                    aria-label={t('customize')}
+                    title={t('customize')}
+                    className="h-8 w-8 p-0 shrink-0"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {canEdit && onEdit && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onEdit(tt)}
+                    aria-label={t('edit')}
+                    title={t('edit')}
+                    className="h-8 w-8 p-0 shrink-0"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                )}
                 {canDelete && (
                   <Button
                     variant="ghost"
@@ -353,18 +432,46 @@ function TemplateSection({
   )
 }
 
-function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void; entityLabels: Record<string, string> }) {
+type TemplateFormMode = 'create' | 'edit' | 'duplicate'
+
+function TemplateForm({
+  mode,
+  initialTemplate,
+  entityLabels,
+  duplicateNamePool = [],
+  onSaved,
+}: {
+  mode: TemplateFormMode
+  initialTemplate?: BookingTemplateLibrary
+  entityLabels: Record<string, string>
+  duplicateNamePool?: string[]
+  onSaved: () => void
+}) {
   const t = useTranslations('settings_booking_templates')
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [category, setCategory] = useState<BookingTemplateCategory>('other')
-  const [entityType, setEntityType] = useState<'all' | 'enskild_firma' | 'aktiebolag'>('all')
-  const [lines, setLines] = useState<BookingTemplateLibraryLine[]>([
-    { account: '', label: '', side: 'debit', type: 'business', ratio: 1 },
-    { account: '', label: '', side: 'credit', type: 'settlement', ratio: 1 },
-  ])
+  // When customizing a system template (mode 'duplicate') we suggest a distinct
+  // "(anpassad)" name so the company copy doesn't read as the standard one.
+  const [name, setName] = useState(() =>
+    initialTemplate
+      ? mode === 'duplicate'
+        ? t('copy_name_suffix', { name: initialTemplate.name })
+        : initialTemplate.name
+      : '',
+  )
+  const [description, setDescription] = useState(initialTemplate?.description ?? '')
+  const [category, setCategory] = useState<BookingTemplateCategory>(initialTemplate?.category ?? 'other')
+  const [entityType, setEntityType] = useState<'all' | 'enskild_firma' | 'aktiebolag'>(
+    initialTemplate?.entity_type ?? 'all',
+  )
+  const [lines, setLines] = useState<BookingTemplateLibraryLine[]>(() =>
+    initialTemplate
+      ? initialTemplate.lines.map((l) => ({ ...l }))
+      : [
+          { account: '', label: '', side: 'debit', type: 'business', ratio: 1 },
+          { account: '', label: '', side: 'credit', type: 'settlement', ratio: 1 },
+        ],
+  )
 
   function updateLine(index: number, field: keyof BookingTemplateLibraryLine, value: string | number) {
     setLines((prev) => {
@@ -403,12 +510,45 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
     setLines((prev) => prev.filter((_, i) => i !== index))
   }
 
+  // Ratio is only load-bearing when a template splits the amount across more
+  // than one cost/revenue line. Hide it for the simple case to keep the form
+  // approachable for non-accountants; it stays 1.0 under the hood.
+  const businessLineCount = lines.filter((l) => l.type === 'business').length
+  const showRatio = businessLineCount > 1
+  // The ratio only validates against cost/revenue lines (businessRatioSum), so
+  // only those get an editable input. The settlement leg is the full counter-
+  // amount (ratio 1.0) and is shown in the live preview, not as a control —
+  // an editable settlement ratio that doesn't feed the sum check would mislead.
+  const firstRatioIndex = showRatio ? lines.findIndex((l) => l.type === 'business') : -1
+  const businessRatioSum = lines
+    .filter((l) => l.type === 'business')
+    .reduce((sum, l) => sum + (l.ratio ?? 1), 0)
+  const ratioSumOff = showRatio && Math.abs(businessRatioSum - 1) > 0.001
+
+  // Live split preview for a 1 000 kr amount. Computed only once every line has
+  // an account so the table doesn't flicker while the form is half-filled.
+  const preview = useMemo(() => {
+    if (lines.some((l) => !l.account)) return null
+    try {
+      return applyTemplate(lines, 1000)
+    } catch {
+      return null
+    }
+  }, [lines])
+
+  // Soft, non-blocking hint when the chosen name collides with an existing
+  // company template (no DB unique constraint — duplicates are allowed).
+  const nameCollision =
+    mode !== 'edit' &&
+    name.trim().length > 0 &&
+    duplicateNamePool.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase())
+
   // Real-time check: can this draft be picked from the transaction sheet?
   // If not, we show a hint — save remains allowed (templates may still be
   // useful from the journal-entry form).
   const isConvertible = (() => {
     const draft: BookingTemplateLibrary = {
-      id: '',
+      id: initialTemplate?.id ?? '',
       company_id: null,
       team_id: null,
       created_by: null,
@@ -434,18 +574,24 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
 
     setIsSubmitting(true)
     try {
-      const res = await fetch('/api/settings/booking-templates', {
-        method: 'POST',
+      // Edit updates the existing template in place (PUT); create and duplicate
+      // both write a new company-scoped template (POST).
+      const isEdit = mode === 'edit'
+      const url = isEdit
+        ? `/api/settings/booking-templates/${initialTemplate!.id}`
+        : '/api/settings/booking-templates'
+      const res = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, description, category, entity_type: entityType, lines }),
       })
       if (!res.ok) {
-        const json = await res.json()
+        const json = await res.json().catch(() => ({}))
         toast({ title: json.error || t('toast_create_failed'), variant: 'destructive' })
         return
       }
-      toast({ title: t('toast_created') })
-      onCreated()
+      toast({ title: isEdit ? t('toast_updated') : t('toast_created') })
+      onSaved()
     } finally {
       setIsSubmitting(false)
     }
@@ -455,7 +601,13 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <Label>{t('name_label')}</Label>
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('name_placeholder')} />
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={t('name_placeholder')}
+          autoFocus={mode === 'duplicate'}
+          onFocus={mode === 'duplicate' ? (e) => e.target.select() : undefined}
+        />
       </div>
       <div>
         <Label>{t('description_label')} <span className="text-muted-foreground font-normal">{t('optional_suffix')}</span></Label>
@@ -489,7 +641,9 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
       <div>
         <Label>{t('lines_label')}</Label>
         <div className="space-y-2 mt-1">
-          {lines.map((line, i) => (
+          {lines.map((line, i) => {
+            const showRatioInput = showRatio && line.type === 'business'
+            return (
             <div key={i} className="rounded-md border border-border p-2 space-y-1.5">
               <div className="flex items-center gap-2">
                 <Input
@@ -546,15 +700,80 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
                     </SelectContent>
                   </Select>
                 )}
+                {showRatioInput && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.1"
+                      min={0}
+                      max={10}
+                      value={String(line.ratio ?? 1)}
+                      onChange={(e) => {
+                        const n = Number(e.target.value)
+                        if (!Number.isNaN(n)) updateLine(i, 'ratio', n)
+                      }}
+                      aria-label={t('ratio_label')}
+                      className="w-16 font-mono tabular-nums text-right"
+                    />
+                    {i === firstRatioIndex && <InfoTooltip content={t('ratio_help')} />}
+                  </div>
+                )}
               </div>
             </div>
-          ))}
+          )})}
           <Button type="button" variant="outline" size="sm" onClick={addLine}>
             <Plus className="h-3 w-3 mr-1" />
             {t('add_line')}
           </Button>
         </div>
       </div>
+
+      {ratioSumOff && (
+        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
+          <p className="text-xs text-warning-foreground leading-snug">
+            {t('ratio_sum_warning')}
+          </p>
+        </div>
+      )}
+
+      {preview && (
+        <div>
+          <Label>{t('preview_label')}</Label>
+          <table className="w-full text-xs mt-1">
+            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
+              <tr className="border-b">
+                <th className="text-left py-1 w-14">{t('th_account')}</th>
+                <th className="text-left py-1">{t('th_description')}</th>
+                <th className="text-right py-1 w-20">{t('th_debit')}</th>
+                <th className="text-right py-1 w-20">{t('th_credit')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.map((pl, i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="py-1 font-mono">{pl.account_number}</td>
+                  <td className="py-1">{pl.line_description}</td>
+                  <td className="py-1 text-right tabular-nums">
+                    {pl.debit_amount ? formatCurrency(Number(pl.debit_amount)) : ''}
+                  </td>
+                  <td className="py-1 text-right tabular-nums">
+                    {pl.credit_amount ? formatCurrency(Number(pl.credit_amount)) : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {nameCollision && (
+        <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
+          <p className="text-xs text-warning-foreground leading-snug">
+            {t('duplicate_name_warning')}
+          </p>
+        </div>
+      )}
 
       {!isConvertible && (
         <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
@@ -566,7 +785,7 @@ function CreateTemplateForm({ onCreated, entityLabels }: { onCreated: () => void
 
       <Button type="submit" disabled={isSubmitting} className="w-full">
         {isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-        {t('create_button')}
+        {mode === 'create' ? t('create_button') : t('save_button')}
       </Button>
     </form>
   )
