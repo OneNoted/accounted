@@ -147,6 +147,14 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'reminder_fee',
 ])
 
+/** Query params for GET /api/bookkeeping/voucher-sequences/next. */
+export const VoucherSequenceNextQuerySchema = z.object({
+  period_id: uuid.optional(),
+  series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  source_type: JournalEntrySourceTypeSchema.optional(),
+  date: isoDate.optional(),
+})
+
 export const AccountTypeSchema = z.enum([
   'asset', 'equity', 'liability', 'revenue', 'expense',
 ])

@@ -203,4 +203,31 @@ describe('GET /api/bookkeeping/voucher-sequences/next', () => {
     // (the global default is intentionally NOT used here — no consolidation).
     expect(body.data).toEqual({ next: 1, series: 'A', fiscal_period_id: 'period-1' })
   })
+
+  it('rejects an unknown source_type with 400 before touching the database', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+
+    const response = await GET(mkReq('?source_type=not_a_source_type'), mkParams())
+
+    expect(response.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed date with 400 before touching the database', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+
+    const response = await GET(mkReq('?date=2026-13-99x'), mkParams())
+
+    expect(response.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed series with 400 before touching the database', async () => {
+    mockAuth.mockResolvedValue({ data: { user: { id: 'user-1' } } })
+
+    const response = await GET(mkReq('?series=AB'), mkParams())
+
+    expect(response.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
 })

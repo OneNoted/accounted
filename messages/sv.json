@@ -2179,7 +2179,27 @@
     "validation_customer_required": "Välj en kund",
     "validation_invoice_date_required": "Fakturadatum krävs",
     "validation_due_date_required": "Förfallodatum krävs",
-    "validation_min_one_row": "Minst en rad krävs"
+    "validation_min_one_row": "Minst en rad krävs",
+    "deduction_menu_label": "Skattereduktion",
+    "deduction_none": "Ingen",
+    "deduction_rot": "ROT (30%)",
+    "deduction_rut": "RUT (50%)",
+    "deduction_work_type_placeholder": "Välj arbetstyp",
+    "deduction_hours_placeholder": "Arbetstimmar",
+    "deduction_labor_only_warning": "Skatteverket kräver att endast arbetskostnad ingår i ROT/RUT-grundlaget. Material ska faktureras separat. Sätt endast skattereduktion på rader som är 100% arbete.",
+    "deduction_card_title": "Underlag för skattereduktion",
+    "deduction_card_description": "ROT/RUT-avdrag begärs hos Skatteverket via fakturamodellen. Kunden behöver godkänna utbetalningen, så uppgifterna måste matcha köparen exakt.",
+    "deduction_personnummer_label": "Personnummer",
+    "deduction_personnummer_placeholder": "ÅÅÅÅMMDD-NNNN",
+    "deduction_personnummer_hint": "Krypteras innan lagring. Endast de fyra sista siffrorna visas på fakturan.",
+    "deduction_housing_label": "Fastighetsbeteckning",
+    "deduction_housing_placeholder": "t.ex. Stockholm Vasastan 1:23",
+    "deduction_housing_hint": "Krävs för ROT-avdrag (RUT behöver inte detta fält).",
+    "deduction_cap_over": "Fakturans avdrag överstiger årstaket",
+    "deduction_cap_check": "Kunden behöver kontrollera sitt återstående utrymme själv.",
+    "deduction_summary_label": "Skattereduktion ROT/RUT",
+    "to_pay_label": "Att betala",
+    "total_incl_vat_label": "Totalt inkl. moms"
   },
   "invoice_review": {
     "assigned_number_prefix": "Tilldelas fakturanummer",
@@ -3517,7 +3537,8 @@
     "col_unit": "Enhet",
     "col_price": "Pris exkl. moms",
     "col_vat": "Moms",
-    "col_status": "Status"
+    "col_status": "Status",
+    "activate_and_save": "Aktivera och spara"
   },
   "article_detail": {
     "back": "Tillbaka till artiklar",
@@ -3552,7 +3573,8 @@
     "deactivate_confirm_description": "Artikeln döljs i listor och fakturaval men historiken bevaras. Du kan aktivera den igen senare.",
     "deactivate_confirm_label": "Inaktivera",
     "deactivated_title": "Artikel inaktiverad",
-    "deactivate_failed_title": "Kunde inte inaktivera artikel"
+    "deactivate_failed_title": "Kunde inte inaktivera artikel",
+    "activate_and_save": "Aktivera och spara"
   },
   "form_article": {
     "type_label": "Typ *",

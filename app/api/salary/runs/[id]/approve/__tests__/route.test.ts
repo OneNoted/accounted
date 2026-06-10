@@ -51,7 +51,7 @@ function runEmp(opts: {
       last_name: opts.last_name,
       clearing_number: opts.clearing_number ?? null,
       bank_account_number: opts.bank_account_number ?? null,
-      email: 'anställd@test.se',
+      email: 'employee@example.com',
     },
   }
 }
@@ -69,8 +69,8 @@ describe('POST /api/salary/runs/[id]/approve — bank-detail guard', () => {
       { data: { id: 'run-1', status: 'review', company_id: 'company-1' } }, // run lookup
       {
         data: [
-          runEmp({ first_name: 'Tomas', last_name: 'Tysén', net_salary: 0 }),
-          runEmp({ first_name: 'Andreas', last_name: 'Wiberg', net_salary: 0 }),
+          runEmp({ first_name: 'Test', last_name: 'Testsson', net_salary: 0 }),
+          runEmp({ first_name: 'Anna', last_name: 'Exempelsson', net_salary: 0 }),
         ],
       }, // run employees
       { data: { id: 'run-1', status: 'approved' } }, // update
@@ -93,7 +93,7 @@ describe('POST /api/salary/runs/[id]/approve — bank-detail guard', () => {
       {
         data: [
           // Paid 24 000 but no clearing/account → must block.
-          runEmp({ first_name: 'Tomas', last_name: 'Tysén', net_salary: 24000, tax_withheld: 8000 }),
+          runEmp({ first_name: 'Test', last_name: 'Testsson', net_salary: 24000, tax_withheld: 8000 }),
         ],
       },
     ])
@@ -104,7 +104,7 @@ describe('POST /api/salary/runs/[id]/approve — bank-detail guard', () => {
 
     expect(status).toBe(400)
     expect(body.details).toHaveLength(1)
-    expect(body.details[0]).toContain('Tomas Tysén')
+    expect(body.details[0]).toContain('Test Testsson')
     expect(body.details[0]).toContain('Bankuppgifter saknas')
   })
 
@@ -117,15 +117,15 @@ describe('POST /api/salary/runs/[id]/approve — bank-detail guard', () => {
       {
         data: [
           runEmp({
-            first_name: 'Andreas',
-            last_name: 'Wiberg',
+            first_name: 'Anna',
+            last_name: 'Exempelsson',
             net_salary: 24000,
             tax_withheld: 8000,
             clearing_number: '8327',
             bank_account_number: '1234567',
           }),
           // Zero payout, no bank details — should not block.
-          runEmp({ first_name: 'Tomas', last_name: 'Tysén', net_salary: 0 }),
+          runEmp({ first_name: 'Test', last_name: 'Testsson', net_salary: 0 }),
         ],
       },
       { data: { id: 'run-1', status: 'approved' } },

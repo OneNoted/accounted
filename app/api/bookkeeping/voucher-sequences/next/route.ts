@@ -1,23 +1,26 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { validateQuery } from '@/lib/api/validate'
+import { VoucherSequenceNextQuerySchema } from '@/lib/api/schemas'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
-import type { JournalEntrySourceType } from '@/types'
 
 export const GET = withRouteContext(
   'voucher_sequence.next',
   async (request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
-    const url = new URL(request.url)
-    const overridePeriodId = url.searchParams.get('period_id')
-    const overrideSeries = url.searchParams.get('series')
-    const sourceType = url.searchParams.get('source_type') as JournalEntrySourceType | null
+    const query = validateQuery(request, VoucherSequenceNextQuerySchema, {
+      log,
+      operation: 'voucher_sequence.next',
+    })
+    if (!query.success) return query.response
+    const { period_id: overridePeriodId, series: overrideSeries, source_type: sourceType } = query.data
 
     const today = new Date().toISOString().split('T')[0]
     // Vouchers are numbered per fiscal period, so the preview must reflect the
     // period of the entry's date (e.g. a back-dated payment), not today's.
-    const date = url.searchParams.get('date') || today
+    const date = query.data.date || today
 
     const [{ data: period, error: periodError }, { data: settings, error: settingsError }] =
       await Promise.all([

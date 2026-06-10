@@ -1047,7 +1047,7 @@ export default function NewInvoicePage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Skattereduktion</DropdownMenuLabel>
+                          <DropdownMenuLabel>{t('deduction_menu_label')}</DropdownMenuLabel>
                           <DropdownMenuRadioGroup
                             value={watchItems[index]?.deduction_type ?? 'none'}
                             onValueChange={(v) => {
@@ -1061,9 +1061,9 @@ export default function NewInvoicePage() {
                               }
                             }}
                           >
-                            <DropdownMenuRadioItem value="none">Ingen</DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="rot">ROT (30%)</DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="rut">RUT (50%)</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="none">{t('deduction_none')}</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="rot">{t('deduction_rot')}</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="rut">{t('deduction_rut')}</DropdownMenuRadioItem>
                           </DropdownMenuRadioGroup>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -1276,7 +1276,7 @@ export default function NewInvoicePage() {
                                     onValueChange={(v) => workField.onChange(v || null)}
                                   >
                                     <SelectTrigger className="h-8 w-56">
-                                      <SelectValue placeholder="Välj arbetstyp" />
+                                      <SelectValue placeholder={t('deduction_work_type_placeholder')} />
                                     </SelectTrigger>
                                     <SelectContent>
                                       {opts.map((w) => (
@@ -1293,7 +1293,7 @@ export default function NewInvoicePage() {
                               type="number"
                               step="0.5"
                               inputMode="decimal"
-                              placeholder="Arbetstimmar"
+                              placeholder={t('deduction_hours_placeholder')}
                               className="h-8 w-32 text-right tabular-nums"
                               {...register(`items.${index}.labor_hours`, {
                                 valueAsNumber: true,
@@ -1320,9 +1320,7 @@ export default function NewInvoicePage() {
                               to be invoiced separately. */}
                           <div className="mt-2 flex items-start gap-2 text-xs text-warning-foreground">
                             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 text-warning shrink-0" />
-                            <p>
-                              Skatteverket kräver att endast arbetskostnad ingår i ROT/RUT-grundlaget. Material ska faktureras separat. Sätt endast skattereduktion på rader som är 100% arbete.
-                            </p>
+                            <p>{t('deduction_labor_only_warning')}</p>
                           </div>
                         </div>
                       )}
@@ -1408,47 +1406,46 @@ export default function NewInvoicePage() {
             {isInvoiceDoc && hasAnyDeduction && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Underlag för skattereduktion</CardTitle>
-                  <CardDescription>
-                    ROT/RUT-avdrag begärs hos Skatteverket via fakturamodellen. Kunden behöver godkänna utbetalningen, så uppgifterna måste matcha köparen exakt.
-                  </CardDescription>
+                  <CardTitle>{t('deduction_card_title')}</CardTitle>
+                  <CardDescription>{t('deduction_card_description')}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="deduction_personnummer">
-                      Personnummer<RequiredMark />
+                      {t('deduction_personnummer_label')}<RequiredMark />
                     </Label>
                     <Input
                       id="deduction_personnummer"
-                      placeholder="ÅÅÅÅMMDD-NNNN"
+                      placeholder={t('deduction_personnummer_placeholder')}
                       autoComplete="off"
                       {...register('deduction_personnummer')}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Krypteras innan lagring. Endast de fyra sista siffrorna visas på fakturan.
+                      {t('deduction_personnummer_hint')}
                     </p>
                   </div>
                   {hasAnyRotLine && (
                     <div className="space-y-2">
                       <Label htmlFor="deduction_housing_designation">
-                        Fastighetsbeteckning<RequiredMark />
+                        {t('deduction_housing_label')}<RequiredMark />
                       </Label>
                       <Input
                         id="deduction_housing_designation"
-                        placeholder="t.ex. Stockholm Vasastan 1:23"
+                        placeholder={t('deduction_housing_placeholder')}
                         {...register('deduction_housing_designation')}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Krävs för ROT-avdrag (RUT behöver inte detta fält).
+                        {t('deduction_housing_hint')}
                       </p>
                     </div>
                   )}
                   {(deductionByKind.rot > ROT_MAX || deductionByKind.rut > RUT_MAX) && (
                     <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                      Fakturans avdrag överstiger årstaket
+                      {t('deduction_cap_over')}
                       {deductionByKind.rot > ROT_MAX && ` (ROT ${ROT_MAX.toLocaleString('sv-SE')} kr)`}
                       {deductionByKind.rut > RUT_MAX && ` (RUT ${RUT_MAX.toLocaleString('sv-SE')} kr)`}
-                      . Kunden behöver kontrollera sitt återstående utrymme själv.
+                      {'. '}
+                      {t('deduction_cap_check')}
                     </div>
                   )}
                 </CardContent>
@@ -1625,18 +1622,18 @@ export default function NewInvoicePage() {
               )}
               {hasAnyDeduction && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Skattereduktion ROT/RUT</span>
+                  <span className="text-muted-foreground">{t('deduction_summary_label')}</span>
                   <span className="tabular-nums">−{formatCurrency(deductionTotal, watchCurrency)}</span>
                 </div>
               )}
               <Separator />
               <div className="flex justify-between font-bold text-lg">
-                <span>{hasAnyDeduction ? 'Att betala' : t('total_label')}</span>
+                <span>{hasAnyDeduction ? t('to_pay_label') : t('total_label')}</span>
                 <span>{formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}</span>
               </div>
               {hasAnyDeduction && (
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Totalt inkl. moms</span>
+                  <span>{t('total_incl_vat_label')}</span>
                   <span className="tabular-nums">{formatCurrency(total, watchCurrency)}</span>
                 </div>
               )}

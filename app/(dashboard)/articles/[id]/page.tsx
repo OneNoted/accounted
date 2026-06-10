@@ -326,7 +326,7 @@ export default function ArticleDetailPage({
         accountNumbers={activationDialog.accountNumbers}
         onConfirm={confirmActivation}
         onCancel={cancelActivation}
-        confirmLabel="Aktivera och spara"
+        confirmLabel={t('activate_and_save')}
       />
 
       {/* Edit dialog */}
