@@ -1891,7 +1891,13 @@ export async function seedDimensionCatalog(
       .from(table)
       .upsert(rows, { onConflict: 'company_id,code', ignoreDuplicates: true })
       .select('id')
-    if (error || !data) return 0
+    if (error || !data) {
+      // Don't fail the import, but make the failure observable rather than
+      // silent — a constraint/RLS error here is otherwise indistinguishable
+      // from "file had no #OBJEKT".
+      if (error) console.error(`[sie-import] failed to seed ${table} from #OBJEKT`, error.message)
+      return 0
+    }
     return data.length
   }
 
@@ -2366,8 +2372,13 @@ export async function executeSIEImport(
           if (dims.projects > 0) parts.push(`${dims.projects} projekt`)
           result.warnings.push(`Dimensioner från filen: ${parts.join(' och ')} skapades från #OBJEKT-poster.`)
         }
-      } catch {
-        // Non-fatal — per-line dimension tags are preserved regardless.
+      } catch (err) {
+        // Non-fatal — per-line dimension tags are preserved regardless — but
+        // surface the failure (logged + user-visible) instead of swallowing it.
+        console.error('[sie-import] dimension catalog seeding failed', err)
+        result.warnings.push(
+          'Dimensionskatalogen (kostnadsställen/projekt) kunde inte återskapas från #OBJEKT-poster — verifikationsraderna behåller ändå sina dimensionskoder.'
+        )
       }
 
       const voucherResults = await importVouchers(

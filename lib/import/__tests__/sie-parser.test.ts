@@ -332,6 +332,25 @@ describe('parseSIEFile', () => {
       expect(result.dimensionObjects).toEqual([])
     })
 
+    it('falls back the #OBJEKT name to the code when the name field is omitted', () => {
+      // SIE4 allows a nameless #OBJEKT (name is optional per spec)
+      const sie = [
+        '#FLAGGA 0',
+        '#SIETYP 4',
+        '#FNAMN "Nameless AB"',
+        '#RAR 0 20240101 20241231',
+        '#KONTO 5010 "Lokalhyra"',
+        '#OBJEKT 1 "K10"',
+        '#OBJEKT 6 "P-2024" "Projekt Alpha"',
+      ].join('\n')
+
+      const result = parseSIEFile(sie)
+      expect(result.dimensionObjects).toEqual([
+        { dimension: 1, code: 'K10', name: 'K10' }, // name omitted → falls back to code
+        { dimension: 6, code: 'P-2024', name: 'Projekt Alpha' },
+      ])
+    })
+
     it('parses quoted VER fields (series, number, date)', () => {
       const result = parseSIEFile(SIE_QUOTED_FIELDS)
       expect(result.vouchers).toHaveLength(1)
