@@ -1568,10 +1568,13 @@ export default function TransactionsPage() {
       prev.map((t) => (t.id === transactionId ? { ...t, document_id: documentId } : t))
     )
     // Booked row: the attach route propagated the doc onto the verifikation,
-    // so flip the JE status optimistically too.
-    const tx = transactions.find((t) => t.id === transactionId)
-    if (tx?.journal_entry_id) {
-      const jeId = tx.journal_entry_id
+    // so flip the JE status optimistically too. Read the JE id off the
+    // dialog's own subject (attachDocTx), not the transactions snapshot —
+    // the list may have changed (load-more, booking) while the dialog was
+    // open, and a stale find() would silently skip the badge flip.
+    const jeId =
+      attachDocTx?.id === transactionId ? attachDocTx.journal_entry_id : null
+    if (jeId) {
       setJeUnderlagStatus((prev) => ({ ...prev, [jeId]: 'has' }))
     }
   }

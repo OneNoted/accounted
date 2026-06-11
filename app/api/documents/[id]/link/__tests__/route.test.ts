@@ -30,6 +30,14 @@ import { NextResponse } from 'next/server'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
+// Body fields are uuid-validated (LinkDocumentSchema) — request fixtures must
+// be real UUIDs. The enqueue mock rows keep their short ids; the queued mock
+// doesn't correlate request input with mocked output.
+const JE_ID = '11111111-1111-4111-8111-111111111111'
+const OTHER_JE_ID = '22222222-2222-4222-8222-222222222222'
+const INBOX_ID = '33333333-3333-4333-8333-333333333333'
+const TX_ID = '44444444-4444-4444-8444-444444444444'
+
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
@@ -49,7 +57,7 @@ function makeReq(body: unknown) {
 describe('POST /api/documents/[id]/link', () => {
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
-    const res = await POST(makeReq({ journal_entry_id: 'je-1' }), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq({ journal_entry_id: JE_ID }), createMockRouteParams({ id: 'doc-1' }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
   })
@@ -62,7 +70,7 @@ describe('POST /api/documents/[id]/link', () => {
         { status: 403 },
       ),
     })
-    const res = await POST(makeReq({ journal_entry_id: 'je-1' }), createMockRouteParams({ id: 'doc-1' }))
+    const res = await POST(makeReq({ journal_entry_id: JE_ID }), createMockRouteParams({ id: 'doc-1' }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(403)
   })
@@ -73,13 +81,24 @@ describe('POST /api/documents/[id]/link', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
+  it('rejects a non-uuid journal_entry_id', async () => {
+    const res = await POST(
+      makeReq({ journal_entry_id: 'not-a-uuid' }),
+      createMockRouteParams({ id: 'doc-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(mockSupabase.from).not.toHaveBeenCalled()
+  })
+
   it('links the document and stamps the inbox item when inbox_item_id is given', async () => {
     enqueue({ data: { id: 'je-1' } }) // journal entry company check
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
     enqueue({ data: null }) // inbox stamp update
 
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1', inbox_item_id: 'inbox-1' }),
+      makeReq({ journal_entry_id: JE_ID, inbox_item_id: INBOX_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { status, body } = await parseJsonResponse<{ data: { id: string } }>(res)
@@ -95,7 +114,7 @@ describe('POST /api/documents/[id]/link', () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
 
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1' }),
+      makeReq({ journal_entry_id: JE_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { status } = await parseJsonResponse(res)
@@ -110,7 +129,7 @@ describe('POST /api/documents/[id]/link', () => {
     enqueue({ data: null }) // transaction pin update
 
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1', transaction_id: 'tx-1' }),
+      makeReq({ journal_entry_id: JE_ID, transaction_id: TX_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { status } = await parseJsonResponse(res)
@@ -124,7 +143,7 @@ describe('POST /api/documents/[id]/link', () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
 
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1' }),
+      makeReq({ journal_entry_id: JE_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { status } = await parseJsonResponse(res)
@@ -139,7 +158,7 @@ describe('POST /api/documents/[id]/link', () => {
     enqueue({ data: null, error: { message: 'rls denied' } }) // transaction pin fails
 
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1', transaction_id: 'tx-1' }),
+      makeReq({ journal_entry_id: JE_ID, transaction_id: TX_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { status, body } = await parseJsonResponse<{ data: { id: string } }>(res)
@@ -156,7 +175,7 @@ describe('POST /api/documents/[id]/link', () => {
       error: { message: 'new row violates ... locked/closed fiscal period' },
     })
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1', inbox_item_id: 'inbox-1' }),
+      makeReq({ journal_entry_id: JE_ID, inbox_item_id: INBOX_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { body } = await parseJsonResponse<{ error: { code: string } }>(res)
@@ -172,7 +191,7 @@ describe('POST /api/documents/[id]/link', () => {
       error: { message: 'document already linked to another entry' },
     })
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-1' }),
+      makeReq({ journal_entry_id: JE_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { body } = await parseJsonResponse<{ error: { code: string } }>(res)
@@ -184,7 +203,7 @@ describe('POST /api/documents/[id]/link', () => {
     // bogus or belongs to another tenant. The document must never be updated.
     enqueue({ data: null }) // journal entry company check → no match
     const res = await POST(
-      makeReq({ journal_entry_id: 'je-other-company' }),
+      makeReq({ journal_entry_id: OTHER_JE_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { body } = await parseJsonResponse<{ error: { code: string } }>(res)

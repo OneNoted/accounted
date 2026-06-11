@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { LinkDocumentSchema } from '@/lib/api/schemas'
 
 ensureInitialized()
 
@@ -34,14 +35,19 @@ export const POST = withRouteContext(
     const { supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ documentId: id })
 
-    const body = await request.json().catch(() => ({}))
-
-    if (!body.journal_entry_id) {
+    const parsed = LinkDocumentSchema.safeParse(await request.json().catch(() => null))
+    if (!parsed.success) {
       return errorResponseFromCode('VALIDATION_ERROR', opLog, {
         requestId,
-        details: { field: 'journal_entry_id', reason: 'required' },
+        details: {
+          issues: parsed.error.issues.map((i) => ({
+            field: i.path.join('.'),
+            reason: i.message,
+          })),
+        },
       })
     }
+    const body = parsed.data
 
     try {
       const document = await linkToJournalEntry(
@@ -80,7 +86,7 @@ export const POST = withRouteContext(
         }
       }
 
-      if (typeof body.transaction_id === 'string' && body.transaction_id) {
+      if (body.transaction_id) {
         const { error: pinError } = await supabase
           .from('transactions')
           .update({ document_id: id })
