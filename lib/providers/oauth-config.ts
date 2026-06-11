@@ -16,8 +16,10 @@ export function getOAuthConfig(provider: string): OAuthConfig {
     };
   }
   if (provider === 'briox') {
+    // No app-level credentials: the user's account ID + application token are
+    // exchanged per consent (exchangeBrioxCode). No env vars needed.
     return {
-      clientId: process.env.BRIOX_CLIENT_ID ?? '',
+      clientId: '',
       clientSecret: '',
       redirectUri: '',
     };

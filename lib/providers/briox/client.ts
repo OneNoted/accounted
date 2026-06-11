@@ -37,6 +37,12 @@ interface BrioxListResponse {
   };
 }
 
+export interface BrioxFinancialYear {
+  id: string;
+  fromdate: string;
+  todate: string;
+}
+
 export class BrioxClient {
   private readonly rateLimiter: TokenBucketRateLimiter;
   private readonly baseUrl: string;
@@ -46,17 +52,24 @@ export class BrioxClient {
     this.rateLimiter = new TokenBucketRateLimiter(BRIOX_RATE_LIMIT, 'ratelimit:briox');
   }
 
+  // The Authorization header carries the RAW access token — no "Bearer "
+  // prefix. The swagger securityScheme is `apiKey` in header "Authorization"
+  // (the Swagger UI pastes the bare token), not an OAuth bearer scheme.
+  private authHeaders(accessToken: string): Record<string, string> {
+    return {
+      Authorization: accessToken,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+  }
+
   async get<T>(accessToken: string, path: string): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
         const response = await fetch(url, {
-          headers: {
-            Authorization: accessToken,
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-          },
+          headers: this.authHeaders(accessToken),
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });
 
@@ -70,6 +83,41 @@ export class BrioxClient {
         }
 
         return response.json() as Promise<T>;
+      },
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1000,
+        shouldRetry: isRetryableError,
+      },
+    );
+  }
+
+  /**
+   * Fetch a binary resource (e.g. the SIE export, served as an octet-stream)
+   * with the same rate-limit/retry behavior as get(). Returns the raw bytes —
+   * SIE files must go through detectEncoding()/decodeBuffer() since Briox may
+   * emit CP437, Windows-1252 or UTF-8.
+   */
+  async getBytes(accessToken: string, path: string): Promise<ArrayBuffer> {
+    return withRetry(
+      async () => {
+        await this.rateLimiter.acquire();
+        const url = `${this.baseUrl}${path}`;
+        const response = await fetch(url, {
+          headers: { Authorization: accessToken },
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new BrioxApiError(
+            `Briox API error: ${response.status} ${response.statusText}`,
+            response.status,
+            body,
+          );
+        }
+
+        return response.arrayBuffer();
       },
       {
         maxAttempts: 3,
@@ -146,14 +194,19 @@ export class BrioxClient {
     return allItems;
   }
 
-  async getCurrentFinancialYear(accessToken: string): Promise<string> {
+  /** All financial years registered in Briox, oldest first (API order). */
+  async listFinancialYears(accessToken: string): Promise<BrioxFinancialYear[]> {
     const response = await this.get<{
       data: {
-        financialyears: { id: string; fromdate: string; todate: string }[];
+        financialyears: BrioxFinancialYear[];
       };
     }>(accessToken, '/financialyear');
 
-    const years = response.data?.financialyears ?? [];
+    return response.data?.financialyears ?? [];
+  }
+
+  async getCurrentFinancialYear(accessToken: string): Promise<string> {
+    const years = await this.listFinancialYears(accessToken);
     if (years.length === 0) {
       throw new BrioxApiError('No financial years found in Briox', 404);
     }

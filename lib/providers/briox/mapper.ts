@@ -13,11 +13,32 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
+/** Briox often serializes numbers as strings ("250.00") — coerce defensively. */
+function num(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Single source of truth for "is this invoice fully settled?", used by BOTH
+ * deriveInvoiceStatus and the paymentStatus.paid flag so they can never
+ * diverge (mirrors the Fortnox mapper). An ABSENT balance is treated as NOT
+ * paid — only an explicit paid status/flag, or a present non-positive balance
+ * on a positive-total invoice, counts as paid.
+ */
+function isFullyPaid(raw: Record<string, unknown>): boolean {
+  if (raw['status'] === 'paid' || raw['fully_paid'] === true) return true;
+  const total = num(raw['total_amount']);
+  const balance = num(raw['balance']);
+  return total != null && total > 0 && balance != null && balance <= 0;
+}
+
 function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
   const status = raw['status'] as string | undefined;
   if (status === 'cancelled') return 'cancelled';
   if (status === 'credited') return 'credited';
-  if (status === 'paid' || raw['fully_paid'] === true) return 'paid';
+  if (isFullyPaid(raw)) return 'paid';
   if (status === 'booked' || raw['booked'] === true) return 'booked';
   if (status === 'sent' || raw['sent'] === true) return 'sent';
   if (status === 'overdue') return 'overdue';
@@ -49,8 +70,12 @@ function buildParty(name: string, orgNumber?: string, raw?: Record<string, unkno
 
 export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['currency_code'] as string) ?? 'SEK';
-  const total = raw['total_amount'] as number ?? 0;
-  const balance = raw['balance'] as number ?? 0;
+  const total = num(raw['total_amount']) ?? 0;
+  // Default an ABSENT balance to the full total (= fully unpaid), never 0, so
+  // a missing balance never silently reads as paid. When paid, force balance
+  // to 0 so the DTO is internally consistent (paid ⇒ nothing outstanding).
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : (num(raw['balance']) ?? total);
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -67,13 +92,13 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   }));
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(raw['net_amount'] as number ?? total, currency),
+    lineExtensionAmount: amount(num(raw['net_amount']) ?? total, currency),
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: balance === 0 && total > 0,
+    paid,
     balance: amount(balance, currency),
   };
 
@@ -103,8 +128,11 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
 
 export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['currency_code'] as string) ?? 'SEK';
-  const total = raw['total_amount'] as number ?? 0;
-  const balance = raw['balance'] as number ?? 0;
+  const total = num(raw['total_amount']) ?? 0;
+  // Same absent-balance hardening as the sales path: missing balance reads as
+  // fully unpaid, paid forces balance to 0.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : (num(raw['balance']) ?? total);
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -117,13 +145,13 @@ export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): Supplie
   }));
 
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
-    lineExtensionAmount: amount(raw['net_amount'] as number ?? total, currency),
+    lineExtensionAmount: amount(num(raw['net_amount']) ?? total, currency),
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: balance === 0 && total > 0,
+    paid,
     balance: amount(balance, currency),
   };
 

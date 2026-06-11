@@ -1,5 +1,5 @@
 import type {
-  SalesInvoiceDto, SalesInvoiceLineDto, InvoiceStatusCode,
+  SalesInvoiceDto, InvoiceStatusCode,
   LegalMonetaryTotalDto, PaymentStatusDto,
   SupplierInvoiceDto,
   CustomerDto,
@@ -14,10 +14,30 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
+/**
+ * Derive an invoice lifecycle status from BL's fields.
+ *
+ * Sandbox-verified: `status` is an ARRAY of numeric codes. Documented for
+ * customer invoices (supplier invoices observed to follow the same scheme):
+ * 0 Unpaid, 1 Overdue, 2 Fully paid, 3 Partially paid, 4 Overpaid,
+ * 5 Deleted, 6 Customer loss, 7 Marked for collection, 8 Sent for collection.
+ * Codes ≥40 are ROT/RUT, factoring ("Invoier") and e-invoice transport noise —
+ * ignored here. The `paid`/`preliminary` booleans are the primary signals;
+ * the codes refine terminal states the booleans can't express.
+ */
 function deriveBLInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
+  const codes = Array.isArray(raw['status'])
+    ? (raw['status'] as unknown[]).map(Number).filter(Number.isFinite)
+    : [];
+  // Terminal states win over payment flags: a deleted (makulerad) or
+  // written-off (kundförlust) invoice must not be imported as open/paid.
+  if (codes.includes(5) || codes.includes(6)) return 'cancelled';
   if (raw['paid'] === true) return 'paid';
   if (raw['preliminary'] === true) return 'draft';
-  const status = raw['status'] != null ? String(raw['status']).toLowerCase() : undefined;
+  if (codes.includes(2) || codes.includes(4)) return 'paid';
+  if (codes.includes(1) || codes.includes(7) || codes.includes(8)) return 'overdue';
+  // Defensive: handle a plain string status should BL ever send one
+  const status = typeof raw['status'] === 'string' ? raw['status'].toLowerCase() : undefined;
   if (status === 'cancelled') return 'cancelled';
   if (status === 'credited') return 'credited';
   if (status === 'sent') return 'sent';
@@ -238,20 +258,32 @@ export function mapBLToJournal(raw: Record<string, unknown>): JournalDto {
   };
 }
 
+/** BL's own account `type` values (sandbox-verified) → our AccountType. */
+const BL_ACCOUNT_TYPE_MAP: Record<string, AccountType> = {
+  asset: 'asset',
+  liability: 'liability',
+  income: 'revenue',
+  cost: 'expense',
+};
+
 /**
  * Map BL Account to AccountingAccountDto.
  *
  * BL fields: entityId, id (account number), name, vatCode, sruCode, closed, type
- * Type derived from BAS plan number ranges.
+ * BL sends an explicit `type` (asset|liability|income|cost) — prefer it, since
+ * it also covers off-plan accounts like 0099 "Konvertering"; fall back to BAS
+ * number ranges when absent.
  */
 export function mapBLToAccountingAccount(raw: Record<string, unknown>): AccountingAccountDto {
   const num = Number(raw['id']);
 
-  let type: AccountType | undefined;
-  if (num >= 1000 && num < 2000) type = 'asset';
-  else if (num >= 2000 && num < 3000) type = 'liability';
-  else if (num >= 3000 && num < 4000) type = 'revenue';
-  else if (num >= 4000 && num < 9000) type = 'expense';
+  let type: AccountType | undefined = BL_ACCOUNT_TYPE_MAP[String(raw['type'] ?? '').toLowerCase()];
+  if (!type) {
+    if (num >= 1000 && num < 2000) type = 'asset';
+    else if (num >= 2000 && num < 3000) type = 'liability';
+    else if (num >= 3000 && num < 4000) type = 'revenue';
+    else if (num >= 4000 && num < 9000) type = 'expense';
+  }
 
   return {
     accountNumber: String(raw['id'] ?? ''),

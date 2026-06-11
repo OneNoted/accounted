@@ -13,7 +13,26 @@ import { buildFortnoxAuthUrl } from '@/lib/providers/fortnox/oauth'
 import { exchangeFortnoxCode } from '@/lib/providers/fortnox/oauth'
 import { buildVismaAuthUrl, exchangeVismaCode } from '@/lib/providers/visma/oauth'
 import { refreshBjornLundenToken } from '@/lib/providers/bjornlunden/oauth'
+import { BjornLundenClient, BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
+import { exchangeBrioxCode } from '@/lib/providers/briox/oauth'
+import { BrioxApiError } from '@/lib/providers/briox/client'
 import type { ConsentRecord, OtcResponse } from '../types'
+
+// Singleton (holds the rate limiter) — used to validate BL User-Keys at submit
+const bjornLundenClient = new BjornLundenClient()
+
+/**
+ * Thrown by submitProviderToken when the provider actively rejects the
+ * submitted credentials (as opposed to a transient failure). The route maps
+ * this to the PROVIDER_TOKEN_INVALID structured error so the wizard can tell
+ * the user to re-check what they pasted.
+ */
+export class ProviderTokenInvalidError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProviderTokenInvalidError'
+  }
+}
 
 // Re-export data fetching functions from the provider layer
 export { resolveConsent } from '@/lib/providers/resolve-consent'
@@ -231,13 +250,70 @@ export async function submitProviderToken(
   const supabase = createServiceClient()
 
   let accessToken = apiToken
+  let refreshToken: string | null = null
   let tokenExpiresAt: string | null = null
 
-  // BL uses client credentials — get a real token
+  // BL uses app-level client credentials — get a real token, then prove the
+  // pasted User-Key actually opens a company before storing anything.
   if (provider === 'bjornlunden') {
+    if (!companyId) {
+      throw new ProviderTokenInvalidError('Björn Lundén requires a company key (User-Key)')
+    }
     const tokenResponse = await refreshBjornLundenToken()
     accessToken = tokenResponse.access_token
     tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+
+    // Sandbox-verified: an unknown User-Key makes /details answer 500 (BL
+    // fails to bind the company database), not 401/403 — so ANY error on this
+    // probe means the key is unusable. Without it a typo'd GUID is stored
+    // silently and only surfaces as a confusing failure at preview.
+    try {
+      const details = await bjornLundenClient.get<Record<string, unknown>>(
+        accessToken,
+        companyId,
+        '/details',
+      )
+      // Bonus from the probe: label the consent with the company name so the
+      // wizard's connection list shows which BL company was linked.
+      const blCompanyName = typeof details?.['name'] === 'string' ? (details['name'] as string).trim() : ''
+      if (blCompanyName) {
+        await supabase
+          .from('provider_consents')
+          .update({ company_name: blCompanyName })
+          .eq('id', consentId)
+      }
+    } catch (error) {
+      if (error instanceof BjornLundenApiError) {
+        throw new ProviderTokenInvalidError(
+          `Björn Lundén rejected the company key (HTTP ${error.statusCode})`,
+        )
+      }
+      throw error
+    }
+  }
+
+  // Briox: the user pastes an application token + account ID, which we
+  // exchange ONCE for an access/refresh token pair. Storing the raw
+  // application token would fail on every data call.
+  if (provider === 'briox') {
+    if (!companyId) {
+      throw new ProviderTokenInvalidError('Briox requires an account ID (clientid)')
+    }
+    try {
+      const tokenResponse = await exchangeBrioxCode(companyId, apiToken)
+      accessToken = tokenResponse.access_token
+      refreshToken = tokenResponse.refresh_token
+      tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+    } catch (error) {
+      // /token answers 400/401/404 for a wrong account ID or application
+      // token — surface as invalid credentials, not a server error.
+      if (error instanceof BrioxApiError && error.statusCode < 500 && error.statusCode !== 429) {
+        throw new ProviderTokenInvalidError(
+          `Briox rejected the credentials (HTTP ${error.statusCode})`,
+        )
+      }
+      throw error
+    }
   }
 
   // Store tokens — consent stays at status 0 until migration/SIE import completes
@@ -247,7 +323,7 @@ export async function submitProviderToken(
       consent_id: consentId,
       provider,
       access_token: accessToken,
-      refresh_token: null,
+      refresh_token: refreshToken,
       token_expires_at: tokenExpiresAt,
       provider_company_id: companyId,
     })

@@ -12,7 +12,9 @@ import {
   deleteConsent,
   resolveConsent,
   fetchCompanyInfoDirect,
+  ProviderTokenInvalidError,
 } from './lib/provider-client'
+import { providerSupportsSie, fetchProviderSieFiles } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
@@ -22,18 +24,12 @@ import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport, saveMappings } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
-import { FortnoxClient } from '@/lib/providers/fortnox/client'
 import type { ProviderName } from '@/lib/providers/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { createLogger } from '@/lib/logger'
 
 const moduleLog = createLogger('extensions/arcim-migration')
-
-/** Fiscal years we support importing — older data is not needed */
-const ALLOWED_FISCAL_YEARS = new Set([2024, 2025, 2026])
-
-const fortnoxClient = new FortnoxClient()
 
 /**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
@@ -326,7 +322,9 @@ export const arcimMigrationExtension: Extension = {
           })
         }
 
-        if ((provider === 'bokio' || provider === 'bjornlunden') && !companyId) {
+        // Briox needs the account ID (the /token clientid param) alongside
+        // the application token; Bokio/BL need their company GUID.
+        if ((provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox') && !companyId) {
           return errorResponseFromCode('PROVIDER_COMPANY_ID_REQUIRED', moduleLog, {
             details: { provider },
           })
@@ -337,6 +335,13 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ success: true, consentId })
         } catch (error) {
           log.error('arcim submit-token failed', error as Error, { provider })
+          // Wrong credentials (provider actively rejected them) — tell the
+          // user to re-check the pasted values instead of a generic 500.
+          if (error instanceof ProviderTokenInvalidError) {
+            return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
+              details: { provider, reason: error.message },
+            })
+          }
           return errorResponseFromCode('PROVIDER_TOKEN_SUBMIT_FAILED', moduleLog, {
             details: { reason: error instanceof Error ? error.message : 'unknown' },
           })
@@ -513,46 +518,27 @@ export const arcimMigrationExtension: Extension = {
             log.info('Company info fetch failed:', err instanceof Error ? err.message : String(err))
           }
 
-          // Try to fetch SIE data (Fortnox has native SIE export)
+          // Try to fetch SIE data (Fortnox and Briox serve SIE over the API)
           let sieAvailable = false
           let sieStats: { accountCount: number; transactionCount: number; fiscalYears: number[] } | null = null
 
-          if (provider === 'fortnox') {
+          if (providerSupportsSie(provider)) {
             try {
-              log.info(`Fetching SIE export from Fortnox for consent ${consentId}...`)
-              // Fortnox SIE export endpoint: /3/sie/{type}?financialyear={id}
-              // First get financial years
-              const fyResponse = await fortnoxClient.get<Record<string, unknown>>(
+              log.info(`Fetching SIE export from ${provider} for consent ${consentId}...`)
+              // Fetch SIE type 4 for the most recent allowed year to get stats
+              const { files, availableYears } = await fetchProviderSieFiles(
+                provider,
                 resolved.accessToken,
-                '/financialyears'
+                resolved.providerCompanyId,
+                { latestOnly: true },
               )
-              const years = (fyResponse['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
-              const allowedYears = years
-                .map(fy => ({
-                  id: fy['Id'] as number,
-                  fromDate: fy['FromDate'] as string,
-                  toDate: fy['ToDate'] as string,
-                }))
-                .filter(fy => {
-                  const year = new Date(fy.fromDate).getFullYear()
-                  return ALLOWED_FISCAL_YEARS.has(year)
-                })
-
-              if (allowedYears.length > 0) {
-                // Fetch SIE type 4 for the most recent allowed year to get stats
-                const latestYear = allowedYears[allowedYears.length - 1]
-                const sieContent = await fortnoxClient.getText(
-                  resolved.accessToken,
-                  `/sie/4?financialyear=${latestYear.id}`
-                )
-                if (sieContent) {
-                  const parsed = parseSIEFile(sieContent)
-                  sieAvailable = true
-                  sieStats = {
-                    accountCount: parsed.accounts.length,
-                    transactionCount: parsed.vouchers.length,
-                    fiscalYears: allowedYears.map(fy => new Date(fy.fromDate).getFullYear()),
-                  }
+              if (files.length > 0) {
+                const parsed = parseSIEFile(files[files.length - 1].rawContent)
+                sieAvailable = true
+                sieStats = {
+                  accountCount: parsed.accounts.length,
+                  transactionCount: parsed.vouchers.length,
+                  fiscalYears: availableYears,
                 }
               }
             } catch (err) {
@@ -621,51 +607,18 @@ export const arcimMigrationExtension: Extension = {
           const resolved = await resolveConsent(companyId, consentId)
           const provider = resolved.consent.provider as ProviderName
 
-          if (provider !== 'fortnox') {
-            return errorResponseFromCode('PROVIDER_SIE_ONLY_FORTNOX', moduleLog, {
+          if (!providerSupportsSie(provider)) {
+            return errorResponseFromCode('PROVIDER_SIE_NOT_SUPPORTED', moduleLog, {
               details: { provider },
             })
           }
 
-          // Fetch financial years from Fortnox
-          const fyResponse = await fortnoxClient.get<Record<string, unknown>>(
+          // Fetch SIE type 4 for each allowed fiscal year
+          const { files: sieFiles } = await fetchProviderSieFiles(
+            provider,
             resolved.accessToken,
-            '/financialyears'
+            resolved.providerCompanyId,
           )
-          const years = (fyResponse['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
-          const allowedYears = years
-            .map(fy => ({
-              id: fy['Id'] as number,
-              fromDate: fy['FromDate'] as string,
-              toDate: fy['ToDate'] as string,
-            }))
-            .filter(fy => {
-              const year = new Date(fy.fromDate).getFullYear()
-              return ALLOWED_FISCAL_YEARS.has(year)
-            })
-
-          if (allowedYears.length === 0) {
-            return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog)
-          }
-
-          // Fetch SIE type 4 for each allowed year
-          const sieFiles: { fiscalYear: number; rawContent: string }[] = []
-          for (const fy of allowedYears) {
-            try {
-              const sieContent = await fortnoxClient.getText(
-                resolved.accessToken,
-                `/sie/4?financialyear=${fy.id}`
-              )
-              if (sieContent) {
-                sieFiles.push({
-                  fiscalYear: new Date(fy.fromDate).getFullYear(),
-                  rawContent: sieContent,
-                })
-              }
-            } catch (err) {
-              log.info(`Failed to fetch SIE for year ${fy.id}:`, err instanceof Error ? err.message : String(err))
-            }
-          }
 
           if (sieFiles.length === 0) {
             return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog)
@@ -677,6 +630,10 @@ export const arcimMigrationExtension: Extension = {
           const validation = validateSIEFile(parsed)
 
           if (!validation.valid) {
+            log.warn(
+              `arcim sie-data validation failed for ${provider} fiscal year ${sieFile.fiscalYear}: ` +
+              `${validation.errors.length} error(s) — ${validation.errors.slice(0, 3).join(' | ')}`,
+            )
             return NextResponse.json({
               error: 'validation',
               message: 'SIE file validation failed',
@@ -725,7 +682,7 @@ export const arcimMigrationExtension: Extension = {
           const preview = generateImportPreview(parsed, mappings)
 
           // Detect prior imports by *fiscal period overlap*, not file hash.
-          // Fortnox embeds the export-time #GEN date in every SIE export so
+          // Providers embed the export-time #GEN date in every SIE export so
           // the hash always changes between syncs; only the period stays
           // stable. A re-sync replaces the prior import for the same period.
           const fileStatuses: {
@@ -871,7 +828,7 @@ export const arcimMigrationExtension: Extension = {
             // Default ON: re-syncs keep account names current with the source
             // system (idempotent — equal names are a no-op in the rename pass).
             updateAccountNames: options.updateAccountNames ?? true,
-            // Fortnox re-sync semantics: a prior completed import for the
+            // Provider re-sync semantics: a prior completed import for the
             // same fiscal year is automatically replaced (its imported
             // entries are cancelled) so the user can pull updated data
             // without manual cleanup. Manual SIE upload keeps default
@@ -946,15 +903,19 @@ export const arcimMigrationExtension: Extension = {
           }
 
           // ── Guard: a completed SIE import is required before entity import ──
-          // Every provider except Fortnox exposes ONLY entity data (customers,
-          // suppliers, invoices) via API — never the general ledger. Fortnox pulls
-          // the GL itself via SIE-over-API. Importing entities without the
-          // SIE-derived ledger (kontoplan, ingående balanser, verifikationer)
-          // would leave an incomplete bokföring under BFL: a subledger with no
-          // chart of accounts and no opening balances, so every subsequent posting
-          // and balance is wrong. The wizard surfaces this as an advisory banner,
-          // but it must be enforced here so the rule cannot be bypassed by a direct
-          // API call, a skipped wizard step, or a stale client.
+          // Most providers expose ONLY entity data (customers, suppliers,
+          // invoices) via API — never the general ledger. Fortnox pulls the GL
+          // itself via SIE-over-API and is exempt. Briox and Björn Lundén also
+          // serve SIE over the API, but the wizard runs /import-sie before
+          // /migrate, so this guard stays satisfied — and keeps protecting
+          // against a skipped SIE step. Importing entities without the
+          // SIE-derived ledger (kontoplan,
+          // ingående balanser, verifikationer) would leave an incomplete
+          // bokföring under BFL: a subledger with no chart of accounts and no
+          // opening balances, so every subsequent posting and balance is wrong.
+          // The wizard surfaces this as an advisory banner, but it must be
+          // enforced here so the rule cannot be bypassed by a direct API call,
+          // a skipped wizard step, or a stale client.
           if (consent.provider !== 'fortnox') {
             const { count: completedSieImports } = await supabase
               .from('sie_imports')

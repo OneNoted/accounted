@@ -93,15 +93,17 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       throw { status: 401, message: 'Access token expired and no refresh token available' };
     }
 
-    const config = getOAuthConfig(consent.provider as string);
     let refreshed: TokenResponse;
 
     if (consent.provider === 'fortnox') {
-      refreshed = await refreshFortnoxToken(config, tokens.refresh_token as string);
+      refreshed = await refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string);
     } else if (consent.provider === 'briox') {
-      refreshed = await refreshBrioxToken(config.clientId, tokens.refresh_token as string);
+      // Briox /tokenrefresh wants the (expired) access token alongside the
+      // refresh token; no app-level config involved. Both tokens rotate —
+      // the new refresh_token is persisted below.
+      refreshed = await refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string);
     } else {
-      refreshed = await refreshVismaToken(config, tokens.refresh_token as string);
+      refreshed = await refreshVismaToken(getOAuthConfig(consent.provider as string), tokens.refresh_token as string);
     }
 
     const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
@@ -115,8 +117,16 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       })
       .eq('consent_id', consentId);
 
-    return { consent, accessToken: refreshed.access_token };
+    return {
+      consent,
+      accessToken: refreshed.access_token,
+      providerCompanyId: tokens.provider_company_id as string | undefined,
+    };
   }
 
-  return { consent, accessToken: tokens.access_token as string };
+  return {
+    consent,
+    accessToken: tokens.access_token as string,
+    providerCompanyId: tokens.provider_company_id as string | undefined,
+  };
 }

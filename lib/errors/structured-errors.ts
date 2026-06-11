@@ -1290,6 +1290,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Tokensubmissionen misslyckades.',
     message_en: 'Failed to submit provider token.',
   },
+  PROVIDER_TOKEN_INVALID: {
+    httpStatus: 401,
+    message_sv:
+      'Leverantören avvisade uppgifterna. Kontrollera att konto-ID och applikationstoken stämmer och försök igen.',
+    message_en:
+      'The provider rejected the credentials. Check that the account ID and application token are correct and try again.',
+  },
   PROVIDER_PREVIEW_FAILED: {
     httpStatus: 500,
     message_sv: 'Förhandsgranskningen från leverantören misslyckades.',
@@ -1305,10 +1312,12 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inga räkenskapsår 2024–2026 hittades hos leverantören.',
     message_en: 'No fiscal years available for 2024–2026.',
   },
-  PROVIDER_SIE_ONLY_FORTNOX: {
+  PROVIDER_SIE_NOT_SUPPORTED: {
     httpStatus: 400,
-    message_sv: 'SIE-export stöds för närvarande endast för Fortnox.',
-    message_en: 'SIE export is currently only supported for Fortnox.',
+    message_sv:
+      'Den här leverantören stöder inte SIE-hämtning via API. Ladda upp en SIE-fil manuellt istället.',
+    message_en:
+      'This provider does not support fetching SIE via API. Upload a SIE file manually instead.',
   },
   PROVIDER_SIE_IMPORT_REQUIRED: {
     httpStatus: 409,

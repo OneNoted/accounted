@@ -40,13 +40,33 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 
 type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden'
 
-const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token' }[] = [
-  { id: 'fortnox', name: 'Fortnox', authType: 'oauth' },
-  { id: 'visma', name: 'Visma', authType: 'oauth' },
-  { id: 'bokio', name: 'Bokio', authType: 'token' },
-  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token' },
-  { id: 'briox', name: 'Briox', authType: 'token' },
+// `sieViaApi`: the provider serves its general ledger as SIE over the API —
+// no manual SIE upload needed. Deliberately duplicated from
+// extensions/general/arcim-migration/types.ts (core code must not import from
+// @/extensions/ — CI enforces it). Keep both lists in sync.
+const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
+  { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
+  { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
+  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
+  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
+  { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
 ]
+
+/**
+ * Extract a human-readable message from an API error body. Routes answer in
+ * two shapes: legacy `{ error: 'text' }` and the structured envelope
+ * `{ error: { code, message } }` — naively rendering the latter shows
+ * "[object Object]".
+ */
+function apiErrorMessage(data: unknown, fallback: string): string {
+  const err = (data as { error?: unknown } | null)?.error
+  if (typeof err === 'string' && err) return err
+  if (err && typeof err === 'object') {
+    const message = (err as { message?: unknown }).message
+    if (typeof message === 'string' && message) return message
+  }
+  return fallback
+}
 
 interface SkipReasons {
   duplicate?: number
@@ -190,7 +210,7 @@ interface ConnectionStatus {
   }
 }
 
-const COMING_SOON_PROVIDERS = new Set<ArcimProvider>(['bjornlunden', 'briox'])
+const COMING_SOON_PROVIDERS = new Set<ArcimProvider>([])
 
 const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
   fortnox: '/logos/fortnox.svg',
@@ -215,19 +235,20 @@ function ProviderStep({
 }) {
   const activeConsents = connectionStatus?.consents.filter(c => c.status === 1) ?? []
   const hasSieImport = (connectionStatus?.sieImports.filter(i => i.status === 'completed').length ?? 0) > 0
-  const allFortnox = activeConsents.length > 0 && activeConsents.every(c => c.provider === 'fortnox')
-  const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allFortnox
+  const sieViaApi = (id: ArcimProvider) => ARCIM_PROVIDERS.find(p => p.id === id)?.sieViaApi === true
+  const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApi(c.provider))
+  const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
 
   return (
     <div className="space-y-4">
-      {/* SIE-required banner (not relevant for Fortnox — it fetches SIE itself) */}
+      {/* SIE-required banner (not relevant for Fortnox/Briox — they fetch SIE via API) */}
       {showSieRequiredBanner && (
         <div className="flex gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-500" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">SIE-import krävs först</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Bokio, Visma, Björn Lundén och Briox hämtar endast kunder, leverantörer och fakturor via API:et. Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil först. Gäller inte Fortnox — där hämtar vi SIE direkt via API:et.
+              Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et. Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil först. Gäller inte Fortnox, Briox och Björn Lundén — där hämtar vi SIE direkt via API:et.
             </p>
             <Link
               href="/import?mode=sie"
@@ -349,13 +370,13 @@ function ProviderStep({
               {ARCIM_PROVIDERS.map((provider) => {
                 const comingSoon = COMING_SOON_PROVIDERS.has(provider.id)
                 const alreadyConnected = activeConsents.some(c => c.provider === provider.id)
-                // Non-Fortnox providers only expose entity data (customers,
-                // suppliers, invoices) via API — the ledger must arrive via SIE
-                // first. Gate the connection entry until a completed SIE import
-                // exists so users don't authenticate into a flow that can't
-                // import anything yet. The /migrate route enforces this
+                // Providers without SIE-over-API only expose entity data
+                // (customers, suppliers, invoices) — the ledger must arrive via
+                // SIE upload first. Gate the connection entry until a completed
+                // SIE import exists so users don't authenticate into a flow that
+                // can't import anything yet. The /migrate route enforces this
                 // server-side regardless; this is just the matching UX.
-                const needsSieFirst = !hasSieImport && provider.id !== 'fortnox'
+                const needsSieFirst = !hasSieImport && !provider.sieViaApi
                 const isDisabled = comingSoon || alreadyConnected || needsSieFirst
                 return (
                   <button
@@ -399,7 +420,9 @@ function ProviderStep({
                             ? 'Importera SIE-fil först'
                             : provider.authType === 'oauth'
                               ? 'Anslut via inloggning'
-                              : 'Anslut med API-nyckel'}
+                              : provider.id === 'bjornlunden'
+                                ? 'Anslut med företagsnyckel'
+                                : 'Anslut med API-nyckel'}
                       </p>
                     </div>
                   </button>
@@ -441,17 +464,27 @@ function ConnectStep({
   // BL uses server-side client credentials — only needs company ID, no API key
   const isClientCredentials = provider === 'bjornlunden'
   const needsApiToken = !isClientCredentials
-  const needsCompanyId = provider === 'bokio' || provider === 'bjornlunden'
+  // Briox: the account ID is the `clientid` half of the token exchange
+  const needsCompanyId = provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox'
+  const companyIdLabel = provider === 'briox'
+    ? 'Konto-ID'
+    : provider === 'bjornlunden'
+      ? 'Företagsnyckel (User-Key)'
+      : 'Företags-ID'
 
   const tokenDescription = isClientCredentials
-    ? `Ange ditt företags-ID (GUID) från Björn Lundén. ${branding.appName.toLowerCase()} ansluter automatiskt via sin integrationspartner-åtkomst.`
-    : `Ange din API-nyckel från ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
+    ? `Ange din företagsnyckel (User-Key) från Björn Lundén. ${branding.appName.toLowerCase()} ansluter automatiskt via sin integrationspartner-åtkomst.`
+    : provider === 'briox'
+      ? `Ange ditt konto-ID och din applikationstoken från Briox för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
+      : `Ange din API-nyckel från ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
 
   const tokenHelpText = isClientCredentials
-    ? `Hittas i Björn Lundén under Inställningar \u2192 Företagsinformation (GUID-format).`
+    ? `Företagsnyckeln (User-Key) är ett GUID som du hittar i Lundify under Integrationer → kugghjulet vid integrationen, eller i aktiveringsmejlet från Björn Lundén.`
     : provider === 'bokio'
       ? `Du hittar din API-nyckel i ${providerName} under Inställningar \u2192 Integrationer \u2192 API. Ditt företags-ID är det GUID som syns i URL:en när du är inloggad, t.ex. https://app.bokio.se/ditt-företags-id/settings-r/private-integrations.`
-      : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
+      : provider === 'briox'
+        ? `Skapa din applikationstoken i Briox under Admin \u2192 Anv\u00e4ndare \u2192 kugghjulet vid din anv\u00e4ndare \u2192 Applikationstoken. Ditt konto-ID \u00e4r det l\u00e5nga numret inom parentes bredvid f\u00f6retagsnamnet under "Ditt konto" i menyn till h\u00f6ger.`
+        : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
 
   const canSubmit = isClientCredentials
     ? !!companyId
@@ -548,13 +581,19 @@ function ConnectStep({
                 {needsCompanyId && (
                   <div>
                     <label htmlFor="companyId" className="text-sm font-medium">
-                      Företags-ID
+                      {companyIdLabel}
                     </label>
                     <Input
                       id="companyId"
                       name="companyId_nocomplete"
                       autoComplete="new-password"
-                      placeholder={isClientCredentials ? 'GUID från företagsinställningar' : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'}
+                      placeholder={
+                        isClientCredentials
+                          ? 'Företagsnyckel, t.ex. 1f0e2d3c-4b5a-...'
+                          : provider === 'briox'
+                            ? 'Det långa numret inom parentes, t.ex. 35649125'
+                            : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'
+                      }
                       value={companyId}
                       onChange={(e) => setCompanyId(e.target.value)}
                     />
@@ -712,6 +751,7 @@ function MappingStep({
   sieData,
   isLoading,
   error,
+  errorDetails,
   onMappingChange,
   onContinue,
   onBack,
@@ -719,6 +759,7 @@ function MappingStep({
   sieData: SIEData | null
   isLoading: boolean
   error: string | null
+  errorDetails: string[] | null
   onMappingChange: (sourceAccount: string, targetAccount: string, targetName: string) => void
   onContinue: () => void
   onBack: () => void
@@ -743,9 +784,19 @@ function MappingStep({
           <CardContent className="pt-6">
             <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
               <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-              <div>
+              <div className="min-w-0">
                 <p className="font-medium text-destructive">Kunde inte ladda SIE-data</p>
                 <p className="text-sm text-muted-foreground">{error}</p>
+                {errorDetails && errorDetails.length > 0 && (
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
+                    {errorDetails.slice(0, 8).map((detail, i) => (
+                      <li key={i} className="break-words">{detail}</li>
+                    ))}
+                    {errorDetails.length > 8 && (
+                      <li>… och {errorDetails.length - 8} fel till</li>
+                    )}
+                  </ul>
+                )}
               </div>
             </div>
           </CardContent>
@@ -1291,7 +1342,7 @@ function ResultStep({
               <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
               <div>
                 <p className="text-base font-medium text-destructive">Migreringen misslyckades</p>
-                <p className="mt-1 text-sm text-muted-foreground">{error}</p>
+                <p className="mt-1 whitespace-pre-line text-sm text-muted-foreground">{error}</p>
               </div>
             </div>
           </CardContent>
@@ -1560,6 +1611,10 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
   const [isLoading, setIsLoading] = useState(false)
   const [isLoadingStatus, setIsLoadingStatus] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Per-item details behind `error` — e.g. the SIE validation errors from
+  // /sie-data, which would otherwise be swallowed (the envelope's `error`
+  // field is just the string "validation").
+  const [errorDetails, setErrorDetails] = useState<string[] | null>(null)
 
   // Connection status (existing connections + import history)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus | null>(null)
@@ -1630,7 +1685,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       const res = await fetch(`/api/extensions/ext/arcim-migration/preview?consentId=${cId}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `HTTP ${res.status}`)
+        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
       }
 
       const data = await res.json()
@@ -1663,7 +1718,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `HTTP ${res.status}`)
+        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
       }
 
       const data = await res.json()
@@ -1708,7 +1763,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || 'Kunde inte koppla från')
+        throw new Error(apiErrorMessage(data, 'Kunde inte koppla från'))
       }
       toast({ title: 'Frånkopplad', description: 'Anslutningen har tagits bort.' })
       await fetchStatus()
@@ -1738,7 +1793,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `HTTP ${res.status}`)
+        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
       }
 
       // Token stored — consent is now accepted, proceed to preview
@@ -1813,12 +1868,23 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
     setStep('mapping')
     setIsLoading(true)
     setError(null)
+    setErrorDetails(null)
 
     try {
       const res = await fetch(`/api/extensions/ext/arcim-migration/sie-data?consentId=${consentId}`)
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `HTTP ${res.status}`)
+        const data = await res.json().catch(() => ({})) as {
+          error?: unknown
+          validation?: { errors?: unknown }
+        }
+        const validationErrors = data?.error === 'validation' ? data.validation?.errors : undefined
+        if (Array.isArray(validationErrors)) {
+          setErrorDetails(validationErrors.filter((e): e is string => typeof e === 'string'))
+          throw new Error(
+            'Bokföringsdatan hos leverantören klarade inte valideringen. Felen nedan måste rättas i källsystemet innan importen kan fortsätta.'
+          )
+        }
+        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
       }
 
       const data = await res.json()
@@ -1916,11 +1982,21 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}))
-            throw new Error(data.error || `SIE import HTTP ${res.status}`)
+            throw new Error(apiErrorMessage(data, `SIE import HTTP ${res.status}`))
           }
 
           const result = await res.json() as ImportResult
           setSieImportResults(prev => [...prev, result])
+
+          // The endpoint returns HTTP 200 with success:false when the import
+          // itself failed (e.g. räkenskapsår mismatch). Stop here — continuing
+          // to /migrate would hit its SIE-guard, whose "SIE måste importeras
+          // först" message masks the real error.
+          if (!result.success) {
+            throw new Error(result.errors.length > 0
+              ? result.errors.join('\n')
+              : 'SIE-importen misslyckades utan felmeddelande.')
+          }
         }
       }
 
@@ -1950,7 +2026,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
-          throw new Error(data.error || `HTTP ${res.status}`)
+          throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
         }
 
         const data = await res.json()
@@ -2070,6 +2146,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
           sieData={sieData}
           isLoading={isLoading}
           error={error}
+          errorDetails={errorDetails}
           onMappingChange={handleMappingChange}
           onContinue={() => setStep('options')}
           onBack={() => setStep('preview')}

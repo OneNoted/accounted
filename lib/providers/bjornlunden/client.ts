@@ -4,6 +4,9 @@ import { BL_BASE_URL, BL_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 
 const FETCH_TIMEOUT_MS = 15_000;
+// The SIE export renders a whole fiscal year server-side (megabytes for an
+// active company) — give it more room than ordinary CRUD reads.
+const SIE_FETCH_TIMEOUT_MS = 60_000;
 
 export class BjornLundenApiError extends Error {
   constructor(
@@ -32,6 +35,15 @@ interface BLPaginatedResponse<T> {
   totalPages: number;
   totalRows: number;
   data: T[];
+}
+
+export interface BLFinancialYear {
+  entityId: number;
+  /** BL's period key, e.g. "202501" */
+  id?: string;
+  fromDate: string;
+  toDate: string;
+  open?: boolean;
 }
 
 export class BjornLundenClient {
@@ -82,9 +94,12 @@ export class BjornLundenClient {
     relativePath: string,
     options?: { page?: number; pageSize?: number },
   ): Promise<{ items: T[]; page: number; totalPages: number; totalCount: number }> {
+    // Sandbox-verified: the batch endpoints honor `page` and `rows`. The
+    // response envelope echoes `pageRequested`, but a `pageRequested` REQUEST
+    // param is silently ignored (as is `rowsRequested`) — sending those would
+    // re-fetch page 1 forever.
     const params = new URLSearchParams();
-    params.set('pageRequested', String(options?.page ?? 1));
-    params.set('rowsRequested', String(options?.pageSize ?? 50));
+    params.set('page', String(options?.page ?? 1));
     params.set('rows', String(options?.pageSize ?? 50));
 
     const path = `${relativePath}?${params.toString()}`;
@@ -104,6 +119,50 @@ export class BjornLundenClient {
       return response;
     }
     return Array.isArray(response.data) ? response.data : [];
+  }
+
+  /**
+   * Fetch a binary resource with the same rate-limit/retry behavior as get().
+   * Used for the SIE export, which BL serves as raw bytes
+   * (Content-Type: text/vnd.sie-gruppen.si, typically CP437-encoded) despite
+   * the swagger declaring a base64 string — callers must run the bytes
+   * through detectEncoding()/decodeBuffer().
+   */
+  async getBytes(accessToken: string, userKey: string, path: string): Promise<ArrayBuffer> {
+    return withRetry(
+      async () => {
+        await this.rateLimiter.acquire();
+        const url = `${this.baseUrl}${path}`;
+        const response = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'User-Key': userKey,
+          },
+          signal: AbortSignal.timeout(SIE_FETCH_TIMEOUT_MS),
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '');
+          throw new BjornLundenApiError(
+            `Björn Lunden API error: ${response.status} ${response.statusText}`,
+            response.status,
+            body,
+          );
+        }
+
+        return response.arrayBuffer();
+      },
+      {
+        maxAttempts: 3,
+        initialDelayMs: 1000,
+        shouldRetry: isRetryableError,
+      },
+    );
+  }
+
+  /** All financial years registered in BL for the company behind the User-Key. */
+  async listFinancialYears(accessToken: string, userKey: string): Promise<BLFinancialYear[]> {
+    return this.getAll<BLFinancialYear>(accessToken, userKey, '/financialyear');
   }
 
   async getDetail<T>(accessToken: string, userKey: string, path: string): Promise<T> {
