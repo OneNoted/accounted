@@ -166,10 +166,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Pre-flight: fetch invoice with relations needed for journal entry.
+    // journal_entry_id is fetched for booking-state routing only (it stays out
+    // of INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract and the
+    // invoice.paid event payload are unchanged).
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount)`,
+        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount)`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -428,9 +431,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (newStatus === 'paid') {
       updatePayload.paid_at = paymentDate
     }
-    if (journalEntryId) {
-      updatePayload.journal_entry_id = journalEntryId
-    }
+    // Deliberately NOT writing journal_entry_id here: that column means "the
+    // registration entry that booked this invoice at issuance" and drives the
+    // invoiceAlreadyBooked routing above. Writing the payment/cash entry id
+    // would make a kontantmetoden invoice look registered, so a later partial
+    // payment would clear a 1510 that was never debited. The payment entry id
+    // is returned in the response body instead.
 
     const { data: updated, error: updateErr } = await ctx.supabase
       .from('invoices')
