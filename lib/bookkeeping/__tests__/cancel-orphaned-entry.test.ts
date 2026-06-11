@@ -84,6 +84,18 @@ describe('cancelOrphanedPaymentEntry', () => {
     expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 
+  it('never throws, even when the client rejects unexpectedly', async () => {
+    const supabase = {
+      from: vi.fn().mockImplementation(() => {
+        throw new Error('network blip')
+      }),
+    }
+
+    await expect(
+      cancelOrphanedPaymentEntry(supabase as never, 'company-1', 'user-1', 'je-1', 'x'),
+    ).resolves.toBeUndefined()
+  })
+
   it('does not record a gap when the cancel itself fails', async () => {
     const { supabase, inserts } = createMockSupabase({
       orphan: { fiscal_period_id: 'fp-1', voucher_series: 'A', voucher_number: 9 },
