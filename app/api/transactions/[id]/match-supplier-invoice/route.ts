@@ -7,7 +7,6 @@ import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-pa
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
@@ -219,7 +218,6 @@ export const POST = withRouteContext(
       : `Utbetalning leverantörsfaktura ${invoice.supplier_invoice_number}`
 
     let journalEntryId: string | null = null
-    let journalEntryError: string | null = null
 
     try {
       if (customLines) {
@@ -298,13 +296,21 @@ export const POST = withRouteContext(
       }
     } catch (err) {
       txLog.error('failed to create supplier invoice payment journal entry', err as Error)
-      // Bookkeeping errors with structured codes get a Swedish translation;
-      // otherwise pass-through. Match still proceeds — the user can re-book.
+      // A failed payment voucher must fail the whole match. Proceeding used to
+      // mark the invoice paid with NO voucher — an unrecoverable half-state:
+      // mark-paid rejects 'paid' invoices and this route rejects linked
+      // transactions, so no flow could ever complete the booking afterwards.
       if (isBookkeepingError(err)) {
-        journalEntryError = getErrorMessage(err, { context: 'supplier_invoice' })
-      } else {
-        journalEntryError = err instanceof Error ? err.message : 'Unknown error'
+        return errorResponse(err, txLog, { requestId })
       }
+      return errorResponseFromCode('MATCH_SI_JE_FAILED', txLog, {
+        requestId,
+        details: { reason: err instanceof Error ? err.message : 'unknown' },
+      })
+    }
+
+    if (!journalEntryId) {
+      return errorResponseFromCode('MATCH_SI_JE_FAILED', txLog, { requestId })
     }
 
     // Ledger update from the plan computed up front. An öre-absorbed settlement
@@ -391,19 +397,12 @@ export const POST = withRouteContext(
       txLog.warn('supplier_invoice.match_confirmed event emission failed', err as Error)
     }
 
-    if (journalEntryError) {
-      txLog.warn('supplier invoice match recorded but payment JE failed', {
-        message: journalEntryError,
-      })
-    }
-
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,
-      ...(journalEntryError ? { journal_entry_error: journalEntryError } : {}),
     })
   },
   { requireWrite: true },
