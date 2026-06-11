@@ -4,6 +4,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -338,6 +339,13 @@ export const POST = withRouteContext(
     }
 
     if (!updatedRows || updatedRows.length === 0) {
+      // CAS guard: the invoice was settled by a concurrent request between
+      // our read and write. The payment voucher we just posted belongs to no
+      // payment — cancel it and document the gap (mirrors mark-paid).
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId!, user.id, journalEntryId,
+        'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      )
       return errorResponseFromCode('MATCH_SI_NOT_OPEN', txLog, { requestId })
     }
 
