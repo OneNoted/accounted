@@ -1,5 +1,6 @@
 import type { TransactionCategory, MappingResult, VatJournalLine, Transaction, EntityType, VatTreatment } from '@/types'
 import { getVatRate, generateReverseChargeLines } from './vat-entries'
+import { roundOre } from '@/lib/money'
 
 /**
  * Maps TransactionCategory to BAS accounts for journal entry creation
@@ -252,7 +253,7 @@ export function buildMappingResultFromCategory(
     const grossAmount = Math.abs(transaction.amount)
     // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds
     // any legitimate document VAT — even on mixed-rate receipts.
-    const maxVat = Math.round((grossAmount * 0.25 / 1.25) * 100) / 100
+    const maxVat = roundOre(grossAmount * 0.25 / 1.25)
     if (vatAmountOverride > maxVat) {
       throw new Error(
         `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${grossAmount} ` +
@@ -278,8 +279,8 @@ export function buildMappingResultFromCategory(
     } else if (vatRate > 0) {
       const grossAmount = Math.abs(transaction.amount)
       const vatAmount = hasVatOverride
-        ? Math.round((vatAmountOverride as number) * 100) / 100
-        : Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
+        ? roundOre(vatAmountOverride as number)
+        : roundOre(grossAmount * vatRate / (1 + vatRate))
 
       if (vatAmount > 0 && transaction.amount < 0 && mapping.vatDebitAccount) {
         // Expense: Ingående moms (deductible VAT)
