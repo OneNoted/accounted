@@ -14,6 +14,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 
@@ -676,16 +677,37 @@ export default function ArsredovisningPage() {
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
             </Button>
-            <Button variant="outline" asChild>
-              <Link
-                href="https://www.bolagsverket.se/foretag/aktiebolag/arsredovisning/lamna-in-arsredovisning"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <ExternalLink className="mr-2 h-4 w-4" /> Bolagsverket Mina Sidor
-              </Link>
-            </Button>
+            {/* Bolagsverket-delarna blurras tills integrationen är godkänd —
+                rubriken, instruktionstexten och PDF-knappen förblir skarpa. */}
+            <span
+              inert={INLAMNING_COMING_SOON}
+              aria-hidden={INLAMNING_COMING_SOON}
+              className={
+                INLAMNING_COMING_SOON
+                  ? 'pointer-events-none select-none blur-[3px] opacity-60'
+                  : undefined
+              }
+            >
+              <Button variant="outline" asChild>
+                <Link
+                  href="https://www.bolagsverket.se/foretag/aktiebolag/arsredovisning/lamna-in-arsredovisning"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" /> Bolagsverket Mina Sidor
+                </Link>
+              </Button>
+            </span>
           </div>
+          <div
+            inert={INLAMNING_COMING_SOON}
+            aria-hidden={INLAMNING_COMING_SOON}
+            className={
+              INLAMNING_COMING_SOON
+                ? 'pointer-events-none select-none blur-[3px] opacity-60 space-y-4'
+                : 'space-y-4'
+            }
+          >
           {data.warnings.length > 0 && (
             <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground space-y-1">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
@@ -697,14 +719,19 @@ export default function ArsredovisningPage() {
             </div>
           )}
           <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground">
-            <strong>Notis om digital inlämning:</strong> Bolagsverket har föreslagit att
-            digital inlämning (iXBRL) av årsredovisning för aktiebolag ska bli
-            obligatorisk — beslut och ikraftträdande är ännu inte fastställda. Idag är
-            PDF-inlämning fortfarande godkänd. Accounted stödjer för närvarande endast
-            PDF-utkast; iXBRL-generering är planerad till en kommande version.
+            <strong>Notis om digital inlämning:</strong> Digital inlämning (iXBRL) av
+            årsredovisning föreslås bli obligatorisk för K2/K3-aktiebolag för
+            räkenskapsår som inleds efter 2025-12-31. Använd avsnittet{' '}
+            <strong>Digital inlämning</strong> nedan för att granska, validera och lämna
+            in årsredovisningen som iXBRL — PDF:en ovan är ett läsexemplar.
+          </div>
           </div>
         </CardContent>
       </Card>
+
+      {data.accounting_framework === 'k2' && periodId && (
+        <DigitalInlamning periodId={periodId} />
+      )}
     </div>
   )
 }

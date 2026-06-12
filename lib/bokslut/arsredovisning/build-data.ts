@@ -60,7 +60,7 @@ export async function buildArsredovisningData(
       .single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, address, entity_type')
+      .select('company_name, org_number, city, entity_type')
       .eq('company_id', companyId)
       .maybeSingle(),
     // Source-of-truth for entity_type and accounting_framework lives on
@@ -111,10 +111,11 @@ export async function buildArsredovisningData(
   const accountingFramework: AccountingFramework =
     companyRow?.accounting_framework === 'k3' ? 'k3' : 'k2'
 
-  type AddressShape = { city?: string | null; postal_city?: string | null } | null
-  const addressUnknown = (settings as { address?: AddressShape } | null)?.address ?? null
-  const city =
-    (addressUnknown && (addressUnknown.city ?? addressUnknown.postal_city)) || null
+  // company_settings stores the address as flat columns (address_line1,
+  // postal_code, city) — there is no `address` json column. Selecting one
+  // made the whole settings query fail, so every ÅR fell back to "Bolaget"
+  // with an empty org number.
+  const city = (settings as { city?: string | null } | null)?.city ?? null
 
   // Merge precedence: caller overrides → persisted narrative → boilerplate
   const persistedDescription = narrative?.description ?? undefined

@@ -64,14 +64,17 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
       const data = body.data as DispositionsProposal
       setProposal(data)
       const selections: UiState['selections'] = {}
-      for (const p of data.proposals) {
-        const key = proposalKey(p)
+      data.proposals.forEach((p, index) => {
+        // Key must match the render loop and buildPostItems, which both pass
+        // the array index — omitting it here defaulted every non-ateforing
+        // key to ":0", so only the first proposal card ever rendered.
+        const key = proposalKey(p, index)
         selections[key] = {
           accept: true,
           overrideAmount: p.amount,
           lockedSkip: Boolean(p.required),
         }
-      }
+      })
       setUi({ selections })
     } catch {
       setFetchError('Kunde inte ladda dispositioner')
