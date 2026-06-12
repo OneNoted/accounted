@@ -139,8 +139,15 @@ describe('accrual_schedules constraints', () => {
 
   it('rejects a direction that does not match the source side', async () => {
     const ctx = await seedScheduleContext()
+    // Accounts are valid for the 'revenue' direction so the only violated
+    // constraint is direction_matches_source (supplier invoice → expense).
     await expect(
-      insertSchedule({ ...ctx, direction: 'revenue' }),
+      insertSchedule({
+        ...ctx,
+        direction: 'revenue',
+        balanceAccount: '2970',
+        targetAccount: '3001',
+      }),
     ).rejects.toThrow(/direction_matches_source/i)
   })
 
@@ -265,9 +272,11 @@ describe('posted installment immutability + verifikat protection', () => {
       journalEntryId: entryId,
     })
 
+    // The engine-level delete guard fires before the FK RESTRICT can — either
+    // layer blocking the delete satisfies the verifikat-protection invariant.
     await expect(
       getPool().query(`DELETE FROM public.journal_entries WHERE id = $1`, [entryId]),
-    ).rejects.toThrow(/foreign key|violates/i)
+    ).rejects.toThrow(/foreign key|violates|cannot delete journal entries/i)
   })
 })
 

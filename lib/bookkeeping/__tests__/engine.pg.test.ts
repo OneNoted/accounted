@@ -76,7 +76,7 @@ describe('engine.pg — triggers & RPCs that mocks cannot catch', () => {
     // the voucher_sequences user_id NOT NULL check before ON CONFLICT could
     // arbitrate (commit_journal_entry got the fallback in 20260421170500;
     // next_voucher_number — the storno/correction path — did not until
-    // 20260611130000).
+    // 20260623130000).
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
     const first = await getPool().query<{ n: number }>(

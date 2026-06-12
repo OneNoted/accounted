@@ -3,7 +3,7 @@
  *
  * All dates are ISO strings (YYYY-MM-DD) handled numerically — never via
  * `new Date()` — so the result is independent of server timezone. Amounts
- * follow the project rule: `Math.round(x * 100) / 100`, never `toFixed()`.
+ * round via `roundOre` from `@/lib/money`, never `toFixed()`.
  */
 
 export interface InstallmentPlan {

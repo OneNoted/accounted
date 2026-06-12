@@ -7,6 +7,7 @@ import type {
   SupplierInvoiceItem,
 } from '@/types'
 import { makeSupplierInvoice } from '@/tests/helpers'
+import { roundOre } from '@/lib/money'
 
 // Periodisering booking behaviour: lines with an accrual period book their
 // net to the 17xx/29xx interim account instead of the P&L account, while
@@ -38,7 +39,7 @@ vi.mock('../vat-entries', async (importOriginal) => {
         return [{
           account_number: account,
           debit_amount: 0,
-          credit_amount: Math.round(baseAmount * rate * 100) / 100,
+          credit_amount: roundOre(baseAmount * rate),
           line_description: 'Utgående moms',
         }]
       },
@@ -69,7 +70,7 @@ function makeSupplierItem(overrides: Partial<SupplierInvoiceItem> = {}): Supplie
     account_number: '6310',
     vat_code: null,
     vat_rate: vatRate,
-    vat_amount: overrides.vat_amount ?? Math.round(lineTotal * vatRate * 100) / 100,
+    vat_amount: overrides.vat_amount ?? roundOre(lineTotal * vatRate),
     reverse_charge_rate: null,
     created_at: '2026-01-15T00:00:00Z',
     ...overrides,

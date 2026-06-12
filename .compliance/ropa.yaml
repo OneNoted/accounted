@@ -321,3 +321,47 @@ processing_activities:
       - service_role_only_writes
       - error_message_truncated_500_chars
       - no_tool_args_or_results_persisted
+
+  - id: arsredovisning.bolagsverket.submit
+    name: Digital inlämning av årsredovisning till Bolagsverket
+    purpose: >-
+      Lämna in årsredovisningen (iXBRL) digitalt till Bolagsverkets eget
+      utrymme (ÅRL 8 kap.). Avsändarens och undertecknarens personnummer
+      krävs av Bolagsverkets API (skapa-inlamningtoken, lamna-in) och
+      används transient i anropen; i databasen sparas endast
+      företagssaltade SHA-256-hashar. Fastställelseintyget signeras med
+      e-legitimation hos Bolagsverket, aldrig i appen.
+    lawful_basis: art_6_1_c   # legal obligation (ÅRL filing duty)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: anthropic-na   # software supplier; Bolagsverket is recipient, not processor
+    data_subjects:
+      - business_owner        # avsändare/undertecknare (styrelseledamot, VD)
+    data_categories:
+      - user.government_id    # personnummer (transient; at rest only salted SHA-256 hash)
+      - user.name             # undertecknarens namn
+      - user.contact          # undertecknarens/kvittens e-post
+      - user.financial        # årsredovisningens finansiella innehåll
+    recipients:
+      - name: Bolagsverket
+        country: SE
+        role: legal_recipient
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: Sweden-to-Sweden flow to a public authority; no third-country transfer.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap        # filed .xhtml archived as räkenskapsinformation
+      stored_in:
+        - arsredovisning_submissions   # status, idnummer, checksums, PNR hashes only
+        - document_attachments         # the exact filed iXBRL bytes (WORM)
+    security_measures:
+      - mtls_client_certificate_to_bolagsverket
+      - mtls_key_env_only_injected_from_secret_manager   # never in settings/DB; see .env.example custody note
+      - pinned_endpoint_allowlist_per_environment        # HOSTS map in client.ts; not env-configurable
+      - personnummer_never_persisted_plaintext_salted_sha256_only
+      - personnummer_never_logged
+      - webhook_secret_constant_time_validation
+      - rls_company_scoped
+      - immutable_status_machine_trigger

@@ -43,6 +43,7 @@ import {
   firstOfMonth,
   maxIsoDate,
 } from '@/lib/bookkeeping/accruals/compute'
+import { roundOre, sumOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('bookkeeping.accruals')
@@ -190,7 +191,7 @@ export async function createAccrualSchedule(
       invoice_item_id: spec.invoiceItemId ?? null,
       balance_account: spec.balanceAccount,
       target_account: spec.targetAccount,
-      total_amount: Math.round(spec.totalAmountSek * 100) / 100,
+      total_amount: roundOre(spec.totalAmountSek),
       period_start: spec.periodStart,
       period_end: spec.periodEnd,
       months: plan.length,
@@ -488,9 +489,7 @@ export async function dissolveScheduleNow(
     throw new AccrualNothingToDissolveError()
   }
 
-  const amount =
-    Math.round(pending.reduce((sum, installment) => sum + installment.amount, 0) * 100) /
-    100
+  const amount = sumOre(pending.map((installment) => installment.amount))
 
   const lockFloor = await fetchLockDateFloor(supabase, companyId)
   const entryDate = maxIsoDate(today, schedule.posting_floor_date, lockFloor)
@@ -527,8 +526,31 @@ export async function dissolveScheduleNow(
 
   if (claimError || !claimed || claimed.length !== pendingIds.length) {
     // Concurrent posting changed the set under us — undo our combined entry
-    // and let the caller retry against the new state.
-    await reverseEntry(supabase, companyId, userId, entry.id)
+    // and let the caller retry against the new state. If the storno itself
+    // fails, the combined entry stands while some installments point at the
+    // cron's entries — the interim account would dissolve twice. Surface
+    // both failures and pin the alert on the installments so the
+    // periodiseringar UI shows the stuck state instead of nothing.
+    try {
+      await reverseEntry(supabase, companyId, userId, entry.id)
+    } catch (reversalError) {
+      const message = getErrorMessage(reversalError)
+      log.error('failed to reverse combined dissolution entry after lost claim race', reversalError, {
+        companyId,
+        scheduleId,
+        entryId: entry.id,
+      })
+      await supabase
+        .from('accrual_schedule_installments')
+        .update({
+          last_error: `Storno av samlad upplösning (verifikat ${entry.id}) misslyckades — kontrollera interimskontot: ${message}`.slice(0, 2_000),
+        })
+        .in('id', pendingIds)
+        .eq('company_id', companyId)
+      throw new Error(
+        `Periodiseringen ändrades samtidigt och vändningen av det samlade verifikatet misslyckades: ${message}`,
+      )
+    }
     throw new Error('Periodiseringen ändrades samtidigt — försök igen')
   }
 

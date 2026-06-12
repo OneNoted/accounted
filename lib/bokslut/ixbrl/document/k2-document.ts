@@ -20,7 +20,7 @@ import { getEntryPoint } from '../taxonomy/entry-points'
 import { getRegistry, getConcept } from '../taxonomy/registry'
 import type { IxbrlArsredovisningInput, ConceptAmount } from '../types'
 import { FactWriter } from './ix'
-import { el, escapeText, escapeAttr, paragraphs, formatSekAbs } from './xml'
+import { el, selfClosing, escapeText, escapeAttr, paragraphs, formatSekAbs } from './xml'
 
 const CSS = `
 body { font-family: 'Times New Roman', Times, serif; margin: 0 auto; max-width: 46em; color: #000; }
@@ -90,14 +90,18 @@ function sectionRow(label: string, cls: 'section' | 'subsection' = 'section'): s
 }
 
 function pageHeader(input: IxbrlArsredovisningInput, page: number, total: number): string {
+  // el() treats its content argument as raw markup — build it exclusively
+  // from escapeText() output joined with builder-emitted tags so no user
+  // value can ever reach the string unescaped.
+  const identity = [
+    escapeText(input.company.name),
+    selfClosing('br', {}),
+    escapeText(input.company.orgNumber),
+  ].join('')
   return el(
     'div',
     { class: 'ar-page-hdr' },
-    el(
-      'span',
-      {},
-      `${escapeText(input.company.name)}<br/>${escapeText(input.company.orgNumber)}`,
-    ) + el('span', {}, `${page} (${total})`),
+    el('span', {}, identity) + el('span', {}, `${page} (${total})`),
   )
 }
 

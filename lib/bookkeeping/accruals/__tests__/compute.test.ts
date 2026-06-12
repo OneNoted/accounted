@@ -8,6 +8,7 @@ import {
   listCalendarMonths,
   maxIsoDate,
 } from '@/lib/bookkeeping/accruals/compute'
+import { sumOre } from '@/lib/money'
 
 describe('firstOfMonth', () => {
   it('truncates to the first of the month', () => {
@@ -74,7 +75,7 @@ describe('computeInstallmentAmounts', () => {
       for (const amount of amounts) {
         expect(amount).toBeGreaterThan(0)
       }
-      const sum = Math.round(amounts.reduce((a, b) => a + b, 0) * 100) / 100
+      const sum = sumOre(amounts)
       expect(sum).toBe(total)
       // No installment differs by more than 1 öre from any other.
       const min = Math.min(...amounts)

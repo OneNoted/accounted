@@ -29,6 +29,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     try {
       const result = await dissolveScheduleNow(supabase, companyId!, user.id, id)
+      // Manual financial write — log the acting user for auditability.
+      log.info('accrual schedule dissolved', {
+        userId: user.id,
+        companyId,
+        scheduleId: id,
+        amount: result.amount,
+        journalEntryId: result.journalEntryId,
+      })
       return NextResponse.json({ data: result })
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'unknown'

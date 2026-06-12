@@ -6,7 +6,7 @@ import { seedCompany, insertDraftJournalEntry } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
 /**
- * pg-real coverage for 20260622120000_invoices_journal_entry_id_backfill.sql.
+ * pg-real coverage for 20260622121000_invoices_journal_entry_id_backfill.sql.
  *
  * invoices.journal_entry_id means "the registration verifikat that booked the
  * invoice at issuance" — payment flows route on it (set → clear 1510; NULL →
@@ -25,7 +25,7 @@ import { getPool } from '@/tests/pg/setup'
 
 // Run the real migration SQL so the test exercises exactly what ships.
 const BACKFILL_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260622120000_invoices_journal_entry_id_backfill.sql'),
+  join(process.cwd(), 'supabase/migrations/20260622121000_invoices_journal_entry_id_backfill.sql'),
   'utf8',
 )
 async function runBackfill(): Promise<void> {

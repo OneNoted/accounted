@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 import { parseInvoiceDateRange } from './date-range-parser'
 
 export type PeriodiseringSource = 'invoice' | 'supplier_invoice'
@@ -122,7 +123,7 @@ function buildSuggestion(args: {
   if (daysAfterPeriodEnd <= 0) return null
 
   const ratio = daysAfterPeriodEnd / totalDays
-  const periodisationAmount = Math.round(netAmount * ratio * 100) / 100
+  const periodisationAmount = roundOre(netAmount * ratio)
 
   if (periodisationAmount <= 0) return null
 

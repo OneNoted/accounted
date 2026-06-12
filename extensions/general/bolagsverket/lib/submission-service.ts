@@ -63,6 +63,13 @@ export function normalizeOrgnr(orgNumber: string): string {
   return digits.length === 12 ? digits.slice(2) : digits
 }
 
+/**
+ * SECURITY: `avsandarePnr` and `undertecknare.pnr` are plaintext personnummer,
+ * needed only for the Bolagsverket API calls. They must NEVER reach a log sink
+ * — log structured fields (companyId, fiscalPeriodId, submissionId) and never
+ * the params object itself. At rest only company-salted SHA-256 hashes are
+ * stored (see hashPnr).
+ */
 export interface SubmitParams {
   companyId: string
   userId: string
@@ -580,7 +587,17 @@ export async function handleWebhook(
   if (!message || typeof message !== 'object' || !message.data) {
     return { status: 400, body: { ok: false, reason: 'malformed' } }
   }
+  // `message.id` is attacker-controllable until the auth check below, so it
+  // is used ONLY to look up candidate subscriptions; a delivery is accepted
+  // exclusively when its `auth` header matches a secret WE registered with
+  // Bolagsverket for exactly this orgnr (the eq below). A valid secret for a
+  // different orgnr can never authenticate a spoofed orgnr. Status payloads
+  // are still treated as untrusted: STATUS_MAP allowlists transitions and the
+  // DB status-machine trigger rejects illegal ones in applyHandelse.
   const orgnr = String(message.id ?? '')
+  if (!/^\d{10}$/.test(orgnr)) {
+    return { status: 400, body: { ok: false, reason: 'malformed orgnr' } }
+  }
   const { data: subs } = await serviceClient
     .from('bolagsverket_subscriptions')
     .select('company_id, auth_secret')

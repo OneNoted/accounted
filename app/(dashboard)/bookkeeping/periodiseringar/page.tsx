@@ -26,6 +26,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type {
   AccrualSchedule,
@@ -257,7 +258,7 @@ export default function AccrualSchedulesPage() {
                   const remaining =
                     schedule.status === 'cancelled'
                       ? 0
-                      : Math.round((schedule.total_amount - dissolved) * 100) / 100
+                      : roundOre(schedule.total_amount - dissolved)
                   const isOpen = expanded.has(schedule.id)
                   const badge = SCHEDULE_BADGE[schedule.status]
                   const sourceHref = schedule.supplier_invoice_id

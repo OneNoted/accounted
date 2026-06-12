@@ -451,8 +451,14 @@ export default function NewSupplierInvoicePage() {
         // license term), pre-fill periodisering on every positive line — the
         // user sees the panel and can remove it before booking.
         if (extracted.lineItems && extracted.lineItems.length > 0) {
-          const sps = extracted.invoice?.servicePeriodStart ?? null
-          const spe = extracted.invoice?.servicePeriodEnd ?? null
+          // AI-extracted values are untrusted input — only accept strict
+          // ISO-8601 dates before they reach form state (and later the API).
+          const isIsoDate = (v: unknown): v is string =>
+            typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+          const spsRaw = extracted.invoice?.servicePeriodStart
+          const speRaw = extracted.invoice?.servicePeriodEnd
+          const sps = isIsoDate(spsRaw) ? spsRaw : null
+          const spe = isIsoDate(speRaw) ? speRaw : null
           let prefillAccrual = false
           if (sps && spe && spe >= sps) {
             try {

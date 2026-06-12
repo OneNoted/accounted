@@ -7,6 +7,7 @@ import {
   TOOL_SCOPE_MAP,
 } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
+import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
@@ -9011,19 +9012,16 @@ export const tools: McpTool[] = [
         const installments = ([...((schedule.installments as InstallmentRow[]) ?? [])]).sort(
           (a, b) => a.period_month.localeCompare(b.period_month),
         )
-        const dissolved =
-          Math.round(
-            installments
-              .filter((i) => i.status === 'posted')
-              .reduce((sum, i) => sum + Number(i.amount), 0) * 100,
-          ) / 100
+        const dissolved = sumOre(
+          installments.filter((i) => i.status === 'posted').map((i) => Number(i.amount)),
+        )
         const total = Number(schedule.total_amount)
         return {
           ...schedule,
           installments,
           dissolved_amount: dissolved,
           remaining_amount:
-            schedule.status === 'cancelled' ? 0 : Math.round((total - dissolved) * 100) / 100,
+            schedule.status === 'cancelled' ? 0 : roundOre(total - dissolved),
         }
       })
       return { schedules, count: schedules.length }
