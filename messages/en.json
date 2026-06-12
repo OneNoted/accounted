@@ -265,7 +265,15 @@
     "type_mark_invoice_paid": "Paid invoice",
     "type_send_invoice": "Send invoice",
     "type_mark_invoice_sent": "Mark as sent",
-    "type_match_transaction_invoice": "Invoice match"
+    "type_match_transaction_invoice": "Invoice match",
+    "origin_agent_chat": "Suggested by the AI assistant via chat",
+    "origin_mcp": "Suggested by an AI assistant via {label}",
+    "origin_api": "Suggested via API integration",
+    "origin_cron": "Created by a scheduled job",
+    "explainer": "Approve executes the bookkeeping operation. Reject just discards the proposal — nothing is booked.",
+    "auto_expiry_note": "Unhandled proposals expire automatically after 30 days — doing nothing is safe.",
+    "badge_auto_expired": "Expired automatically",
+    "auto_expired_detail": "Expired automatically after 30 days without action. Nothing was booked."
   },
   "deadlines": {
     "title": "Deadlines",
@@ -936,7 +944,9 @@
     "toast_create_failed_title": "Could not create company",
     "toast_create_failed_description": "Try again or add it manually.",
     "toast_welcome_title": "Welcome!",
-    "toast_company_ready": "Your company is ready."
+    "toast_company_ready": "Your company is ready.",
+    "error_no_access": "You don't have access to this company.",
+    "error_switch_failed": "The company switch could not be saved. Please try again."
   },
   "companies_new": {
     "step1_title": "New company",
@@ -1467,7 +1477,7 @@
     "copy_aria": "Copy",
     "connect_mcp_title": "Connect MCP client",
     "recommended_badge": "Recommended",
-    "claude_ai_instructions": "Go to <path>Settings → Integrations → Add Integration</path> and paste the MCP server URL. You sign in via your {connectorName} account — no API key needed.",
+    "claude_ai_instructions": "Go to <path>Settings → Connectors → Add custom connector</path> and paste the MCP server URL. You sign in via your {connectorName} account — no API key needed.",
     "claude_code_cursor": "Claude Code / Cursor",
     "terminal_runs_browser_login": "Run in the terminal — sign in via the browser:",
     "connect_with_api_key": "Connect with an API key instead",
@@ -1683,6 +1693,7 @@
     "match_supplier_invoice_btn": "Match supplier invoice {number}",
     "choose_template_btn": "Choose template...",
     "match_voucher_btn": "Match to existing voucher",
+    "attach_document_btn": "Match to document",
     "more_actions_aria": "More actions",
     "delete_aria": "Delete transaction",
     "edit_title_aria": "Edit title",
@@ -1739,6 +1750,26 @@
     "doc_link_failed_title": "Receipt could not be attached",
     "doc_link_failed_description": "{count} file(s) could not be linked to the journal entry. Try again from the bookkeeping page.",
     "bank_line_description": "Business account"
+  },
+  "tx_attach_dialog": {
+    "title": "Match to document",
+    "description": "Attach a receipt or invoice to the transaction — pick from the inbox or upload a new file.",
+    "pick_existing": "Choose existing document",
+    "selected_remove": "Remove selected document",
+    "already_attached_hint": "This transaction already has a document. Attaching a new one replaces it.",
+    "confirm": "Attach document",
+    "attaching": "Attaching…",
+    "success_toast": "Document attached",
+    "error_toast": "Could not attach the document",
+    "cancel": "Cancel"
+  },
+  "tx_underlag": {
+    "attached_label": "Document",
+    "attached_title": "Supporting document attached — click to open",
+    "attached_aria": "Open attached document",
+    "missing_label": "Missing document",
+    "missing_title": "The voucher has no supporting document — click to attach",
+    "open_failed": "Could not fetch the document"
   },
   "tx_batch_selector": {
     "title_processing": "Posting {done}/{total}...",
@@ -2023,6 +2054,7 @@
     "create_correction": "Create correction entry",
     "not_posted": "Not posted",
     "possible_match_invoice": "Possible match: Invoice {number}",
+    "attach_document": "Match to document",
     "book": "Post",
     "delete": "Delete",
     "delete_aria": "Delete transaction",
@@ -2701,6 +2733,8 @@
     "supplier_missing_description": "Select or create a supplier.",
     "invoice_number_missing_title": "Invoice number missing",
     "invoice_number_missing_description": "Enter the supplier's invoice number.",
+    "account_missing_title": "Account missing",
+    "account_missing_description": "Select an expense account for line {row}.",
     "expense_registered_title": "Expense registered",
     "invoice_registered_title": "Invoice registered",
     "arrival_number_label": "Arrival number: {number}",
@@ -3450,7 +3484,9 @@
   "company_switcher": {
     "company_label": "Company",
     "default_company_name": "My business",
-    "add_company": "Add company"
+    "add_company": "Add company",
+    "error_no_access": "You don't have access to this company.",
+    "error_switch_failed": "The company switch could not be saved. Please try again."
   },
   "transactions": {
     "page_title": "Transactions",

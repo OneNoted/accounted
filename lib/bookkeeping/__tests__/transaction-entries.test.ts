@@ -250,6 +250,37 @@ describe('createTransactionJournalEntry', () => {
     assertBalanced(input)
   })
 
+  it('nets the expense line against an underlag VAT override below the rate amount', async () => {
+    // Restaurant receipt 415.80 kr incl. dricks: the document's 12% VAT is
+    // 42.43 kr (not rate-extraction 44.55) because dricks carries no moms.
+    // The expense line must absorb the difference so the entry balances.
+    const tx = makeTransaction({ amount: -415.80, description: 'LEONH Repr' })
+    const vatLines: VatJournalLine[] = [
+      { account_number: '2641', debit_amount: 42.43, credit_amount: 0, description: 'Ingående moms (enligt underlag)' },
+    ]
+    const mapping = makeMappingResult({
+      debit_account: '6071',
+      credit_account: '1930',
+      vat_lines: vatLines,
+    })
+
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines).toHaveLength(3)
+
+    const debit2641 = input.lines.find(l => l.account_number === '2641')
+    expect(debit2641?.debit_amount).toBe(42.43)
+
+    const debit6071 = input.lines.find(l => l.account_number === '6071')
+    expect(debit6071?.debit_amount).toBe(373.37) // 415.80 - 42.43
+
+    const credit1930 = input.lines.find(l => l.account_number === '1930')
+    expect(credit1930?.credit_amount).toBe(415.80)
+
+    assertBalanced(input)
+  })
+
   it('handles VAT rounding precision on expense', async () => {
     const tx = makeTransaction({ amount: -997.50, description: 'Expense with rounding' })
     const vatLines: VatJournalLine[] = [

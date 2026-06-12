@@ -55,7 +55,13 @@ const mockPayment = mockedPayment as ReturnType<typeof vi.fn>
 const mockCash = mockedCash as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
+type RecordedCall = { table: string; method: string; args: unknown[] }
+function makeFlexibleSupabase(
+  byTable: Record<string, MockResult | MockResult[]>,
+  // Optional recorder: collects every (table, method, args) so tests can
+  // assert on select projections and update payloads, not just results.
+  calls?: RecordedCall[],
+) {
   const queues = new Map<string, MockResult[]>()
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
@@ -70,7 +76,10 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          calls?.push({ table, method: String(prop), args })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -190,6 +199,107 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(res.status).toBe(200)
     expect(mockCash).toHaveBeenCalled()
     expect(mockPayment).not.toHaveBeenCalled()
+  })
+
+  it('fetches journal_entry_id in the pre-flight select but keeps it out of the response select', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: SENT_INVOICE, error: null },
+            { data: PAID_INVOICE, error: null },
+          ],
+          company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        },
+        calls,
+      ),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+    expect(res.status).toBe(200)
+
+    const invoiceSelects = calls.filter((c) => c.table === 'invoices' && c.method === 'select')
+    // Pre-flight select must fetch journal_entry_id — invoiceAlreadyBooked
+    // routing reads it; omitting it silently forces the cash path.
+    expect(invoiceSelects.length).toBeGreaterThanOrEqual(2)
+    expect(String(invoiceSelects[0].args[0])).toContain('journal_entry_id')
+    // Response select (the update's .select) keeps the public contract unchanged.
+    expect(String(invoiceSelects[1].args[0])).not.toContain('journal_entry_id')
+  })
+
+  it('clears AR (payment entry) when a cash-method company pays an invoice booked at send', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          {
+            // Booked at send under accrual: registration entry linked.
+            data: { ...SENT_INVOICE, journal_entry_id: 'rrrrrrrr-rrrr-4rrr-8rrr-rrrrrrrrrrrr' },
+            error: null,
+          },
+          { data: PAID_INVOICE, error: null },
+        ],
+        company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+      }),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    // Already-booked → clearing entry (Dr 1930 / Cr 1510), NOT a cash entry —
+    // a cash entry here would re-recognise revenue + VAT (double-booking).
+    expect(mockPayment).toHaveBeenCalled()
+    expect(mockCash).not.toHaveBeenCalled()
+  })
+
+  it('does not write journal_entry_id back to the invoice row (registration semantics)', async () => {
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: SENT_INVOICE, error: null },
+            { data: PAID_INVOICE, error: null },
+          ],
+          company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        },
+        calls,
+      ),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+    expect(res.status).toBe(200)
+
+    // The column means "registration entry at issuance"; writing the payment
+    // entry id would make a kontantmetoden invoice look registered.
+    const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')
+    expect(update).toBeDefined()
+    expect(Object.keys(update!.args[0] as Record<string, unknown>)).not.toContain('journal_entry_id')
+
+    // The payment entry id still reaches the caller via the response body.
+    const body = await res.json()
+    expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
   })
 
   it('returns 400 INVOICE_PAID_LINES_UNBALANCED when custom lines do not balance', async () => {

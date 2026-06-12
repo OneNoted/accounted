@@ -66,7 +66,7 @@ export async function createSupplierInvoiceRegistrationEntry(
   }
 
   const lines: CreateJournalEntryLineInput[] = []
-  const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomst ${invoice.arrival_number})`)
+  const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const isForeign = invoice.currency !== 'SEK'
 
   // Aggregate expense amounts by account number and convert to SEK.
@@ -200,7 +200,7 @@ export async function createSupplierInvoicePaymentEntry(
     return null
   }
 
-  const desc = buildSupplierDescription('Utbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomst ${invoice.arrival_number})`)
+  const desc = buildSupplierDescription('Utbetalning leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
 
   if (exchangeRateDifference && exchangeRateDifference !== 0) {
@@ -463,7 +463,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
   }
 
   const ownerAccount = entityType === 'aktiebolag' ? '2893' : '2018'
-  const desc = buildSupplierDescription('Eget utlägg', invoice.supplier_invoice_number, supplierName, `(ankomst ${invoice.arrival_number})`)
+  const desc = buildSupplierDescription('Eget utlägg', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
 
   // Debit: Expense accounts (in SEK), aggregated per account
@@ -540,7 +540,7 @@ export async function createSupplierCreditNoteEntry(
     return null
   }
 
-  const desc = buildSupplierDescription('Kreditfaktura leverantör', creditNote.supplier_invoice_number, supplierName, `(ankomst ${creditNote.arrival_number})`)
+  const desc = buildSupplierDescription('Kreditfaktura leverantör', creditNote.supplier_invoice_number, supplierName, `(ankomstnr ${creditNote.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
 
   // Credit: Expense accounts (reverse, in SEK). The caller passes the

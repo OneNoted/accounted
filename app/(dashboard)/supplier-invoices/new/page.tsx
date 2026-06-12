@@ -322,7 +322,11 @@ export default function NewSupplierInvoicePage() {
       payment_reference: '',
       notes: '',
       paid_with_private_funds: false,
-      items: [{ description: '', amount: 0, account_number: '5010', vat_rate: 0.25, reverse_charge_rate: 0.25 }],
+      // account_number is deliberately empty — a silent prefilled expense
+      // account (the old '5010' Lokalhyra seed) produced legally wrong
+      // verifikat whenever the user didn't notice it. An explicit choice is
+      // required; the supplier's default_expense_account fills it when set.
+      items: [{ description: '', amount: 0, account_number: '', vat_rate: 0.25, reverse_charge_rate: 0.25 }],
     },
   })
 
@@ -464,12 +468,17 @@ export default function NewSupplierInvoicePage() {
               return {
                 description: li.description || '',
                 amount,
-                account_number: '5010',
+                // Extraction never suggests accounts (forcibly nulled at parse
+                // time) and a silent default misbooks — leave empty so the user
+                // (or the supplier default) makes the call.
+                account_number: '',
                 vat_rate: vatRateFromAi(li.vatRate),
                 accrual_period_start: withAccrual ? (sps as string) : undefined,
                 accrual_period_end: withAccrual ? (spe as string) : undefined,
+                // No account yet → generic 1790; toggleAccrual re-suggests the
+                // same way once the user picks one.
                 accrual_balance_account: withAccrual
-                  ? suggestBalanceAccount('expense', '5010')
+                  ? suggestBalanceAccount('expense', '')
                   : undefined,
               }
             }),
@@ -514,11 +523,14 @@ export default function NewSupplierInvoicePage() {
       setValue('due_date', due.toISOString().split('T')[0])
     }
     if (supplier.default_expense_account && fields.length > 0) {
-      // Only override the first row if it's still the seeded default (5010 with empty desc)
-      const firstRow = watch('items.0')
-      if (firstRow && (firstRow.account_number === '5010' || !firstRow.account_number) && !firstRow.description) {
-        setValue('items.0.account_number', supplier.default_expense_account)
-      }
+      // Fill every row the user hasn't assigned yet — an empty account is the
+      // only signal needed (rows start empty by design, no seeded default).
+      const items = getValues('items')
+      items.forEach((row, i) => {
+        if (!row.account_number) {
+          setValue(`items.${i}.account_number`, supplier.default_expense_account!)
+        }
+      })
     }
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
@@ -911,6 +923,15 @@ export default function NewSupplierInvoicePage() {
     }
     if (!data.supplier_invoice_number) {
       toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
+      return
+    }
+    const rowWithoutAccount = data.items.findIndex((item) => !item.account_number)
+    if (rowWithoutAccount !== -1) {
+      toast({
+        title: t('account_missing_title'),
+        description: t('account_missing_description', { row: rowWithoutAccount + 1 }),
+        variant: 'destructive',
+      })
       return
     }
     // A row with an open periodisering panel must carry a complete period of

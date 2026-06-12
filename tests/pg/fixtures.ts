@@ -170,15 +170,18 @@ export async function insertDraftJournalEntry(params: {
   entryDate?: string
   description?: string
   voucherSeries?: string
-  status?: 'draft' | 'posted'
+  status?: 'draft' | 'posted' | 'reversed' | 'cancelled'
   voucherNumber?: number
+  sourceType?: string
+  sourceId?: string | null
+  createdAt?: string
 }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.journal_entries
        (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual', $9)`,
+        entry_date, description, source_type, source_id, status, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, now()))`,
     [
       id,
       params.userId,
@@ -188,7 +191,10 @@ export async function insertDraftJournalEntry(params: {
       params.voucherSeries ?? 'A',
       params.entryDate ?? '2026-06-01',
       params.description ?? 'Test entry',
+      params.sourceType ?? 'manual',
+      params.sourceId ?? null,
       params.status ?? 'draft',
+      params.createdAt ?? null,
     ],
   )
   return id

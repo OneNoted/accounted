@@ -137,6 +137,115 @@ describe('buildMappingResultFromCategory', () => {
   })
 })
 
+describe('buildMappingResultFromCategory vat_amount override (underlagets faktiska moms)', () => {
+  // Real-world case: restaurant receipt 415.80 kr incl. dricks. The receipt's
+  // actual 12% VAT is 42.43 kr — lower than rate-extraction 44.55 kr, because
+  // dricks carries no moms. The override must win over the computed amount.
+  it('uses the underlag VAT instead of rate-extraction for an expense', () => {
+    const tx = makeTransaction({ amount: -415.8 })
+    const result = buildMappingResultFromCategory(
+      'expense_representation', tx, true, 'enskild_firma', 'reduced_12', 42.43,
+    )
+
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].account_number).toBe('2641')
+    expect(result.vat_lines[0].debit_amount).toBe(42.43)
+    expect(result.vat_lines[0].description).toBe('Ingående moms (enligt underlag)')
+  })
+
+  it('without override the computed amount is unchanged (regression)', () => {
+    const tx = makeTransaction({ amount: -415.8 })
+    const result = buildMappingResultFromCategory(
+      'expense_representation', tx, true, 'enskild_firma', 'reduced_12',
+    )
+
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].debit_amount).toBe(44.55)
+    expect(result.vat_lines[0].description).toBe('Ingående moms 12%')
+  })
+
+  it('null override behaves like no override', () => {
+    const tx = makeTransaction({ amount: -415.8 })
+    const result = buildMappingResultFromCategory(
+      'expense_representation', tx, true, 'enskild_firma', 'reduced_12', null,
+    )
+    expect(result.vat_lines[0].debit_amount).toBe(44.55)
+  })
+
+  it('rejects override 0, pointing to vat_treatment exempt', () => {
+    // A 0-moms document is an exempt supply — booking it as a rate-bearing
+    // treatment minus its VAT line would misclassify it in the momsdeklaration.
+    const tx = makeTransaction({ amount: -500 })
+    expect(() =>
+      buildMappingResultFromCategory('expense_office', tx, true, 'enskild_firma', 'standard_25', 0),
+    ).toThrow(/exempt/)
+  })
+
+  it('overrides output VAT on income', () => {
+    const tx = makeTransaction({ amount: 1000 })
+    const result = buildMappingResultFromCategory(
+      'income_services', tx, true, 'enskild_firma', 'standard_25', 180,
+    )
+
+    expect(result.vat_lines).toHaveLength(1)
+    expect(result.vat_lines[0].account_number).toBe('2611')
+    expect(result.vat_lines[0].credit_amount).toBe(180)
+    expect(result.vat_lines[0].description).toBe('Utgående moms (enligt underlag)')
+  })
+
+  it('rejects an override above the 25% extraction bound', () => {
+    const tx = makeTransaction({ amount: -415.8 })
+    // max possible Swedish VAT on 415.80 gross is 83.16 (25% extraction)
+    expect(() =>
+      buildMappingResultFromCategory('expense_representation', tx, true, 'enskild_firma', 'reduced_12', 100),
+    ).toThrow(/exceeds the maximum possible Swedish VAT/)
+  })
+
+  it('rejects a negative override', () => {
+    const tx = makeTransaction({ amount: -500 })
+    expect(() =>
+      buildMappingResultFromCategory('expense_office', tx, true, 'enskild_firma', 'standard_25', -1),
+    ).toThrow(/positive/)
+  })
+
+  it('rejects an override combined with reverse_charge', () => {
+    const tx = makeTransaction({ amount: -1000 })
+    expect(() =>
+      buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge', 50),
+    ).toThrow(/cannot be combined/)
+  })
+
+  it('treatment incompatibility wins over the bound check (oversized + reverse_charge)', () => {
+    const tx = makeTransaction({ amount: -1000 })
+    // 500 also exceeds maxVat (200), but the agent's actual mistake is the
+    // treatment — the error must say so, not complain about the amount.
+    expect(() =>
+      buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge', 500),
+    ).toThrow(/cannot be combined/)
+  })
+
+  it('rejects an override on a VAT-less treatment', () => {
+    const tx = makeTransaction({ amount: -1000 })
+    expect(() =>
+      buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'exempt', 50),
+    ).toThrow(/cannot be combined/)
+  })
+
+  it('rejects an override on a VAT-exempt default category (bank fees)', () => {
+    const tx = makeTransaction({ amount: -100 })
+    expect(() =>
+      buildMappingResultFromCategory('expense_bank_fees', tx, true, 'enskild_firma', undefined, 10),
+    ).toThrow(/cannot be combined/)
+  })
+
+  it('rejects an override on private transactions', () => {
+    const tx = makeTransaction({ amount: -500 })
+    expect(() =>
+      buildMappingResultFromCategory('private', tx, false, 'enskild_firma', undefined, 50),
+    ).toThrow(/cannot be combined/)
+  })
+})
+
 describe('buildMappingResultFromCategory returns non-empty accounts', () => {
   const allCategories: TransactionCategory[] = [
     'income_services',

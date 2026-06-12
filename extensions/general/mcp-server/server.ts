@@ -497,6 +497,9 @@ async function categorizeTransactionCore(
   txId: string,
   category: TransactionCategory,
   vatTreatment: VatTreatment | undefined,
+  // Underlag's actual VAT when it differs from rate × belopp (e.g. dricks on
+  // a restaurant receipt carries no moms). Replaces the computed VAT line.
+  vatAmount: number | undefined,
   userId: string,
   companyId: string,
   supabase: SupabaseClient,
@@ -619,7 +622,8 @@ async function categorizeTransactionCore(
     transaction as Transaction,
     isBusiness,
     entityType,
-    vatTreatment
+    vatTreatment,
+    vatAmount
   )
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
@@ -2549,7 +2553,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. If an underlag is attached it rejects vat_treatment="reverse_charge" when the seller already charged VAT.',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. vat_amount overrides the computed moms; reverse_charge is rejected when the underlag shows the seller already charged VAT.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2557,6 +2561,7 @@ export const tools: McpTool[] = [
         transaction_id: { type: 'string', description: 'UUID of the transaction to categorize' },
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
+        vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp — e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only — foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
       },
       required: ['transaction_id', 'category'],
@@ -2569,11 +2574,16 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase, actor) {
+      const vatAmount = typeof args.vat_amount === 'number' && Number.isFinite(args.vat_amount)
+        ? args.vat_amount
+        : undefined
+
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
         args.transaction_id as string,
         args.category as TransactionCategory,
         args.vat_treatment as VatTreatment | undefined,
+        vatAmount,
         userId,
         companyId,
         supabase,
@@ -2605,6 +2615,7 @@ export const tools: McpTool[] = [
           transaction_id: args.transaction_id,
           category: args.category,
           vat_treatment: args.vat_treatment || null,
+          vat_amount: vatAmount ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
             ? (args.notes as string).trim()
             : null,
