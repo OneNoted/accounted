@@ -10,4 +10,4 @@ docker/crontab.* text eol=lf
 # Generated taxonomy registry is compared byte-for-byte by `npm run
 # taxonomy:check` (CI); keep LF on Windows checkouts so the local check
 # matches what the generator writes.
-lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf
+lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=true
