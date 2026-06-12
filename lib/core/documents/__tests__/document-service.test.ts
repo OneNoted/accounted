@@ -47,7 +47,13 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => makeClient()),
 }))
 
-import { uploadDocument, createNewVersion, verifyIntegrity, _resetBucketVerified } from '../document-service'
+import {
+  uploadDocument,
+  createNewVersion,
+  verifyIntegrity,
+  validateDocumentMagicBytes,
+  _resetBucketVerified,
+} from '../document-service'
 
 // A minimal valid PDF byte sequence (header + EOF) — passes magic-byte check.
 function pdfBuffer(payload = 'test'): ArrayBuffer {
@@ -60,6 +66,54 @@ beforeEach(() => {
   _resetBucketVerified()
   resultIdx = 0
   results = []
+})
+
+describe('validateDocumentMagicBytes — application/xhtml+xml', () => {
+  const toBuffer = (text: string, bom = false): ArrayBuffer => {
+    const bytes = new TextEncoder().encode(bom ? `﻿${text}` : text)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  it('accepts content starting with an XML declaration', () => {
+    const xhtml = '<?xml version="1.0" encoding="UTF-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml"></html>'
+    expect(validateDocumentMagicBytes(toBuffer(xhtml), 'application/xhtml+xml')).toBeNull()
+  })
+
+  it('accepts content starting with an HTML doctype or <html>, case-insensitively', () => {
+    expect(
+      validateDocumentMagicBytes(toBuffer('<!DOCTYPE html>\n<html></html>'), 'application/xhtml+xml'),
+    ).toBeNull()
+    expect(
+      validateDocumentMagicBytes(toBuffer('<!doctype HTML><html></html>'), 'application/xhtml+xml'),
+    ).toBeNull()
+    expect(
+      validateDocumentMagicBytes(toBuffer('<HTML xmlns="http://www.w3.org/1999/xhtml"></HTML>'), 'application/xhtml+xml'),
+    ).toBeNull()
+  })
+
+  it('accepts a UTF-8 BOM and leading whitespace before the marker', () => {
+    expect(
+      validateDocumentMagicBytes(toBuffer('\n  <?xml version="1.0"?><html></html>', true), 'application/xhtml+xml'),
+    ).toBeNull()
+  })
+
+  it('rejects content that is not XHTML/XML', () => {
+    expect(validateDocumentMagicBytes(toBuffer('just some text'), 'application/xhtml+xml')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(pdfBuffer(), 'application/xhtml+xml')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+
+  it('does not loosen validation for other declared types', () => {
+    // XHTML bytes declared as PDF must still be rejected.
+    expect(validateDocumentMagicBytes(toBuffer('<?xml version="1.0"?>'), 'application/pdf')).toMatch(
+      /kunde inte verifieras/,
+    )
+    // And a real PDF still passes as PDF.
+    expect(validateDocumentMagicBytes(pdfBuffer(), 'application/pdf')).toBeNull()
+  })
 })
 
 describe('uploadDocument', () => {

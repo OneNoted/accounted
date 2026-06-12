@@ -44,13 +44,37 @@ describe('runPreflightChecks', () => {
     expect(codes(dateless)).toContain('1214')
   })
 
+  it('1214 — an unsigned signature request (signedDate null) BLOCKS filing', () => {
+    // build-input never fabricates a signing date: an unsigned request keeps
+    // signedDate null, and that must surface as a blocking error, not a warn.
+    const input = makeInput()
+    input.underskrifter.signers[1].signedDate = null
+    const result = runPreflightChecks(input, TODAY)
+    const hit = result.issues.find((issue) => issue.code === '1214')
+    expect(hit?.severity).toBe('error')
+    expect(result.ok).toBe(false)
+  })
+
   it('1103/1169 — fastställelseintyg completeness', () => {
     const input = makeInput()
-    input.faststallelseintyg.arsstammaDatum = ''
+    input.faststallelseintyg.arsstammaDatum = null
     input.faststallelseintyg.signerLastName = ''
     const found = codes(input)
     expect(found).toContain('1103')
     expect(found).toContain('1169')
+  })
+
+  it('1103 — missing AGM date is a blocking error (no today-fallback)', () => {
+    const input = makeInput()
+    input.faststallelseintyg.arsstammaDatum = null
+    const result = runPreflightChecks(input, TODAY)
+    const hit = result.issues.find((issue) => issue.code === '1103')
+    expect(hit?.severity).toBe('error')
+    expect(result.ok).toBe(false)
+    // The date-ordering rules must not crash or misfire on the null date.
+    const found = result.issues.map((issue) => issue.code)
+    expect(found).not.toContain('1101')
+    expect(found).not.toContain('1178')
   })
 
   it('1015 — fiscal year not yet ended', () => {

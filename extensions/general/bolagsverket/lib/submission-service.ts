@@ -12,20 +12,46 @@
  * company-salted SHA-256 hashes.
  */
 
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { buildIxbrlInput } from '@/lib/bokslut/ixbrl/build-input'
 import { generateK2IxbrlDocument, embedKontrollsumma } from '@/lib/bokslut/ixbrl/document/k2-document'
 import { runPreflightChecks } from '@/lib/bokslut/ixbrl/validate/rules'
 import { BolagsverketClient } from './client'
+import type { ExtensionLogger } from '@/lib/extensions/types'
 import type {
   ArsredovisningSubmission,
   HandelseMeddelande,
   KontrolleraUtfall,
   SubmissionStatus,
 } from '../types'
+
+/**
+ * Domain error carrying a structured-error registry code
+ * (lib/errors/structured-errors.ts). index.ts maps it through
+ * errorResponseFromCode for the canonical envelope.
+ */
+export class BolagsverketSubmissionError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+    this.name = 'BolagsverketSubmissionError'
+  }
+}
+
+/** Statuses that mean "Bolagsverket currently holds an open filing for this period". */
+export const ACTIVE_SUBMISSION_STATUSES = [
+  'uploaded',
+  'inkommen',
+  'forelagd',
+  'komplettering',
+] as const
 
 export function hashPnr(companyId: string, pnr: string): string {
   return createHash('sha256').update(`${companyId}:${pnr.replace(/\D/g, '')}`).digest('hex')
@@ -81,6 +107,25 @@ interface ServiceDeps {
   client: BolagsverketClient
   /** Absolute base URL of this install, for the webhook subscription. */
   appUrl: string
+  /** Extension logger — non-fatal failures must be visible, never swallowed. */
+  log: ExtensionLogger
+}
+
+/** Best-effort: persist a failure on the submission row so it is visible. */
+async function markSubmissionError(
+  supabase: SupabaseClient,
+  log: ExtensionLogger,
+  submissionId: string,
+  err: unknown,
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err)
+  const { error } = await supabase
+    .from('arsredovisning_submissions')
+    .update({ status: 'error', error_message: message.slice(0, 2_000) })
+    .eq('id', submissionId)
+  if (error) {
+    log.error('could not mark submission as error', { submissionId, dbError: error.message })
+  }
 }
 
 async function getOrgnr(supabase: SupabaseClient, companyId: string): Promise<string> {
@@ -98,8 +143,29 @@ export async function submitArsredovisning(
   deps: ServiceDeps,
   params: SubmitParams,
 ): Promise<SubmitResult> {
-  const { supabase, client } = deps
+  const { supabase, client, log } = deps
   const orgnr = await getOrgnr(supabase, params.companyId)
+
+  // 0. Double-submission guard: once an upload reached Bolagsverket, a retry
+  //    would file a second handling (and store a second audit document).
+  //    Refuse while a submission for this period is still open with the
+  //    authority. Rows in draft/kontrollerad/error/registrerad/avslutad do
+  //    not block — retries after failure create a fresh row.
+  const { data: activeRows } = await supabase
+    .from('arsredovisning_submissions')
+    .select('id, status')
+    .eq('company_id', params.companyId)
+    .eq('fiscal_period_id', params.fiscalPeriodId)
+    .in('status', [...ACTIVE_SUBMISSION_STATUSES])
+    .limit(1)
+  const active = (activeRows as Array<{ id: string; status: string }> | null)?.[0]
+  if (active) {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_SUBMISSION_EXISTS',
+      `An active submission (${active.status}) already exists for this fiscal period.`,
+      { submission_id: active.id, status: active.status },
+    )
+  }
 
   // 1. Token (also carries the avtalstext we must gate on).
   const token = await client.createInlamningToken(params.avsandarePnr, orgnr)
@@ -156,8 +222,13 @@ export async function submitArsredovisning(
     )
     kontrollsumma = checksum.kontrollsumma
     xhtml = embedKontrollsumma(xhtml, checksum.kontrollsumma, checksum.algoritm)
-  } catch {
+  } catch (err) {
     kontrollsumma = null
+    log.warn('kontrollsumma generation failed — continuing without embedded checksum', {
+      companyId: params.companyId,
+      fiscalPeriodId: params.fiscalPeriodId,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 
   const fileBase64 = Buffer.from(xhtml, 'utf8').toString('base64')
@@ -188,59 +259,89 @@ export async function submitArsredovisning(
   }
   const submissionId = (submissionRow as { id: string }).id
 
-  // 6. Kontrollera (layer 3) — always run; surface utfall to the user.
-  const kontrollSvar = await client.kontrollera(token.token, fileBase64, 'arsredovisning_komplett')
-  const utfall = kontrollSvar.utfall ?? []
-  await supabase
-    .from('arsredovisning_submissions')
-    .update({ status: 'kontrollerad', kontrollera_utfall: utfall })
-    .eq('id', submissionId)
-  const hasBlocking = utfall.some((item) => item.typ?.toLowerCase() === 'error')
-  if (utfall.length > 0 && (hasBlocking || !params.ignoreWarnings)) {
-    return { outcome: 'kontrollera_stopped', submissionId, utfall }
-  }
-
-  // 7. Store the exact uploaded bytes as räkenskapsinformation (7-year
-  //    retention, Accounting Guard Rail #7) BEFORE upload.
-  let dokumentId: string | null = null
+  // Steps 6–8 talk to Bolagsverket with a persisted row in play. Any failure
+  // here must flip the row to status='error' with the message — otherwise it
+  // sits in draft/kontrollerad forever and the failed attempt is invisible.
+  let svar: Awaited<ReturnType<BolagsverketClient['lamnaIn']>>
+  let utfall: KontrolleraUtfall[]
   try {
-    const buffer = Buffer.from(xhtml, 'utf8')
-    const doc = await uploadDocument(
-      supabase,
-      params.userId,
-      params.companyId,
-      {
-        name: `arsredovisning-${input.period.end}-inlamnad.xhtml`,
-        buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
-        type: 'application/xhtml+xml',
-      },
-      { upload_source: 'system' },
-    )
-    dokumentId = doc.id
-  } catch {
-    dokumentId = null // storage failure must not block the filing
-  }
+    // 6. Kontrollera (layer 3) — always run; surface utfall to the user.
+    const kontrollSvar = await client.kontrollera(token.token, fileBase64, 'arsredovisning_komplett')
+    utfall = kontrollSvar.utfall ?? []
+    await supabase
+      .from('arsredovisning_submissions')
+      .update({ status: 'kontrollerad', kontrollera_utfall: utfall })
+      .eq('id', submissionId)
+    const hasBlocking = utfall.some((item) => item.typ?.toLowerCase() === 'error')
+    if (utfall.length > 0 && (hasBlocking || !params.ignoreWarnings)) {
+      return { outcome: 'kontrollera_stopped', submissionId, utfall }
+    }
 
-  // 8. Lämna in till eget utrymme.
-  const svar = await client.lamnaIn(token.token, {
-    undertecknare: params.undertecknare.pnr,
-    epostadresser: [params.undertecknare.epost],
-    kvittensepostadresser: params.kvittensEpost,
-    fileBase64,
-    typ: 'arsredovisning_komplett',
-  })
+    // 7. Store the exact uploaded bytes as räkenskapsinformation (7-year
+    //    retention, Accounting Guard Rail #7) BEFORE upload.
+    let dokumentId: string | null = null
+    try {
+      const buffer = Buffer.from(xhtml, 'utf8')
+      const doc = await uploadDocument(
+        supabase,
+        params.userId,
+        params.companyId,
+        {
+          name: `arsredovisning-${input.period.end}-inlamnad.xhtml`,
+          buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
+          type: 'application/xhtml+xml',
+        },
+        { upload_source: 'system' },
+      )
+      dokumentId = doc.id
+    } catch (err) {
+      // Storage failure must not block the filing, but it MUST be visible:
+      // without the stored bytes the legally-filed document is not
+      // reproducible from our archive (Guard Rail #7).
+      dokumentId = null
+      const message = err instanceof Error ? err.message : String(err)
+      log.error('failed to archive the filed .xhtml as räkenskapsinformation', {
+        submissionId,
+        companyId: params.companyId,
+        error: message,
+      })
+      await supabase
+        .from('arsredovisning_submissions')
+        .update({ error_message: `Dokumentarkivering misslyckades: ${message}`.slice(0, 2_000) })
+        .eq('id', submissionId)
+    }
 
-  await supabase
-    .from('arsredovisning_submissions')
-    .update({
-      status: 'uploaded',
-      idnummer: svar.handlingsinfo.idnummer,
-      sha256_checksumma: svar.handlingsinfo.sha256checksumma,
-      bolagsverket_url: svar.url,
-      dokument_id: dokumentId,
-      uploaded_at: new Date().toISOString(),
+    // 8. Lämna in till eget utrymme.
+    svar = await client.lamnaIn(token.token, {
+      undertecknare: params.undertecknare.pnr,
+      epostadresser: [params.undertecknare.epost],
+      kvittensepostadresser: params.kvittensEpost,
+      fileBase64,
+      typ: 'arsredovisning_komplett',
     })
-    .eq('id', submissionId)
+
+    const { error: uploadUpdateError } = await supabase
+      .from('arsredovisning_submissions')
+      .update({
+        status: 'uploaded',
+        idnummer: svar.handlingsinfo.idnummer,
+        sha256_checksumma: svar.handlingsinfo.sha256checksumma,
+        bolagsverket_url: svar.url,
+        dokument_id: dokumentId,
+        uploaded_at: new Date().toISOString(),
+      })
+      .eq('id', submissionId)
+    if (uploadUpdateError) {
+      log.error('failed to persist uploaded state after successful inlämning', {
+        submissionId,
+        idnummer: svar.handlingsinfo.idnummer,
+        dbError: uploadUpdateError.message,
+      })
+    }
+  } catch (err) {
+    await markSubmissionError(supabase, log, submissionId, err)
+    throw err // preserved for the route's error mapping (5xx / upstream status)
+  }
 
   await eventBus.emit({
     type: 'arsredovisning.uploaded',
@@ -257,8 +358,13 @@ export async function submitArsredovisning(
   // 9. Subscribe to händelser (idempotent; extends TTL 6 months — GUIDE §4.3).
   try {
     await ensureSubscription(deps, params.companyId, params.userId, orgnr)
-  } catch {
+  } catch (err) {
     // Non-fatal: polling fallback (hamta-handelser) covers missed webhooks.
+    log.warn('handelseprenumeration could not be created/renewed — relying on polling fallback', {
+      submissionId,
+      companyId: params.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 
   return {
@@ -278,6 +384,13 @@ export async function ensureSubscription(
   orgnr: string,
 ): Promise<void> {
   const { supabase, client, appUrl } = deps
+  if (!/^https?:\/\//.test(appUrl)) {
+    // A relative/empty base URL would register a broken webhook endpoint at
+    // Bolagsverket. Fail fast — the caller logs this as a subscription failure.
+    throw new Error(
+      'NEXT_PUBLIC_APP_URL saknas eller är inte en absolut URL — kan inte registrera webhook hos Bolagsverket.',
+    )
+  }
   const url = `${appUrl.replace(/\/$/, '')}/api/extensions/ext/bolagsverket/webhook`
   const { data: existing } = await supabase
     .from('bolagsverket_subscriptions')
@@ -287,8 +400,29 @@ export async function ensureSubscription(
     .eq('url', url)
     .eq('environment', client.environment)
     .maybeSingle()
+  // Org-number reuse is allowed in this product, and Bolagsverket dedupes
+  // subscriptions per (url, orgnr): registering a NEW secret here would
+  // overwrite the delivery auth another company sharing this orgnr already
+  // depends on, 401-ing their webhooks. Reuse any existing secret for the
+  // same (orgnr, url, environment) across ALL companies (service client —
+  // RLS would hide other tenants' rows) so everyone sharing the orgnr
+  // authenticates the same deliveries.
+  let sharedSecret: string | null = null
+  if (!existing) {
+    const serviceClient = createServiceClientNoCookies()
+    const { data: shared } = await serviceClient
+      .from('bolagsverket_subscriptions')
+      .select('auth_secret')
+      .eq('orgnr', orgnr)
+      .eq('url', url)
+      .eq('environment', client.environment)
+      .limit(1)
+      .maybeSingle()
+    sharedSecret = (shared as { auth_secret?: string } | null)?.auth_secret ?? null
+  }
   const secret =
     (existing as { auth_secret?: string } | null)?.auth_secret ??
+    sharedSecret ??
     randomBytes(24).toString('base64url')
   await client.createSubscription(url, orgnr, secret)
   const expires = new Date()
@@ -334,6 +468,7 @@ export async function applyHandelse(
   serviceClient: SupabaseClient,
   message: HandelseMeddelande,
   matchedCompanyIds: string[],
+  log?: Pick<ExtensionLogger, 'warn' | 'error'>,
 ): Promise<void> {
   const mapped = STATUS_MAP[message.data.status]
   if (!mapped) return // 'test' or future statuses — nothing to apply
@@ -368,7 +503,20 @@ export async function applyHandelse(
       .from('arsredovisning_submissions')
       .update(update)
       .eq('id', submission.id)
-    if (error) continue // invalid transition per trigger — leave as-is
+    if (error) {
+      // Transition rejected by the DB state machine (or other write failure).
+      // Don't apply, but never silently — a divergence between our status and
+      // Bolagsverket's must be investigable.
+      log?.warn('handelse rejected — submission status not updated', {
+        submissionId: submission.id,
+        companyId,
+        fromStatus: submission.status,
+        toStatus: mapped,
+        bolagsverketStatus: message.data.status,
+        dbError: error.message,
+      })
+      continue
+    }
 
     await eventBus.emit({
       type: 'arsredovisning.status_changed',
@@ -412,10 +560,22 @@ export async function applyHandelse(
  * the orgnr (GUIDE §5.4.5.2), ack test messages (status "test", nr -1), and
  * apply real events.
  */
+/**
+ * Constant-time secret comparison: hash both sides to equal-length digests
+ * first (timingSafeEqual requires equal lengths and a plain === leaks
+ * prefix-match timing).
+ */
+function secretMatches(expected: string, provided: string): boolean {
+  const a = createHash('sha256').update(expected).digest()
+  const b = createHash('sha256').update(provided).digest()
+  return timingSafeEqual(a, b)
+}
+
 export async function handleWebhook(
   serviceClient: SupabaseClient,
   message: HandelseMeddelande,
   authHeader: string | null,
+  log?: Pick<ExtensionLogger, 'warn' | 'error'>,
 ): Promise<WebhookHandlingResult> {
   if (!message || typeof message !== 'object' || !message.data) {
     return { status: 400, body: { ok: false, reason: 'malformed' } }
@@ -426,7 +586,7 @@ export async function handleWebhook(
     .select('company_id, auth_secret')
     .eq('orgnr', orgnr)
   const matching = ((subs as Array<{ company_id: string; auth_secret: string }> | null) ?? []).filter(
-    (sub) => authHeader !== null && sub.auth_secret === authHeader,
+    (sub) => authHeader !== null && secretMatches(sub.auth_secret, authHeader),
   )
   if (matching.length === 0) {
     return { status: 401, body: { ok: false, reason: 'unknown subscription or bad auth' } }
@@ -438,6 +598,7 @@ export async function handleWebhook(
     serviceClient,
     message,
     [...new Set(matching.map((sub) => sub.company_id))],
+    log,
   )
   return { status: 200, body: { ok: true } }
 }

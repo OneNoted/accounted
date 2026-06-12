@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 
@@ -24,20 +25,29 @@ export const GET = withCronContext('cron.accrual_postings', async (_request, ctx
   const supabase = createServiceClient()
   const todayIso = new Date().toISOString().slice(0, 10)
 
-  const { data, error } = await supabase
-    .from('accrual_schedule_installments')
-    .select('company_id')
-    .eq('status', 'pending')
-    .lte('period_month', firstOfMonth(todayIso))
-
-  if (error) {
-    ctx.log.error('failed to load due accrual installments', error)
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+  // fetchAllRows pages past PostgREST's 1000-row cap — a single unpaginated
+  // select would silently drop companies once total due installments exceed
+  // the cap, permanently starving the ones sorted last.
+  let rows: Array<{ company_id: string }>
+  try {
+    rows = await fetchAllRows<{ company_id: string }>(({ from, to }) =>
+      supabase
+        .from('accrual_schedule_installments')
+        .select('company_id')
+        .eq('status', 'pending')
+        .lte('period_month', firstOfMonth(todayIso))
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (error) {
+    ctx.log.error('failed to load due accrual installments', error as Error)
+    return NextResponse.json(
+      { success: false, error: error instanceof Error ? error.message : 'unknown' },
+      { status: 500 },
+    )
   }
 
-  const companyIds = Array.from(
-    new Set(((data ?? []) as Array<{ company_id: string }>).map((row) => row.company_id)),
-  )
+  const companyIds = Array.from(new Set(rows.map((row) => row.company_id)))
 
   ctx.log.info('accrual posting cron starting', {
     companyCount: companyIds.length,

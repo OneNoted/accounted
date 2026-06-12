@@ -68,6 +68,17 @@ CREATE TABLE public.accrual_schedules (
   CONSTRAINT accrual_schedules_direction_matches_source CHECK (
     (direction = 'expense' AND supplier_invoice_id IS NOT NULL)
     OR (direction = 'revenue' AND invoice_id IS NOT NULL)
+  ),
+  -- Mirror the item-level account-range rules: förutbetalda kostnader live on
+  -- 17xx (interimsfordringar), förutbetalda intäkter on 29xx (interimsskulder).
+  CONSTRAINT accrual_schedules_balance_account_range CHECK (
+    (direction = 'expense' AND balance_account ~ '^17[0-9]{2}$')
+    OR (direction = 'revenue' AND balance_account ~ '^29[0-9]{2}$')
+  ),
+  -- The dissolution target must be a plausible 4-digit BAS account (class
+  -- 1–8); the engine still validates it against chart_of_accounts at booking.
+  CONSTRAINT accrual_schedules_target_account_range CHECK (
+    target_account ~ '^[1-8][0-9]{3}$'
   )
 );
 

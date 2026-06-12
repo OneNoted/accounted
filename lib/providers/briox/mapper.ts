@@ -78,14 +78,16 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const balance = paid ? 0 : (num(raw['balance']) ?? total);
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
+  // Line-level amounts arrive from the same string-serializing API as the
+  // header amounts — coerce ALL numerics through num(), never blind casts.
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
     id: String(row['id'] ?? idx + 1),
     description: row['description'] as string | undefined,
-    quantity: row['quantity'] as number | undefined,
+    quantity: num(row['quantity']),
     unitCode: row['unit'] as string | undefined,
-    unitPrice: row['price'] != null ? amount(row['price'] as number, currency) : undefined,
-    lineExtensionAmount: amount(row['total'] as number ?? 0, currency),
-    taxPercent: row['vat_rate'] as number | undefined,
+    unitPrice: row['price'] != null ? amount(num(row['price']), currency) : undefined,
+    lineExtensionAmount: amount(num(row['total']), currency),
+    taxPercent: num(row['vat_rate']),
     accountNumber: row['account_number'] != null ? String(row['account_number']) : undefined,
     articleNumber: row['article_number'] as string | undefined,
     itemName: row['description'] as string | undefined,
@@ -135,12 +137,14 @@ export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): Supplie
   const balance = paid ? 0 : (num(raw['balance']) ?? total);
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
+  // Same string-coercion hardening as the sales path (Briox serializes
+  // numbers as strings) — route every numeric line field through num().
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => ({
     id: String(row['id'] ?? idx + 1),
     description: row['description'] as string | undefined,
-    quantity: row['quantity'] as number | undefined,
-    unitPrice: row['price'] != null ? amount(row['price'] as number, currency) : undefined,
-    lineExtensionAmount: amount(row['total'] as number ?? 0, currency),
+    quantity: num(row['quantity']),
+    unitPrice: row['price'] != null ? amount(num(row['price']), currency) : undefined,
+    lineExtensionAmount: amount(num(row['total']), currency),
     accountNumber: row['account_number'] != null ? String(row['account_number']) : undefined,
   }));
 

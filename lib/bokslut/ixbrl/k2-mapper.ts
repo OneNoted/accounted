@@ -23,6 +23,22 @@ export interface TrialBalanceRowLike {
   closing_credit: number
 }
 
+/**
+ * Per-year trial balance pair. The year-end closing entry (source_type
+ * 'year_end') zeroes every class 3–8 account into 2099, so a single TB can
+ * never serve both statements:
+ *   - `full` (including the closing entry) carries the booked 2099 and the
+ *     correct equity — it drives the BR concepts.
+ *   - `preClosing` (generateTrialBalance with excludeYearEndClosing: true)
+ *     still has the RR accounts open — it drives the RR concepts.
+ * Mirrors how lib/reports' generateIncomeStatement/generateBalanceSheet split
+ * the same source.
+ */
+export interface TrialBalancePair {
+  full: TrialBalanceRowLike[]
+  preClosing: TrialBalanceRowLike[]
+}
+
 interface Range {
   start: string
   end: string
@@ -455,31 +471,42 @@ function sumConcepts(amounts: ConceptAmounts, concepts: string[], signs?: number
 }
 
 /**
- * Map current + previous trial balances onto the K2 risbs posts.
+ * Map current + previous trial balance pairs onto the K2 risbs posts.
  *
- * `previousRows = null` → first fiscal year (jämförelsesiffror omitted,
+ * RR concepts come from the pre-closing TB (year-end closing excluded — the
+ * closing entry zeroes class 3–8); BR concepts come from the full TB (the
+ * closing entry books 2099). See TrialBalancePair.
+ *
+ * `previous = null` → first fiscal year (jämförelsesiffror omitted,
  * which kontrollera 3006/3007 accepts only for year one).
  */
 export function mapTrialBalancesToK2(
-  currentRows: TrialBalanceRowLike[],
-  previousRows: TrialBalanceRowLike[] | null,
+  current: TrialBalancePair,
+  previous: TrialBalancePair | null,
 ): K2MappingResult {
   const warnings: string[] = []
   const rr: ConceptAmounts = {}
   const br: ConceptAmounts = {}
 
   for (const mapping of K2_RR_MAPPINGS) {
-    rr[mapping.concept] = amount(mapping, currentRows, previousRows)
+    rr[mapping.concept] = amount(mapping, current.preClosing, previous?.preClosing ?? null)
   }
   for (const mapping of K2_BR_MAPPINGS) {
-    br[mapping.concept] = amount(mapping, currentRows, previousRows)
+    br[mapping.concept] = amount(mapping, current.full, previous?.full ?? null)
   }
 
-  // Reclassification + unmapped sweep over balance-carrying accounts.
+  // Reclassification + unmapped sweep over balance-carrying accounts. Both TB
+  // variants are swept: the full TB exposes unmapped BR accounts, the
+  // pre-closing TB exposes unmapped RR accounts (zeroed in the full TB).
   const allMappings = [...K2_RR_MAPPINGS, ...K2_BR_MAPPINGS]
   const unmappedAccounts: K2MappingResult['unmappedAccounts'] = []
   const seenReclass = new Set<string>()
-  for (const rows of [currentRows, previousRows ?? []]) {
+  for (const rows of [
+    current.full,
+    current.preClosing,
+    previous?.full ?? [],
+    previous?.preClosing ?? [],
+  ]) {
     for (const row of rows) {
       const balance = Math.round(row.closing_debit - row.closing_credit)
       if (balance === 0) continue
@@ -500,6 +527,132 @@ export function mapTrialBalancesToK2(
     )
   }
 
+  let totals = computeTotals(rr, br)
+
+  // ---- öre-rounding residual smoothing ------------------------------------
+  // Every tagged post is independently rounded to whole SEK, so the sum of
+  // rounded posts can drift by ±1 kr from the rounded exact total even though
+  // the underlying trial balance ties to the öre. Bolagsverket compares the
+  // tagged totals exactly (kontrollera 3005), so a ±1 kr residual is
+  // distributed back into a line item instead of tolerated. Deterministic
+  // rule, per year:
+  //   - BR: the residual (Tillgångar − Eget kapital och skulder) is added to
+  //     the largest post (by absolute value) on the equity/liabilities side,
+  //     excluding AretsResultatEgetKapital, whose value must stay equal to
+  //     the booked 2099 / RR result (ties broken toward the LATER post in
+  //     the uppställningsform, so liabilities win over aktiekapital).
+  //   - RR: the residual (RR-resultat − konto 2099) is absorbed by the
+  //     largest RR post: cost posts are increased by the residual, income
+  //     posts decreased (ties broken toward the EARLIER post).
+  // Residuals beyond ±1 kr are real bookkeeping errors and are left for the
+  // exact balance checks below.
+  let smoothedAny = false
+  for (const field of ['current', 'previous'] as const) {
+    if (field === 'previous' && previous === null) continue
+    const rrSmoothed = smoothRrResidual(rr, br, totals, field)
+    const brSmoothed = smoothBrResidual(br, totals, field)
+    smoothedAny = smoothedAny || rrSmoothed || brSmoothed
+  }
+  if (smoothedAny) totals = computeTotals(rr, br)
+
+  // Internal consistency: the RR result must equal BR 2099 (årets resultat)
+  // EXACTLY — if the year-end closing hasn't booked the result yet, warn
+  // (the BR will not balance against RR otherwise). Rounding residuals were
+  // smoothed above, so any remaining difference is a data problem.
+  const brResult = br['AretsResultatEgetKapital'] ?? ZERO
+  if (totals.aretsResultat.current !== brResult.current) {
+    warnings.push(
+      `Årets resultat enligt resultaträkningen (${totals.aretsResultat.current} kr) stämmer inte med konto 2099 (${brResult.current} kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).`,
+    )
+  }
+  if (totals.tillgangar.current !== totals.egetKapitalSkulder.current) {
+    warnings.push(
+      `Balansräkningen balanserar inte: Summa tillgångar ${totals.tillgangar.current} kr ≠ Summa eget kapital och skulder ${totals.egetKapitalSkulder.current} kr (kontrollera-kod 3005).`,
+    )
+  }
+
+  return { rr, br, totals, warnings, unmappedAccounts }
+}
+
+function pickLargestConcept(
+  amounts: ConceptAmounts,
+  mappings: PostMapping[],
+  field: 'current' | 'previous',
+  exclude: ReadonlySet<string>,
+  tieBreak: 'first' | 'last',
+): string | null {
+  let best: string | null = null
+  let bestAbs = -1
+  for (const mapping of mappings) {
+    if (exclude.has(mapping.concept)) continue
+    const value = amounts[mapping.concept]?.[field]
+    if (value === null || value === undefined || value === 0) continue
+    const abs = Math.abs(value)
+    if (abs > bestAbs || (abs === bestAbs && tieBreak === 'last')) {
+      best = mapping.concept
+      bestAbs = abs
+    }
+  }
+  return best
+}
+
+function adjustConcept(
+  amounts: ConceptAmounts,
+  concept: string,
+  field: 'current' | 'previous',
+  delta: number,
+): void {
+  const existing = amounts[concept] ?? { current: 0, previous: null }
+  amounts[concept] = { ...existing, [field]: (existing[field] ?? 0) + delta }
+}
+
+/** Absorb a ±1 kr rounding residual between the RR result and BR 2099. */
+function smoothRrResidual(
+  rr: ConceptAmounts,
+  br: ConceptAmounts,
+  totals: K2MappingResult['totals'],
+  field: 'current' | 'previous',
+): boolean {
+  const target = br['AretsResultatEgetKapital']?.[field]
+  const result = totals.aretsResultat[field]
+  if (target === null || target === undefined || result === null) return false
+  const diff = result - target
+  if (diff === 0 || Math.abs(diff) > 1) return false
+  const concept = pickLargestConcept(rr, K2_RR_MAPPINGS, field, new Set(), 'first')
+  if (!concept) return false
+  const balance = K2_RR_MAPPINGS.find((mapping) => mapping.concept === concept)?.balance
+  // Debit (cost) posts enter the result with weight −1, credit (income)
+  // posts with +1 — adjust so the recomputed result lands on the 2099 value.
+  adjustConcept(rr, concept, field, balance === 'debit' ? diff : -diff)
+  return true
+}
+
+/** Equity/liability-side posts (everything from Aktiekapital onwards). */
+const EQ_LIAB_MAPPINGS = K2_BR_MAPPINGS.slice(
+  K2_BR_MAPPINGS.findIndex((mapping) => mapping.concept === 'Aktiekapital'),
+)
+
+/** Absorb a ±1 kr rounding residual between the two BR sides. */
+function smoothBrResidual(
+  br: ConceptAmounts,
+  totals: K2MappingResult['totals'],
+  field: 'current' | 'previous',
+): boolean {
+  const assets = totals.tillgangar[field]
+  const eqLiab = totals.egetKapitalSkulder[field]
+  if (assets === null || eqLiab === null) return false
+  const diff = assets - eqLiab
+  if (diff === 0 || Math.abs(diff) > 1) return false
+  const concept =
+    pickLargestConcept(br, EQ_LIAB_MAPPINGS, field, new Set(['AretsResultatEgetKapital']), 'last') ??
+    'BalanseratResultat'
+  // All equity/liability posts are credit-oriented: adding the residual
+  // raises the eget kapital och skulder side to match Tillgångar.
+  adjustConcept(br, concept, field, diff)
+  return true
+}
+
+function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult['totals'] {
   // ---- RR subtotals (credit-positive orientation) ----
   const rorelseintakter = sumConcepts(rr, [
     'Nettoomsattning',
@@ -656,53 +809,32 @@ export function mapTrialBalancesToK2(
     kortfristigaSkulder,
   )
 
-  // Internal consistency: the RR result must equal BR 2099 (årets resultat) —
-  // if the year-end closing hasn't booked the result yet, warn (the BR will
-  // not balance against RR otherwise).
-  const brResult = br['AretsResultatEgetKapital'] ?? ZERO
-  if (Math.abs(aretsResultat.current - brResult.current) > 1) {
-    warnings.push(
-      `Årets resultat enligt resultaträkningen (${aretsResultat.current} kr) stämmer inte med konto 2099 (${brResult.current} kr). Kontrollera att bokslutet är genomfört (resultatdisposition bokad).`,
-    )
-  }
-  if (Math.abs(tillgangar.current - egetKapitalSkulder.current) > 1) {
-    warnings.push(
-      `Balansräkningen balanserar inte: Summa tillgångar ${tillgangar.current} kr ≠ Summa eget kapital och skulder ${egetKapitalSkulder.current} kr (kontrollera-kod 3005).`,
-    )
-  }
-
   return {
-    rr,
-    br,
-    totals: {
-      rorelseintakter,
-      rorelsekostnader,
-      rorelseresultat,
-      finansiellaPoster,
-      resultatEfterFinansiellaPoster,
-      bokslutsdispositioner,
-      resultatForeSkatt,
-      aretsResultat,
-      anlaggningstillgangar,
-      immateriellaAnlaggningstillgangar: immateriella,
-      materiellaAnlaggningstillgangar: materiella,
-      finansiellaAnlaggningstillgangar: finansiella,
-      varulager,
-      kortfristigaFordringar,
-      kortfristigaPlaceringar,
-      kassaBank,
-      omsattningstillgangar,
-      tillgangar,
-      bundetEgetKapital,
-      frittEgetKapital,
-      egetKapital,
-      obeskattadeReserver,
-      avsattningar,
-      langfristigaSkulder,
-      kortfristigaSkulder,
-      egetKapitalSkulder,
-    },
-    warnings,
-    unmappedAccounts,
+    rorelseintakter,
+    rorelsekostnader,
+    rorelseresultat,
+    finansiellaPoster,
+    resultatEfterFinansiellaPoster,
+    bokslutsdispositioner,
+    resultatForeSkatt,
+    aretsResultat,
+    anlaggningstillgangar,
+    immateriellaAnlaggningstillgangar: immateriella,
+    materiellaAnlaggningstillgangar: materiella,
+    finansiellaAnlaggningstillgangar: finansiella,
+    varulager,
+    kortfristigaFordringar,
+    kortfristigaPlaceringar,
+    kassaBank,
+    omsattningstillgangar,
+    tillgangar,
+    bundetEgetKapital,
+    frittEgetKapital,
+    egetKapital,
+    obeskattadeReserver,
+    avsattningar,
+    langfristigaSkulder,
+    kortfristigaSkulder,
+    egetKapitalSkulder,
   }
 }

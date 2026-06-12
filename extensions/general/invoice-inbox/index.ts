@@ -1656,6 +1656,12 @@ export const invoiceInboxExtension: Extension = {
         const hasAccrualItems = body.items.some(
           (bodyItem) => bodyItem.accrual_period_start && bodyItem.accrual_period_end,
         )
+        if (hasAccrualItems && body.reverse_charge) {
+          // Omvänd skattskyldighet: the expense line carries the VAT base for
+          // rutor 20–32 — deferring the net to a 17xx interim account would
+          // corrupt the momsdeklaration. Same guard as /api/supplier-invoices.
+          return errorResponseFromCode('SI_CREATE_ACCRUAL_REVERSE_CHARGE', ctx.log)
+        }
         if (hasAccrualItems) {
           const { data: methodSettings } = await ctx.supabase
             .from('company_settings')

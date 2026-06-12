@@ -178,6 +178,9 @@ interface SIEData {
   allImported: boolean
   newFileCount: number
   replacedFileCount?: number
+  // Fiscal years whose provider export failed. Importing the remaining years
+  // anyway leaves an IB/UB gap — the options step warns before proceeding.
+  failedYears?: { year: number; error: string }[]
   basAccounts: BASAccount[]
 }
 
@@ -858,6 +861,7 @@ function OptionsStep({
   const yearsToReplace = fileStatuses
     .filter(fs => fs.previousImport)
     .map(fs => fs.fiscalYear)
+  const failedYears = sieData?.failedYears ?? []
 
   const selectedItems: string[] = []
   if (options.importCompanyInfo) selectedItems.push('Företagsinformation')
@@ -887,6 +891,29 @@ function OptionsStep({
 
           {sieAvailable && (
             <>
+              {/* Years whose provider export failed — must be visible before
+                  the user proceeds, otherwise an IB/UB gap slips through. */}
+              {failedYears.length > 0 && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-50/50 p-3 dark:bg-amber-950/20">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">
+                        {failedYears.length === 1
+                          ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas`
+                          : `Räkenskapsår ${failedYears.map(f => f.year).join(', ')} kunde inte hämtas`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Exporten från källsystemet misslyckades för{' '}
+                        {failedYears.length === 1 ? 'det här räkenskapsåret' : 'dessa räkenskapsår'}.
+                        Om du fortsätter importeras övriga år, men ingående och utgående balanser
+                        kan sakna kontinuitet mellan åren. Försök igen senare eller ladda upp en
+                        SIE-fil för {failedYears.length === 1 ? 'det saknade året' : 'de saknade åren'} manuellt.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
               <OptionRow
                 icon={<Database className="h-4 w-4" />}
                 label="Bokföringsdata (SIE)"

@@ -13,8 +13,9 @@ import {
   resolveConsent,
   fetchCompanyInfoDirect,
   ProviderTokenInvalidError,
+  ConsentNotFoundError,
 } from './lib/provider-client'
-import { providerSupportsSie, fetchProviderSieFiles } from './lib/sie-fetcher'
+import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
@@ -302,7 +303,12 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         }
 
-        const { consentId, provider, apiToken, companyId } = await request.json() as {
+        // The caller's tenant — NOT the provider-side company id below.
+        const ownerCompanyId = ctx?.companyId ?? user.id
+
+        // `companyId` in the body is the PROVIDER-side company identifier
+        // (BL User-Key / Briox account ID / Bokio company GUID).
+        const { consentId, provider, apiToken, companyId: providerCompanyId } = await request.json() as {
           consentId: string
           provider: ArcimProvider
           apiToken: string
@@ -324,17 +330,29 @@ export const arcimMigrationExtension: Extension = {
 
         // Briox needs the account ID (the /token clientid param) alongside
         // the application token; Bokio/BL need their company GUID.
-        if ((provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox') && !companyId) {
+        if ((provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox') && !providerCompanyId) {
           return errorResponseFromCode('PROVIDER_COMPANY_ID_REQUIRED', moduleLog, {
             details: { provider },
           })
         }
 
         try {
-          await submitProviderToken(consentId, provider, apiToken || 'client_credentials', companyId)
+          await submitProviderToken(
+            consentId,
+            provider,
+            apiToken || 'client_credentials',
+            providerCompanyId,
+            ownerCompanyId,
+          )
           return NextResponse.json({ success: true, consentId })
         } catch (error) {
           log.error('arcim submit-token failed', error as Error, { provider })
+          // Consent missing or owned by another company — same 404 either way.
+          if (error instanceof ConsentNotFoundError) {
+            return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
+              details: { consentId },
+            })
+          }
           // Wrong credentials (provider actively rejected them) — tell the
           // user to re-check the pasted values instead of a generic 500.
           if (error instanceof ProviderTokenInvalidError) {
@@ -614,14 +632,23 @@ export const arcimMigrationExtension: Extension = {
           }
 
           // Fetch SIE type 4 for each allowed fiscal year
-          const { files: sieFiles } = await fetchProviderSieFiles(
+          const { files: sieFiles, failedYears } = await fetchProviderSieFiles(
             provider,
             resolved.accessToken,
             resolved.providerCompanyId,
           )
 
           if (sieFiles.length === 0) {
-            return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog)
+            // The allowed window is rolling (current year and the two before
+            // it) — interpolate the actual range instead of the static
+            // registry message so the text never goes stale.
+            const allowedYears = [...getAllowedFiscalYears()].sort((a, b) => a - b)
+            const range = `${allowedYears[0]}–${allowedYears[allowedYears.length - 1]}`
+            return errorResponseFromCode('PROVIDER_SIE_NO_YEARS', moduleLog, {
+              messageSv: `Inga räkenskapsår ${range} hittades hos leverantören.`,
+              messageEn: `No fiscal years available for ${range}.`,
+              ...(failedYears.length > 0 ? { details: { failedYears } } : {}),
+            })
           }
 
           // Parse most recent file for preview/validation
@@ -751,6 +778,9 @@ export const arcimMigrationExtension: Extension = {
             allImported: false,
             newFileCount: fileStatuses.length - replacedFileCount,
             replacedFileCount,
+            // Allowed years whose provider export failed — the wizard warns
+            // the user before proceeding so an IB/UB gap cannot slip through.
+            failedYears,
             basAccounts: BAS_REFERENCE,
           })
         } catch (error) {

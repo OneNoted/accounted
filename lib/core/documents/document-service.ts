@@ -89,6 +89,23 @@ function detectFileMagic(bytes: Uint8Array): string | null {
 }
 
 /**
+ * XHTML/XML has no binary magic number. For the declared type
+ * application/xhtml+xml (system-generated iXBRL årsredovisningar) we instead
+ * require the content to start with an XML declaration, an HTML doctype, or
+ * an <html> root element (after an optional UTF-8 BOM and leading
+ * whitespace). This branch is consulted ONLY for that declared type — it
+ * never loosens detection for PDF/PNG/JPEG/WEBP uploads.
+ */
+function looksLikeXhtml(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  const head = Buffer.from(bytes.slice(offset, offset + 256))
+    .toString('utf8')
+    .replace(/^[\s﻿]+/, '')
+    .toLowerCase()
+  return head.startsWith('<?xml') || head.startsWith('<!doctype html') || head.startsWith('<html')
+}
+
+/**
  * Verify the buffer actually contains a file of the declared type.
  * Returns an error string or null if valid. HEIC has many ftyp brands so
  * we skip the check for now — the UI path doesn't allow HEIC anyway, only
@@ -96,6 +113,10 @@ function detectFileMagic(bytes: Uint8Array): string | null {
  */
 export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType: string): string | null {
   if (declaredMimeType === 'image/heic') return null
+  if (declaredMimeType === 'application/xhtml+xml') {
+    if (looksLikeXhtml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
+  }
   const detected = detectFileMagic(new Uint8Array(buffer))
   if (!detected) {
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil — vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`

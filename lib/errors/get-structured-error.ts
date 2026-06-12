@@ -179,6 +179,13 @@ interface ErrorResponseContext {
   details?: unknown
   /** When known, override the http status from the registry entry. */
   status?: number
+  /**
+   * Override the registry messages when the route computes a dynamic message
+   * (e.g. interpolating a rolling year range). Provide both or neither so the
+   * sv/en pair never drifts apart.
+   */
+  messageSv?: string
+  messageEn?: string
 }
 
 interface MinimalLogger {
@@ -404,5 +411,15 @@ export function errorResponseFromCode(
   const entry = entryFor(code)
   log.error(code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
   const status = ctx.status ?? entry.httpStatus
-  return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
+  return buildResponse(
+    code,
+    {
+      ...entry,
+      httpStatus: status,
+      ...(ctx.messageSv ? { message_sv: ctx.messageSv } : {}),
+      ...(ctx.messageEn ? { message_en: ctx.messageEn } : {}),
+    },
+    ctx.requestId,
+    ctx.details,
+  )
 }

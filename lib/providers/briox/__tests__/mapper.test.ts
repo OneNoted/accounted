@@ -153,6 +153,38 @@ describe('Briox mapper — line mapping', () => {
     expect(dto.lines[1].id).toBe('2');
     expect(dto.lines[1].accountNumber).toBeUndefined();
   });
+
+  it('coerces string line-level price/total/quantity/vat_rate (Briox serializes numbers as strings)', () => {
+    const dto = mapBrioxToSalesInvoice(salesRaw({
+      rows: [
+        {
+          id: 1,
+          description: 'Konsulttimmar',
+          quantity: '10',
+          price: '250.00',
+          total: '2500.00',
+          vat_rate: '25',
+        },
+      ],
+    }));
+
+    expect(dto.lines[0].quantity).toBe(10);
+    expect(dto.lines[0].unitPrice?.value).toBe(250);
+    expect(dto.lines[0].lineExtensionAmount.value).toBe(2500);
+    expect(dto.lines[0].taxPercent).toBe(25);
+  });
+
+  it('supplier: coerces string line-level amounts too', () => {
+    const dto = mapBrioxToSupplierInvoice(supplierRaw({
+      rows: [
+        { id: 1, description: 'Material', quantity: '2', price: '125.50', total: '251.00' },
+      ],
+    }));
+
+    expect(dto.lines[0].quantity).toBe(2);
+    expect(dto.lines[0].unitPrice?.value).toBe(125.5);
+    expect(dto.lines[0].lineExtensionAmount.value).toBe(251);
+  });
 });
 
 describe('Briox mapper — customers', () => {

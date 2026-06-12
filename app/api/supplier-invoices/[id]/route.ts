@@ -4,6 +4,10 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('api.supplier_invoices.id')
 
 export async function GET(
   _request: Request,
@@ -141,6 +145,33 @@ export async function DELETE(
       { error: 'Kan bara ta bort registrerade fakturor' },
       { status: 400 }
     )
+  }
+
+  // Booked invoices must go through the credit flow (mirrors the credit-note
+  // guard above). Two independent blockers:
+  //   (a) a posted registration verifikat — deleting the row would orphan it
+  //       and silently understate 2440/2641 for the momsdeklaration;
+  //   (b) an accrual schedule — accrual_schedules.supplier_invoice_id is
+  //       ON DELETE RESTRICT, so the invoice DELETE below would fail AFTER the
+  //       items were already deleted, leaving a broken invoice with zero rows.
+  if (existing.registration_journal_entry_id) {
+    return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
+      details: { reason: 'registration_journal_entry' },
+    })
+  }
+
+  const { data: linkedSchedule } = await supabase
+    .from('accrual_schedules')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', id)
+    .limit(1)
+    .maybeSingle()
+
+  if (linkedSchedule) {
+    return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
+      details: { reason: 'accrual_schedule', scheduleId: linkedSchedule.id },
+    })
   }
 
   // Delete items first, then invoice

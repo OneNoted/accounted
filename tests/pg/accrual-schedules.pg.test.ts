@@ -44,6 +44,9 @@ async function insertSchedule(
     supplierInvoiceId: string
     direction?: string
     supplierInvoiceIdOverride?: string | null
+    invoiceId?: string | null
+    balanceAccount?: string
+    targetAccount?: string
     periodStart?: string
     periodEnd?: string
   },
@@ -51,10 +54,10 @@ async function insertSchedule(
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.accrual_schedules
-       (id, user_id, company_id, direction, supplier_invoice_id,
+       (id, user_id, company_id, direction, supplier_invoice_id, invoice_id,
         balance_account, target_account, total_amount,
         period_start, period_end, months)
-     VALUES ($1, $2, $3, $4, $5, '1730', '6310', 12000, $6, $7, 12)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 12000, $9, $10, 12)`,
     [
       id,
       params.userId,
@@ -63,9 +66,32 @@ async function insertSchedule(
       params.supplierInvoiceIdOverride === undefined
         ? params.supplierInvoiceId
         : params.supplierInvoiceIdOverride,
+      params.invoiceId ?? null,
+      params.balanceAccount ?? '1730',
+      params.targetAccount ?? '6310',
       params.periodStart ?? '2026-01-01',
       params.periodEnd ?? '2026-12-31',
     ],
+  )
+  return id
+}
+
+async function insertCustomerInvoice(companyId: string, userId: string): Promise<string> {
+  const customerId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.customers (id, user_id, company_id, name, customer_type)
+     VALUES ($1, $2, $3, 'Kund AB', 'swedish_business')`,
+    [customerId, userId, companyId],
+  )
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.invoices
+       (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date,
+        currency, subtotal, vat_amount, total, vat_treatment, vat_rate, status,
+        paid_amount, remaining_amount)
+     VALUES ($1, $2, $3, $4, $5, '2026-01-15', '2026-02-14', 'SEK',
+             12000, 3000, 15000, 'standard_25', 25, 'sent', 0, 15000)`,
+    [id, userId, companyId, customerId, `F-${id.slice(0, 8)}`],
   )
   return id
 }
@@ -123,6 +149,53 @@ describe('accrual_schedules constraints', () => {
     await expect(
       insertSchedule({ ...ctx, periodStart: '2026-06-01', periodEnd: '2026-01-31' }),
     ).rejects.toThrow(/period_valid/i)
+  })
+
+  it('rejects a non-17xx balance account on an expense schedule', async () => {
+    const ctx = await seedScheduleContext()
+    await expect(
+      insertSchedule({ ...ctx, balanceAccount: '2970' }),
+    ).rejects.toThrow(/balance_account_range/i)
+    await expect(
+      insertSchedule({ ...ctx, balanceAccount: '5010' }),
+    ).rejects.toThrow(/balance_account_range/i)
+  })
+
+  it('rejects a non-29xx balance account on a revenue schedule', async () => {
+    const ctx = await seedScheduleContext()
+    const invoiceId = await insertCustomerInvoice(ctx.companyId, ctx.userId)
+    await expect(
+      insertSchedule({
+        ...ctx,
+        direction: 'revenue',
+        supplierInvoiceIdOverride: null,
+        invoiceId,
+        balanceAccount: '1730',
+        targetAccount: '3001',
+      }),
+    ).rejects.toThrow(/balance_account_range/i)
+
+    // The mirrored valid combination passes.
+    await expect(
+      insertSchedule({
+        ...ctx,
+        direction: 'revenue',
+        supplierInvoiceIdOverride: null,
+        invoiceId,
+        balanceAccount: '2970',
+        targetAccount: '3001',
+      }),
+    ).resolves.toBeDefined()
+  })
+
+  it('rejects an implausible BAS target account', async () => {
+    const ctx = await seedScheduleContext()
+    await expect(
+      insertSchedule({ ...ctx, targetAccount: '9999' }),
+    ).rejects.toThrow(/target_account_range/i)
+    await expect(
+      insertSchedule({ ...ctx, targetAccount: '631' }),
+    ).rejects.toThrow(/target_account_range/i)
   })
 })
 

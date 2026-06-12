@@ -19,8 +19,15 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
 
-/** Fiscal years we support importing — older data is not needed */
-export const ALLOWED_FISCAL_YEARS = new Set([2024, 2025, 2026])
+/**
+ * Fiscal years we support importing — the current year and the two before it.
+ * Derived at call time (not a module constant) so the window rolls forward
+ * automatically at new year without a code change.
+ */
+export function getAllowedFiscalYears(now: Date = new Date()): Set<number> {
+  const currentYear = now.getFullYear()
+  return new Set([currentYear - 2, currentYear - 1, currentYear])
+}
 
 export interface ProviderSieFile {
   fiscalYear: number
@@ -30,11 +37,17 @@ export interface ProviderSieFile {
 export interface ProviderSieFetchResult {
   files: ProviderSieFile[]
   /**
-   * Every fiscal year available at the provider within ALLOWED_FISCAL_YEARS —
+   * Every fiscal year available at the provider within the allowed window —
    * also populated when latestOnly fetched just one file, so /preview can show
    * the full year list without a second round-trip.
    */
   availableYears: number[]
+  /**
+   * Allowed years whose export failed (or came back empty). Callers MUST
+   * surface these to the user: silently importing e.g. 2024+2026 without 2025
+   * breaks IB/UB continuity between the years without anyone noticing.
+   */
+  failedYears: { year: number; error: string }[]
 }
 
 // Singleton clients (they hold rate limiters)
@@ -57,8 +70,9 @@ interface FiscalYearRef {
 
 /**
  * Fetch SIE type-4 exports from the provider, one file per allowed fiscal
- * year (oldest first). Years whose export fails are logged and skipped —
- * a single bad year must not block the rest of the migration.
+ * year (oldest first). Years whose export fails do not block the rest of the
+ * migration, but they are reported in `failedYears` so the caller can warn
+ * the user before importing a gap (IB/UB continuity).
  */
 export async function fetchProviderSieFiles(
   provider: ProviderName,
@@ -71,29 +85,35 @@ export async function fetchProviderSieFiles(
     throw new Error(`Provider ${provider} does not support SIE over API`)
   }
 
+  const allowedFiscalYears = getAllowedFiscalYears()
   const allYears = await fetcher.listYears(accessToken)
   const allowedYears = allYears
-    .filter((fy) => ALLOWED_FISCAL_YEARS.has(fy.year))
+    .filter((fy) => allowedFiscalYears.has(fy.year))
     .sort((a, b) => a.year - b.year)
 
   const availableYears = allowedYears.map((fy) => fy.year)
   const toFetch = opts?.latestOnly ? allowedYears.slice(-1) : allowedYears
 
   const files: ProviderSieFile[] = []
+  const failedYears: { year: number; error: string }[] = []
   for (const fy of toFetch) {
     try {
       const rawContent = await fetcher.fetchSie(accessToken, fy)
       if (rawContent) {
         files.push({ fiscalYear: fy.year, rawContent })
+      } else {
+        failedYears.push({ year: fy.year, error: 'Provider returned an empty SIE export' })
       }
     } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
       log.warn(`Failed to fetch SIE for ${provider} fiscal year ${fy.year} (id ${fy.id})`, {
-        reason: err instanceof Error ? err.message : String(err),
+        reason,
       })
+      failedYears.push({ year: fy.year, error: reason })
     }
   }
 
-  return { files, availableYears }
+  return { files, availableYears, failedYears }
 }
 
 interface SieFetcher {
@@ -119,8 +139,12 @@ function getSieFetcher(
         }))
       },
       async fetchSie(accessToken, fy) {
-        // Fortnox serves SIE as text (the client decodes the body for us)
-        return fortnoxClient.getText(accessToken, `/sie/4?financialyear=${fy.id}`)
+        // Fortnox normally serves the SIE body as UTF-8, but endpoint variants
+        // have been seen answering CP437 (the SIE spec encoding) — a blind
+        // response.text() would turn å/ä/ö into U+FFFD irrecoverably. Fetch
+        // raw bytes and detect-decode like the Briox/BL paths.
+        const buffer = await fortnoxClient.getBytes(accessToken, `/sie/4?financialyear=${fy.id}`)
+        return decodeBuffer(buffer, detectEncoding(buffer))
       },
     }
   }

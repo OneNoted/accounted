@@ -23,7 +23,10 @@
 CREATE TABLE public.arsredovisning_submissions (
   id                    uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   company_id            uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-  user_id               uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- ON DELETE SET NULL (not CASCADE): a filing attempt against the authority
+  -- is audit history for the COMPANY — it must survive deletion of the user
+  -- account that happened to press the button.
+  user_id               uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   fiscal_period_id      uuid NOT NULL REFERENCES public.fiscal_periods(id) ON DELETE CASCADE,
   handling_typ          text NOT NULL DEFAULT 'arsredovisning_komplett'
                         CHECK (handling_typ IN ('arsredovisning_komplett', 'arsredovisning', 'revisionsberattelse')),
@@ -111,12 +114,17 @@ BEGIN
     END IF;
   END IF;
 
+  -- Post-upload statuses (inkommen/forelagd/komplettering/registrerad/
+  -- avslutad) are asserted by Bolagsverket, not derived by us. Webhooks can
+  -- be missed and the polling fallback may skip intermediate events, so all
+  -- FORWARD jumps between externally-asserted statuses are allowed; only
+  -- regressions (e.g. registrerad → draft) are rejected.
   IF NEW.status IS DISTINCT FROM OLD.status THEN
     IF NOT (
       (OLD.status = 'draft'         AND NEW.status IN ('kontrollerad', 'uploaded', 'error'))
       OR (OLD.status = 'kontrollerad' AND NEW.status IN ('kontrollerad', 'uploaded', 'error', 'draft'))
-      OR (OLD.status = 'uploaded'     AND NEW.status IN ('inkommen', 'registrerad', 'avslutad', 'error'))
-      OR (OLD.status = 'inkommen'     AND NEW.status IN ('forelagd', 'registrerad', 'avslutad'))
+      OR (OLD.status = 'uploaded'     AND NEW.status IN ('inkommen', 'forelagd', 'komplettering', 'registrerad', 'avslutad', 'error'))
+      OR (OLD.status = 'inkommen'     AND NEW.status IN ('forelagd', 'komplettering', 'registrerad', 'avslutad'))
       OR (OLD.status = 'forelagd'     AND NEW.status IN ('komplettering', 'registrerad', 'avslutad'))
       OR (OLD.status = 'komplettering' AND NEW.status IN ('forelagd', 'registrerad', 'avslutad'))
       OR (OLD.status = 'error'        AND NEW.status IN ('draft', 'kontrollerad'))
@@ -140,7 +148,9 @@ CREATE TRIGGER enforce_arsred_submission_immutability
 CREATE TABLE public.bolagsverket_avtal_acceptances (
   id                uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   company_id        uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-  user_id           uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- ON DELETE SET NULL: the acceptance is an audit record of WHO accepted the
+  -- Bolagsverket avtalstext for the company; it must survive user deletion.
+  user_id           uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   -- The avtalstextAndrad date from skapa-inlamningtoken; a NEW acceptance row
   -- is required whenever Bolagsverket bumps this (GUIDE §4.2/§5.3.1).
   avtalstext_andrad text NOT NULL,
@@ -167,7 +177,10 @@ CREATE UNIQUE INDEX uq_bolagsverket_avtal_acceptance
 CREATE TABLE public.bolagsverket_subscriptions (
   id           uuid DEFAULT gen_random_uuid() PRIMARY KEY,
   company_id   uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-  user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- ON DELETE SET NULL: the subscription authenticates COMPANY-level webhook
+  -- deliveries (the auth secret below). Cascading it away with the user who
+  -- happened to register it would silently 401 all subsequent deliveries.
+  user_id      uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   orgnr        text NOT NULL,
   url          text NOT NULL,
   -- Secret we provide as the `auth` field at subscription; Bolagsverket echoes
@@ -199,6 +212,11 @@ CREATE POLICY "delete own-company bolagsverket subscriptions"
 
 CREATE UNIQUE INDEX uq_bolagsverket_subscription
   ON public.bolagsverket_subscriptions (company_id, orgnr, url, environment);
+
+-- The webhook receiver looks subscriptions up by orgnr alone (the unique
+-- index above leads with company_id and cannot serve that path).
+CREATE INDEX idx_bolagsverket_subscriptions_orgnr
+  ON public.bolagsverket_subscriptions (orgnr);
 
 CREATE TRIGGER set_updated_at_bolagsverket_subscriptions
   BEFORE UPDATE ON public.bolagsverket_subscriptions

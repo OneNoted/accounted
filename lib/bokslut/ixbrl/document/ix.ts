@@ -121,7 +121,11 @@ export class FactWriter {
     }
     let markup = el('ix:nonFraction', attrs, formatSekAbs(rounded))
     if (opts.spanClass) markup = el('span', { class: opts.spanClass }, markup)
-    if (opts.displayMinus || rounded < 0) markup = `−${markup}`
+    // Presentational minus is an XOR: a cost row (displayMinus) with its
+    // natural sign shows "−X", but a DEVIATING cost (negative fact value,
+    // sign="-" — i.e. net income on a cost line) displays positive per the
+    // RR convention; conversely a deviating income row displays "−X".
+    if ((opts.displayMinus ?? false) !== rounded < 0) markup = `−${markup}`
     return markup
   }
 

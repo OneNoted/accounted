@@ -11,6 +11,15 @@ import {
   findFiscalPeriod,
   reverseEntry,
 } from '@/lib/bookkeeping/engine'
+import {
+  CannotReverseNonPostedError,
+  EntryAlreadyReversedError,
+} from '@/lib/bookkeeping/errors'
+import {
+  ACCRUAL_NOTHING_TO_DISSOLVE,
+  ACCRUAL_SCHEDULE_NOT_ACTIVE,
+  ACCRUAL_SCHEDULE_NOT_FOUND,
+} from '@/lib/bookkeeping/accruals/errors'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
@@ -193,6 +202,95 @@ describe('postDueInstallments', () => {
     )
   })
 
+  it('reverses its own entry when the CAS claim UPDATE itself errors', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment()] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: null, error: { message: 'connection reset' } }, // claim errored
+      { data: null }, // last_error update in the catch
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    expect(result).toMatchObject({ posted: 0, skipped: 0, failed: 1 })
+    expect(result.errors[0].message).toMatch(/Failed to mark installment posted/)
+    // Without the storno the next cron run would double-book the month.
+    expect(mockReverseEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY,
+      USER,
+      'je-new',
+    )
+  })
+
+  it('records the reversal failure too when storno after claim error fails', async () => {
+    mockReverseEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment()] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: null, error: { message: 'connection reset' } }, // claim errored
+      { data: null }, // last_error update in the catch
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    expect(result.failed).toBe(1)
+    expect(result.errors[0].message).toMatch(/misslyckades också/)
+    expect(result.errors[0].message).toMatch(/Bokföringen är låst/)
+  })
+
+  it('clamps the posting date to the next open fiscal period when the date falls in a closed one', async () => {
+    mockFindFiscalPeriod.mockResolvedValueOnce(null) // 2026 period is closed
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment()] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: { id: 'fp-next', period_start: '2027-01-01' } }, // next open period
+      { data: [{ id: 'inst-1' }] }, // CAS claim
+      { count: 0 },
+      { data: null },
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    expect(result).toMatchObject({ posted: 1, failed: 0 })
+    const input = mockCreateJournalEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2027-01-01')
+    expect(input.fiscal_period_id).toBe('fp-next')
+  })
+
+  it('records an actionable last_error when no open period exists at or after the date', async () => {
+    mockFindFiscalPeriod.mockResolvedValueOnce(null)
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment()] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: null }, // no open period after the date either
+      { data: null }, // last_error update
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-01-20',
+    })
+
+    expect(result).toMatchObject({ posted: 0, failed: 1 })
+    expect(result.errors[0].message).toMatch(/eller senare/)
+    expect(result.errors[0].message).toMatch(/skapa nästa räkenskapsår/)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('records last_error and continues when posting fails', async () => {
     mockCreateJournalEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
     const { supabase, enqueueMany } = createQueuedMockSupabase()
@@ -342,6 +440,47 @@ describe('dissolveScheduleNow', () => {
     ).rejects.toThrow(/ändrades samtidigt/i)
     expect(mockReverseEntry).toHaveBeenCalled()
   })
+
+  it('throws a typed not-found error with a stable code', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: null, error: { message: 'No rows' } }])
+
+    await expect(
+      dissolveScheduleNow(supabase as unknown as SupabaseClient, COMPANY, USER, 'missing'),
+    ).rejects.toMatchObject({
+      code: ACCRUAL_SCHEDULE_NOT_FOUND,
+      message: 'Periodiseringen hittades inte',
+    })
+  })
+
+  it('throws a typed not-active error with a stable code', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeSchedule({ status: 'completed' }) }])
+
+    await expect(
+      dissolveScheduleNow(supabase as unknown as SupabaseClient, COMPANY, USER, 'sched-1'),
+    ).rejects.toMatchObject({
+      code: ACCRUAL_SCHEDULE_NOT_ACTIVE,
+      message: 'Periodiseringen är inte aktiv',
+    })
+  })
+
+  it('throws a typed nothing-to-dissolve error with a stable code', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeSchedule() }, // schedule fetch
+      { data: [] }, // nothing pending
+      { count: 0 }, // completeScheduleIfDone: remaining pending
+      { data: null }, // schedule -> completed
+    ])
+
+    await expect(
+      dissolveScheduleNow(supabase as unknown as SupabaseClient, COMPANY, USER, 'sched-1'),
+    ).rejects.toMatchObject({
+      code: ACCRUAL_NOTHING_TO_DISSOLVE,
+      message: 'Det finns inget kvar att lösa upp',
+    })
+  })
 })
 
 describe('cancelSchedulesForSource', () => {
@@ -362,7 +501,7 @@ describe('cancelSchedulesForSource', () => {
       { reversalDate: '2026-05-01' },
     )
 
-    expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 1 })
+    expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 1, failedReversals: 0 })
     expect(mockReverseEntry).toHaveBeenCalledWith(
       expect.anything(),
       COMPANY,
@@ -370,6 +509,55 @@ describe('cancelSchedulesForSource', () => {
       'je-jan',
       '2026-05-01',
     )
+  })
+
+  it('leaves the schedule active and reports the failure when a storno fails', async () => {
+    mockReverseEntry.mockRejectedValueOnce(new Error('Bokföringen är låst'))
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeSchedule()] }, // schedules for source
+      { data: null }, // pending -> cancelled
+      { data: [{ id: 'inst-1', journal_entry_id: 'je-jan' }] }, // posted rows
+      { data: null }, // last_error update on the stuck installment
+      // NOTE: no schedule -> cancelled update is queued; the schedule must
+      // stay 'active' so the UI keeps showing the un-reversed remainder.
+    ])
+
+    const result = await cancelSchedulesForSource(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toEqual({ cancelledSchedules: 0, reversedEntries: 0, failedReversals: 1 })
+  })
+
+  it('treats already-reversed dissolutions as success and still cancels the schedule', async () => {
+    mockReverseEntry
+      .mockRejectedValueOnce(new EntryAlreadyReversedError())
+      .mockRejectedValueOnce(new CannotReverseNonPostedError('reversed'))
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeSchedule()] },
+      { data: null }, // pending -> cancelled
+      {
+        data: [
+          { id: 'inst-1', journal_entry_id: 'je-jan' },
+          { id: 'inst-2', journal_entry_id: 'je-feb' },
+        ],
+      },
+      { data: null }, // schedule -> cancelled
+    ])
+
+    const result = await cancelSchedulesForSource(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 0, failedReversals: 0 })
   })
 
   it('requires a source id', async () => {

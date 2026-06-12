@@ -74,6 +74,12 @@ export const POST = withRouteContext(
     const hasAccrualItems = body.items.some(
       (item) => item.accrual_period_start && item.accrual_period_end,
     )
+    if (hasAccrualItems && body.reverse_charge) {
+      // Omvänd skattskyldighet: the expense line IS the VAT base for rutor
+      // 20–32 — deferring the net to a 17xx interim account would corrupt the
+      // momsdeklaration. Mirrors the customer-side reverse-charge guard.
+      return errorResponseFromCode('SI_CREATE_ACCRUAL_REVERSE_CHARGE', log, { requestId })
+    }
     if (hasAccrualItems && paidPrivately) {
       // Eget utlägg books the expense in one verifikat at registration —
       // there is no interim-account flow to defer. UI hides the combination.

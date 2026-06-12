@@ -46,7 +46,11 @@ export interface EgetKapitalForandring {
 }
 
 export interface Resultatdisposition {
+  /** Balanserat resultat ONLY (2090–2096 + 2098) — must stay value-identical
+   *  to the BalanseratResultat fact in BR/eget kapital (TA §2.7.3). */
   balanseratResultat: number
+  /** Fri överkursfond (2097), shown as its own row tagged Overkursfond. */
+  overkursfond: number
   aretsResultat: number
   summa: number
   utdelning: number
@@ -66,8 +70,10 @@ export interface IxbrlSigner {
   lastName: string
   /** Visible role label, e.g. "Styrelseledamot", "Verkställande direktör". */
   role: string | null
-  /** ISO date for DatumForUndertecknande (per-signer, TA §2.9.1). */
-  signedDate: string
+  /** ISO date for DatumForUndertecknande (per-signer, TA §2.9.1).
+   *  Null when the signature request has not been signed yet — the date fact
+   *  is then omitted (never fabricated) and preflight 1214 blocks filing. */
+  signedDate: string | null
 }
 
 export interface IxbrlArsredovisningInput {
@@ -118,8 +124,11 @@ export interface IxbrlArsredovisningInput {
   }
 
   faststallelseintyg: {
-    /** AGM date — must be > räkenskapsårets sista dag (kontrollera 1101). */
-    arsstammaDatum: string
+    /** AGM date — must be > räkenskapsårets sista dag (kontrollera 1101).
+     *  Null when no AGM date is recorded: the document renders a visible
+     *  placeholder instead of a fabricated date and preflight 1103 blocks
+     *  filing (Bolagsverket kontrollera 1103 semantics). */
+    arsstammaDatum: string | null
     /** The företrädare who will sign at Bolagsverket. */
     signerFirstName: string
     signerLastName: string

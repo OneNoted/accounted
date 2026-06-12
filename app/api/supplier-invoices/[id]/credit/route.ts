@@ -144,17 +144,35 @@ export const POST = withRouteContext(
     // already-posted dissolutions so origin + dissolutions + stornos +
     // credit-note net to zero on both the interim and cost accounts.
     // Best-effort: a reversal hiccup (e.g. locked period) must not block the
-    // credit itself — the schedule stays visible for manual follow-up.
+    // credit itself — the schedule stays active and visible for follow-up,
+    // and the response carries a PARTIAL-style warning (same pattern as the
+    // supplier-create route's ACCRUAL_SCHEDULE_FAILED warning).
+    const warnings: Array<{ code: string; message: string }> = []
     try {
-      await cancelSchedulesForSource(
+      const cancelResult = await cancelSchedulesForSource(
         supabase,
         companyId!,
         user.id,
         { supplierInvoiceId: id },
         { reversalDate: creditNote.invoice_date },
       )
+      if (cancelResult.failedReversals > 0) {
+        warnings.push({
+          code: 'ACCRUAL_CANCEL_PARTIAL',
+          message:
+            'Fakturan krediterades, men en eller flera periodiseringsverifikat ' +
+            'kunde inte vändas. Periodiseringen är fortfarande aktiv — ' +
+            'kontrollera under Bokföring → Periodiseringar.',
+        })
+      }
     } catch (err) {
       opLog.warn('failed to cancel accrual schedules for credited supplier invoice', err as Error)
+      warnings.push({
+        code: 'ACCRUAL_CANCEL_PARTIAL',
+        message:
+          'Fakturan krediterades, men periodiseringarna kunde inte avslutas. ' +
+          'Kontrollera under Bokföring → Periodiseringar.',
+      })
     }
 
     const newRemaining = Math.max(0, original.remaining_amount - original.total)
@@ -185,6 +203,7 @@ export const POST = withRouteContext(
     return NextResponse.json({
       data: creditNote,
       journal_entry_id: journalEntryId,
+      ...(warnings.length > 0 ? { warnings } : {}),
     })
   },
   { requireWrite: true },

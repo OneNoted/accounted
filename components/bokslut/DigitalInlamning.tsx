@@ -23,6 +23,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
+import { formatDate } from '@/lib/utils'
 import {
   ExternalLink,
   FileDown,
@@ -83,6 +84,27 @@ type SubmitOutcome =
   | { outcome: 'kontrollera_stopped'; submissionId: string; utfall: KontrolleraUtfall[] }
   | { outcome: 'uploaded'; submissionId: string; idnummer: string; url: string; utfall: KontrolleraUtfall[] }
 
+/**
+ * Normalize a Swedish personnummer to the 12-digit ÅÅÅÅMMDDNNNN form the
+ * Bolagsverket token API requires. 10-digit input gets its century inferred:
+ * a 2-digit year greater than the current year's last two digits → 19xx,
+ * otherwise 20xx; the '+' separator (person 100+ years) shifts one more
+ * century back. Returns null when the input is neither 10 nor 12 digits.
+ */
+function normalizePnr(raw: string): string | null {
+  const trimmed = raw.trim()
+  const digits = trimmed.replace(/\D/g, '')
+  if (digits.length === 12) return digits
+  if (digits.length !== 10) return null
+  const now = new Date()
+  const currentCentury = Math.floor(now.getFullYear() / 100)
+  const currentYy = now.getFullYear() % 100
+  const yy = Number(digits.slice(0, 2))
+  let century = yy > currentYy ? currentCentury - 1 : currentCentury
+  if (trimmed.includes('+')) century -= 1
+  return `${century}${digits}`
+}
+
 const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline' }> = {
   draft: { label: 'Utkast', variant: 'outline' },
   kontrollerad: { label: 'Kontrollerad', variant: 'secondary' },
@@ -119,8 +141,20 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [utfall, setUtfall] = useState<KontrolleraUtfall[] | null>(null)
   const [kvittens, setKvittens] = useState<{ idnummer: string; url: string } | null>(null)
 
+  // Proposed dividend (utdelning) for the resultatdisposition. There is no
+  // persisted dividend proposal in the year-end flow yet, so the value is
+  // entered here and forwarded to the preview, the download and the
+  // submission so all three render the same disposition.
+  const [utdelning, setUtdelning] = useState('')
+  const parsedUtdelning = Math.round(Number(utdelning.replace(/\s/g, '').replace(',', '.')))
+  const utdelningValue = Number.isFinite(parsedUtdelning) && parsedUtdelning > 0 ? parsedUtdelning : 0
+  const previewUrl = utdelningValue > 0 ? `${ixbrlUrl}?utdelning=${utdelningValue}` : ixbrlUrl
+  const downloadUrl =
+    utdelningValue > 0 ? `${ixbrlUrl}?download=1&utdelning=${utdelningValue}` : `${ixbrlUrl}?download=1`
+
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
+  const [submissionsError, setSubmissionsError] = useState<string | null>(null)
 
   const loadSubmissions = useCallback(async () => {
     setLoadingSubmissions(true)
@@ -131,7 +165,15 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       if (res.ok) {
         const body = await res.json()
         setSubmissions((body.data ?? []) as SubmissionRow[])
+        setSubmissionsError(null)
+      } else {
+        setSubmissionsError('Kunde inte hämta inlämningshistoriken — försök igen.')
       }
+    } catch {
+      // Non-blocking: the call sites fire-and-forget (`void loadSubmissions()`),
+      // so a network failure must surface here instead of as an unhandled
+      // rejection.
+      setSubmissionsError('Kunde inte hämta inlämningshistoriken — försök igen.')
     } finally {
       setLoadingSubmissions(false)
     }
@@ -162,7 +204,9 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const handleValidate = async () => {
     setValidating(true)
     try {
-      const res = await fetch(`${ixbrlUrl}/validate`)
+      const res = await fetch(
+        `${ixbrlUrl}/validate${utdelningValue > 0 ? `?utdelning=${utdelningValue}` : ''}`,
+      )
       const body = await res.json()
       if (body?.error) {
         toast({ title: 'Kunde inte validera', description: body.error.message, variant: 'destructive' })
@@ -177,8 +221,12 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   }
 
   const handleSubmit = async (opts: { ignoreWarnings?: boolean } = {}) => {
-    if (!/^\d{10,12}$/.test(avsandarePnr.replace(/\D/g, '')) || !/^\d{10,12}$/.test(pnr.replace(/\D/g, ''))) {
-      toast({ title: 'Ange personnummer med 10–12 siffror', variant: 'destructive' })
+    // The Bolagsverket token API needs 12 digits (ÅÅÅÅMMDDNNNN); 10-digit
+    // input is normalized client-side with a century pivot.
+    const normalizedAvsandare = normalizePnr(avsandarePnr)
+    const normalizedPnr = normalizePnr(pnr)
+    if (!normalizedAvsandare || !normalizedPnr) {
+      toast({ title: 'Ange personnummer med 10 eller 12 siffror', variant: 'destructive' })
       return
     }
     if (!fornamn.trim() || !efternamn.trim() || !epost.trim()) {
@@ -193,14 +241,15 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fiscal_period_id: periodId,
-          avsandare_pnr: avsandarePnr.replace(/\D/g, ''),
+          avsandare_pnr: normalizedAvsandare,
           undertecknare: {
-            pnr: pnr.replace(/\D/g, ''),
+            pnr: normalizedPnr,
             fornamn: fornamn.trim(),
             efternamn: efternamn.trim(),
             roll,
             epost: epost.trim(),
           },
+          ...(utdelningValue > 0 ? { utdelning: utdelningValue } : {}),
           ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
           ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
         }),
@@ -291,12 +340,27 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           </p>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
+          <div className="space-y-1.5 max-w-xs">
+            <Label htmlFor="di-utdelning">Föreslagen utdelning (kr)</Label>
+            <Input
+              id="di-utdelning"
+              inputMode="numeric"
+              placeholder="0"
+              value={utdelning}
+              onChange={(event) => setUtdelning(event.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Ingår i resultatdispositionen i dokumentet — 0 betyder att allt
+              balanseras i ny räkning. Beloppet följer med förhandsgranskning,
+              nedladdning och inlämning.
+            </p>
+          </div>
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" onClick={() => setShowPreview((value) => !value)}>
               {showPreview ? 'Dölj förhandsgranskning' : 'Förhandsgranska iXBRL'}
             </Button>
             <Button variant="outline" asChild>
-              <a href={`${ixbrlUrl}?download=1`}>
+              <a href={downloadUrl}>
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner iXBRL (.xhtml)
               </a>
             </Button>
@@ -312,7 +376,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
 
           {showPreview && (
             <iframe
-              src={ixbrlUrl}
+              src={previewUrl}
               title="Förhandsgranskning av årsredovisning (iXBRL)"
               className="w-full h-[640px] rounded-lg border border-border bg-white"
             />
@@ -402,7 +466,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Input
                     id="di-avsandare-pnr"
                     inputMode="numeric"
-                    placeholder="ÅÅÅÅMMDDNNNN"
+                    placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
                     value={avsandarePnr}
                     onChange={(event) => setAvsandarePnr(event.target.value)}
                   />
@@ -412,7 +476,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Input
                     id="di-pnr"
                     inputMode="numeric"
-                    placeholder="ÅÅÅÅMMDDNNNN"
+                    placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
                     value={pnr}
                     onChange={(event) => setPnr(event.target.value)}
                   />
@@ -563,12 +627,13 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 <RefreshCcw className="mr-2 h-4 w-4" /> Uppdatera status
               </Button>
             </div>
+            {submissionsError && <p className="text-xs text-destructive">{submissionsError}</p>}
             {loadingSubmissions && submissions.length === 0 && (
               <p className="text-muted-foreground">
                 <Loader2 className="inline h-4 w-4 animate-spin mr-2" /> Hämtar …
               </p>
             )}
-            {!loadingSubmissions && submissions.length === 0 && (
+            {!loadingSubmissions && submissions.length === 0 && !submissionsError && (
               <p className="text-muted-foreground italic">Inga inlämningar ännu.</p>
             )}
             {submissions.map((submission) => {
@@ -589,7 +654,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground tabular-nums">
-                      {new Date(submission.created_at).toISOString().slice(0, 16).replace('T', ' ')}
+                      {formatDate(submission.created_at)}
                       {submission.idnummer ? ` · id ${submission.idnummer}` : ''}
                       {submission.undertecknare_namn ? ` · ${submission.undertecknare_namn}` : ''}
                     </p>

@@ -544,6 +544,10 @@ async function createCreditNote(
   log: Logger,
   requestId: string,
 ) {
+  // Non-blocking issues (e.g. partial accrual cancellation) surfaced to the
+  // caller alongside the created credit note.
+  const warnings: Array<{ code: string; message: string }> = []
+
   const { data: originalInvoice, error: originalError } = await supabase
     .from('invoices')
     .select('*, items:invoice_items(*)')
@@ -702,17 +706,34 @@ async function createCreditNote(
 
     // Periodisering interplay: cancel remaining months and storno posted
     // dissolutions so origin + dissolutions + stornos + credit net to zero on
-    // both 29xx and 3xxx. Best-effort — never blocks the credit itself.
+    // both 29xx and 3xxx. Best-effort — never blocks the credit itself, but
+    // partial reversals are surfaced as a response warning so the user knows
+    // the schedule stayed active.
     try {
-      await cancelSchedulesForSource(
+      const cancelResult = await cancelSchedulesForSource(
         supabase,
         companyId,
         userId,
         { invoiceId: input.credited_invoice_id },
         { reversalDate: creditNote.invoice_date },
       )
+      if (cancelResult.failedReversals > 0) {
+        warnings.push({
+          code: 'ACCRUAL_CANCEL_PARTIAL',
+          message:
+            'Fakturan krediterades, men en eller flera periodiseringsverifikat ' +
+            'kunde inte vändas. Periodiseringen är fortfarande aktiv — ' +
+            'kontrollera under Bokföring → Periodiseringar.',
+        })
+      }
     } catch (err) {
       log.warn('failed to cancel accrual schedules for credited invoice', err as Error)
+      warnings.push({
+        code: 'ACCRUAL_CANCEL_PARTIAL',
+        message:
+          'Fakturan krediterades, men periodiseringarna kunde inte avslutas. ' +
+          'Kontrollera under Bokföring → Periodiseringar.',
+      })
     }
 
     await eventBus.emit({
@@ -721,5 +742,8 @@ async function createCreditNote(
     })
   }
 
-  return NextResponse.json({ data: completeCreditNote })
+  return NextResponse.json({
+    data: completeCreditNote,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  })
 }

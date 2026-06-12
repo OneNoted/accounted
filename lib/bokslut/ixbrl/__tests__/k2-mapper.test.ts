@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mapTrialBalancesToK2, type TrialBalanceRowLike } from '../k2-mapper'
+import { CURRENT, PREVIOUS } from './fixtures'
 
 const row = (
   account: string,
@@ -13,54 +14,9 @@ const row = (
   closing_credit: credit,
 })
 
-/** Current-year fixture: small AB, balanced at 380 000, result 120 000. */
-const CURRENT: TrialBalanceRowLike[] = [
-  row('1220', 'Inventarier och verktyg', 80_000, 0),
-  row('1229', 'Ack. avskrivningar inventarier', 0, 20_000),
-  row('1510', 'Kundfordringar', 50_000, 0),
-  row('1930', 'Företagskonto', 270_000, 0),
-  row('2081', 'Aktiekapital', 0, 25_000),
-  row('2091', 'Balanserad vinst eller förlust', 0, 100_000),
-  row('2099', 'Årets resultat', 0, 120_000),
-  row('2110', 'Periodiseringsfond', 0, 40_000),
-  row('2440', 'Leverantörsskulder', 0, 30_000),
-  row('2510', 'Skatteskulder', 0, 35_000),
-  row('2610', 'Utgående moms 25 %', 0, 20_000),
-  row('2941', 'Upplupna sociala avgifter', 0, 10_000),
-  row('3010', 'Försäljning', 0, 1_000_000),
-  row('4010', 'Inköp material och varor', 200_000, 0),
-  row('5010', 'Lokalhyra', 100_000, 0),
-  row('7010', 'Löner', 400_000, 0),
-  row('7510', 'Arbetsgivaravgifter', 125_660, 0),
-  row('7832', 'Avskrivningar inventarier', 20_000, 0),
-  row('8310', 'Ränteintäkter', 0, 1_000),
-  row('8410', 'Räntekostnader', 4_000, 0),
-  row('8811', 'Avsättning till periodiseringsfond', 10_000, 0),
-  row('8910', 'Skatt på årets resultat', 21_340, 0),
-]
-
-const PREVIOUS: TrialBalanceRowLike[] = [
-  row('1220', 'Inventarier och verktyg', 80_000, 0),
-  row('1229', 'Ack. avskrivningar inventarier', 0, 12_000),
-  row('1930', 'Företagskonto', 185_000, 0),
-  row('2081', 'Aktiekapital', 0, 25_000),
-  row('2091', 'Balanserad vinst eller förlust', 0, 60_000),
-  row('2099', 'Årets resultat', 0, 40_000),
-  row('2110', 'Periodiseringsfond', 0, 30_000),
-  row('2440', 'Leverantörsskulder', 0, 25_000),
-  row('2510', 'Skatteskulder', 0, 15_000),
-  row('2610', 'Utgående moms 25 %', 0, 8_000),
-  row('2941', 'Upplupna sociala avgifter', 0, 50_000),
-  row('3010', 'Försäljning', 0, 500_000),
-  row('4010', 'Inköp material och varor', 200_000, 0),
-  row('5010', 'Lokalhyra', 80_000, 0),
-  row('7010', 'Löner', 150_000, 0),
-  row('7832', 'Avskrivningar inventarier', 8_000, 0),
-  row('8410', 'Räntekostnader', 2_000, 0),
-  row('8910', 'Skatt på årets resultat', 20_000, 0),
-]
-
 describe('mapTrialBalancesToK2', () => {
+  // Realistic post-bokslut pairs: full TB has class 3–8 zeroed + 2099 booked;
+  // preClosing TB has the RR accounts open (see fixtures.ts).
   const result = mapTrialBalancesToK2(CURRENT, PREVIOUS)
 
   it('maps RR posts with natural orientation for both years', () => {
@@ -136,6 +92,27 @@ describe('mapTrialBalancesToK2', () => {
     expect(result.totals.aretsResultat.current).toBe(result.br['AretsResultatEgetKapital'].current)
   })
 
+  // Regression for the year-end-closing split: a realistic post-bokslut TB
+  // pair must yield NON-ZERO RR concepts (from the pre-closing TB) AND a BR
+  // that ties (from the full TB). Mapping a single TB can never do both: the
+  // closing entry zeroes class 3–8, so RR concepts would collapse to 0.
+  it('regression: post-bokslut pair gives non-zero RR and a balancing BR', () => {
+    const res = mapTrialBalancesToK2(CURRENT, PREVIOUS)
+    expect(res.rr['Nettoomsattning'].current).toBe(1_000_000)
+    expect(res.totals.aretsResultat.current).toBe(120_000)
+    expect(res.totals.aretsResultat.current).toBe(res.br['AretsResultatEgetKapital'].current)
+    expect(res.totals.tillgangar.current).toBe(res.totals.egetKapitalSkulder.current)
+    expect(res.warnings).toEqual([])
+
+    // Sanity: the full TB really has the RR accounts zeroed — mapping it as
+    // the RR source would produce an all-zero resultaträkning.
+    const wrong = mapTrialBalancesToK2(
+      { full: CURRENT.full, preClosing: CURRENT.full },
+      null,
+    )
+    expect(wrong.rr['Nettoomsattning'].current).toBe(0)
+  })
+
   it('handles first fiscal year (no previous trial balance)', () => {
     const firstYear = mapTrialBalancesToK2(CURRENT, null)
     expect(firstYear.rr['Nettoomsattning']).toEqual({ current: 1_000_000, previous: null })
@@ -143,7 +120,10 @@ describe('mapTrialBalancesToK2', () => {
   })
 
   it('flags unmapped accounts (their balance never reaches the BR)', () => {
-    const broken = [...CURRENT, row('9999', 'Internkonto', 5_000, 0)]
+    const broken = {
+      full: CURRENT.full,
+      preClosing: [...CURRENT.preClosing, row('9999', 'Internkonto', 5_000, 0)],
+    }
     const res = mapTrialBalancesToK2(broken, null)
     expect(res.unmappedAccounts).toHaveLength(1)
     expect(res.unmappedAccounts[0].account).toBe('9999')
@@ -151,22 +131,20 @@ describe('mapTrialBalancesToK2', () => {
   })
 
   it('warns when the mapped balance sheet does not balance (3005)', () => {
-    const broken = CURRENT.map((r2) =>
+    const brokenFull = CURRENT.full.map((r2) =>
       r2.account_number === '1930' ? { ...r2, closing_debit: 275_000 } : r2,
     )
-    const res = mapTrialBalancesToK2(broken, null)
+    const res = mapTrialBalancesToK2({ full: brokenFull, preClosing: CURRENT.preClosing }, null)
     expect(res.warnings.some((w) => w.includes('3005'))).toBe(true)
   })
 
   it('warns when 2099 is not booked (RR ≠ BR result)', () => {
-    const noResult = CURRENT.map((r2) =>
-      r2.account_number === '2099'
-        ? { ...r2, closing_credit: 0 }
-        : r2.account_number === '2091'
-          ? { ...r2, closing_credit: 220_000 }
-          : r2,
+    // "Bokslut not run" = the full TB equals the pre-closing TB (no closing
+    // entry exists), so 2099 carries no result.
+    const res = mapTrialBalancesToK2(
+      { full: CURRENT.preClosing, preClosing: CURRENT.preClosing },
+      null,
     )
-    const res = mapTrialBalancesToK2(noResult, null)
     expect(res.warnings.some((w) => w.includes('2099'))).toBe(true)
   })
 
@@ -177,11 +155,65 @@ describe('mapTrialBalancesToK2', () => {
       row('4940', 'Förändring produkter i arbete', 0, 7_000),
       row('4960', 'Förändring lager handelsvaror', 3_000, 0),
     ]
-    const res = mapTrialBalancesToK2(rows, null)
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
     expect(res.rr['RavarorFornodenheterKostnader'].current).toBe(-5_000)
     expect(
       res.rr['ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning'].current,
     ).toBe(7_000)
     expect(res.rr['HandelsvarorKostnader'].current).toBe(3_000)
+  })
+})
+
+describe('mapTrialBalancesToK2 — öre-rounding residual smoothing', () => {
+  it('absorbs a ±1 kr BR residual into the largest equity/liability post', () => {
+    // Assets round UP twice (.50 each), liabilities round once up once down:
+    // rounded Tillgångar 202 vs rounded EK+skulder 201 although the TB ties
+    // exactly at 201,00. The +1 residual lands in the largest post on the
+    // equity/liabilities side (Leverantörsskulder).
+    const rows = [
+      row('1510', 'Kundfordringar', 100.5, 0),
+      row('1930', 'Bank', 100.5, 0),
+      row('2440', 'Leverantörsskulder', 0, 100.75),
+      row('2510', 'Skatteskulder', 0, 100.25),
+    ]
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+    expect(res.totals.tillgangar.current).toBe(202)
+    expect(res.totals.egetKapitalSkulder.current).toBe(202)
+    expect(res.br['Leverantorsskulder'].current).toBe(102)
+    expect(res.br['Skatteskulder'].current).toBe(100)
+    expect(res.warnings).toEqual([])
+  })
+
+  it('absorbs a ±1 kr RR residual so the RR result equals 2099 exactly', () => {
+    // Two revenue posts of 100,25 each round to 100 + 100 = 200, while the
+    // booked 2099 (200,50) rounds to 201. The −1 residual is absorbed by the
+    // largest RR post (Nettoomsättning).
+    const preClosing = [
+      row('1930', 'Bank', 200.5, 0),
+      row('3010', 'Försäljning', 0, 100.25),
+      row('3990', 'Övriga intäkter', 0, 100.25),
+    ]
+    const full = [
+      row('1930', 'Bank', 200.5, 0),
+      row('2099', 'Årets resultat', 0, 200.5),
+      row('3010', 'Försäljning', 100.25, 100.25),
+      row('3990', 'Övriga intäkter', 100.25, 100.25),
+    ]
+    const res = mapTrialBalancesToK2({ full, preClosing }, null)
+    expect(res.rr['Nettoomsattning'].current).toBe(101)
+    expect(res.totals.aretsResultat.current).toBe(201)
+    expect(res.br['AretsResultatEgetKapital'].current).toBe(201)
+    expect(res.totals.tillgangar.current).toBe(res.totals.egetKapitalSkulder.current)
+    expect(res.warnings).toEqual([])
+  })
+
+  it('leaves residuals beyond ±1 kr alone and reports them', () => {
+    const rows = [
+      row('1930', 'Bank', 1_000, 0),
+      row('2440', 'Leverantörsskulder', 0, 990),
+    ]
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+    expect(res.br['Leverantorsskulder'].current).toBe(990)
+    expect(res.warnings.some((w) => w.includes('3005'))).toBe(true)
   })
 })

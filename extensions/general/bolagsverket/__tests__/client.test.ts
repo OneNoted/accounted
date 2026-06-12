@@ -1,15 +1,44 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
   BolagsverketClient,
   BolagsverketApiError,
   BOLAGSVERKET_ERROR_MESSAGES,
   configFromEnv,
+  extractFelkod,
+  isBolagsverketEnvironment,
 } from '../lib/client'
 
 describe('configFromEnv', () => {
+  const originalEnv = process.env.BOLAGSVERKET_ENV
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.BOLAGSVERKET_ENV
+    else process.env.BOLAGSVERKET_ENV = originalEnv
+  })
+
   it('defaults to the test environment', () => {
+    delete process.env.BOLAGSVERKET_ENV
     const config = configFromEnv()
     expect(config.environment).toBe('test')
+  })
+
+  it('rejects an invalid environment override with a clear error', () => {
+    expect(() => configFromEnv({ environment: 'banana' as never })).toThrow(
+      /Ogiltig Bolagsverket-miljö/,
+    )
+  })
+
+  it('rejects a garbage BOLAGSVERKET_ENV env var with a clear error', () => {
+    process.env.BOLAGSVERKET_ENV = 'production' // common typo for 'prod'
+    expect(() => configFromEnv()).toThrow(/Ogiltig Bolagsverket-miljö/)
+  })
+
+  it('isBolagsverketEnvironment validates the three known environments', () => {
+    expect(isBolagsverketEnvironment('test')).toBe(true)
+    expect(isBolagsverketEnvironment('accept')).toBe(true)
+    expect(isBolagsverketEnvironment('prod')).toBe(true)
+    expect(isBolagsverketEnvironment('production')).toBe(false)
+    expect(isBolagsverketEnvironment(undefined)).toBe(false)
+    expect(isBolagsverketEnvironment(null)).toBe(false)
   })
 
   it('decodes base64-wrapped PEM material', () => {
@@ -34,6 +63,24 @@ describe('BolagsverketClient', () => {
   it('exposes the configured environment', () => {
     expect(new BolagsverketClient({ environment: 'test' }).environment).toBe('test')
     expect(new BolagsverketClient({ environment: 'prod' }).environment).toBe('prod')
+  })
+})
+
+describe('extractFelkod (error-body anchoring)', () => {
+  it('extracts the felkod from JSON bodies', () => {
+    expect(extractFelkod('{"felkod":"4001","text":"fel"}')).toBe('4001')
+    expect(extractFelkod('{"kod":7003}')).toBe('7003')
+  })
+
+  it('extracts the felkod from "NNNN=text" bodies', () => {
+    expect(extractFelkod('4008=Filen innehåller tekniska fel')).toBe('4008')
+    expect(extractFelkod('  \n 5006 = Dokumentet är för stort')).toBe('5006')
+  })
+
+  it('does not false-positive on years or stray four-digit numbers in prose', () => {
+    expect(extractFelkod('Räkenskapsåret 2026 kunde inte hanteras just nu')).toBeNull()
+    expect(extractFelkod('{"message":"taxonomin för 2024 hittades inte (id 5008)"}')).toBeNull()
+    expect(extractFelkod('Internt fel 9003 uppstod')).toBeNull()
   })
 })
 

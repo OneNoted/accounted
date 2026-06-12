@@ -634,8 +634,31 @@ export default function NewSupplierInvoicePage() {
   }
 
   // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
-  // kostnaden direkt mot ägarkontot och kan inte periodiseras.
-  const canUseAccrual = accountingMethod === 'accrual' && !watchedPaidPrivately
+  // kostnaden direkt mot ägarkontot och kan inte periodiseras. Omvänd
+  // skattskyldighet kan inte heller periodiseras — kostnadsraden utgör
+  // momsunderlaget (ruta 20–32) och får inte flyttas till ett interimskonto.
+  const canUseAccrual =
+    accountingMethod === 'accrual' && !watchedPaidPrivately && !watchedReverseCharge
+
+  // When reverse charge is switched on, clear any per-line periodisering so a
+  // stale AI prefill (or fields set before the toggle) can never reach the
+  // API, which rejects the combination with SI_CREATE_ACCRUAL_REVERSE_CHARGE.
+  useEffect(() => {
+    if (!watchedReverseCharge) return
+    const items = getValues('items') ?? []
+    items.forEach((item, index) => {
+      if (
+        item.accrual_period_start !== undefined ||
+        item.accrual_period_end !== undefined ||
+        item.accrual_balance_account !== undefined
+      ) {
+        setValue(`items.${index}.accrual_period_start`, undefined, { shouldDirty: true })
+        setValue(`items.${index}.accrual_period_end`, undefined, { shouldDirty: true })
+        setValue(`items.${index}.accrual_balance_account`, undefined, { shouldDirty: true })
+      }
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedReverseCharge])
 
   function isAccrualOpen(index: number): boolean {
     return watchedItems?.[index]?.accrual_balance_account != null

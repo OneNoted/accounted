@@ -687,6 +687,37 @@ describe('POST /api/supplier-invoices', () => {
     expect(items[0].vat_amount).toBe(2500)
   })
 
+  it('rejects periodisering combined with reverse_charge', async () => {
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-RC-ACC',
+        invoice_date: '2026-01-01',
+        due_date: '2026-02-01',
+        reverse_charge: true,
+        items: [
+          {
+            description: 'Licens 12 mån',
+            amount: 12000,
+            account_number: '6540',
+            vat_rate: 0,
+            accrual_period_start: '2026-01-01',
+            accrual_period_end: '2026-12-31',
+          },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_ACCRUAL_REVERSE_CHARGE')
+    // The guard must fire before anything is persisted or booked.
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoicePrivatelyPaidEntry).not.toHaveBeenCalled()
+  })
+
   it('rejects paid_with_private_funds combined with reverse_charge', async () => {
     const request = createMockRequest('/api/supplier-invoices', {
       method: 'POST',

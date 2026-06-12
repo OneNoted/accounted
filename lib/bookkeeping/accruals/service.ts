@@ -29,6 +29,15 @@ import {
   reverseEntry,
 } from '@/lib/bookkeeping/engine'
 import {
+  CannotReverseNonPostedError,
+  EntryAlreadyReversedError,
+} from '@/lib/bookkeeping/errors'
+import {
+  AccrualNothingToDissolveError,
+  AccrualScheduleNotActiveError,
+  AccrualScheduleNotFoundError,
+} from '@/lib/bookkeeping/accruals/errors'
+import {
   computeInstallments,
   dayAfter,
   firstOfMonth,
@@ -85,6 +94,29 @@ async function fetchLockDateFloor(
   const lockedThrough = (data as { bookkeeping_locked_through?: string | null } | null)
     ?.bookkeeping_locked_through
   return lockedThrough ? dayAfter(lockedThrough) : null
+}
+
+/**
+ * Earliest OPEN fiscal period starting after `date`. Used to clamp a posting
+ * date forward when the computed date falls inside a closed period (bokslut
+ * done) — same spirit as the company lock-date floor.
+ */
+async function findNextOpenPeriodStart(
+  supabase: SupabaseClient,
+  companyId: string,
+  date: string,
+): Promise<{ fiscalPeriodId: string; periodStart: string } | null> {
+  const { data } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start')
+    .eq('company_id', companyId)
+    .eq('is_closed', false)
+    .gt('period_start', date)
+    .order('period_start', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  const row = data as { id: string; period_start: string } | null
+  return row ? { fiscalPeriodId: row.id, periodStart: row.period_start } : null
 }
 
 function dissolutionLines(
@@ -263,14 +295,26 @@ export async function postDueInstallments(
   for (const installment of due) {
     const schedule = installment.schedule as ScheduleRow
     try {
-      const entryDate = maxIsoDate(
+      let entryDate = maxIsoDate(
         installment.period_month,
         schedule.posting_floor_date,
         lockFloor,
       )
-      const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
+      let fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
       if (!fiscalPeriodId) {
-        throw new Error(`Ingen öppen räkenskapsperiod för ${entryDate}`)
+        // The computed date can fall inside a CLOSED fiscal period (bokslut
+        // done while the company lock date lags behind). Clamp forward to the
+        // start of the earliest open period — same spirit as the lockFloor —
+        // instead of retrying the same impossible date forever.
+        const clamped = await findNextOpenPeriodStart(supabase, companyId, entryDate)
+        if (!clamped) {
+          throw new Error(
+            `Ingen öppen räkenskapsperiod för ${entryDate} eller senare — ` +
+              'skapa nästa räkenskapsår för att kunna bokföra periodiseringen',
+          )
+        }
+        entryDate = clamped.periodStart
+        fiscalPeriodId = clamped.fiscalPeriodId
       }
 
       const monthLabel = installment.period_month.slice(0, 7)
@@ -308,7 +352,32 @@ export async function postDueInstallments(
         .select('id')
 
       if (claimError) {
-        throw new Error(`Failed to mark installment posted: ${claimError.message}`)
+        // The journal entry is already committed but the installment was NOT
+        // flipped to posted — without a storno the next run would book the
+        // same month twice. Mirror the dissolveScheduleNow handling: reverse
+        // our own entry best-effort, then record the failure (the catch below
+        // writes last_error on the installment).
+        let reversalNote = ''
+        try {
+          await reverseEntry(
+            supabase,
+            companyId,
+            options.userId ?? schedule.user_id,
+            entry.id,
+          )
+        } catch (reversalError) {
+          log.error('failed to reverse accrual entry after claim error', reversalError, {
+            companyId,
+            installmentId: installment.id,
+            entryId: entry.id,
+          })
+          reversalNote =
+            `; storno av verifikat ${entry.id} misslyckades också: ` +
+            getErrorMessage(reversalError)
+        }
+        throw new Error(
+          `Failed to mark installment posted: ${claimError.message}${reversalNote}`,
+        )
       }
       if (!claimed || claimed.length === 0) {
         log.warn('accrual installment claimed concurrently; reversing duplicate entry', {
@@ -396,11 +465,11 @@ export async function dissolveScheduleNow(
     .single()
 
   if (scheduleError || !scheduleData) {
-    throw new Error('Periodiseringen hittades inte')
+    throw new AccrualScheduleNotFoundError()
   }
   const schedule = scheduleData as ScheduleRow
   if (schedule.status !== 'active') {
-    throw new Error('Periodiseringen är inte aktiv')
+    throw new AccrualScheduleNotActiveError(schedule.status)
   }
 
   const { data: pendingData, error: pendingError } = await supabase
@@ -416,7 +485,7 @@ export async function dissolveScheduleNow(
   const pending = (pendingData ?? []) as InstallmentRow[]
   if (pending.length === 0) {
     await completeScheduleIfDone(supabase, companyId, scheduleId)
-    throw new Error('Det finns inget kvar att lösa upp')
+    throw new AccrualNothingToDissolveError()
   }
 
   const amount =
@@ -479,6 +548,12 @@ export async function dissolveScheduleNow(
  * reversed (storno), and the schedule is marked cancelled. The caller's
  * credit-note entry reverses the interim account at its full original
  * amount, so the net of origin + dissolutions + stornos + credit is zero.
+ *
+ * A schedule is only marked cancelled when ALL its posted dissolutions
+ * reversed cleanly — otherwise it stays 'active' (so the UI keeps showing
+ * the un-reversed remainder instead of remaining=0 while 17xx/29xx is still
+ * unbalanced) and the stuck installments get a descriptive last_error.
+ * Callers should surface `failedReversals > 0` as a warning.
  */
 export async function cancelSchedulesForSource(
   supabase: SupabaseClient,
@@ -486,7 +561,11 @@ export async function cancelSchedulesForSource(
   userId: string,
   source: { supplierInvoiceId?: string; invoiceId?: string },
   options: { reversalDate?: string } = {},
-): Promise<{ cancelledSchedules: number; reversedEntries: number }> {
+): Promise<{
+  cancelledSchedules: number
+  reversedEntries: number
+  failedReversals: number
+}> {
   if (!source.supplierInvoiceId && !source.invoiceId) {
     throw new Error('cancelSchedulesForSource requires a source invoice id')
   }
@@ -506,9 +585,14 @@ export async function cancelSchedulesForSource(
   }
   const schedules = (data ?? []) as ScheduleRow[]
 
+  let cancelledSchedules = 0
   let reversedEntries = 0
+  let failedReversals = 0
 
   for (const schedule of schedules) {
+    // Cancel pending months first so the posting cron cannot book new
+    // dissolutions for a credited invoice while (or after) we storno the
+    // already-posted ones.
     await supabase
       .from('accrual_schedule_installments')
       .update({ status: 'cancelled' })
@@ -523,6 +607,7 @@ export async function cancelSchedulesForSource(
       .eq('schedule_id', schedule.id)
       .eq('status', 'posted')
 
+    let scheduleFailures = 0
     for (const installment of (postedData ?? []) as Array<{
       id: string
       journal_entry_id: string | null
@@ -538,15 +623,38 @@ export async function cancelSchedulesForSource(
         )
         reversedEntries++
       } catch (error) {
-        // Already-reversed entries are fine (idempotent re-credit); anything
-        // else is logged and surfaced via the schedule staying visible.
+        // A dissolution stornoed by an earlier (partially failed) cancel run
+        // is fine — idempotent re-credit, treated as success.
+        if (
+          error instanceof EntryAlreadyReversedError ||
+          (error instanceof CannotReverseNonPostedError &&
+            error.currentStatus === 'reversed')
+        ) {
+          continue
+        }
+        scheduleFailures++
+        const message = getErrorMessage(error)
         log.warn('could not reverse accrual dissolution during cancel', {
           companyId,
           scheduleId: schedule.id,
           journalEntryId: installment.journal_entry_id,
-          message: getErrorMessage(error),
+          message,
         })
+        // Posted installments freeze their financial fields, but last_error
+        // stays writable — surface the stuck storno in the periodiseringar UI.
+        await supabase
+          .from('accrual_schedule_installments')
+          .update({
+            last_error: `Storno vid kreditering misslyckades: ${message}`,
+          })
+          .eq('id', installment.id)
+          .eq('company_id', companyId)
       }
+    }
+
+    if (scheduleFailures > 0) {
+      failedReversals += scheduleFailures
+      continue
     }
 
     await supabase
@@ -554,7 +662,8 @@ export async function cancelSchedulesForSource(
       .update({ status: 'cancelled' })
       .eq('id', schedule.id)
       .eq('company_id', companyId)
+    cancelledSchedules++
   }
 
-  return { cancelledSchedules: schedules.length, reversedEntries }
+  return { cancelledSchedules, reversedEntries, failedReversals }
 }

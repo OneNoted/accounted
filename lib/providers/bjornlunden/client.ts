@@ -55,7 +55,18 @@ export class BjornLundenClient {
     this.rateLimiter = new TokenBucketRateLimiter(BL_RATE_LIMIT, 'ratelimit:bjornlunden');
   }
 
-  async get<T>(accessToken: string, userKey: string, path: string): Promise<T> {
+  /**
+   * @param options.retry Set to false to fail fast on the first error instead
+   *   of retrying. Used by credential probes, where a bad User-Key answers
+   *   HTTP 500 (a "retryable" status) and would otherwise burn the full retry
+   *   budget with backoff before reporting the bad key.
+   */
+  async get<T>(
+    accessToken: string,
+    userKey: string,
+    path: string,
+    options?: { retry?: boolean },
+  ): Promise<T> {
     return withRetry(
       async () => {
         await this.rateLimiter.acquire();
@@ -81,7 +92,7 @@ export class BjornLundenClient {
         return response.json() as Promise<T>;
       },
       {
-        maxAttempts: 3,
+        maxAttempts: options?.retry === false ? 1 : 3,
         initialDelayMs: 1000,
         shouldRetry: isRetryableError,
       },

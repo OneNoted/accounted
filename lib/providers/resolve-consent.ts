@@ -5,6 +5,9 @@ import { refreshFortnoxToken } from './fortnox/oauth';
 import { refreshVismaToken } from './visma/oauth';
 import { refreshBrioxToken } from './briox/oauth';
 import { refreshBjornLundenToken } from './bjornlunden/oauth';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('providers/resolve-consent');
 
 export interface ResolvedConsent {
   consent: Record<string, unknown>;
@@ -108,14 +111,64 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
 
     const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
 
-    await supabase
+    // Optimistic concurrency guard: providers like Briox and Fortnox rotate
+    // BOTH tokens on refresh, so two concurrent requests refreshing the same
+    // expired pair must not both persist — the second write would overwrite
+    // the pair the first request just stored with a possibly-dead one. Key
+    // the UPDATE on the token_expires_at we read above: if another request
+    // already rotated, zero rows match and we adopt the stored fresh tokens.
+    const { data: updatedRows, error: updateError } = await supabase
       .from('provider_consent_tokens')
       .update({
         access_token: refreshed.access_token,
         refresh_token: refreshed.refresh_token,
         token_expires_at: newExpiresAt,
       })
-      .eq('consent_id', consentId);
+      .eq('consent_id', consentId)
+      .eq('token_expires_at', tokens.token_expires_at as string)
+      .select('id');
+
+    if (updateError) {
+      // The provider has ALREADY rotated the tokens but we failed to persist
+      // the new pair — the stored pair is now dead and every later call on
+      // this consent will fail. Log loudly; the only recovery is to
+      // disconnect and re-enter the provider credentials.
+      log.error(
+        `Failed to persist rotated ${consent.provider} tokens for consent ${consentId} — ` +
+        'the stored credentials are now invalid and the consent will break',
+        { reason: updateError.message },
+      );
+      throw {
+        status: 500,
+        message:
+          'Token refresh succeeded at the provider but the rotated tokens could not be saved. ' +
+          'The stored credentials are no longer valid — disconnect the provider and re-enter the credentials.',
+      };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      // Lost the refresh race: a concurrent request already rotated and
+      // persisted a fresh pair. Use those tokens as-is — calling the provider
+      // refresh endpoint again here would invalidate the winner's pair.
+      const { data: freshRows } = await supabase
+        .from('provider_consent_tokens')
+        .select('*')
+        .eq('consent_id', consentId)
+        .limit(1);
+
+      const fresh = freshRows?.[0];
+      if (fresh?.access_token) {
+        return {
+          consent,
+          accessToken: fresh.access_token as string,
+          providerCompanyId: (fresh.provider_company_id ?? tokens.provider_company_id) as
+            | string
+            | undefined,
+        };
+      }
+      // Token row vanished mid-flight (disconnect?) — fall through to our own
+      // refreshed pair, which the provider still considers the latest one.
+    }
 
     return {
       consent,

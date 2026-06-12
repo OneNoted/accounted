@@ -12,7 +12,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { buildArsredovisningData } from '@/lib/bokslut/arsredovisning/build-data'
 import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-service'
-import { mapTrialBalancesToK2 } from './k2-mapper'
+import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
+import { mapTrialBalancesToK2, type TrialBalancePair } from './k2-mapper'
 import { resolveEntryPoint } from './taxonomy/entry-points'
 import type {
   EgetKapitalForandring,
@@ -50,17 +51,25 @@ export async function buildIxbrlInput(
 ): Promise<IxbrlArsredovisningInput> {
   const warnings: string[] = []
 
-  const [pdfData, periodRow, currentTb, signatureRequests] = await Promise.all([
-    buildArsredovisningData(supabase, companyId, fiscalPeriodId),
-    supabase
-      .from('fiscal_periods')
-      .select('id, period_start, period_end, previous_period_id')
-      .eq('id', fiscalPeriodId)
-      .eq('company_id', companyId)
-      .single(),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId),
-    listSignatureRequests(supabase, companyId, fiscalPeriodId),
-  ])
+  // Two TB variants per year (see TrialBalancePair): the FULL trial balance
+  // (year-end closing included → 2099 booked, class 3–8 zeroed) drives the
+  // BR; the PRE-CLOSING trial balance (excludeYearEndClosing — the same split
+  // lib/reports' generateIncomeStatement uses) drives the RR. A single TB can
+  // never serve both: with bokslut booked every RR concept would map to 0,
+  // without it the BR would not tie.
+  const [pdfData, periodRow, currentTbFull, currentTbPreClosing, signatureRequests] =
+    await Promise.all([
+      buildArsredovisningData(supabase, companyId, fiscalPeriodId),
+      supabase
+        .from('fiscal_periods')
+        .select('id, period_start, period_end, previous_period_id')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .single(),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
+      listSignatureRequests(supabase, companyId, fiscalPeriodId),
+    ])
 
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
   const period = periodRow.data
@@ -72,9 +81,10 @@ export async function buildIxbrlInput(
   }
   const entryPoint = resolveEntryPoint('k2')
 
-  // Previous period: trial balance for jämförelsesiffror.
+  // Previous period: trial balances for jämförelsesiffror (same full/
+  // pre-closing split as the current year).
   let previousPeriod: { start: string; end: string } | null = null
-  let previousTbRows: typeof currentTb.rows | null = null
+  let previousTb: TrialBalancePair | null = null
   if (period.previous_period_id) {
     const { data: prev } = await supabase
       .from('fiscal_periods')
@@ -85,8 +95,11 @@ export async function buildIxbrlInput(
     if (prev) {
       previousPeriod = { start: prev.period_start, end: prev.period_end }
       try {
-        const prevTb = await generateTrialBalance(supabase, companyId, prev.id)
-        previousTbRows = prevTb.rows
+        const [prevFull, prevPreClosing] = await Promise.all([
+          generateTrialBalance(supabase, companyId, prev.id),
+          generateTrialBalance(supabase, companyId, prev.id, { excludeYearEndClosing: true }),
+        ])
+        previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
       } catch {
         warnings.push(
           'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår — balans- och resultaträkning visas utan jämförelseår (kontrollera-kod 3006/3007 kan utlösas).',
@@ -96,7 +109,10 @@ export async function buildIxbrlInput(
     }
   }
 
-  const mapping = mapTrialBalancesToK2(currentTb.rows, previousTbRows)
+  const mapping = mapTrialBalancesToK2(
+    { full: currentTbFull.rows, preClosing: currentTbPreClosing.rows },
+    previousTb,
+  )
   warnings.push(...mapping.warnings)
 
   // ---- flerårsöversikt (reuse PDF rows; whole SEK) -------------------------
@@ -128,14 +144,43 @@ export async function buildIxbrlInput(
   }
   // Column 0 must be the current period and column 1 the previous one —
   // the document reuses period0/period1 contexts for them. Anything else
-  // means the period chain is inconsistent; drop the table rather than tag
-  // amounts against the wrong period.
-  if (flerarsPerioder.length > 0 && flerarsPerioder[0].start !== period.period_start) {
+  // (e.g. a missed periodByName lookup shifting the rows) means the period
+  // chain is inconsistent; drop the table rather than tag amounts against
+  // the wrong period.
+  const flerarsMisaligned =
+    (flerarsPerioder.length > 0 && flerarsPerioder[0].start !== period.period_start) ||
+    (flerarsPerioder.length > 1 &&
+      previousPeriod !== null &&
+      flerarsPerioder[1].start !== previousPeriod.start)
+  if (flerarsMisaligned) {
     warnings.push(
       'Flerårsöversikten kunde inte knytas till räkenskapsperioderna — tabellen utelämnas ur iXBRL-dokumentet.',
     )
     flerarsoversikt.length = 0
     flerarsPerioder.length = 0
+  }
+  // Duplicate-fact consistency (TA §2.7.3): the flerårsöversikt repeats
+  // Nettoomsattning / ResultatEfterFinansiellaPoster in the same contexts
+  // (period0/period1) as the RR, and repeated facts must be value-identical
+  // or Bolagsverket rejects the filing. The PDF rows are computed from the
+  // income statement (ALL class-3 revenue), while nettoomsättning per ÅRL is
+  // strictly 3000–3799 — so the current and previous year columns are
+  // overridden with the mapper outputs. Older years have no RR facts and
+  // keep the PDF values.
+  if (flerarsoversikt.length > 0) {
+    flerarsoversikt[0] = {
+      ...flerarsoversikt[0],
+      nettoomsattning: mapping.rr['Nettoomsattning']?.current ?? 0,
+      resultatEfterFinansiellaPoster: mapping.totals.resultatEfterFinansiellaPoster.current,
+    }
+    if (flerarsoversikt.length > 1 && previousPeriod !== null) {
+      flerarsoversikt[1] = {
+        ...flerarsoversikt[1],
+        nettoomsattning: mapping.rr['Nettoomsattning']?.previous ?? 0,
+        resultatEfterFinansiellaPoster:
+          mapping.totals.resultatEfterFinansiellaPoster.previous ?? 0,
+      }
+    }
   }
 
   // ---- eget kapital-förändring ---------------------------------------------
@@ -177,8 +222,13 @@ export async function buildIxbrlInput(
   }
 
   // ---- resultatdisposition --------------------------------------------------
+  // BalanseratResultat is tagged in BR and the eget kapital-table for the
+  // same context — the disposition row must carry the identical value
+  // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
+  // separate Overkursfond concept instead of being folded into balanserat.
   const proposedDividend = Math.max(0, Math.round(options.proposedDividend ?? 0))
-  const dispBalanserat = (br['BalanseratResultat']?.current ?? 0) + (br['Overkursfond']?.current ?? 0)
+  const dispBalanserat = br['BalanseratResultat']?.current ?? 0
+  const dispOverkursfond = br['Overkursfond']?.current ?? 0
   const dispArets = br['AretsResultatEgetKapital']?.current ?? 0
   const dispSumma = mapping.totals.frittEgetKapital.current
   if (proposedDividend > dispSumma) {
@@ -188,6 +238,7 @@ export async function buildIxbrlInput(
   }
   const resultatdisposition: Resultatdisposition = {
     balanseratResultat: dispBalanserat,
+    overkursfond: dispOverkursfond,
     aretsResultat: dispArets,
     summa: dispSumma,
     utdelning: proposedDividend,
@@ -196,19 +247,22 @@ export async function buildIxbrlInput(
   }
 
   // ---- underskrifter ---------------------------------------------------------
+  // Every signature request becomes a signer row (the board must appear in
+  // the document), but ONLY actually-signed requests get a date — an unsigned
+  // request keeps signedDate null. Legal dates are never fabricated: the
+  // missing date renders as an omitted fact in the preview and preflight 1214
+  // blocks the submission path until everyone has signed.
   const signedRequests = signatureRequests.filter((request) => request.status === 'signed')
   const today = options.todayIso ?? new Date().toISOString().slice(0, 10)
-  const signers: IxbrlSigner[] = (signedRequests.length > 0 ? signedRequests : signatureRequests).map(
-    (request) => {
-      const { firstName, lastName } = splitName(request.signer_name)
-      return {
-        firstName,
-        lastName,
-        role: request.role || null,
-        signedDate: request.signed_at ? request.signed_at.slice(0, 10) : today,
-      }
-    },
-  )
+  const signers: IxbrlSigner[] = signatureRequests.map((request) => {
+    const { firstName, lastName } = splitName(request.signer_name)
+    return {
+      firstName,
+      lastName,
+      role: request.role || null,
+      signedDate: request.signed_at ? request.signed_at.slice(0, 10) : null,
+    }
+  })
   if (signers.length === 0) {
     warnings.push(
       'Inga underskrifter är registrerade — årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).',
@@ -219,11 +273,17 @@ export async function buildIxbrlInput(
   }
   const harVd = signers.some((signer) => /verkställande direktör|^vd$/i.test(signer.role ?? ''))
   const latestSignatureDate = signers.reduce<string | null>(
-    (latest, signer) => (latest === null || signer.signedDate > latest ? signer.signedDate : latest),
+    (latest, signer) =>
+      signer.signedDate !== null && (latest === null || signer.signedDate > latest)
+        ? signer.signedDate
+        : latest,
     null,
   )
 
   // ---- fastställelseintyg ----------------------------------------------------
+  // A missing AGM date is NEVER replaced with today's date — it stays null,
+  // the document renders a placeholder and preflight 1103 blocks filing
+  // (mirrors Bolagsverket kontrollera 1103).
   const agmDate = pdfData.forvaltningsberattelse.agm_date
   if (!agmDate) {
     warnings.push(
@@ -244,6 +304,31 @@ export async function buildIxbrlInput(
   let allmant = pdfData.forvaltningsberattelse.description
   if (pdfData.company.city && !/säte/i.test(allmant)) {
     allmant = `${allmant}\n\nBolaget har sitt säte i ${pdfData.company.city}.`
+  }
+
+  // ---- medelantal anställda ---------------------------------------------------
+  // Compute BOTH years with the real FTE helper (the same one the PDF note
+  // uses) over the employees table. The note-prose regex stays only as a
+  // last-resort fallback when the employees query fails.
+  let medelantalAnstallda: { current: number; previous: number | null }
+  const { data: employeeRows, error: employeesError } = await supabase
+    .from('employees')
+    .select('employment_start, employment_end, employment_degree')
+    .eq('company_id', companyId)
+  if (employeesError) {
+    medelantalAnstallda = extractMedelantal(pdfData.noter, null)
+  } else {
+    const employees = (employeeRows ?? []) as Array<{
+      employment_start: string
+      employment_end: string | null
+      employment_degree: number
+    }>
+    medelantalAnstallda = {
+      current: computeMedelantalAnstallda(employees, period.period_start, period.period_end),
+      previous: previousPeriod
+        ? computeMedelantalAnstallda(employees, previousPeriod.start, previousPeriod.end)
+        : null,
+    }
   }
 
   return {
@@ -267,7 +352,7 @@ export async function buildIxbrlInput(
       resultatdisposition,
     },
     noter: pdfData.noter.map((note) => ({ number: note.number, title: note.title, body: note.body })),
-    medelantalAnstallda: extractMedelantal(pdfData.noter, null),
+    medelantalAnstallda,
     underskrifter: {
       ort: pdfData.company.city ?? '',
       dateringsdatum: latestSignatureDate,
@@ -275,7 +360,7 @@ export async function buildIxbrlInput(
       harVd,
     },
     faststallelseintyg: {
-      arsstammaDatum: agmDate ?? today,
+      arsstammaDatum: agmDate ?? null,
       signerFirstName: undertecknare.firstName,
       signerLastName: undertecknare.lastName,
       signerRole: undertecknare.role,

@@ -114,6 +114,7 @@ const RULES: Rule[] = [
       ? issue('1101', 'error', `Datum för årsstämman (${input.faststallelseintyg.arsstammaDatum}) får inte vara tidigare än eller samma som räkenskapsårets sista dag (${input.period.end}).`)
       : null,
   (input, today) =>
+    input.faststallelseintyg.arsstammaDatum !== null &&
     input.faststallelseintyg.arsstammaDatum > today
       ? issue('1178', 'error', `Datum för årsstämman (${input.faststallelseintyg.arsstammaDatum}) får inte vara senare än dagens datum — håll årsstämman innan inlämning.`)
       : null,
@@ -126,19 +127,23 @@ const RULES: Rule[] = [
       : null
   },
   (input) => {
-    if (!input.faststallelseintyg.arsstammaDatum) return null
+    const agm = input.faststallelseintyg.arsstammaDatum
+    if (!agm) return null
     const late = input.underskrifter.signers.find(
-      (signer) => signer.signedDate && signer.signedDate > input.faststallelseintyg.arsstammaDatum,
+      (signer) => signer.signedDate && signer.signedDate > agm,
     )
     return late
-      ? issue('1183', 'error', `Datum för årsstämman (${input.faststallelseintyg.arsstammaDatum}) är tidigare än styrelsens underskrift (${late.signedDate}).`)
+      ? issue('1183', 'error', `Datum för årsstämman (${agm}) är tidigare än styrelsens underskrift (${late.signedDate}).`)
       : null
   },
   (input) => {
     const datering = input.underskrifter.dateringsdatum
     if (!datering) return null
     const earliest = input.underskrifter.signers.reduce<string | null>(
-      (min, signer) => (min === null || signer.signedDate < min ? signer.signedDate : min),
+      (min, signer) =>
+        signer.signedDate !== null && (min === null || signer.signedDate < min)
+          ? signer.signedDate
+          : min,
       null,
     )
     return earliest && datering > earliest
@@ -152,10 +157,12 @@ const RULES: Rule[] = [
       : null,
 
   // ---- balance checks -----------------------------------------------------
+  // Exact comparisons: Bolagsverket compares the tagged totals exactly, and
+  // the mapper already absorbs legitimate ±1 kr rounding residuals.
   (input) => {
     const assets = input.totals.tillgangar.current
     const eqLiab = input.totals.egetKapitalSkulder.current
-    return Math.abs(assets - eqLiab) > 1
+    return assets !== eqLiab
       ? issue('3005', 'error', `"Summa tillgångar" (${assets} kr) och "Summa eget kapital och skulder" (${eqLiab} kr) stämmer inte överens.`)
       : null
   },
@@ -176,7 +183,7 @@ const RULES: Rule[] = [
   (input) => {
     const rrResult = input.totals.aretsResultat.current
     const brResult = input.br['AretsResultatEgetKapital']?.current ?? 0
-    return Math.abs(rrResult - brResult) > 1
+    return rrResult !== brResult
       ? issue('ACC-2099', 'error', `Årets resultat enligt resultaträkningen (${rrResult} kr) stämmer inte med eget kapital-posten Årets resultat (${brResult} kr) — kör bokslutet (resultatdisposition) innan inlämning.`)
       : null
   },

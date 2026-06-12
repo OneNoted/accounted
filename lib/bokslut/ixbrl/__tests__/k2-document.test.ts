@@ -146,6 +146,58 @@ describe('generateK2IxbrlDocument — dividend + first year variants', () => {
     expect(xhtml).toMatch(/name="se-gen-base:ForslagDispositionUtdelning"[^>]*>50 000/)
   })
 
+  it('tags fri överkursfond as its own concept in the disposition — identical to BR (TA §2.7.3)', () => {
+    const input = makeInput()
+    input.br['Overkursfond'] = { current: 50_000, previous: 50_000 }
+    input.forvaltningsberattelse.resultatdisposition.overkursfond = 50_000
+    input.forvaltningsberattelse.resultatdisposition.summa = 270_000
+    input.forvaltningsberattelse.resultatdisposition.balanserasINyRakning = 270_000
+    const { xhtml } = generateK2IxbrlDocument(input)
+    // BR row + disposition row: same concept, same context, same value.
+    const facts =
+      xhtml.match(
+        /<ix:nonFraction contextRef="balans0" name="se-gen-base:Overkursfond"[^>]*>50 000<\/ix:nonFraction>/g,
+      ) ?? []
+    expect(facts).toHaveLength(2)
+    // BalanseratResultat stays strictly balanserat (not balanserat + 2097).
+    const balanserat =
+      xhtml.match(
+        /<ix:nonFraction contextRef="balans0" name="se-gen-base:BalanseratResultat"[^>]*>([\d ]+)</g,
+      ) ?? []
+    expect(balanserat.length).toBeGreaterThan(0)
+    for (const fact of balanserat) expect(fact).toContain('>100 000<')
+  })
+
+  it('renders a deviating cost row WITHOUT the presentational minus (sign="-" carries the deviation)', () => {
+    const input = makeInput()
+    // Net income on a cost line (credit balance on 5xxx) — deviating sign.
+    input.rr['OvrigaExternaKostnader'] = { current: -5_000, previous: null }
+    const { xhtml } = generateK2IxbrlDocument(input)
+    expect(xhtml).toMatch(/name="se-gen-base:OvrigaExternaKostnader"[^>]*sign="-"/)
+    expect(xhtml).not.toMatch(/−<ix:nonFraction[^>]*name="se-gen-base:OvrigaExternaKostnader"/)
+  })
+
+  it('omits the per-signer date fact for unsigned requests instead of fabricating one', () => {
+    const input = makeInput()
+    input.underskrifter.signers[1].signedDate = null
+    const { xhtml } = generateK2IxbrlDocument(input)
+    const dates = xhtml.match(/name="se-gen-base:UndertecknandeDatum"/g) ?? []
+    expect(dates).toHaveLength(1)
+    // Both signers still appear with their names.
+    const names = xhtml.match(/name="se-gen-base:UnderskriftHandlingTilltalsnamn"/g) ?? []
+    expect(names).toHaveLength(2)
+    expect(XMLValidator.validate(xhtml)).toBe(true)
+  })
+
+  it('renders a placeholder instead of a fabricated AGM date when none is recorded', () => {
+    const input = makeInput()
+    input.faststallelseintyg.arsstammaDatum = null
+    const { xhtml } = generateK2IxbrlDocument(input)
+    expect(xhtml).not.toContain('name="se-bol-base:Arsstamma"')
+    expect(xhtml).toContain('[datum för årsstämma saknas]')
+    expect(XMLValidator.validate(xhtml)).toBe(true)
+  })
+
   it('omits comparison columns for the first fiscal year', () => {
     const mapping = mapTrialBalancesToK2(CURRENT, null)
     const input = makeInput()

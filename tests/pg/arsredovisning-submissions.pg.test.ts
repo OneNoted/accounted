@@ -124,6 +124,49 @@ describe('arsredovisning_submissions immutability after upload', () => {
   })
 })
 
+describe('arsredovisning_submissions audit survival on user deletion', () => {
+  it('keeps the submission row with user_id NULL when the filing user is deleted', async () => {
+    const { companyId, fiscalPeriodId } = await seedCompany()
+    // A separate filer (not the company creator) so the company itself survives.
+    const filer = await insertAuthUser()
+    const id = await insertSubmission(companyId, filer, fiscalPeriodId, {
+      status: 'uploaded',
+      uploadedAt: new Date().toISOString(),
+      idnummer: '70001',
+    })
+
+    await getPool().query(`DELETE FROM auth.users WHERE id = $1`, [filer])
+
+    const res = await getPool().query(
+      `SELECT user_id, status, idnummer FROM public.arsredovisning_submissions WHERE id = $1`,
+      [id],
+    )
+    expect(res.rowCount).toBe(1)
+    expect(res.rows[0].user_id).toBeNull()
+    expect(res.rows[0].status).toBe('uploaded')
+    expect(res.rows[0].idnummer).toBe('70001')
+  })
+
+  it('keeps avtal acceptances with user_id NULL when the accepting user is deleted', async () => {
+    const { companyId } = await seedCompany()
+    const acceptor = await insertAuthUser()
+    const inserted = await getPool().query(
+      `INSERT INTO public.bolagsverket_avtal_acceptances (company_id, user_id, avtalstext_andrad)
+       VALUES ($1, $2, '2017-12-06') RETURNING id`,
+      [companyId, acceptor],
+    )
+
+    await getPool().query(`DELETE FROM auth.users WHERE id = $1`, [acceptor])
+
+    const res = await getPool().query(
+      `SELECT user_id FROM public.bolagsverket_avtal_acceptances WHERE id = $1`,
+      [inserted.rows[0].id],
+    )
+    expect(res.rowCount).toBe(1)
+    expect(res.rows[0].user_id).toBeNull()
+  })
+})
+
 describe('arsredovisning_submissions status machine', () => {
   it('follows the documented flow inkommen → forelagd → komplettering → registrerad', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
@@ -142,6 +185,54 @@ describe('arsredovisning_submissions status machine', () => {
       [id],
     )
     expect(final.rows[0].status).toBe('registrerad')
+  })
+
+  it('allows forward jumps between Bolagsverket-asserted statuses (missed webhooks)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    // uploaded → komplettering directly (skipping inkommen + forelagd).
+    const skipAhead = await insertSubmission(companyId, userId, fiscalPeriodId, {
+      status: 'uploaded',
+      uploadedAt: new Date().toISOString(),
+    })
+    const res1 = await getPool().query(
+      `UPDATE public.arsredovisning_submissions SET status = 'komplettering' WHERE id = $1 RETURNING status`,
+      [skipAhead],
+    )
+    expect(res1.rows[0].status).toBe('komplettering')
+
+    // inkommen → komplettering (skipping forelagd).
+    const inkommen = await insertSubmission(companyId, userId, fiscalPeriodId, {
+      status: 'uploaded',
+      uploadedAt: new Date().toISOString(),
+    })
+    await getPool().query(
+      `UPDATE public.arsredovisning_submissions SET status = 'inkommen' WHERE id = $1`,
+      [inkommen],
+    )
+    const res2 = await getPool().query(
+      `UPDATE public.arsredovisning_submissions SET status = 'komplettering' WHERE id = $1 RETURNING status`,
+      [inkommen],
+    )
+    expect(res2.rows[0].status).toBe('komplettering')
+  })
+
+  it('allows error capture and retry transitions (draft/kontrollerad → error → draft)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const id = await insertSubmission(companyId, userId, fiscalPeriodId, { status: 'kontrollerad' })
+    const errored = await getPool().query(
+      `UPDATE public.arsredovisning_submissions
+         SET status = 'error', error_message = 'inlamning failed'
+       WHERE id = $1 RETURNING status, error_message`,
+      [id],
+    )
+    expect(errored.rows[0].status).toBe('error')
+    expect(errored.rows[0].error_message).toBe('inlamning failed')
+
+    const retried = await getPool().query(
+      `UPDATE public.arsredovisning_submissions SET status = 'draft' WHERE id = $1 RETURNING status`,
+      [id],
+    )
+    expect(retried.rows[0].status).toBe('draft')
   })
 
   it('rejects undocumented transitions (registrerad → draft, draft → inkommen)', async () => {

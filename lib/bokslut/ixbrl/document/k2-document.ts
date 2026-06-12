@@ -154,11 +154,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   )
   writer.hiddenDate('RakenskapsarForstaDag', 'period0', input.period.start)
   writer.hiddenDate('RakenskapsarSistaDag', 'period0', input.period.end)
-  // Note bodies beyond Not 1/medelantal are rendered untagged in the MVP, so
-  // the honest value for "Status för taggning" is true (TA §2.22).
-  if (getConcept(registry, 'ArsredovisningEjTaggadInformation')) {
-    writer.hiddenBoolean('ArsredovisningEjTaggadInformation', 'period0', true)
-  }
+  // Note on TA §2.22 (status för taggning): the 2024-09-12 K2 AB taxonomy has
+  // no tagging-status concept (verified against the generated registry and
+  // the official example filings), so nothing is emitted even though note
+  // bodies beyond Not 1/medelantal are rendered untagged.
 
   const totalPages = 6
   const pages: string[] = []
@@ -166,6 +165,12 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   // ====== Page 1 — titel + innehåll + fastställelseintyg ======
   {
     const fb = input.faststallelseintyg
+    // A missing AGM date renders as a visible placeholder — never today's
+    // date. Preflight 1103 blocks the submission path until the date exists.
+    const arsstammaFact =
+      fb.arsstammaDatum !== null
+        ? writer.date('Arsstamma', 'balans0', fb.arsstammaDatum)
+        : escapeText('[datum för årsstämma saknas]')
     const fi = el(
       'div',
       { class: 'ar-cert', id: 'id-innehall-faststallelseintyg' },
@@ -183,7 +188,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
               'Jag intygar att resultaträkningen och balansräkningen har fastställts på årsstämma',
             ) +
               ' ' +
-              writer.date('Arsstamma', 'balans0', fb.arsstammaDatum) +
+              arsstammaFact +
               '.<br/>' +
               writer.textPlain(
                 'ArsstammaResultatDispositionGodkannaStyrelsensForslag',
@@ -373,9 +378,13 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     )
     const ekRows: string[] = [ekHead]
     const td = (content: string): string => el('td', { class: 'num' }, content)
+    // Untagged residual cells: plain text, but with the same sign handling as
+    // the other untagged rows (negative renders with a minus).
+    const signedSek = (value: number): string =>
+      escapeText(`${value < 0 ? '−' : ''}${formatSekAbs(value)}`)
     const ibCells = [
       writer.money('Aktiekapital', ctx.balans1 ?? ctx.balans0, ek.aktiekapital.ib),
-      ...(hasOvriga ? [escapeText(formatSekAbs(ek.ovrigaPoster.ib))] : []),
+      ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ib)] : []),
       writer.money('BalanseratResultat', ctx.balans1 ?? ctx.balans0, ek.balanseratResultat.ib),
       writer.money('AretsResultatEgetKapital', ctx.balans1 ?? ctx.balans0, ek.aretsResultat.ib),
       writer.money('EgetKapital', ctx.balans1 ?? ctx.balans0, ek.totalt.ib),
@@ -471,9 +480,9 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
           el('th', {}, 'Övrig förändring') +
             td('') +
             (hasOvriga ? td('') : '') +
-            td(escapeText(`${ek.ovrigForandringBalanserat < 0 ? '−' : ''}${formatSekAbs(ek.ovrigForandringBalanserat)}`)) +
+            td(signedSek(ek.ovrigForandringBalanserat)) +
             td('') +
-            td(escapeText(`${ek.ovrigForandringBalanserat < 0 ? '−' : ''}${formatSekAbs(ek.ovrigForandringBalanserat)}`)),
+            td(signedSek(ek.ovrigForandringBalanserat)),
         ),
       )
     }
@@ -484,11 +493,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
           {},
           el('th', {}, 'Förändring övriga poster') +
             td('') +
-            td(
-              escapeText(
-                `${ek.ovrigaPoster.ub - ek.ovrigaPoster.ib < 0 ? '−' : ''}${formatSekAbs(ek.ovrigaPoster.ub - ek.ovrigaPoster.ib)}`,
-              ),
-            ) +
+            td(signedSek(ek.ovrigaPoster.ub - ek.ovrigaPoster.ib)) +
             td('') +
             td('') +
             td(''),
@@ -517,7 +522,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     )
     const ubCells = [
       writer.money('Aktiekapital', 'balans0', ek.aktiekapital.ub),
-      ...(hasOvriga ? [escapeText(formatSekAbs(ek.ovrigaPoster.ub))] : []),
+      ...(hasOvriga ? [signedSek(ek.ovrigaPoster.ub)] : []),
       writer.money('BalanseratResultat', 'balans0', ek.balanseratResultat.ub),
       writer.money('AretsResultatEgetKapital', 'balans0', ek.aretsResultat.ub),
       writer.money('EgetKapital', 'balans0', ek.totalt.ub),
@@ -531,7 +536,11 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     )
     parts.push(el('table', {}, ekRows.join('')))
 
-    // Resultatdisposition
+    // Resultatdisposition. BalanseratResultat/AretsResultatEgetKapital/
+    // Overkursfond are repeated from the BR in the same balans0 context, so
+    // the values MUST be byte-identical (TA §2.7.3) — fri överkursfond gets
+    // its own row tagged with its own concept instead of being folded into
+    // balanserat resultat.
     const rd = fb.resultatdisposition
     const rdRows: string[] = [
       el(
@@ -540,6 +549,18 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         el('th', {}, 'Till årsstämmans förfogande står följande medel (kr)') +
           el('th', { class: 'num' }, ''),
       ),
+    ]
+    if (rd.overkursfond !== 0) {
+      rdRows.push(
+        el(
+          'tr',
+          {},
+          el('th', {}, 'Överkursfond') +
+            el('td', { class: 'num' }, writer.money('Overkursfond', 'balans0', rd.overkursfond)),
+        ),
+      )
+    }
+    rdRows.push(
       el(
         'tr',
         {},
@@ -564,7 +585,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         el('th', {}, 'Styrelsen föreslår att medlen disponeras så att') +
           el('th', { class: 'num' }, ''),
       ),
-    ]
+    )
     if (rd.utdelning !== 0) {
       rdRows.push(
         el(
@@ -1157,14 +1178,17 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         )
       }
       // Per-signer date — mandatory for FY ending 2021-12-31+ (TA §2.9.1,
-      // kontrollera 1107/1214).
-      inner.push(
-        '<br/>',
-        writer.date('UndertecknandeDatum', 'period0', signer.signedDate, {
-          tupleRef: tupleId,
-          order: orderOf('UndertecknandeDatum'),
-        }),
-      )
+      // kontrollera 1107/1214). An unsigned request has signedDate null: the
+      // fact is omitted (never fabricated) and preflight 1214 blocks filing.
+      if (signer.signedDate !== null) {
+        inner.push(
+          '<br/>',
+          writer.date('UndertecknandeDatum', 'period0', signer.signedDate, {
+            tupleRef: tupleId,
+            order: orderOf('UndertecknandeDatum'),
+          }),
+        )
+      }
       signerDivs.push(el('div', { class: 'ar-sign-name' }, inner.join('')))
     })
     parts.push(tupleDecls.join('\n'), signerDivs.join('\n'))

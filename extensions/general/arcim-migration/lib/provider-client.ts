@@ -34,6 +34,19 @@ export class ProviderTokenInvalidError extends Error {
   }
 }
 
+/**
+ * Thrown when a consent does not exist OR does not belong to the caller's
+ * company. The two cases are deliberately indistinguishable so a caller
+ * cannot probe whether other tenants' consent IDs exist. The route maps this
+ * to PROVIDER_CONSENT_NOT_FOUND (404).
+ */
+export class ConsentNotFoundError extends Error {
+  constructor() {
+    super('Consent not found')
+    this.name = 'ConsentNotFoundError'
+  }
+}
+
 // Re-export data fetching functions from the provider layer
 export { resolveConsent } from '@/lib/providers/resolve-consent'
 export {
@@ -245,9 +258,26 @@ export async function submitProviderToken(
   consentId: string,
   provider: ProviderName,
   apiToken: string,
-  companyId?: string,
+  providerCompanyId: string | undefined,
+  ownerCompanyId: string,
 ): Promise<{ success: boolean; consentId: string }> {
   const supabase = createServiceClient()
+
+  // Ownership guard (IDOR): the consent must belong to the caller's company
+  // before ANY write — this module runs on the service client, which bypasses
+  // RLS, so this check is the only tenant boundary. Mirrors resolveConsent()
+  // in lib/providers/resolve-consent.ts. A consent that exists but belongs to
+  // another company throws the same not-found error as a nonexistent one.
+  const { data: ownedRows } = await supabase
+    .from('provider_consents')
+    .select('id')
+    .eq('id', consentId)
+    .eq('company_id', ownerCompanyId)
+    .limit(1)
+
+  if (!ownedRows || ownedRows.length === 0) {
+    throw new ConsentNotFoundError()
+  }
 
   let accessToken = apiToken
   let refreshToken: string | null = null
@@ -256,7 +286,7 @@ export async function submitProviderToken(
   // BL uses app-level client credentials — get a real token, then prove the
   // pasted User-Key actually opens a company before storing anything.
   if (provider === 'bjornlunden') {
-    if (!companyId) {
+    if (!providerCompanyId) {
       throw new ProviderTokenInvalidError('Björn Lundén requires a company key (User-Key)')
     }
     const tokenResponse = await refreshBjornLundenToken()
@@ -264,14 +294,16 @@ export async function submitProviderToken(
     tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
 
     // Sandbox-verified: an unknown User-Key makes /details answer 500 (BL
-    // fails to bind the company database), not 401/403 — so ANY error on this
-    // probe means the key is unusable. Without it a typo'd GUID is stored
-    // silently and only surfaces as a confusing failure at preview.
+    // fails to bind the company database), not 401/403. Without this probe a
+    // typo'd GUID is stored silently and only surfaces as a confusing failure
+    // at preview. retry:false makes a bad key fail fast instead of burning
+    // the client's full retry budget on the "retryable" 500.
     try {
       const details = await bjornLundenClient.get<Record<string, unknown>>(
         accessToken,
-        companyId,
+        providerCompanyId,
         '/details',
+        { retry: false },
       )
       // Bonus from the probe: label the consent with the company name so the
       // wizard's connection list shows which BL company was linked.
@@ -284,6 +316,15 @@ export async function submitProviderToken(
       }
     } catch (error) {
       if (error instanceof BjornLundenApiError) {
+        // 429 and gateway-style 5xx (502/503/504) are transient provider
+        // failures, not a verdict on the key — rethrow so the route reports a
+        // generic submit failure instead of "your key is wrong". 500 stays
+        // mapped to invalid credentials: per the sandbox finding above, 500
+        // IS the bad-key signal at BL. Tradeoff: a genuine BL 500 outage also
+        // reads as a rejected key.
+        if (error.statusCode === 429 || error.statusCode >= 501) {
+          throw error
+        }
         throw new ProviderTokenInvalidError(
           `Björn Lundén rejected the company key (HTTP ${error.statusCode})`,
         )
@@ -296,11 +337,11 @@ export async function submitProviderToken(
   // exchange ONCE for an access/refresh token pair. Storing the raw
   // application token would fail on every data call.
   if (provider === 'briox') {
-    if (!companyId) {
+    if (!providerCompanyId) {
       throw new ProviderTokenInvalidError('Briox requires an account ID (clientid)')
     }
     try {
-      const tokenResponse = await exchangeBrioxCode(companyId, apiToken)
+      const tokenResponse = await exchangeBrioxCode(providerCompanyId, apiToken)
       accessToken = tokenResponse.access_token
       refreshToken = tokenResponse.refresh_token
       tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
@@ -325,7 +366,7 @@ export async function submitProviderToken(
       access_token: accessToken,
       refresh_token: refreshToken,
       token_expires_at: tokenExpiresAt,
-      provider_company_id: companyId,
+      provider_company_id: providerCompanyId,
     })
 
   return { success: true, consentId }
