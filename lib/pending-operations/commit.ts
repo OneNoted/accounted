@@ -256,6 +256,13 @@ async function commitCategorizeTransaction(
     typeof params.notes === 'string' && params.notes.trim().length > 0
       ? (params.notes as string)
       : undefined
+  // The underlag's actual VAT, staged when the document's moms differs from
+  // rate × belopp (e.g. dricks). Threaded into the mapping builder so the
+  // approved posting matches the staged preview exactly.
+  const vatAmount =
+    typeof params.vat_amount === 'number' && Number.isFinite(params.vat_amount)
+      ? params.vat_amount
+      : undefined
 
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions').select('*').eq('id', txId).eq('company_id', companyId).single()
@@ -276,7 +283,7 @@ async function commitCategorizeTransaction(
   const fiscalYearStartMonth = settings?.fiscal_year_start_month ?? 1
 
   const mappingResult = buildMappingResultFromCategory(
-    category, transaction as Transaction, isBusiness, entityType, vatTreatment
+    category, transaction as Transaction, isBusiness, entityType, vatTreatment, vatAmount
   )
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {

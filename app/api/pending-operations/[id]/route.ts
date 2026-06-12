@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
+import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
 
 // PATCH /api/pending-operations/[id]
@@ -38,9 +39,11 @@ const PatchSchema = z
   .object({
     category: z.enum(CATEGORIES).optional(),
     vat_treatment: z.enum(VAT_TREATMENTS).nullable().optional(),
+    // Underlag's actual VAT override (null clears it; omit to preserve)
+    vat_amount: z.number().min(0).nullable().optional(),
   })
   .refine(
-    (v) => v.category !== undefined || v.vat_treatment !== undefined,
+    (v) => v.category !== undefined || v.vat_treatment !== undefined || v.vat_amount !== undefined,
     { message: 'Nothing to update' },
   )
 
@@ -129,13 +132,50 @@ export async function PATCH(
   const entityType = ((settings?.entity_type as EntityType) || 'enskild_firma')
 
   const isBusiness = newCategory !== 'private'
-  const mapping = buildMappingResultFromCategory(
-    newCategory,
-    tx as Transaction,
-    isBusiness,
-    entityType,
-    newVatTreatment,
+
+  // Resolve whether the (possibly defaulted) treatment carries a rate-based
+  // VAT line — only then can a vat_amount override survive. An explicit
+  // override on a VAT-less treatment is a caller error; a preserved one from
+  // before the edit is simply stale and gets dropped.
+  const probe = getCategoryAccountMapping(
+    newCategory, (tx as Transaction).amount, isBusiness, entityType, newVatTreatment,
   )
+  const carriesRateVat =
+    isBusiness &&
+    probe.vatTreatment !== null &&
+    probe.vatTreatment !== 'reverse_charge' &&
+    getVatRate(probe.vatTreatment as VatTreatment) > 0
+
+  let newVatAmount: number | null
+  if (body.vat_amount !== undefined) {
+    if (body.vat_amount !== null && !carriesRateVat) {
+      return NextResponse.json(
+        { error: 'vat_amount kräver en momspliktig vat_treatment (standard_25, reduced_12 eller reduced_6).' },
+        { status: 400 },
+      )
+    }
+    newVatAmount = body.vat_amount
+  } else {
+    const previous = typeof oldParams.vat_amount === 'number' ? oldParams.vat_amount : null
+    newVatAmount = carriesRateVat ? previous : null
+  }
+
+  let mapping
+  try {
+    mapping = buildMappingResultFromCategory(
+      newCategory,
+      tx as Transaction,
+      isBusiness,
+      entityType,
+      newVatTreatment,
+      newVatAmount,
+    )
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Ogiltig momsjustering' },
+      { status: 400 },
+    )
+  }
 
   if (!mapping.debit_account || !mapping.credit_account) {
     return NextResponse.json(
@@ -162,6 +202,7 @@ export async function PATCH(
     ...oldParams,
     category: newCategory,
     vat_treatment: newVatTreatment ?? null,
+    vat_amount: newVatAmount,
   }
 
   const { data: updated, error } = await supabase

@@ -205,13 +205,22 @@ export function getCategoryAccountMapping(
 /**
  * Build a MappingResult from a category selection
  * Used by the categorization API to create journal entries
+ *
+ * `vatAmountOverride` is the underlag's actual VAT when it differs from the
+ * rate-derived amount — e.g. a restaurant receipt where dricks carries no
+ * moms, so the document's VAT is lower than rate × gross. It can only replace
+ * a rate-based VAT line (standard_25/reduced_12/reduced_6); it never applies
+ * to fictive reverse-charge VAT and never conjures a line for treatments
+ * without VAT. Pass 0 to book the full amount on the expense/income account
+ * with no VAT line.
  */
 export function buildMappingResultFromCategory(
   category: TransactionCategory,
   transaction: Transaction,
   isBusiness: boolean,
   entityType: EntityType = 'enskild_firma',
-  vatTreatment?: VatTreatment
+  vatTreatment?: VatTreatment,
+  vatAmountOverride?: number | null
 ): MappingResult {
   const mapping = getCategoryAccountMapping(category, transaction.amount, isBusiness, entityType, vatTreatment)
 
@@ -219,6 +228,30 @@ export function buildMappingResultFromCategory(
 
   // Calculate VAT if applicable using the resolved treatment from mapping
   const treatment = mapping.vatTreatment as VatTreatment | null
+  const hasVatOverride = vatAmountOverride !== undefined && vatAmountOverride !== null
+
+  if (hasVatOverride) {
+    const grossAmount = Math.abs(transaction.amount)
+    // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds
+    // any legitimate document VAT — even on mixed-rate receipts.
+    const maxVat = Math.round((grossAmount * 0.25 / 1.25) * 100) / 100
+    if (typeof vatAmountOverride !== 'number' || !Number.isFinite(vatAmountOverride) || vatAmountOverride < 0) {
+      throw new Error(`vat_amount must be a non-negative number, got ${vatAmountOverride}`)
+    }
+    if (vatAmountOverride > maxVat) {
+      throw new Error(
+        `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${grossAmount} ` +
+        `(${maxVat} at 25%). Check the underlag — the override must be the document's actual moms.`
+      )
+    }
+    if (!isBusiness || !treatment || treatment === 'reverse_charge' || getVatRate(treatment) <= 0) {
+      throw new Error(
+        `vat_amount cannot be combined with vat_treatment "${treatment ?? 'none'}" — ` +
+        'it only overrides a rate-based VAT line (standard_25, reduced_12, reduced_6).'
+      )
+    }
+  }
+
   if (isBusiness && treatment) {
     const vatRate = getVatRate(treatment)
     if (treatment === 'reverse_charge' && transaction.amount < 0) {
@@ -235,23 +268,25 @@ export function buildMappingResultFromCategory(
       }
     } else if (vatRate > 0) {
       const grossAmount = Math.abs(transaction.amount)
-      const vatAmount = Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
+      const vatAmount = hasVatOverride
+        ? Math.round((vatAmountOverride as number) * 100) / 100
+        : Math.round((grossAmount * vatRate / (1 + vatRate)) * 100) / 100
 
-      if (transaction.amount < 0 && mapping.vatDebitAccount) {
+      if (vatAmount > 0 && transaction.amount < 0 && mapping.vatDebitAccount) {
         // Expense: Ingående moms (deductible VAT)
         vatLines.push({
           account_number: mapping.vatDebitAccount,
           debit_amount: vatAmount,
           credit_amount: 0,
-          description: `Ingående moms ${vatRate * 100}%`,
+          description: hasVatOverride ? 'Ingående moms (enligt underlag)' : `Ingående moms ${vatRate * 100}%`,
         })
-      } else if (transaction.amount > 0 && mapping.vatCreditAccount) {
+      } else if (vatAmount > 0 && transaction.amount > 0 && mapping.vatCreditAccount) {
         // Income: Utgående moms (output VAT)
         vatLines.push({
           account_number: mapping.vatCreditAccount,
           debit_amount: 0,
           credit_amount: vatAmount,
-          description: `Utgående moms ${vatRate * 100}%`,
+          description: hasVatOverride ? 'Utgående moms (enligt underlag)' : `Utgående moms ${vatRate * 100}%`,
         })
       }
     }
