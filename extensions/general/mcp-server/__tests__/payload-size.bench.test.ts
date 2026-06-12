@@ -43,6 +43,9 @@ describe('tools/list payload size guard', () => {
     //     92 tools for Connectors Directory readiness; the ~10 longest descriptions
     //     were trimmed toward 180–200 chars to partly offset. Headroom reserved for
     //     the upcoming Skatteverket tools.
+    //   * Held at 36K when gnubok_list_accrual_schedules (add/bokslut) merged with
+    //     the categorize vat_amount override (#717): the combination crossed the
+    //     ceiling by ~75, offset by trimming the 8 longest descriptions to ~200 chars.
     // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
