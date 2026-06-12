@@ -100,6 +100,10 @@ describe('forbiddenOriginResponse', () => {
 })
 
 describe('mcp-server apiRoutes origin enforcement', () => {
+  // The dynamic import pulls in the full 9k-line server module; that parse
+  // alone takes ~4s and flirts with the 5s default timeout under full-suite
+  // parallel load. The test is import-bound, not logic-bound — give it
+  // explicit headroom instead of letting machine load decide the outcome.
   it('rejects foreign-Origin requests on every /mcp method before dispatch', async () => {
     const { mcpServerExtension } = await import('../index')
     const routes = (mcpServerExtension.apiRoutes ?? []).filter((r) => r.path === '/mcp')
@@ -114,5 +118,5 @@ describe('mcp-server apiRoutes origin enforcement', () => {
       )
       expect(res.status, `${route.method} /mcp`).toBe(403)
     }
-  })
+  }, 20_000)
 })
