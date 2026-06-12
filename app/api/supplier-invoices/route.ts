@@ -4,6 +4,8 @@ import {
   createSupplierInvoiceRegistrationEntry,
   createSupplierInvoicePrivatelyPaidEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
@@ -69,6 +71,34 @@ export const POST = withRouteContext(
       })
     }
 
+    const hasAccrualItems = body.items.some(
+      (item) => item.accrual_period_start && item.accrual_period_end,
+    )
+    if (hasAccrualItems && paidPrivately) {
+      // Eget utlägg books the expense in one verifikat at registration —
+      // there is no interim-account flow to defer. UI hides the combination.
+      return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+        requestId,
+        details: { reason: 'periodisering is not supported with paid_with_private_funds' },
+      })
+    }
+    if (hasAccrualItems) {
+      // Kontantmetoden recognises the cost at payment; periodisering only
+      // exists under faktureringsmetoden. Reject loudly instead of silently
+      // dropping the periods.
+      const { data: methodSettings } = await supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', companyId)
+        .single()
+      if ((methodSettings?.accounting_method || 'accrual') !== 'accrual') {
+        return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+          requestId,
+          details: { reason: 'periodisering requires faktureringsmetoden (accrual)' },
+        })
+      }
+    }
+
     const { data: supplier, error: supplierError } = await supabase
       .from('suppliers')
       .select('*')
@@ -121,6 +151,7 @@ export const POST = withRouteContext(
       const vatAmount = item.vat_amount != null
         ? Math.round(item.vat_amount * 100) / 100
         : Math.round(lineTotal * vatRate * 100) / 100
+      const hasAccrual = Boolean(item.accrual_period_start && item.accrual_period_end)
       return {
         sort_order: index,
         description: item.description,
@@ -136,6 +167,15 @@ export const POST = withRouteContext(
         // supplier charges no VAT (vat_rate stays 0); the engine self-assesses
         // at this rate, defaulting to 25% huvudregeln when null.
         reverse_charge_rate: body.reverse_charge ? (item.reverse_charge_rate ?? null) : null,
+        // Periodisering: frozen onto the line at create time. The balance
+        // account defaults from the cost account's BAS convention when the
+        // client leaves it blank.
+        accrual_period_start: hasAccrual ? item.accrual_period_start : null,
+        accrual_period_end: hasAccrual ? item.accrual_period_end : null,
+        accrual_balance_account: hasAccrual
+          ? (item.accrual_balance_account ??
+            suggestBalanceAccount('expense', item.account_number))
+          : null,
       }
     })
 
@@ -265,9 +305,10 @@ export const POST = withRouteContext(
       ...item,
     }))
 
-    const { error: itemsError } = await supabase
+    const { data: insertedItems, error: itemsError } = await supabase
       .from('supplier_invoice_items')
       .insert(itemInserts)
+      .select('id, sort_order')
 
     if (itemsError) {
       // Roll back the parent on items failure to avoid orphan rows.
@@ -378,6 +419,37 @@ export const POST = withRouteContext(
             .from('supplier_invoices')
             .update({ registration_journal_entry_id: journalEntry.id })
             .eq('id', invoice.id)
+
+          if (hasAccrualItems) {
+            // The registration entry is committed (immutable) — a schedule
+            // failure must not roll the invoice back. Surface a warning and
+            // let the user retry from the periodiseringar page instead.
+            const idBySortOrder = new Map(
+              ((insertedItems ?? []) as Array<{ id: string; sort_order: number }>).map(
+                (row) => [row.sort_order, row.id],
+              ),
+            )
+            const itemsWithIds = items.map((item) => ({
+              ...item,
+              id: idBySortOrder.get(item.sort_order) ?? null,
+            }))
+            const scheduleResult = await createSchedulesForSupplierInvoice(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as SupplierInvoice,
+              itemsWithIds as unknown as SupplierInvoiceItem[],
+              journalEntry.id,
+            )
+            if (scheduleResult.failed > 0) {
+              warnings.push({
+                code: 'ACCRUAL_SCHEDULE_FAILED',
+                message:
+                  'Fakturan bokfördes, men en eller flera periodiseringar kunde inte ' +
+                  'skapas. Kontrollera under Bokföring → Periodiseringar.',
+              })
+            }
+          }
         } else {
           // createSupplierInvoiceRegistrationEntry returns null ONLY when no
           // fiscal period covers invoice_date (every other failure throws and

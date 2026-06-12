@@ -1,5 +1,6 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
+import { resolveBookingAccount } from './accruals/account-suggestions'
 import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
@@ -48,6 +49,12 @@ function buildInvoiceDescription(
 /**
  * Group invoice items by VAT rate and generate per-rate revenue + VAT lines.
  * Returns credit lines only (revenue + VAT). The caller adds the debit side.
+ *
+ * options.deferAccruals: substitute the 29xx interim account for lines with a
+ * periodisering period. Only the callers that also create/cancel accrual
+ * schedules may pass true (invoice entry + credit note) — the cash-method
+ * entry books revenue directly even if a line carries stale accrual fields,
+ * since no schedule would ever dissolve the interim balance.
  */
 function generatePerRateLines(
   items: InvoiceItem[],
@@ -55,7 +62,8 @@ function generatePerRateLines(
   entityType: EntityType,
   invoiceTagText: string,
   currency?: string | null,
-  exchangeRate?: number | null
+  exchangeRate?: number | null,
+  options?: { deferAccruals?: boolean }
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = currency != null && currency !== 'SEK'
@@ -132,9 +140,16 @@ function generatePerRateLines(
     // a per-line override only applies to ordinary domestic rates so EU/export
     // sales keep landing in the right VAT-declaration ruta.
     const isSpecialTreatment = treatment === 'reverse_charge' || treatment === 'export'
-    const account = !isSpecialTreatment && item.revenue_account
+    const plAccount = !isSpecialTreatment && item.revenue_account
       ? item.revenue_account
       : getRevenueAccount(treatment, entityType)
+    // Periodiserade lines credit the 29xx interim account (förutbetalda
+    // intäkter) instead of revenue; the schedule dissolves it monthly. Output
+    // VAT below is untouched — moms is never deferred. Special treatments are
+    // never deferred (ruta 39/40 must reflect the full period's sales).
+    const account = isSpecialTreatment || !options?.deferAccruals
+      ? plAccount
+      : resolveBookingAccount('revenue', item, plAccount)
 
     const group = rateGroups.get(rate) ?? { vatAmount: 0, byAccount: new Map<string, number>() }
     group.vatAmount += item.vat_amount || 0
@@ -297,7 +312,10 @@ export async function createInvoiceJournalEntry(
   if (invoice.items && invoice.items.length > 0) {
     creditLines.push(...generatePerRateLines(
       invoice.items, invoice.vat_treatment, entityType, tag,
-      invoice.currency, invoice.exchange_rate
+      invoice.currency, invoice.exchange_rate,
+      // Schedules are created right after this entry commits (send/mark-sent
+      // flows), so deferring to 29xx here is safe.
+      { deferAccruals: true }
     ))
   } else {
     // Fallback: no items available, use invoice-level amounts
@@ -523,7 +541,11 @@ export async function createCreditNoteJournalEntry(
     // Use absolute items for generatePerRateLines, then swap debit/credit
     const creditLines = generatePerRateLines(
       creditNote.items, creditNote.vat_treatment, entityType, tag,
-      creditNote.currency, creditNote.exchange_rate
+      creditNote.currency, creditNote.exchange_rate,
+      // Credit-note items carry the original's accrual fields so the reversal
+      // hits the same 29xx interim account; the original's schedule is
+      // cancelled/stornoed by the credit flow.
+      { deferAccruals: true }
     )
     for (const line of creditLines) {
       debitLines.push({

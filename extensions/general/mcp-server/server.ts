@@ -8967,6 +8967,59 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_list_accrual_schedules',
+    title: 'List Periodiseringar',
+    description:
+      'Löpande periodiseringar (17xx/29xx): monthly installments, dissolved and remaining amounts.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['active', 'completed', 'cancelled', 'all'],
+          description: "Default 'active'.",
+        },
+      },
+    },
+    outputSchema: { type: 'object', additionalProperties: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase, _actor) {
+      const status = (args.status as string) || 'active'
+      let query = supabase
+        .from('accrual_schedules')
+        .select('*, installments:accrual_schedule_installments(*)')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
+      if (status !== 'all') query = query.eq('status', status)
+      const { data, error } = await query
+      if (error) throw new Error(error.message)
+
+      type InstallmentRow = { period_month: string; amount: number; status: string }
+      const schedules = ((data ?? []) as Array<Record<string, unknown>>).map((schedule) => {
+        const installments = ([...((schedule.installments as InstallmentRow[]) ?? [])]).sort(
+          (a, b) => a.period_month.localeCompare(b.period_month),
+        )
+        const dissolved =
+          Math.round(
+            installments
+              .filter((i) => i.status === 'posted')
+              .reduce((sum, i) => sum + Number(i.amount), 0) * 100,
+          ) / 100
+        const total = Number(schedule.total_amount)
+        return {
+          ...schedule,
+          installments,
+          dissolved_amount: dissolved,
+          remaining_amount:
+            schedule.status === 'cancelled' ? 0 : Math.round((total - dissolved) * 100) / 100,
+        }
+      })
+      return { schedules, count: schedules.length }
+    },
+  },
+
+  {
     name: 'gnubok_propose_annual_depreciation',
     title: 'Propose Annual Depreciation (Avskrivning)',
     description:

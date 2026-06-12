@@ -23,7 +23,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical } from 'lucide-react'
+import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   DropdownMenu,
@@ -52,6 +52,9 @@ import {
   RUT_MAX,
   computeDeduction,
 } from '@/lib/invoices/rot-rut-rules'
+import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
+import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
@@ -75,6 +78,7 @@ export default function NewInvoicePage() {
   const supabase = createClient()
   const t = useTranslations('invoice_editor')
   const ts = useTranslations('self_billing')
+  const ta = useTranslations('accruals')
   // Toggle between a normal customer invoice (default) and registering a
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   const [mode, setMode] = useState<'invoice' | 'self_billed'>('invoice')
@@ -99,7 +103,31 @@ export default function NewInvoicePage() {
       work_type: z.string().nullable().optional(),
       housing_designation: z.string().nullable().optional(),
       apartment_number: z.string().nullable().optional(),
+      // Periodisering (förutbetald intäkt). Active when balance account is
+      // non-null; both period dates are then required (refine below).
+      accrual_period_start: z.string().nullable().optional(),
+      accrual_period_end: z.string().nullable().optional(),
+      accrual_balance_account: z.string().nullable().optional(),
     }).superRefine((item, ctx) => {
+      if (item.accrual_balance_account != null) {
+        const start = item.accrual_period_start
+        const end = item.accrual_period_end
+        let invalid = !start || !end || end < start
+        if (!invalid) {
+          try {
+            invalid = countCalendarMonths(start as string, end as string) < 2
+          } catch {
+            invalid = true
+          }
+        }
+        if (invalid) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['accrual_period_end'],
+            message: ta('validation_period'),
+          })
+        }
+      }
       if (item.line_type === 'text') return
       if (item.description.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['description'], message: t('validation_description_required') })
@@ -135,7 +163,7 @@ export default function NewInvoicePage() {
       deduction_housing_designation: z.string().optional(),
       items: z.array(itemSchema).min(1, t('validation_min_one_row')),
     })
-  }, [t])
+  }, [t, ta])
 
   type FormData = z.infer<typeof schema>
 
@@ -202,6 +230,9 @@ export default function NewInvoicePage() {
         work_type: null,
         housing_designation: null,
         apartment_number: null,
+        accrual_period_start: null,
+        accrual_period_end: null,
+        accrual_balance_account: null,
       }],
     },
   })
@@ -536,6 +567,30 @@ export default function NewInvoicePage() {
   const hasAnyDeduction = deductionTotal > 0
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
   const toPay = Math.round((total - deductionTotal) * 100) / 100
+
+  // Periodisering per rad: kräver faktureringsmetoden och en riktig faktura.
+  // EU-/exportkunder bokas på 3308/3305 (omvänd skattskyldighet/export) och
+  // kan inte periodiseras — ruta 39/40 ska spegla hela försäljningen.
+  const customerBlocksAccrual =
+    selectedCustomer?.customer_type === 'eu_business' ||
+    selectedCustomer?.customer_type === 'non_eu_business'
+  const canUseAccrual = isInvoiceDoc && accountingMethod === 'accrual' && !customerBlocksAccrual
+
+  function toggleAccrual(index: number) {
+    if (watchItems[index]?.accrual_balance_account != null) {
+      setValue(`items.${index}.accrual_period_start`, null, { shouldDirty: true })
+      setValue(`items.${index}.accrual_period_end`, null, { shouldDirty: true })
+      setValue(`items.${index}.accrual_balance_account`, null, { shouldDirty: true })
+    } else {
+      setValue(`items.${index}.accrual_period_start`, watch('invoice_date') || '', { shouldDirty: true })
+      setValue(`items.${index}.accrual_period_end`, '', { shouldDirty: true })
+      setValue(
+        `items.${index}.accrual_balance_account`,
+        DEFAULT_DEFERRED_REVENUE_ACCOUNT,
+        { shouldDirty: true },
+      )
+    }
+  }
 
   // Self-billing path: no review dialog, no PDF, no send — it arrives already
   // booked. POST straight to the dedicated endpoint and open the verifikat.
@@ -1046,7 +1101,7 @@ export default function NewInvoicePage() {
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
+                        <DropdownMenuContent align="end" className="min-w-56">
                           <DropdownMenuLabel>{t('deduction_menu_label')}</DropdownMenuLabel>
                           <DropdownMenuRadioGroup
                             value={watchItems[index]?.deduction_type ?? 'none'}
@@ -1058,16 +1113,33 @@ export default function NewInvoicePage() {
                                 setValue(`items.${index}.labor_hours`, null)
                                 setValue(`items.${index}.housing_designation`, null)
                                 setValue(`items.${index}.apartment_number`, null)
+                              } else if (watchItems[index]?.accrual_balance_account != null) {
+                                // ROT/RUT och periodisering kombineras aldrig
+                                // på samma rad — avdraget vinner.
+                                setValue(`items.${index}.accrual_period_start`, null)
+                                setValue(`items.${index}.accrual_period_end`, null)
+                                setValue(`items.${index}.accrual_balance_account`, null)
                               }
                             }}
                           >
-                            <DropdownMenuRadioItem value="none">{t('deduction_none')}</DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="rot">{t('deduction_rot')}</DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="rut">{t('deduction_rut')}</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="none" className="py-2">{t('deduction_none')}</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="rot" className="py-2">{t('deduction_rot')}</DropdownMenuRadioItem>
+                            <DropdownMenuRadioItem value="rut" className="py-2">{t('deduction_rut')}</DropdownMenuRadioItem>
                           </DropdownMenuRadioGroup>
+                          {canUseAccrual && !watchItems[index]?.deduction_type && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onSelect={() => toggleAccrual(index)} className="py-2">
+                                <CalendarClock className="h-4 w-4" />
+                                {watchItems[index]?.accrual_balance_account != null
+                                  ? ta('row_menu_remove')
+                                  : ta('row_menu_add')}
+                              </DropdownMenuItem>
+                            </>
+                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
-                            className="text-destructive focus:text-destructive"
+                            className="py-2 text-destructive focus:text-destructive"
                             disabled={fields.length === 1}
                             onSelect={() => remove(index)}
                           >
@@ -1325,6 +1397,37 @@ export default function NewInvoicePage() {
                         </div>
                       )}
 
+                      {/* Periodisering (förutbetald intäkt) — activated via the
+                          row's ⋮ menu. Intäkten krediteras 29xx vid bokning och
+                          löses upp månadsvis över perioden; momsen påverkas inte. */}
+                      {canUseAccrual && watchItems[index]?.accrual_balance_account != null && (
+                        <div className="md:col-span-12 mt-2 md:mt-3">
+                          <AccrualPeriodControl
+                            direction="revenue"
+                            amount={lineTotal}
+                            idPrefix={`accrual-invoice-${index}`}
+                            value={{
+                              start: watchItems[index]?.accrual_period_start ?? '',
+                              end: watchItems[index]?.accrual_period_end ?? '',
+                              balanceAccount:
+                                watchItems[index]?.accrual_balance_account ||
+                                DEFAULT_DEFERRED_REVENUE_ACCOUNT,
+                            }}
+                            onChange={(next) => {
+                              setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
+                              setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
+                              setValue(`items.${index}.accrual_balance_account`, next.balanceAccount, { shouldDirty: true })
+                            }}
+                            onRemove={() => toggleAccrual(index)}
+                          />
+                          {errors.items?.[index]?.accrual_period_end && (
+                            <p className="mt-1 text-sm text-destructive">
+                              {errors.items[index].accrual_period_end?.message}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
                       {/* Mobile summary row */}
                       <div className="flex justify-between text-sm pt-1 border-t border-border/40 md:hidden">
                         <span className="text-muted-foreground">{t('row_label', { index: index + 1 })}</span>
@@ -1356,6 +1459,9 @@ export default function NewInvoicePage() {
                         work_type: null,
                         housing_designation: null,
                         apartment_number: null,
+                        accrual_period_start: null,
+                        accrual_period_end: null,
+                        accrual_balance_account: null,
                       })
                     }
                   >
@@ -1388,6 +1494,9 @@ export default function NewInvoicePage() {
                           work_type: null,
                           housing_designation: null,
                           apartment_number: null,
+                          accrual_period_start: null,
+                          accrual_period_end: null,
+                          accrual_balance_account: null,
                         })
                       }
                     >

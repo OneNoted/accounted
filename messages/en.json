@@ -435,6 +435,24 @@
     "label_bank_account": "Bank account",
     "no_contact_info": "No contact details"
   },
+  "accruals": {
+    "row_toggle": "Defer over period",
+    "row_toggle_aria": "Defer line {index} over a period",
+    "row_menu_add": "Add accrual period",
+    "row_menu_remove": "Remove deferral",
+    "panel_title": "Periodisering",
+    "start_label": "Period start",
+    "end_label": "Period end",
+    "account_label": "Balance account",
+    "remove_aria": "Remove deferral",
+    "preview": "{months} months × {amount}",
+    "preview_invalid_period": "The period end must be after its start",
+    "preview_min_months": "Deferral requires at least 2 calendar months",
+    "k2_hint": "Amounts under SEK 5,000 normally do not need to be deferred (K2).",
+    "validation_period": "Enter a period of at least 2 calendar months",
+    "incomplete_toast_title": "Incomplete deferral",
+    "incomplete_toast_description": "Set the period start and end (at least 2 months) or remove the deferral from the line."
+  },
   "assets": {
     "title": "Fixed assets",
     "new_asset": "New asset",
@@ -2203,6 +2221,7 @@
   },
   "invoice_review": {
     "assigned_number_prefix": "Will be assigned invoice number",
+    "accrual_line_info": "Accrued {from} – {to}",
     "customer_type_individual": "Private individual",
     "customer_type_swedish_business": "Swedish business or organization",
     "customer_type_eu_business": "EU business",
@@ -2274,6 +2293,8 @@
     "badge_proforma": "Proforma",
     "badge_delivery_note": "Delivery note",
     "badge_self_billed": "Self-billing",
+    "badge_accrued": "Accrued",
+    "accrual_line_info": "Accrued {from} – {to}",
     "external_number_label": "Invoice number (customer's)",
     "agreement_ref_label": "Agreement reference",
     "created_at": "Created {date}",
@@ -2716,7 +2737,13 @@
     "account_2647": "Calculated input VAT, domestic reverse charge",
     "account_2614": "Output VAT, reverse charge 25%",
     "account_2624": "Output VAT, reverse charge 12%",
-    "account_2634": "Output VAT, reverse charge 6%"
+    "account_2634": "Output VAT, reverse charge 6%",
+    "account_1710": "Prepaid rent",
+    "account_1720": "Prepaid leasing fees",
+    "account_1730": "Prepaid insurance premiums",
+    "account_1740": "Prepaid interest",
+    "account_1790": "Other prepaid expenses",
+    "review_accrual_line_info": "Accrued {from} – {to}"
   },
   "supplier_invoice_detail": {
     "back": "Back",
@@ -2774,6 +2801,8 @@
     "delivery_date_label": "Delivery date",
     "ocr_reference_label": "OCR/reference",
     "reverse_charge_badge": "Reverse charge",
+    "badge_accrued": "Accrued",
+    "accrual_line_info": "Accrued {from} – {to}",
     "amounts_title": "Amounts",
     "net_excl_vat": "Net (excl. VAT)",
     "vat_label": "VAT",

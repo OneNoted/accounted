@@ -435,6 +435,24 @@
     "label_bank_account": "Bankkonto",
     "no_contact_info": "Inga kontaktuppgifter"
   },
+  "accruals": {
+    "row_toggle": "Periodisera",
+    "row_toggle_aria": "Periodisera rad {index}",
+    "row_menu_add": "Lägg till periodisering",
+    "row_menu_remove": "Ta bort periodisering",
+    "panel_title": "Periodisering",
+    "start_label": "Periodens start",
+    "end_label": "Periodens slut",
+    "account_label": "Balanskonto",
+    "remove_aria": "Ta bort periodisering",
+    "preview": "{months} månader × {amount}",
+    "preview_invalid_period": "Periodens slut måste vara efter dess start",
+    "preview_min_months": "Periodisering kräver minst 2 kalendermånader",
+    "k2_hint": "Belopp under 5 000 kr behöver normalt inte periodiseras (K2).",
+    "validation_period": "Ange en period på minst 2 kalendermånader",
+    "incomplete_toast_title": "Ofullständig periodisering",
+    "incomplete_toast_description": "Ange periodens start och slut (minst 2 månader) eller ta bort periodiseringen från raden."
+  },
   "assets": {
     "title": "Anläggningstillgångar",
     "new_asset": "Ny tillgång",
@@ -2203,6 +2221,7 @@
   },
   "invoice_review": {
     "assigned_number_prefix": "Tilldelas fakturanummer",
+    "accrual_line_info": "Periodiseras {from} – {to}",
     "customer_type_individual": "Privatperson",
     "customer_type_swedish_business": "Svenskt företag eller organisation",
     "customer_type_eu_business": "EU-företag",
@@ -2274,6 +2293,8 @@
     "badge_proforma": "Proforma",
     "badge_delivery_note": "Följesedel",
     "badge_self_billed": "Självfaktura",
+    "badge_accrued": "Periodiserad",
+    "accrual_line_info": "Periodiseras {from} – {to}",
     "external_number_label": "Fakturanummer (kundens)",
     "agreement_ref_label": "Avtalsreferens",
     "created_at": "Skapad {date}",
@@ -2716,7 +2737,13 @@
     "account_2647": "Beräknad ing. moms omvänd i Sverige",
     "account_2614": "Utg. moms omvänd 25%",
     "account_2624": "Utg. moms omvänd 12%",
-    "account_2634": "Utg. moms omvänd 6%"
+    "account_2634": "Utg. moms omvänd 6%",
+    "account_1710": "Förutbetalda hyreskostnader",
+    "account_1720": "Förutbetalda leasingavgifter",
+    "account_1730": "Förutbetalda försäkringspremier",
+    "account_1740": "Förutbetalda räntekostnader",
+    "account_1790": "Övriga förutbetalda kostnader",
+    "review_accrual_line_info": "Periodiseras {from} – {to}"
   },
   "supplier_invoice_detail": {
     "back": "Tillbaka",
@@ -2774,6 +2801,8 @@
     "delivery_date_label": "Leveransdatum",
     "ocr_reference_label": "OCR/referens",
     "reverse_charge_badge": "Omvänd skattskyldighet",
+    "badge_accrued": "Periodiserad",
+    "accrual_line_info": "Periodiseras {from} – {to}",
     "amounts_title": "Belopp",
     "net_excl_vat": "Netto (exkl. moms)",
     "vat_label": "Moms",

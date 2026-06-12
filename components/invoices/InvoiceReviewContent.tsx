@@ -1,10 +1,12 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Customer, Currency } from '@/types'
 
 interface ReviewItem {
@@ -15,7 +17,14 @@ interface ReviewItem {
   vat_rate?: number
   /** 'text' rows are free-text/blank lines — description only, no amounts. */
   line_type?: 'product' | 'text'
+  // Periodisering: when both dates are set, the revenue books to the 29xx
+  // interim account and dissolves monthly over the period.
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
 }
+
+const accrualMonth = (date: string): string => date.slice(0, 7)
 
 interface InvoiceReviewContentProps {
   customer: Customer
@@ -130,7 +139,20 @@ export function InvoiceReviewContent({
                 </tr>
               ) : (
                 <tr key={index} className="border-b last:border-0">
-                  <td className="py-2">{item.description}</td>
+                  <td className="py-2">
+                    {item.description}
+                    {itemHasAccrual(item) && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                        <CalendarClock className="h-3 w-3 shrink-0" />
+                        <span className="tabular-nums">
+                          {t('accrual_line_info', {
+                            from: accrualMonth(item.accrual_period_start!),
+                            to: accrualMonth(item.accrual_period_end!),
+                          })}
+                        </span>
+                      </p>
+                    )}
+                  </td>
                   <td className="py-2 text-right">{item.quantity}</td>
                   <td className="py-2 text-center">{item.unit}</td>
                   <td className="py-2 text-right">{formatCurrency(item.unit_price, currency)}</td>
@@ -153,6 +175,17 @@ export function InvoiceReviewContent({
           ) : (
             <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
               <p className="font-medium">{item.description}</p>
+              {itemHasAccrual(item) && (
+                <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <CalendarClock className="h-3 w-3 shrink-0" />
+                  <span className="tabular-nums">
+                    {t('accrual_line_info', {
+                      from: accrualMonth(item.accrual_period_start!),
+                      to: accrualMonth(item.accrual_period_end!),
+                    })}
+                  </span>
+                </p>
+              )}
               <div className="flex items-center justify-between text-muted-foreground">
                 <span>{item.quantity} {item.unit} × {formatCurrency(item.unit_price, currency)}</span>
                 {showVatColumn && <span className="text-xs">{t('mobile_vat_suffix', { rate: item.vat_rate ?? 0 })}</span>}

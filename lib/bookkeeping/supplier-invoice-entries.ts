@@ -1,5 +1,6 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
+import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
   generateReverseChargeLines,
   generateReverseChargeBasisLines,
@@ -68,12 +69,16 @@ export async function createSupplierInvoiceRegistrationEntry(
   const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomst ${invoice.arrival_number})`)
   const isForeign = invoice.currency !== 'SEK'
 
-  // Aggregate expense amounts by account number and convert to SEK
+  // Aggregate expense amounts by account number and convert to SEK.
+  // Periodiserade lines book their net to the 17xx interim account instead
+  // of the cost account (resolveBookingAccount); VAT and 2440 are untouched —
+  // moms is never deferred (redovisas på fakturadatum).
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
-    const current = expenseByAccount.get(item.account_number) || 0
+    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
+    const current = expenseByAccount.get(bookingAccount) || 0
     const itemSek = resolveSekAmount(item.line_total, null, invoice.currency, invoice.exchange_rate)
-    expenseByAccount.set(item.account_number, current + itemSek)
+    expenseByAccount.set(bookingAccount, current + itemSek)
   }
 
   // Debit: Expense accounts (in SEK)
@@ -538,13 +543,17 @@ export async function createSupplierCreditNoteEntry(
   const desc = buildSupplierDescription('Kreditfaktura leverantör', creditNote.supplier_invoice_number, supplierName, `(ankomst ${creditNote.arrival_number})`)
   const lines: CreateJournalEntryLineInput[] = []
 
-  // Credit: Expense accounts (reverse, in SEK)
+  // Credit: Expense accounts (reverse, in SEK). The caller passes the
+  // ORIGINAL invoice's items so deferred lines reverse against the same 17xx
+  // interim account they were registered on (the schedule's posted
+  // dissolutions are stornoed separately by cancelSchedulesForSource).
   const creditLines: CreateJournalEntryLineInput[] = []
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
-    const current = expenseByAccount.get(item.account_number) || 0
+    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
+    const current = expenseByAccount.get(bookingAccount) || 0
     const itemSek = Math.abs(resolveSekAmount(item.line_total, null, creditNote.currency, creditNote.exchange_rate))
-    expenseByAccount.set(item.account_number, current + itemSek)
+    expenseByAccount.set(bookingAccount, current + itemSek)
   }
 
   for (const [accountNumber, amount] of expenseByAccount) {

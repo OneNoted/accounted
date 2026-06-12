@@ -713,6 +713,14 @@ export interface SupplierInvoiceItem {
   // rate drives the fiktiv-moms + basbelopp booking. See the booking engine.
   reverse_charge_rate: number | null
 
+  // Periodisering (förutbetald kostnad): when set, the registration entry
+  // debits accrual_balance_account (17xx) instead of account_number, and an
+  // accrual_schedules row dissolves the net amount monthly over the period.
+  // VAT is never deferred. Both dates set together or not at all.
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
+
   created_at: string
 }
 
@@ -890,6 +898,15 @@ export interface InvoiceItem {
   // booking in generatePerRateLines().
   article_id?: string | null
   revenue_account?: string | null
+
+  // Periodisering (förutbetald intäkt): when set, the revenue entry credits
+  // accrual_balance_account (29xx) instead of the line's revenue account, and
+  // an accrual_schedules row dissolves the net amount monthly over the
+  // period. Output VAT is never deferred. Both dates set together or not at
+  // all. Not combinable with ROT/RUT or text lines.
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
 
   // ROT/RUT-avdrag (Sweden's tax deduction for household services / home
   // renovation). When `deduction_type` is set, the system computes
@@ -1223,6 +1240,7 @@ export type JournalEntrySourceType =
   | 'supplier_credit_note'
   | 'currency_revaluation'
   | 'reminder_fee'
+  | 'accrual'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -1328,6 +1346,60 @@ export interface JournalEntryLine {
   project: string | null
   sort_order: number
   created_at: string
+}
+
+// ── Periodisering (accrual schedules) ─────────────────────────
+// One schedule per deferred invoice line: the net amount sits on a 17xx/29xx
+// interim account and dissolves to the P&L account via monthly 'accrual'
+// entries. See lib/bookkeeping/accruals/.
+
+export type AccrualDirection = 'expense' | 'revenue'
+export type AccrualScheduleStatus = 'active' | 'completed' | 'cancelled'
+export type AccrualInstallmentStatus = 'pending' | 'posted' | 'cancelled'
+
+export interface AccrualSchedule {
+  id: string
+  user_id: string
+  company_id: string
+  direction: AccrualDirection
+  supplier_invoice_id: string | null
+  supplier_invoice_item_id: string | null
+  invoice_id: string | null
+  invoice_item_id: string | null
+  // Interim balance account (17xx for expense, 29xx for revenue) and the
+  // P&L account each installment dissolves to. Strings, like all accounts.
+  balance_account: string
+  target_account: string
+  // Net SEK amount as booked (ex VAT). Always equals the sum of installments.
+  total_amount: number
+  period_start: string
+  period_end: string
+  months: number
+  origin_journal_entry_id: string | null
+  // Dissolution entries are never dated before this (= origin entry date).
+  posting_floor_date: string
+  status: AccrualScheduleStatus
+  description: string | null
+  created_at: string
+  updated_at: string
+  // Relations
+  installments?: AccrualScheduleInstallment[]
+}
+
+export interface AccrualScheduleInstallment {
+  id: string
+  user_id: string
+  company_id: string
+  schedule_id: string
+  // First day of the calendar month the installment belongs to.
+  period_month: string
+  amount: number
+  status: AccrualInstallmentStatus
+  journal_entry_id: string | null
+  posted_at: string | null
+  last_error: string | null
+  created_at: string
+  updated_at: string
 }
 
 // Mapping Rule
@@ -2923,6 +2995,11 @@ export interface InvoiceExtractionResult {
     dueDate: string | null
     paymentReference: string | null
     currency: string
+    // Service/coverage window the invoice charges for — drives the
+    // periodisering prefill. Optional: extractions from before the field
+    // existed lack it.
+    servicePeriodStart?: string | null
+    servicePeriodEnd?: string | null
   }
   lineItems: ExtractedInvoiceLineItem[]
   totals: {

@@ -26,6 +26,8 @@ describe('detectPeriodisering', () => {
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
+    // accrual_schedules — löpande periodiseringar that exclude their invoices
+    mock.enqueue({ data: [], error: null })
     // 2) invoices (none)
     mock.enqueue({ data: [], error: null })
     // 3) supplier_invoices — one 12-month annual license invoice
@@ -69,6 +71,8 @@ describe('detectPeriodisering', () => {
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
+    // accrual_schedules — löpande periodiseringar that exclude their invoices
+    mock.enqueue({ data: [], error: null })
     // Customer invoice for an annual subscription billed Dec 1 2025 covering
     // Jan 1 2026 → Dec 31 2026 entirely. Entire amount belongs to next year.
     mock.enqueue({
@@ -106,6 +110,8 @@ describe('detectPeriodisering', () => {
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
+    // accrual_schedules — löpande periodiseringar that exclude their invoices
+    mock.enqueue({ data: [], error: null })
     mock.enqueue({ data: [], error: null }) // invoices
     mock.enqueue({
       data: [
@@ -143,6 +149,8 @@ describe('detectPeriodisering', () => {
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
+    // accrual_schedules — löpande periodiseringar that exclude their invoices
+    mock.enqueue({ data: [], error: null })
     mock.enqueue({ data: [], error: null }) // invoices
     mock.enqueue({
       data: [
@@ -172,6 +180,8 @@ describe('detectPeriodisering', () => {
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
+    // accrual_schedules — löpande periodiseringar that exclude their invoices
+    mock.enqueue({ data: [], error: null })
     mock.enqueue({ data: [], error: null })
     mock.enqueue({
       data: [
@@ -201,6 +211,8 @@ describe('detectPeriodisering', () => {
       data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
       error: null,
     })
+    // accrual_schedules — löpande periodiseringar that exclude their invoices
+    mock.enqueue({ data: [], error: null })
     mock.enqueue({ data: [], error: null })
     mock.enqueue({
       data: [
@@ -240,5 +252,40 @@ describe('detectPeriodisering', () => {
     // high confidence wins over a larger medium-confidence suggestion
     expect(result[0].source_invoice_id).toBe('sup-high')
     expect(result[1].source_invoice_id).toBe('sup-medium')
+  })
+
+  it('excludes invoices already covered by a löpande accrual schedule', async () => {
+    mock.enqueue({
+      data: { id: 'period-1', period_start: '2025-01-01', period_end: '2025-12-31' },
+      error: null,
+    })
+    // accrual_schedules — sup-inv-1 is already deferred line-by-line
+    mock.enqueue({
+      data: [{ supplier_invoice_id: 'sup-inv-1', invoice_id: null }],
+      error: null,
+    })
+    mock.enqueue({ data: [], error: null }) // invoices
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-inv-1',
+          supplier_invoice_number: 'LF-100',
+          invoice_date: '2025-07-01',
+          subtotal: 12000,
+          notes: 'Mjukvarulicens period: 2025-07-01 till 2026-06-30',
+          suppliers: { name: 'Acme SaaS AB' },
+          supplier_invoice_items: [{ description: 'Årslicens', account_number: '5800' }],
+        },
+      ],
+      error: null,
+    })
+
+    const result = await detectPeriodisering(
+      mock.supabase as never,
+      'company-1',
+      'period-1',
+    )
+    // Suggesting it again would periodisera the same belopp twice.
+    expect(result).toEqual([])
   })
 })

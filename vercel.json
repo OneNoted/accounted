@@ -43,6 +43,10 @@
     {
       "path": "/api/webhooks/dispatch/cron",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/bookkeeping/accruals/post-due/cron",
+      "schedule": "15 5 * * *"
     }
   ]
 }

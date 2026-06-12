@@ -7,6 +7,8 @@ import type { EntityType, AccountingMethod, Invoice, CreditNote, InvoiceDocument
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
+import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import {
   computeDeduction,
@@ -137,6 +139,39 @@ export const POST = withRouteContext(
     const notVatRegistered = vatSettings?.vat_registered === false
     if (notVatRegistered && documentType !== 'delivery_note') {
       for (const item of invoiceInput.items) item.vat_rate = 0
+    }
+
+    // Periodisering guards. The line schema already validates the period
+    // shape; here we gate the flows where deferral has no meaning: cash
+    // method (recognition at payment), reverse charge/export (3308/3305 must
+    // reflect the full sale for ruta 39/40), and non-invoice document types.
+    const hasAccrualItems = invoiceInput.items.some(
+      (item) => item.accrual_period_start && item.accrual_period_end,
+    )
+    if (hasAccrualItems) {
+      if (documentType !== 'invoice') {
+        return errorResponseFromCode('INVOICE_CREATE_ACCRUAL_INVALID', log, {
+          requestId,
+          details: { reason: 'document_type', documentType },
+        })
+      }
+      if (vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export') {
+        return errorResponseFromCode('INVOICE_CREATE_ACCRUAL_INVALID', log, {
+          requestId,
+          details: { reason: 'vat_treatment', vatTreatment: vatRules.treatment },
+        })
+      }
+      const { data: methodSettings } = await supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', companyId!)
+        .maybeSingle()
+      if ((methodSettings?.accounting_method || 'accrual') !== 'accrual') {
+        return errorResponseFromCode('INVOICE_CREATE_ACCRUAL_INVALID', log, {
+          requestId,
+          details: { reason: 'accounting_method' },
+        })
+      }
     }
 
     // Free-text rows carry no amounts and are excluded from totals + VAT.
@@ -353,6 +388,9 @@ export const POST = withRouteContext(
           work_type: null,
           housing_designation: null,
           apartment_number: null,
+          accrual_period_start: null,
+          accrual_period_end: null,
+          accrual_balance_account: null,
         }
       }
       const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
@@ -392,6 +430,22 @@ export const POST = withRouteContext(
         work_type: documentType === 'invoice' ? (item.work_type ?? null) : null,
         housing_designation: documentType === 'invoice' ? (item.housing_designation ?? null) : null,
         apartment_number: documentType === 'invoice' ? (item.apartment_number ?? null) : null,
+        // Periodisering (förutbetald intäkt): frozen onto the line. The
+        // schedule itself is created when the invoice is sent/booked. ROT/RUT
+        // lines never defer (schema-enforced); the guard above already
+        // restricted this to real invoices under faktureringsmetoden.
+        accrual_period_start:
+          documentType === 'invoice' && !deductionType
+            ? (item.accrual_period_start ?? null)
+            : null,
+        accrual_period_end:
+          documentType === 'invoice' && !deductionType
+            ? (item.accrual_period_end ?? null)
+            : null,
+        accrual_balance_account:
+          documentType === 'invoice' && !deductionType && item.accrual_period_start && item.accrual_period_end
+            ? (item.accrual_balance_account ?? DEFAULT_DEFERRED_REVENUE_ACCOUNT)
+            : null,
       }
     })
 
@@ -561,7 +615,7 @@ async function createCreditNote(
     })
   }
 
-  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number; revenue_account?: string | null; article_id?: string | null }) => ({
+  const creditNoteItems = (originalInvoice.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate?: number; vat_amount?: number; revenue_account?: string | null; article_id?: string | null; accrual_period_start?: string | null; accrual_period_end?: string | null; accrual_balance_account?: string | null }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
     line_type: item.line_type ?? 'product',
@@ -578,6 +632,14 @@ async function createCreditNote(
     // balance. article_id is preserved for the usage history.
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    // Same reasoning for periodiserade lines: the credit-note verifikat must
+    // reverse against the 29xx interim account the original credited, not the
+    // revenue account. generatePerRateLines reads these fields to substitute.
+    // No schedule is ever created for a credit note (only send/mark-sent
+    // create schedules); the original's schedule is cancelled below.
+    accrual_period_start: item.accrual_period_start ?? null,
+    accrual_period_end: item.accrual_period_end ?? null,
+    accrual_balance_account: item.accrual_balance_account ?? null,
   }))
 
   const { error: itemsError } = await supabase.from('invoice_items').insert(creditNoteItems)
@@ -636,6 +698,21 @@ async function createCreditNote(
         creditNoteId: creditNote.id,
       })
       // Non-blocking — credit note still exists.
+    }
+
+    // Periodisering interplay: cancel remaining months and storno posted
+    // dissolutions so origin + dissolutions + stornos + credit net to zero on
+    // both 29xx and 3xxx. Best-effort — never blocks the credit itself.
+    try {
+      await cancelSchedulesForSource(
+        supabase,
+        companyId,
+        userId,
+        { invoiceId: input.credited_invoice_id },
+        { reversalDate: creditNote.invoice_date },
+      )
+    } catch (err) {
+      log.warn('failed to cancel accrual schedules for credited invoice', err as Error)
     }
 
     await eventBus.emit({

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { Fragment, useState, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useForm, Controller, useFieldArray } from 'react-hook-form'
@@ -24,7 +24,10 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, MessageCircle, Link2 } from 'lucide-react'
+import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
+import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, MessageCircle, Link2, CalendarClock } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
 
 interface LineItem {
@@ -35,6 +38,11 @@ interface LineItem {
   // Self-assessed VAT rate for omvänd skattskyldighet (0.25/0.12/0.06). Only
   // meaningful when reverse_charge is on; the line's vat_rate is then 0.
   reverse_charge_rate?: number
+  // Periodisering (förutbetald kostnad): both dates + 17xx interim account.
+  // Present only while the row's periodisering panel is active.
+  accrual_period_start?: string
+  accrual_period_end?: string
+  accrual_balance_account?: string
 }
 
 // The existing invoice surfaced on a duplicate-number conflict, used to drive
@@ -248,6 +256,7 @@ export default function NewSupplierInvoicePage() {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_editor')
+  const ta = useTranslations('accruals')
 
   // When opened from an invoice-inbox item, every redirect should land the
   // user back in the inbox so they can pick the next document. Outside the
@@ -433,15 +442,37 @@ export default function NewSupplierInvoicePage() {
         }
 
         // Line items: keep the single empty default if AI returned nothing,
-        // otherwise replace it with the extracted lines.
+        // otherwise replace it with the extracted lines. When the document
+        // states a service window of 2+ calendar months (insurance period,
+        // license term), pre-fill periodisering on every positive line — the
+        // user sees the panel and can remove it before booking.
         if (extracted.lineItems && extracted.lineItems.length > 0) {
+          const sps = extracted.invoice?.servicePeriodStart ?? null
+          const spe = extracted.invoice?.servicePeriodEnd ?? null
+          let prefillAccrual = false
+          if (sps && spe && spe >= sps) {
+            try {
+              prefillAccrual = countCalendarMonths(sps, spe) >= 2
+            } catch {
+              prefillAccrual = false
+            }
+          }
           replace(
-            extracted.lineItems.map((li) => ({
-              description: li.description || '',
-              amount: typeof li.lineTotal === 'number' ? li.lineTotal : 0,
-              account_number: '5010',
-              vat_rate: vatRateFromAi(li.vatRate),
-            })),
+            extracted.lineItems.map((li) => {
+              const amount = typeof li.lineTotal === 'number' ? li.lineTotal : 0
+              const withAccrual = prefillAccrual && amount > 0
+              return {
+                description: li.description || '',
+                amount,
+                account_number: '5010',
+                vat_rate: vatRateFromAi(li.vatRate),
+                accrual_period_start: withAccrual ? (sps as string) : undefined,
+                accrual_period_end: withAccrual ? (spe as string) : undefined,
+                accrual_balance_account: withAccrual
+                  ? suggestBalanceAccount('expense', '5010')
+                  : undefined,
+              }
+            }),
           )
         }
 
@@ -602,6 +633,54 @@ export default function NewSupplierInvoicePage() {
     }
   }
 
+  // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
+  // kostnaden direkt mot ägarkontot och kan inte periodiseras.
+  const canUseAccrual = accountingMethod === 'accrual' && !watchedPaidPrivately
+
+  function isAccrualOpen(index: number): boolean {
+    return watchedItems?.[index]?.accrual_balance_account != null
+  }
+
+  function toggleAccrual(index: number) {
+    if (isAccrualOpen(index)) {
+      setValue(`items.${index}.accrual_period_start`, undefined, { shouldDirty: true })
+      setValue(`items.${index}.accrual_period_end`, undefined, { shouldDirty: true })
+      setValue(`items.${index}.accrual_balance_account`, undefined, { shouldDirty: true })
+    } else {
+      const account = watch(`items.${index}.account_number`) || ''
+      setValue(`items.${index}.accrual_period_start`, watch('invoice_date') || '', { shouldDirty: true })
+      setValue(`items.${index}.accrual_period_end`, '', { shouldDirty: true })
+      setValue(
+        `items.${index}.accrual_balance_account`,
+        suggestBalanceAccount('expense', account),
+        { shouldDirty: true },
+      )
+    }
+  }
+
+  function renderAccrualPanel(index: number, idPrefix: string) {
+    const item = watchedItems?.[index]
+    if (!item || item.accrual_balance_account == null) return null
+    return (
+      <AccrualPeriodControl
+        direction="expense"
+        amount={item.amount || 0}
+        idPrefix={idPrefix}
+        value={{
+          start: item.accrual_period_start ?? '',
+          end: item.accrual_period_end ?? '',
+          balanceAccount: item.accrual_balance_account || '1790',
+        }}
+        onChange={(next) => {
+          setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
+          setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
+          setValue(`items.${index}.accrual_balance_account`, next.balanceAccount, { shouldDirty: true })
+        }}
+        onRemove={() => toggleAccrual(index)}
+      />
+    )
+  }
+
   const itemTotals = (watchedItems || []).map((item) => {
     const lineTotal = Math.round((item.amount || 0) * 100) / 100
     // Reverse charge: VAT is self-assessed at reverse_charge_rate (25% default),
@@ -712,6 +791,16 @@ export default function NewSupplierInvoicePage() {
         // the self-assessed rate travels on reverse_charge_rate (25% default).
         vat_rate: data.reverse_charge ? 0 : item.vat_rate,
         reverse_charge_rate: data.reverse_charge ? (item.reverse_charge_rate ?? 0.25) : undefined,
+        // Periodisering: only sent when the row has a complete period AND the
+        // flow supports it (kontantmetod/eget utlägg would be rejected by the
+        // API — an AI prefill must never block those submits).
+        ...(canUseAccrual && item.accrual_period_start && item.accrual_period_end
+          ? {
+              accrual_period_start: item.accrual_period_start,
+              accrual_period_end: item.accrual_period_end,
+              accrual_balance_account: item.accrual_balance_account || undefined,
+            }
+          : {}),
       })),
     }
   }
@@ -799,6 +888,22 @@ export default function NewSupplierInvoicePage() {
     }
     if (!data.supplier_invoice_number) {
       toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
+      return
+    }
+    // A row with an open periodisering panel must carry a complete period of
+    // at least two calendar months before the invoice can be booked.
+    const invalidAccrual = canUseAccrual && data.items.some((item) => {
+      if (item.accrual_balance_account == null) return false
+      if (!item.accrual_period_start || !item.accrual_period_end) return true
+      if (item.accrual_period_end < item.accrual_period_start) return true
+      return countCalendarMonths(item.accrual_period_start, item.accrual_period_end) < 2
+    })
+    if (invalidAccrual) {
+      toast({
+        title: ta('incomplete_toast_title'),
+        description: ta('incomplete_toast_description'),
+        variant: 'destructive',
+      })
       return
     }
 
@@ -1359,7 +1464,8 @@ export default function NewSupplierInvoicePage() {
                 </thead>
                 <tbody>
                   {fields.map((field, index) => (
-                    <tr key={field.id} className="border-b last:border-0 align-top">
+                    <Fragment key={field.id}>
+                    <tr className={cn('align-top', canUseAccrual && isAccrualOpen(index) ? 'border-0' : 'border-b last:border-0')}>
                       <td className="py-2 pr-2">
                         <Controller
                           name={`items.${index}.account_number`}
@@ -1428,13 +1534,41 @@ export default function NewSupplierInvoicePage() {
                         {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
                       </td>
                       <td className="py-2 pt-3">
-                        {fields.length > 1 && (
-                          <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={t('remove_row_aria', { index: index + 1 })}>
-                            <Trash2 className="h-4 w-4 text-muted-foreground" />
-                          </Button>
-                        )}
+                        <div className="flex items-center">
+                          {canUseAccrual && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => toggleAccrual(index)}
+                              aria-label={ta('row_toggle_aria', { index: index + 1 })}
+                              aria-pressed={isAccrualOpen(index)}
+                              title={ta('row_toggle')}
+                            >
+                              <CalendarClock
+                                className={cn(
+                                  'h-4 w-4',
+                                  isAccrualOpen(index) ? 'text-foreground' : 'text-muted-foreground',
+                                )}
+                              />
+                            </Button>
+                          )}
+                          {fields.length > 1 && (
+                            <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={t('remove_row_aria', { index: index + 1 })}>
+                              <Trash2 className="h-4 w-4 text-muted-foreground" />
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
+                    {canUseAccrual && isAccrualOpen(index) && (
+                      <tr className="border-b last:border-0">
+                        <td colSpan={6} className="pb-3">
+                          {renderAccrualPanel(index, `accrual-desktop-${index}`)}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -1446,11 +1580,31 @@ export default function NewSupplierInvoicePage() {
                 <div key={field.id} className="border rounded-lg p-3 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-muted-foreground">{t('row_label', { index: index + 1 })}</span>
-                    {fields.length > 1 && (
-                      <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={t('remove_row_aria', { index: index + 1 })}>
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
-                    )}
+                    <div className="flex items-center">
+                      {canUseAccrual && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => toggleAccrual(index)}
+                          aria-label={ta('row_toggle_aria', { index: index + 1 })}
+                          aria-pressed={isAccrualOpen(index)}
+                          title={ta('row_toggle')}
+                        >
+                          <CalendarClock
+                            className={cn(
+                              'h-4 w-4',
+                              isAccrualOpen(index) ? 'text-foreground' : 'text-muted-foreground',
+                            )}
+                          />
+                        </Button>
+                      )}
+                      {fields.length > 1 && (
+                        <Button type="button" variant="ghost" size="icon" onClick={() => remove(index)} aria-label={t('remove_row_aria', { index: index + 1 })}>
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground">{t('col_account')}</Label>
@@ -1524,6 +1678,8 @@ export default function NewSupplierInvoicePage() {
                       {formatAmount(itemTotals[index]?.vatAmount ?? 0)}
                     </span>
                   </div>
+                  {canUseAccrual && isAccrualOpen(index) &&
+                    renderAccrualPanel(index, `accrual-mobile-${index}`)}
                 </div>
               ))}
             </div>

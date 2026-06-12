@@ -589,6 +589,21 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',
     message_en: 'ROT/RUT deduction failed validation. Check personnummer and housing designation.',
   },
+  INVOICE_CREATE_ACCRUAL_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Periodisering kan inte användas här. Den kräver faktureringsmetoden och stöds inte för omvänd skattskyldighet, export eller proforma.',
+    message_en: 'Periodisering cannot be used here. It requires the accrual method and is not supported for reverse charge, export, or proforma documents.',
+  },
+  ACCRUAL_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Periodiseringen kunde inte hittas.',
+    message_en: 'Accrual schedule not found.',
+  },
+  ACCRUAL_DISSOLVE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Periodiseringen kunde inte lösas upp.',
+    message_en: 'The accrual schedule could not be dissolved.',
+  },
   INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID: {
     httpStatus: 400,
     message_sv: 'Personnumret för ROT/RUT-avdraget är ogiltigt.',

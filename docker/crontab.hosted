@@ -5,3 +5,4 @@
 0 2 * * *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/events/cleanup/cron
 0 3 * * 0   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/documents/verify/cron
 0 4 * * *   curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/sandbox/cleanup/cron
+15 5 * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron

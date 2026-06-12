@@ -11,6 +11,7 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -226,6 +227,25 @@ export const POST = withRouteContext(
             .from('invoices')
             .update({ journal_entry_id: journalEntry.id })
             .eq('id', id)
+
+          // Periodiserade lines: create their schedules + catch-up
+          // dissolutions now that the revenue entry exists. Failures degrade
+          // to PARTIAL — the entry is committed and must not be rolled back.
+          const accrual = await createSchedulesForCustomerInvoice(
+            supabase,
+            companyId!,
+            user.id,
+            invoice as Invoice,
+            items,
+            journalEntry.id,
+            (company as CompanySettings).entity_type,
+          )
+          if (accrual.failed > 0) {
+            partialFailures.push({
+              step: 'accrual_schedules',
+              reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
+            })
+          }
         }
       } catch (err) {
         opLog.error('failed to create invoice journal entry on send', err as Error)

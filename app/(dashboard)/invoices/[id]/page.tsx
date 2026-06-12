@@ -30,6 +30,7 @@ import {
   MessageSquare,
   Trash2,
   Lock,
+  CalendarClock,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
@@ -54,6 +55,13 @@ const statusVariantMap: Record<InvoiceStatus, 'default' | 'secondary' | 'success
   cancelled: 'secondary',
   credited: 'secondary',
 }
+
+// A line is periodiserad when both period dates are set — the revenue was
+// parked on the 29xx interim account and dissolves monthly via accrual_schedules.
+const itemHasAccrual = (item: InvoiceItem): boolean =>
+  !!(item.accrual_period_start && item.accrual_period_end)
+
+const accrualMonth = (date: string): string => date.slice(0, 7)
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -511,6 +519,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Self-billing invoices we received: the document is the counterparty's, so
   // there is no own PDF to render and no send step — it arrives already booked.
   const isSelfBilled = !!invoice.is_self_billed
+  const hasAccruedItems = invoice.items.some(itemHasAccrual)
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -534,6 +543,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <Badge variant={displayStatusVariant as 'default' | 'secondary' | 'destructive' | 'outline'}>
                 {displayStatusLabel}
               </Badge>
+              {hasAccruedItems && (
+                <Badge variant="outline" className="gap-1">
+                  <CalendarClock className="h-3 w-3" />
+                  {t('badge_accrued')}
+                </Badge>
+              )}
             </div>
             <p className="text-muted-foreground">
               {t('created_at', { date: formatDate(invoice.created_at) })}
@@ -690,7 +705,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     </div>
                   ) : (
                     <div key={item.id} className="grid grid-cols-12 gap-4 text-sm">
-                      <div className="col-span-5">{item.description}</div>
+                      <div className="col-span-5">
+                        {item.description}
+                        {itemHasAccrual(item) && (
+                          <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                            <CalendarClock className="h-3 w-3 shrink-0" />
+                            <span className="tabular-nums">
+                              {t('accrual_line_info', {
+                                from: accrualMonth(item.accrual_period_start!),
+                                to: accrualMonth(item.accrual_period_end!),
+                              })}
+                              {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
+                            </span>
+                          </p>
+                        )}
+                      </div>
                       <div className="col-span-2 text-right">{item.quantity}</div>
                       <div className="col-span-1 text-center">{item.unit}</div>
                       <div className="col-span-2 text-right">
@@ -712,6 +741,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   ) : (
                     <div key={item.id} className="border rounded-lg p-3 text-sm space-y-1.5">
                       <p className="font-medium">{item.description}</p>
+                      {itemHasAccrual(item) && (
+                        <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <CalendarClock className="h-3 w-3 shrink-0" />
+                          <span className="tabular-nums">
+                            {t('accrual_line_info', {
+                              from: accrualMonth(item.accrual_period_start!),
+                              to: accrualMonth(item.accrual_period_end!),
+                            })}
+                            {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
+                          </span>
+                        </p>
+                      )}
                       <div className="flex items-center justify-between text-muted-foreground">
                         <span>{item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}</span>
                       </div>

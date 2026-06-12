@@ -1,6 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -10,6 +11,7 @@ import {
   isReverseChargeBasisAccount,
   generateReverseChargeBasisLines,
 } from '@/lib/bookkeeping/vat-entries'
+import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Supplier } from '@/types'
 
 interface ReviewLineItem {
@@ -23,7 +25,15 @@ interface ReviewLineItem {
   // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25). The
   // supplier charges no VAT (vat_rate = 0); this drives the fiktiv-moms preview.
   reverse_charge_rate?: number
+  // Periodisering: when both dates are set, the registration entry books the
+  // net to the 17xx interim account instead of account_number (mirrored via
+  // resolveBookingAccount so this preview matches the saved verifikat).
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
 }
+
+const accrualMonth = (date: string): string => date.slice(0, 7)
 
 interface SupplierInvoiceReviewContentProps {
   supplier: Supplier
@@ -74,11 +84,15 @@ function buildJournalPreview(
   const lines: JournalPreviewLine[] = []
   const toSek = (n: number) => Math.round(n * fxRate * 100) / 100
 
-  // Aggregate expense amounts by account number (in SEK)
+  // Aggregate expense amounts by booking account (in SEK). Periodiserade
+  // lines book their net to the 17xx interim account instead of the cost
+  // account — same resolveBookingAccount the entry generator uses, so the
+  // preview matches the saved verifikat.
   const expenseByAccount = new Map<string, number>()
   for (const item of items) {
-    const current = expenseByAccount.get(item.account_number) || 0
-    expenseByAccount.set(item.account_number, current + toSek(item.amount))
+    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
+    const current = expenseByAccount.get(bookingAccount) || 0
+    expenseByAccount.set(bookingAccount, current + toSek(item.amount))
   }
 
   // Debit: Expense accounts
@@ -228,6 +242,11 @@ export function SupplierInvoiceReviewContent({
     '2614': t('account_2614'),
     '2624': t('account_2624'),
     '2634': t('account_2634'),
+    '1710': t('account_1710'),
+    '1720': t('account_1720'),
+    '1730': t('account_1730'),
+    '1740': t('account_1740'),
+    '1790': t('account_1790'),
   }
 
   return (
@@ -300,7 +319,20 @@ export function SupplierInvoiceReviewContent({
                   <td className="py-2">
                     <AccountNumber number={item.account_number} size="sm" />
                   </td>
-                  <td className="py-2">{item.description}</td>
+                  <td className="py-2">
+                    {item.description}
+                    {itemHasAccrual(item) && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                        <CalendarClock className="h-3 w-3 shrink-0" />
+                        <span className="tabular-nums">
+                          {t('review_accrual_line_info', {
+                            from: accrualMonth(item.accrual_period_start!),
+                            to: accrualMonth(item.accrual_period_end!),
+                          })}
+                        </span>
+                      </p>
+                    )}
+                  </td>
                   <td className="py-2 text-right font-mono">{formatAmount(item.amount)}</td>
                   <td className="py-2 text-right">{Math.round(displayRate * 100)}%</td>
                   <td className="py-2 text-right font-mono">{formatAmount(vatAmount)}</td>
@@ -324,6 +356,17 @@ export function SupplierInvoiceReviewContent({
                 <p className="font-medium">{item.description}</p>
                 <AccountNumber number={item.account_number} size="sm" />
               </div>
+              {itemHasAccrual(item) && (
+                <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <CalendarClock className="h-3 w-3 shrink-0" />
+                  <span className="tabular-nums">
+                    {t('review_accrual_line_info', {
+                      from: accrualMonth(item.accrual_period_start!),
+                      to: accrualMonth(item.accrual_period_end!),
+                    })}
+                  </span>
+                </p>
+              )}
               <div className="flex items-center justify-between text-muted-foreground">
                 <span>{formatAmount(item.amount)} kr</span>
                 <span className="text-xs">{t('review_vat_inline', { rate: Math.round(displayRate * 100), amount: formatAmount(vatAmount) })}</span>

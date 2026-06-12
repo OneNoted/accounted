@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -102,10 +103,14 @@ export const POST = withRouteContext(
     let journalEntryId: string | null = null
     if (accountingMethod === 'accrual') {
       try {
+        // Pass the ORIGINAL items: deferred lines carry their periodisering
+        // fields there, so the credit entry reverses against the same 17xx
+        // interim account the registration booked to. The copied credit-note
+        // items intentionally have no accrual fields.
         const journalEntry = await createSupplierCreditNoteEntry(
           supabase, companyId!, user.id,
           creditNote as SupplierInvoice,
-          creditItems as SupplierInvoiceItem[],
+          (original.items || []) as SupplierInvoiceItem[],
           original.supplier?.supplier_type || 'swedish_business',
           original.supplier?.name,
         )
@@ -133,6 +138,23 @@ export const POST = withRouteContext(
           },
         })
       }
+    }
+
+    // Periodisering interplay: cancel remaining months and storno the
+    // already-posted dissolutions so origin + dissolutions + stornos +
+    // credit-note net to zero on both the interim and cost accounts.
+    // Best-effort: a reversal hiccup (e.g. locked period) must not block the
+    // credit itself — the schedule stays visible for manual follow-up.
+    try {
+      await cancelSchedulesForSource(
+        supabase,
+        companyId!,
+        user.id,
+        { supplierInvoiceId: id },
+        { reversalDate: creditNote.invoice_date },
+      )
+    } catch (err) {
+      opLog.warn('failed to cancel accrual schedules for credited supplier invoice', err as Error)
     }
 
     const newRemaining = Math.max(0, original.remaining_amount - original.total)

@@ -69,6 +69,12 @@ export const ExtractionSchema = z.object({
     dueDate: z.string().nullable(),
     paymentReference: z.string().nullable(),
     currency: z.string(),
+    // Service/coverage window the invoice charges for (insurance period,
+    // license term, "avtalsperiod"). Drives the periodisering prefill in the
+    // supplier-invoice form. Optional so cached raw outputs from before this
+    // field still validate.
+    servicePeriodStart: z.string().nullable().optional(),
+    servicePeriodEnd: z.string().nullable().optional(),
   }),
   lineItems: z.array(
     z.object({
@@ -122,7 +128,9 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "invoiceDate": string | null,      // ISO date YYYY-MM-DD
     "dueDate": string | null,          // ISO date YYYY-MM-DD
     "paymentReference": string | null, // OCR / payment reference
-    "currency": string                 // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
+    "currency": string,                // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
+    "servicePeriodStart": string | null, // ISO date — start of the service/coverage window the invoice charges for
+    "servicePeriodEnd": string | null    // ISO date — end of that window
   },
   "lineItems": [
     {
@@ -151,6 +159,7 @@ Rules:
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
+- servicePeriodStart/servicePeriodEnd: only when the document explicitly states the period the charge covers ("Avtalsperiod", "Period", "Försäkringstid", "Subscription period", coverage dates). Never infer from invoice/due dates. Month-only boundaries map to the first resp. last day of the month.
 - Bankgiro/Plusgiro: only set when the document is for a Swedish supplier on a Swedish bank rail. Do not invent.
 - Org.nr: only set when it is an actual Swedish organisation number (10 digits, Luhn-valid). For US/EU companies leave null even if they list an EIN/VAT number.
 - VAT number: include the country prefix.
@@ -175,6 +184,8 @@ export function emptyResult(): InvoiceExtractionResult {
       dueDate: null,
       paymentReference: null,
       currency: 'SEK',
+      servicePeriodStart: null,
+      servicePeriodEnd: null,
     },
     lineItems: [],
     totals: { subtotal: null, vatAmount: null, total: null },

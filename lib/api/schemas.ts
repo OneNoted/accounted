@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { isSaneDateString } from '@/lib/utils'
+import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 
 // ============================================================
 // Shared primitives
@@ -38,6 +39,61 @@ const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.lit
 
 /** Time string (HH:MM or HH:MM:SS) */
 const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
+
+/** Periodisering: interim accounts. Förutbetalda kostnader live on 17xx. */
+const prepaidExpenseAccount = z
+  .string()
+  .regex(/^17\d{2}$/, 'Balanskonto för periodiserad kostnad måste vara ett 17xx-konto')
+
+/** Periodisering: förutbetalda intäkter live on 29xx. */
+const deferredRevenueAccount = z
+  .string()
+  .regex(/^29\d{2}$/, 'Balanskonto för periodiserad intäkt måste vara ett 29xx-konto')
+
+/**
+ * Shared periodisering period rules for invoice line items: both dates or
+ * neither, end after start, and a 2–120 calendar month span. The amount-side
+ * rules differ per item shape and stay in each schema's superRefine.
+ */
+function validateAccrualPeriod(
+  item: { accrual_period_start?: string | null; accrual_period_end?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  const start = item.accrual_period_start
+  const end = item.accrual_period_end
+  if (!start && !end) return
+  if (!start || !end) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_start'],
+      message: 'Ange både periodens start och slut för periodisering',
+    })
+    return
+  }
+  if (end < start) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_end'],
+      message: 'Periodens slut måste vara efter dess start',
+    })
+    return
+  }
+  const months = countCalendarMonths(start, end)
+  if (months < 2) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_end'],
+      message: 'Periodisering kräver minst 2 kalendermånader',
+    })
+  }
+  if (months > 120) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['accrual_period_end'],
+      message: 'Periodisering kan omfatta högst 120 månader',
+    })
+  }
+}
 
 // ============================================================
 // Enum schemas (matching types/index.ts)
@@ -145,6 +201,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'supplier_credit_note',
   'currency_revaluation',
   'reminder_fee',
+  'accrual',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -225,8 +282,39 @@ export const CreateInvoiceItemSchema = z
     work_type: z.string().max(64).nullable().optional(),
     housing_designation: z.string().max(128).nullable().optional(),
     apartment_number: z.string().max(32).nullable().optional(),
+    // Periodisering (förutbetald intäkt): defer the line's net revenue over
+    // the service period. The revenue entry credits the 29xx interim account
+    // instead of the revenue account; output VAT is never deferred.
+    accrual_period_start: isoDate.nullable().optional(),
+    accrual_period_end: isoDate.nullable().optional(),
+    accrual_balance_account: deferredRevenueAccount.nullable().optional(),
   })
   .superRefine((item, ctx) => {
+    validateAccrualPeriod(item, ctx)
+    const hasAccrual = Boolean(item.accrual_period_start || item.accrual_period_end)
+    if (hasAccrual) {
+      if (item.line_type === 'text') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accrual_period_start'],
+          message: 'Textrader kan inte periodiseras',
+        })
+      }
+      if (item.deduction_type) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accrual_period_start'],
+          message: 'ROT/RUT-rader kan inte periodiseras',
+        })
+      }
+      if (item.quantity * item.unit_price <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['accrual_period_start'],
+          message: 'Endast rader med positivt belopp kan periodiseras',
+        })
+      }
+    }
     // Free-text rows skip the product-line requirements (description may be
     // empty for a spacer; quantity/unit/price are ignored).
     if (item.line_type === 'text') return
@@ -485,6 +573,12 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   quantity: z.number().optional(),
   unit: z.string().optional(),
   unit_price: z.number().optional(),
+  // Periodisering (förutbetald kostnad): defer the line's net cost over the
+  // service period. The registration entry debits the 17xx interim account
+  // instead of account_number; input VAT is never deferred.
+  accrual_period_start: isoDate.nullable().optional(),
+  accrual_period_end: isoDate.nullable().optional(),
+  accrual_balance_account: prepaidExpenseAccount.nullable().optional(),
 }).refine(
   (item) => {
     if (item.vat_amount == null) return true
@@ -501,7 +595,21 @@ export const CreateSupplierInvoiceItemSchema = z.object({
     message: 'vat_amount cannot exceed line_total × vat_rate',
     path: ['vat_amount'],
   },
-)
+).superRefine((item, ctx) => {
+  validateAccrualPeriod(item, ctx)
+  if (item.accrual_period_start || item.accrual_period_end) {
+    const lineTotal = item.amount != null
+      ? item.amount
+      : (item.quantity ?? 1) * (item.unit_price ?? 0)
+    if (lineTotal <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['accrual_period_start'],
+        message: 'Endast rader med positivt belopp kan periodiseras',
+      })
+    }
+  }
+})
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,

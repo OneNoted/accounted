@@ -18,6 +18,8 @@ import {
   composeInboxAddress,
 } from './lib/inbox-provisioning'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
+import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -1648,6 +1650,25 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
+        // Periodisering requires faktureringsmetoden — mirror the main
+        // /api/supplier-invoices guard so kontantmetod companies never store
+        // accrual fields the booking would silently ignore.
+        const hasAccrualItems = body.items.some(
+          (bodyItem) => bodyItem.accrual_period_start && bodyItem.accrual_period_end,
+        )
+        if (hasAccrualItems) {
+          const { data: methodSettings } = await ctx.supabase
+            .from('company_settings')
+            .select('accounting_method')
+            .eq('company_id', ctx.companyId)
+            .single()
+          if ((methodSettings?.accounting_method || 'accrual') !== 'accrual') {
+            return errorResponseFromCode('SI_CREATE_INVALID_INPUT', ctx.log, {
+              details: { reason: 'periodisering requires faktureringsmetoden (accrual)' },
+            })
+          }
+        }
+
         const { data: arrivalNum, error: arrivalError } = await ctx.supabase
           .rpc('get_next_arrival_number', { p_company_id: ctx.companyId })
 
@@ -1675,6 +1696,21 @@ export const invoiceInboxExtension: Extension = {
             // Self-assessed RC rate (0.06/0.12/0.25) or null — engine defaults
             // to 25% huvudregeln when null for a reverse-charge invoice.
             reverse_charge_rate: body.reverse_charge ? (bodyItem.reverse_charge_rate ?? null) : null,
+            // Periodisering: frozen onto the line; the balance account
+            // defaults from the cost account's BAS convention.
+            accrual_period_start:
+              bodyItem.accrual_period_start && bodyItem.accrual_period_end
+                ? bodyItem.accrual_period_start
+                : null,
+            accrual_period_end:
+              bodyItem.accrual_period_start && bodyItem.accrual_period_end
+                ? bodyItem.accrual_period_end
+                : null,
+            accrual_balance_account:
+              bodyItem.accrual_period_start && bodyItem.accrual_period_end
+                ? (bodyItem.accrual_balance_account ??
+                  suggestBalanceAccount('expense', bodyItem.account_number))
+                : null,
           }
         })
 
@@ -1788,9 +1824,10 @@ export const invoiceInboxExtension: Extension = {
           ...lineItem,
         }))
 
-        const { error: itemsError } = await ctx.supabase
+        const { data: insertedItems, error: itemsError } = await ctx.supabase
           .from('supplier_invoice_items')
           .insert(itemInserts)
+          .select('id, sort_order')
 
         if (itemsError) {
           await ctx.supabase.from('supplier_invoices').delete().eq('id', invoice.id)
@@ -1831,6 +1868,35 @@ export const invoiceInboxExtension: Extension = {
                   .update({ journal_entry_id: journalEntry.id })
                   .eq('id', item.document_id)
                   .eq('company_id', ctx.companyId)
+              }
+
+              if (hasAccrualItems) {
+                // Schedules + catch-up dissolutions for deferred lines. Never
+                // fatal — the registration entry is committed; failures are
+                // retried/surfaced via the periodiseringar page.
+                const idBySortOrder = new Map(
+                  ((insertedItems ?? []) as Array<{ id: string; sort_order: number }>).map(
+                    (row) => [row.sort_order, row.id],
+                  ),
+                )
+                const itemsWithIds = items.map((lineItem) => ({
+                  ...lineItem,
+                  id: idBySortOrder.get(lineItem.sort_order) ?? null,
+                }))
+                const scheduleResult = await createSchedulesForSupplierInvoice(
+                  ctx.supabase,
+                  ctx.companyId,
+                  ctx.userId,
+                  invoice as SupplierInvoice,
+                  itemsWithIds as unknown as SupplierInvoiceItem[],
+                  journalEntry.id,
+                )
+                if (scheduleResult.failed > 0) {
+                  ctx.log.error('accrual schedule creation failed on inbox convert', {
+                    supplierInvoiceId: invoice.id,
+                    failed: scheduleResult.failed,
+                  })
+                }
               }
             } else {
               // createSupplierInvoiceRegistrationEntry returns null ONLY when no

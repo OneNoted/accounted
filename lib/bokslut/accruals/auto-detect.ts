@@ -181,6 +181,27 @@ export async function detectPeriodisering(
   const periodStart = period.period_start as string
   const periodEnd = period.period_end as string
 
+  // Invoices already covered by a löpande accrual schedule (periodisering
+  // skapad på fakturaraden) are handled month by month and must never be
+  // suggested again at year-end — that would periodisera the same belopp
+  // twice. Cancelled schedules don't exclude: their invoice was credited and
+  // the status filters below drop it anyway.
+  const { data: scheduleRows } = await supabase
+    .from('accrual_schedules')
+    .select('supplier_invoice_id, invoice_id')
+    .eq('company_id', companyId)
+    .neq('status', 'cancelled')
+  const coveredSupplierInvoices = new Set(
+    ((scheduleRows ?? []) as Array<{ supplier_invoice_id: string | null }>)
+      .map((row) => row.supplier_invoice_id)
+      .filter(Boolean),
+  )
+  const coveredInvoices = new Set(
+    ((scheduleRows ?? []) as Array<{ invoice_id: string | null }>)
+      .map((row) => row.invoice_id)
+      .filter(Boolean),
+  )
+
   // Customer invoices — only "real" ones (sent/paid). Drafts and overdue
   // get skipped: drafts haven't moved through the engine, overdue is just a
   // status label that overlaps with sent here.
@@ -206,6 +227,7 @@ export async function detectPeriodisering(
   const suggestions: PeriodiseringSuggestion[] = []
 
   for (const row of (invoiceRows ?? []) as unknown as InvoiceRow[]) {
+    if (coveredInvoices.has(row.id)) continue
     const itemDescs = (row.invoice_items ?? []).map((i) => i.description).filter(Boolean)
     const customerName = row.customers?.name ?? 'Okänd kund'
     const sourceLabel = row.invoice_number
@@ -225,6 +247,7 @@ export async function detectPeriodisering(
   }
 
   for (const row of (supplierRows ?? []) as unknown as SupplierInvoiceRow[]) {
+    if (coveredSupplierInvoices.has(row.id)) continue
     const itemDescs = (row.supplier_invoice_items ?? []).map((i) => i.description).filter(Boolean)
     const firstAccount = row.supplier_invoice_items?.[0]?.account_number ?? null
     const supplierName = row.suppliers?.name ?? 'Okänd leverantör'

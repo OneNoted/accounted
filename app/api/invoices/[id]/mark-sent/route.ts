@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { ensureInitialized } from '@/lib/init'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
@@ -105,6 +106,25 @@ export async function POST(
       )
       if (journalEntry) {
         journalEntryId = journalEntry.id
+
+        // Periodiserade lines: create schedules + catch-up dissolutions now
+        // that the revenue entry exists. Failures are logged, never fatal —
+        // the verifikat is committed.
+        const accrual = await createSchedulesForCustomerInvoice(
+          supabase,
+          companyId,
+          user.id,
+          invoice as Invoice,
+          (invoice.items as InvoiceItem[] | null) ?? [],
+          journalEntry.id,
+          (settings?.entity_type as EntityType) || 'enskild_firma',
+        )
+        if (accrual.failed > 0) {
+          log.error('accrual schedule creation failed on mark-sent', {
+            failed: accrual.failed,
+          })
+        }
+
         const { error: linkError } = await supabase
           .from('invoices')
           .update({ journal_entry_id: journalEntry.id })

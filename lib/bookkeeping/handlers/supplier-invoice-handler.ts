@@ -2,6 +2,7 @@ import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
 import { createClient } from '@/lib/supabase/server'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { createLogger } from '@/lib/logger'
@@ -83,6 +84,23 @@ async function handleSupplierInvoiceConfirmed(
         .from('supplier_invoices')
         .update({ registration_journal_entry_id: journalEntry.id })
         .eq('id', supplierInvoice.id)
+
+      // Lines with a periodisering period get their schedule + catch-up
+      // dissolutions. Idempotent per line, so a replayed event is safe.
+      const scheduleResult = await createSchedulesForSupplierInvoice(
+        supabase,
+        companyId,
+        userId,
+        supplierInvoice,
+        items as SupplierInvoiceItem[],
+        journalEntry.id,
+      )
+      if (scheduleResult.failed > 0) {
+        log.error('accrual schedule creation failed for confirmed supplier invoice', {
+          supplierInvoiceId: supplierInvoice.id,
+          failed: scheduleResult.failed,
+        })
+      }
     }
   } catch (err) {
     log.error('Failed to create registration journal entry:', err)
