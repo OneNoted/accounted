@@ -172,12 +172,13 @@ describe('buildMappingResultFromCategory vat_amount override (underlagets faktis
     expect(result.vat_lines[0].debit_amount).toBe(44.55)
   })
 
-  it('override 0 books the full amount without a VAT line', () => {
+  it('rejects override 0, pointing to vat_treatment exempt', () => {
+    // A 0-moms document is an exempt supply — booking it as a rate-bearing
+    // treatment minus its VAT line would misclassify it in the momsdeklaration.
     const tx = makeTransaction({ amount: -500 })
-    const result = buildMappingResultFromCategory(
-      'expense_office', tx, true, 'enskild_firma', 'standard_25', 0,
-    )
-    expect(result.vat_lines).toHaveLength(0)
+    expect(() =>
+      buildMappingResultFromCategory('expense_office', tx, true, 'enskild_firma', 'standard_25', 0),
+    ).toThrow(/exempt/)
   })
 
   it('overrides output VAT on income', () => {
@@ -204,7 +205,7 @@ describe('buildMappingResultFromCategory vat_amount override (underlagets faktis
     const tx = makeTransaction({ amount: -500 })
     expect(() =>
       buildMappingResultFromCategory('expense_office', tx, true, 'enskild_firma', 'standard_25', -1),
-    ).toThrow(/non-negative/)
+    ).toThrow(/positive/)
   })
 
   it('rejects an override combined with reverse_charge', () => {

@@ -211,8 +211,9 @@ export function getCategoryAccountMapping(
  * moms, so the document's VAT is lower than rate × gross. It can only replace
  * a rate-based VAT line (standard_25/reduced_12/reduced_6); it never applies
  * to fictive reverse-charge VAT and never conjures a line for treatments
- * without VAT. Pass 0 to book the full amount on the expense/income account
- * with no VAT line.
+ * without VAT. Zero is rejected: a document with no moms is an exempt supply
+ * and must be booked with vat_treatment "exempt" so the momsdeklaration sees
+ * the correct classification, not a rate-bearing treatment minus its VAT line.
  */
 export function buildMappingResultFromCategory(
   category: TransactionCategory,
@@ -242,8 +243,11 @@ export function buildMappingResultFromCategory(
     }
     // typeof re-check is deliberate: at commit time the override comes from
     // jsonb params, so the TS signature doesn't guarantee a number at runtime.
-    if (typeof vatAmountOverride !== 'number' || !Number.isFinite(vatAmountOverride) || vatAmountOverride < 0) {
-      throw new Error(`vat_amount must be a non-negative number, got ${vatAmountOverride}`)
+    if (typeof vatAmountOverride !== 'number' || !Number.isFinite(vatAmountOverride) || vatAmountOverride <= 0) {
+      throw new Error(
+        `vat_amount must be a positive number, got ${vatAmountOverride}. ` +
+        'For a document with no moms, use vat_treatment "exempt" instead of vat_amount 0.'
+      )
     }
     const grossAmount = Math.abs(transaction.amount)
     // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds

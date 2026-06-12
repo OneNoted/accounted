@@ -2553,7 +2553,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. Pass vat_amount when the underlag\'s actual moms differs from rate × belopp. Rejects vat_treatment="reverse_charge" when the underlag shows the seller already charged VAT.',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. vat_amount overrides the computed moms; reverse_charge is rejected when the underlag shows the seller already charged VAT.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2561,7 +2561,7 @@ export const tools: McpTool[] = [
         transaction_id: { type: 'string', description: 'UUID of the transaction to categorize' },
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
-        vat_amount: { type: 'number', minimum: 0, description: 'The underlag\'s exact VAT amount (same currency as the transaction). Use ONLY when the document\'s moms differs from rate × belopp — e.g. dricks on a restaurant receipt carries no VAT. Replaces the computed VAT line; the expense/income line absorbs the difference. Requires a rate-based vat_treatment (not reverse_charge/exempt/export). Swedish moms ONLY — foreign VAT on a foreign supplier\'s invoice is never deductible as ingående moms; book it as part of the cost (no vat_amount, vat_treatment exempt). If the document shows 0 moms, prefer vat_treatment="exempt" over vat_amount=0 so the booking reflects the actual VAT status.' },
+        vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp — e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only — foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
       },
       required: ['transaction_id', 'category'],
