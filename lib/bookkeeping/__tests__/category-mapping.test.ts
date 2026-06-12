@@ -214,6 +214,15 @@ describe('buildMappingResultFromCategory vat_amount override (underlagets faktis
     ).toThrow(/cannot be combined/)
   })
 
+  it('treatment incompatibility wins over the bound check (oversized + reverse_charge)', () => {
+    const tx = makeTransaction({ amount: -1000 })
+    // 500 also exceeds maxVat (200), but the agent's actual mistake is the
+    // treatment — the error must say so, not complain about the amount.
+    expect(() =>
+      buildMappingResultFromCategory('expense_software', tx, true, 'enskild_firma', 'reverse_charge', 500),
+    ).toThrow(/cannot be combined/)
+  })
+
   it('rejects an override on a VAT-less treatment', () => {
     const tx = makeTransaction({ amount: -1000 })
     expect(() =>

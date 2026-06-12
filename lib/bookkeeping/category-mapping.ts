@@ -231,23 +231,28 @@ export function buildMappingResultFromCategory(
   const hasVatOverride = vatAmountOverride !== undefined && vatAmountOverride !== null
 
   if (hasVatOverride) {
-    const grossAmount = Math.abs(transaction.amount)
-    // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds
-    // any legitimate document VAT — even on mixed-rate receipts.
-    const maxVat = Math.round((grossAmount * 0.25 / 1.25) * 100) / 100
-    if (typeof vatAmountOverride !== 'number' || !Number.isFinite(vatAmountOverride) || vatAmountOverride < 0) {
-      throw new Error(`vat_amount must be a non-negative number, got ${vatAmountOverride}`)
-    }
-    if (vatAmountOverride > maxVat) {
-      throw new Error(
-        `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${grossAmount} ` +
-        `(${maxVat} at 25%). Check the underlag — the override must be the document's actual moms.`
-      )
-    }
+    // Treatment compatibility first: an invalid override on reverse_charge is
+    // a treatment problem, not an amount problem — the agent should get the
+    // correction hint that matches the actual mistake.
     if (!isBusiness || !treatment || treatment === 'reverse_charge' || getVatRate(treatment) <= 0) {
       throw new Error(
         `vat_amount cannot be combined with vat_treatment "${treatment ?? 'none'}" — ` +
         'it only overrides a rate-based VAT line (standard_25, reduced_12, reduced_6).'
+      )
+    }
+    // typeof re-check is deliberate: at commit time the override comes from
+    // jsonb params, so the TS signature doesn't guarantee a number at runtime.
+    if (typeof vatAmountOverride !== 'number' || !Number.isFinite(vatAmountOverride) || vatAmountOverride < 0) {
+      throw new Error(`vat_amount must be a non-negative number, got ${vatAmountOverride}`)
+    }
+    const grossAmount = Math.abs(transaction.amount)
+    // 25% is the highest Swedish VAT rate, so rate-extraction at 25% bounds
+    // any legitimate document VAT — even on mixed-rate receipts.
+    const maxVat = Math.round((grossAmount * 0.25 / 1.25) * 100) / 100
+    if (vatAmountOverride > maxVat) {
+      throw new Error(
+        `vat_amount ${vatAmountOverride} exceeds the maximum possible Swedish VAT on ${grossAmount} ` +
+        `(${maxVat} at 25%). Check the underlag — the override must be the document's actual moms.`
       )
     }
   }
