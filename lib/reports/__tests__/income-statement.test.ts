@@ -6,6 +6,7 @@ vi.mock('../trial-balance', () => ({
 
 import { generateIncomeStatement } from '../income-statement'
 import { generateTrialBalance } from '../trial-balance'
+import { roundOre } from '@/lib/money'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
@@ -354,6 +355,6 @@ describe('generateIncomeStatement', () => {
     const expectedTotal = rows.reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
     const sectionSum = report.expense_sections.reduce((sum, s) => sum + s.subtotal, 0)
     expect(report.total_expenses).toBe(expectedTotal) // 52500
-    expect(Math.round(sectionSum * 100) / 100).toBe(expectedTotal)
+    expect(roundOre(sectionSum)).toBe(expectedTotal)
   })
 })

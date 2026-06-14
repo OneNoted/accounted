@@ -13,12 +13,18 @@ import { getJournalEntryUnderlagReferences } from '@/lib/core/bookkeeping/journa
  *
  * An id that doesn't belong to the active company resolves to no references
  * (every underlying query is company-scoped), so this neither leaks nor 404s.
+ *
+ * Marked private, no-store: the payload carries invoice numbers (financial
+ * data), so no shared proxy / CDN may cache it across users or companies.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'journal_entry.references',
   async (_request, { supabase, companyId }, { params }) => {
     const { id } = await params
     const references = await getJournalEntryUnderlagReferences(supabase, companyId, id)
-    return NextResponse.json({ data: { references } })
+    return NextResponse.json(
+      { data: { references } },
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    )
   },
 )

@@ -136,12 +136,18 @@ export const enableBankingExtension: Extension = {
             existing = data
           }
 
-          // Resolve the aspsp identity: prefer what the client sent, fall back to
-          // the stored connection (the provider slug ends with the country code,
-          // e.g. "nordea-se").
-          const resolvedAspspName = aspsp_name || existing?.bank_name
-          const resolvedAspspCountry =
-            aspsp_country || existing?.provider?.split('-').pop()?.toUpperCase() || 'SE'
+          // Resolve the aspsp identity. For a reconnect the bank is already
+          // known, so derive it authoritatively from the stored row and IGNORE
+          // any client-supplied aspsp_name/aspsp_country — the client
+          // (BankSyncNowButton) derives the country by string-splitting the
+          // provider slug, and trusting that back is needless attack surface
+          // (compliance: ASVS V8.2.1/V4.5). A fresh connect has no stored row,
+          // so it uses the client values (already required+validated above).
+          // The provider slug ends with the country code, e.g. "nordea-se".
+          const resolvedAspspName = isReconnect ? existing?.bank_name : aspsp_name
+          const resolvedAspspCountry = isReconnect
+            ? existing?.provider?.split('-').pop()?.toUpperCase() || 'SE'
+            : aspsp_country
           if (!resolvedAspspName) {
             return NextResponse.json(
               { error: 'aspsp_name and aspsp_country are required' },
@@ -220,43 +226,25 @@ export const enableBankingExtension: Extension = {
           // Generate cryptographic state token for CSRF protection
           const oauthState = crypto.randomUUID()
 
-          const { url, authorization_id } = await startAuthorization(
-            resolvedAspspName,
-            resolvedAspspCountry,
-            redirectUrl,
-            oauthState,
-            psuType
-          )
-
           if (isReconnect && existing) {
-            // Best-effort revoke the dead consent at Enable Banking. A
-            // closed/expired session is often already gone, so a failure here is
-            // expected and non-fatal — the new authorization supersedes it.
-            if (existing.session_id) {
-              try {
-                await deleteSession(existing.session_id)
-              } catch (revokeError) {
-                log.info('[enable-banking] Old session revoke skipped (likely already expired)', {
-                  message: revokeError instanceof Error ? revokeError.message : String(revokeError),
-                  connection_id: existing.id,
-                })
-              }
-            }
-
-            // Reuse the SAME row: the OAuth callback finds it by oauth_state and
-            // drives it back to pending_selection → active. Keeping the row means
-            // existing transactions and the cash_accounts mirror stay linked.
+            // Persist the CSRF state to the existing row BEFORE asking the bank
+            // to start an authorization. The OAuth callback locates this row only
+            // by oauth_state, so writing it first guarantees that once the bank
+            // holds a session bound to this state a matching row already exists.
+            // If startAuthorization ran first and this UPDATE then failed, the
+            // bank session would be orphaned with no row to complete it.
             //
-            // Deliberately keep status 'expired' (NOT 'pending') during the
-            // round-trip: this row's created_at is old, and the cron deletes
-            // stale 'pending' rows after 1h — a reconnect must not be eligible
-            // for that. Staying 'expired' also keeps it visible in "Åtgärd
-            // krävs" so an abandoned reconnect is recoverable. The callback's
-            // oauth_state lookup accepts 'expired' to complete the flow.
-            const { error: updateError } = await supabase
+            // Reuse the SAME row: the callback drives it back to
+            // pending_selection → active, so existing transactions and the
+            // cash_accounts mirror stay linked. Deliberately keep status
+            // 'expired' (NOT 'pending') during the round-trip: this row's
+            // created_at is old and the cron deletes stale 'pending' rows after
+            // 1h — a reconnect must not be eligible for that. Staying 'expired'
+            // also keeps it visible in "Åtgärd krävs" so an abandoned reconnect
+            // is recoverable. The callback's oauth_state lookup accepts 'expired'.
+            const { error: stateError } = await supabase
               .from('bank_connections')
               .update({
-                authorization_id,
                 oauth_state: oauthState,
                 status: 'expired',
                 session_id: null,
@@ -265,14 +253,54 @@ export const enableBankingExtension: Extension = {
               .eq('id', existing.id)
               .eq('company_id', companyId)
 
-            if (updateError) {
-              log.error('[enable-banking] Database error updating connection for reconnect', {
-                errorMessage: updateError.message,
-                errorCode: updateError.code,
+            if (stateError) {
+              log.error('[enable-banking] Database error staging reconnect state', {
+                errorMessage: stateError.message,
+                errorCode: stateError.code,
                 connection_id: existing.id,
                 user_id: user.id,
               })
-              throw new Error(`Failed to update connection: ${updateError.message}`)
+              throw new Error(`Failed to update connection: ${stateError.message}`)
+            }
+
+            // Best-effort revoke the dead consent at Enable Banking. A
+            // closed/expired session is often already gone, so a failure here is
+            // expected and non-fatal — the new authorization supersedes it.
+            // Logged at WARN so a systematic revoke failure is visible to
+            // monitoring (compliance: ASVS V16 / ISO 27001 A.8.15).
+            if (existing.session_id) {
+              try {
+                await deleteSession(existing.session_id)
+              } catch (revokeError) {
+                log.warn('[enable-banking] Old session revoke skipped (likely already expired)', {
+                  message: revokeError instanceof Error ? revokeError.message : String(revokeError),
+                  connection_id: existing.id,
+                })
+              }
+            }
+
+            const { url, authorization_id } = await startAuthorization(
+              resolvedAspspName,
+              resolvedAspspCountry,
+              redirectUrl,
+              oauthState,
+              psuType
+            )
+
+            // Record the bank's authorization_id for audit/traceability. The
+            // callback matches on oauth_state alone (already persisted above), so
+            // a failure here cannot orphan the flow — log and continue.
+            const { error: authIdError } = await supabase
+              .from('bank_connections')
+              .update({ authorization_id })
+              .eq('id', existing.id)
+              .eq('company_id', companyId)
+
+            if (authIdError) {
+              log.warn('[enable-banking] Could not persist authorization_id on reconnect (non-fatal)', {
+                errorMessage: authIdError.message,
+                connection_id: existing.id,
+              })
             }
 
             return NextResponse.json({
@@ -280,6 +308,16 @@ export const enableBankingExtension: Extension = {
               authorization_url: url,
             })
           }
+
+          // Fresh connect: create the bank authorization, then persist the new
+          // row carrying its oauth_state so the callback can find it.
+          const { url, authorization_id } = await startAuthorization(
+            resolvedAspspName,
+            resolvedAspspCountry,
+            redirectUrl,
+            oauthState,
+            psuType
+          )
 
           const { data: connection, error } = await supabase
             .from('bank_connections')

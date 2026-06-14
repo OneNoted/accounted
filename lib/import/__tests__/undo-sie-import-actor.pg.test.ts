@@ -131,6 +131,10 @@ describe('undo_sie_import: explicit actor (service-client path)', () => {
   it('still resolves the actor from auth.uid() when p_user_id is omitted (backward compat)', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
     const importId = await insertCompletedImport({ companyId, userId, fiscalPeriodId })
+    // Seed a posted import verifikat so undo has something to delete. Without it
+    // the returned count is 0 regardless of behaviour, so the assertion would
+    // pass even if the function deleted nothing — making the count meaningless.
+    await insertPostedImportEntry({ companyId, userId, fiscalPeriodId })
 
     // 2-arg shape: p_user_id defaults to NULL, so the gate falls back to
     // auth.uid(). withUserContext sets the JWT sub to the owner and runs in a
@@ -147,6 +151,6 @@ describe('undo_sie_import: explicit actor (service-client path)', () => {
       expect(imp.rows[0].status).toBe('undone')
       return res.rows[0].deleted
     })
-    expect(deleted).toBe(0)
+    expect(deleted).toBe(1)
   })
 })

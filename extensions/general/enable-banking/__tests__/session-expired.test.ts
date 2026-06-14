@@ -238,17 +238,25 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
     expect(body.connection_id).toBe('conn-1')
     expect(body.authorization_url).toBe('https://bank.example/auth')
 
-    // In-place: a fresh authorization on the SAME row, never a new INSERT, and
-    // it stays 'expired' (not 'pending') so the cron's stale-pending cleanup
-    // can't delete an established connection mid-reconnect.
+    // In-place: a fresh authorization on the SAME row, never a new INSERT.
     expect(insertSpy).not.toHaveBeenCalled()
-    expect(updateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: 'expired',
-        authorization_id: 'auth-123',
-        session_id: null,
-        error_message: null,
-      })
-    )
+
+    // The CSRF state is staged on the row FIRST — before startAuthorization, so
+    // before authorization_id even exists — guaranteeing the callback can always
+    // find the row by oauth_state and the bank session can never be orphaned.
+    // It stays 'expired' (not 'pending') so the cron's stale-pending cleanup
+    // can't delete an established connection mid-reconnect.
+    const firstUpdate = updateSpy.mock.calls[0][0]
+    expect(firstUpdate).toMatchObject({
+      oauth_state: expect.any(String),
+      status: 'expired',
+      session_id: null,
+      error_message: null,
+    })
+    expect(firstUpdate).not.toHaveProperty('authorization_id')
+
+    // The bank's authorization_id is recorded in a follow-up write (audit only;
+    // the callback never reads it, so a failure here can't break the reconnect).
+    expect(updateSpy.mock.calls[1][0]).toEqual({ authorization_id: 'auth-123' })
   })
 })
