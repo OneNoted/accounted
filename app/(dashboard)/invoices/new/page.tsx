@@ -138,9 +138,11 @@ export default function NewInvoicePage() {
       if (item.unit.trim().length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit'], message: t('validation_unit_required') })
       }
-      if (!(item.unit_price >= 0)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['unit_price'], message: t('validation_price_positive') })
-      }
+      // Negative unit prices are allowed: discount lines (e.g. "Rabatt -100")
+      // are a valid way to reduce an invoice total. The backend schema accepts
+      // them too (see lib/api/schemas.ts CreateInvoiceItemSchema). An empty
+      // price field is still rejected by the base `unit_price: z.number()` type
+      // (NaN), so we only need to allow the sign here.
     })
     return z.object({
       customer_id: z.string().min(1, t('validation_customer_required')),

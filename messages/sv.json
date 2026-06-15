@@ -2226,7 +2226,6 @@
     "validation_description_required": "Beskrivning krävs",
     "validation_quantity_min": "Minst 0.01",
     "validation_unit_required": "Enhet krävs",
-    "validation_price_positive": "Pris måste vara positivt",
     "validation_customer_required": "Välj en kund",
     "validation_invoice_date_required": "Fakturadatum krävs",
     "validation_due_date_required": "Förfallodatum krävs",

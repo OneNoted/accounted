@@ -2226,7 +2226,6 @@
     "validation_description_required": "Description required",
     "validation_quantity_min": "Minimum 0.01",
     "validation_unit_required": "Unit required",
-    "validation_price_positive": "Price must be positive",
     "validation_customer_required": "Select a customer",
     "validation_invoice_date_required": "Invoice date required",
     "validation_due_date_required": "Due date required",
