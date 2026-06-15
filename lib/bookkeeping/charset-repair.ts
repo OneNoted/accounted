@@ -76,10 +76,14 @@ export function isClean(s: string): boolean {
   return !hasLostByte(s) && !hasMojibakeSignature(s) && !hasCp1252Artifact(s)
 }
 
+// Combining-diacritical-marks block (U+0300–U+036F) left after NFD. Built from
+// an ASCII string via RegExp() so the source carries no literal (invisible,
+// encoding-fragile) combining marks — the failure mode flagged in review.
+const COMBINING_MARKS = new RegExp('[\\u0300-\\u036f]', 'g')
+
 /** Strip combining diacritical marks (å→a, ä→a, ö→o, é→e), preserving case. */
 export function deaccent(s: string): string {
-  // ̀-ͯ = the combining-diacritical-marks block left after NFD.
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+  return s.normalize('NFD').replace(COMBINING_MARKS, '')
 }
 
 /**
