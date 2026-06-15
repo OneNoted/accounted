@@ -128,6 +128,20 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
 const VAT_ACCOUNTS = Object.keys(ACCOUNT_RUTA)
 
 /**
+ * 26xx output VAT accounts feeding rutor 10/11/12, 30/31/32 and 60/61/62.
+ * Derived from ACCOUNT_RUTA so the KPI vatLiability widget can never drift
+ * from the momsdeklaration (ruta 49) calculation.
+ */
+export const VAT_OUTPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
+  .filter(([account, mapping]) => account.startsWith('26') && mapping.side === 'credit')
+  .map(([account]) => account)
+
+/** Input VAT accounts feeding ruta 48 (2640–2649 series). */
+export const VAT_INPUT_ACCOUNTS = Object.entries(ACCOUNT_RUTA)
+  .filter(([, mapping]) => mapping.box === 'ruta48')
+  .map(([account]) => account)
+
+/**
  * Calculate period start and end dates
  */
 export function calculatePeriodDates(

@@ -9,6 +9,7 @@ import {
   calculateGrossMargin,
   calculateExpenseRatio,
   calculateAvgPaymentDays,
+  calculateVatLiability,
 } from '@/lib/reports/kpi'
 import { requireCompanyId } from '@/lib/company/context'
 import {
@@ -102,15 +103,7 @@ export async function GET(request: Request) {
     ])
 
     const cashPosition = calculateCashPosition(trialBalanceResult.rows)
-    const vatOutputAccounts = ['2611', '2621', '2631']
-    const vatInputAccounts = ['2641', '2645']
-    const outputVat = trialBalanceResult.rows
-      .filter((r) => vatOutputAccounts.includes(r.account_number))
-      .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0)
-    const inputVat = trialBalanceResult.rows
-      .filter((r) => vatInputAccounts.includes(r.account_number))
-      .reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
-    const vatLiability = Math.round((outputVat - inputVat) * 100) / 100
+    const vatLiability = calculateVatLiability(trialBalanceResult.rows)
 
     const paidInvoices = (paidInvoicesResult.data ?? []).map((inv) => ({
       invoice_date: inv.invoice_date as string,

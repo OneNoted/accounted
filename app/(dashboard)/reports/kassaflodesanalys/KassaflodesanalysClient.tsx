@@ -251,6 +251,10 @@ export function KassaflodesanalysClient() {
               />
               <CashRow label="Utdelningar" amount={report.finansierings.utdelningar} />
               <CashRow label="Nyemission" amount={report.finansierings.nyemission} />
+              <CashRow
+                label="Erhållna aktieägartillskott"
+                amount={report.finansierings.erhallna_aktieagartillskott}
+              />
               <SubtotalRow
                 label="Summa kassaflöde finansieringsverksamhet"
                 amount={report.finansierings.total}

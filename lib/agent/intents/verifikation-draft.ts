@@ -172,7 +172,7 @@ export const verifikationDraft = defineAgentIntent<
         })`,
       )
       if (captured.period_status.status === 'locked' || captured.period_status.status === 'closed') {
-        lines.push('PERIODEN ÄR LÅST — vägled mot storno + ny verifikation i öppen period istället.')
+        lines.push('PERIODEN ÄR LÅST — ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden under Bokföring → Räkenskapsår om datumet måste stå kvar.')
       }
     }
     lines.push('')

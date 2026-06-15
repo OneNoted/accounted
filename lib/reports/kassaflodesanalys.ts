@@ -26,7 +26,8 @@ import type { TrialBalanceRow } from '@/types'
  *
  *   10xx-13xx  Anläggningstillgångar (capital goods) → investing
  *
- *   20xx  Eget kapital (nyemission, utdelning)       → financing
+ *   20xx  Eget kapital (nyemission, utdelning,
+ *         erhållna aktieägartillskott 2093)          → financing
  *   23xx  Långfristiga skulder (lån)                 → financing
  *
  *   19xx  Kassa och bank                             → reconciliation (target)
@@ -61,6 +62,7 @@ export type KassaflodesanalysReport = {
     delta_lan: number
     utdelningar: number
     nyemission: number
+    erhallna_aktieagartillskott: number
     total: number
   }
   total_cash_flow: number
@@ -281,12 +283,24 @@ export async function generateKassaflodesanalys(
 
   // Nyemission: increase in 20xx equity (excluding result-of-the-year and
   // dividends). Credit-normal: positive credit-side delta = cash inflow.
-  // We sum 2081 (share capital) + 2082 (premium) deltas specifically to
-  // avoid double-counting 2099 (årets resultat is non-cash).
-  const nyemissionDebit = sumDeltaByPrefix(rows, ['2081', '2082', '2083', '2087'])
+  // We sum 2081 (share capital) + 2082 (ej registrerat aktiekapital) + 2083
+  // (medlemsinsatser) + 2086/2097 (bunden/fri överkursfond — the premium on
+  // an emission lands there under K2/K3) + 2087 (pågående nyemission),
+  // specifically avoiding 2099 (årets resultat is non-cash).
+  const nyemissionDebit = sumDeltaByPrefix(rows, ['2081', '2082', '2083', '2086', '2087', '2097'])
   const nyemission = r2(-nyemissionDebit)
 
-  const totalFinansierings = r2(deltaLan + utdelningar + nyemission)
+  // Erhållna aktieägartillskott (2093, villkorade + ovillkorade): a cash
+  // contribution from shareholders booked straight to equity. Credit-normal:
+  // increase = cash inflow → negate the debit-side delta. Issue #716: this
+  // account was previously unmapped, so any tillskott during the period
+  // showed 0 under finansiering and broke the 19xx reconciliation by exactly
+  // the contributed amount.
+  const erhallnaAktieagartillskott = r2(-sumDeltaByPrefix(rows, ['2093']))
+
+  const totalFinansierings = r2(
+    deltaLan + utdelningar + nyemission + erhallnaAktieagartillskott
+  )
 
   // ─── Total cash flow ───────────────────────────────────────────────────
   const totalCashFlow = r2(totalLopande + totalInvesterings + totalFinansierings)
@@ -332,6 +346,7 @@ export async function generateKassaflodesanalys(
       delta_lan: deltaLan,
       utdelningar,
       nyemission,
+      erhallna_aktieagartillskott: erhallnaAktieagartillskott,
       total: totalFinansierings,
     },
     total_cash_flow: totalCashFlow,

@@ -35,6 +35,20 @@ export const AGENT_GROUND_RULES: string[] = [
   // -- Anchor in user's own history --
   '- KOLLA HISTORIK FÖRST: innan du föreslår "så här gör du" på en återkommande motpart, anropa gnubok_query_journal med motpartens namn. Om de bokfört Vercel/Spotify/SJ förut — följ samma mönster. "Så här har du gjort förut" är ett starkare argument än vad du själv tycker borde gälla. Bryt bara mönstret om underlaget tydligt säger något annat.',
   '',
+  // -- Storno / rättelse: how the product actually works --
+  // Production feedback: the assistant described correction flows that don't
+  // exist in Accounted (or implied the user must register accounts before
+  // correcting), so the user got stuck. Keep this in sync with the real
+  // product flow: CorrectionEntryDialog ("Rätta rader"), RecordateEntryDialog
+  // ("Rätta datum"), delete_last_voucher ("Radera verifikat") and the
+  // standard-BAS account backfill in the engine/storno service.
+  '- RÄTTA FEL I BOKFÖRDA VERIFIKATIONER — så fungerar det i Accounted (beskriv aldrig andra vägar än dessa):',
+  '  • En bokförd verifikation kan aldrig redigeras direkt (Bokföringslagen). Rättelse görs från verifikationens egen sida: Bokföring → öppna verifikationen → knappen "Rätta". "Rätta rader" skapar automatiskt en storno som nollställer originalet plus en ny rättelseverifikation med de rätta raderna, båda i originalets period. "Rätta datum" flyttar verifikationen till rätt datum/år (storno + ombokning under huven). Hela kedjan original → storno → rättelse länkas och visas på verifikationssidan.',
+  '  • Är verifikationen den SENASTE i sin serie kan den även raderas helt ("Radera verifikat") — då återanvänds löpnumret och ingen lucka uppstår.',
+  '  • Konton som finns i BAS-kontoplanen men saknas i företagets kontoplan läggs till AUTOMATISKT vid bokföring och rättelse. Be aldrig användaren registrera standardkonton manuellt innan de bokför — bara okända kontonummer eller avaktiverade konton stoppar.',
+  '  • När en bokning makuleras (storno utan rättelse) släpps den kopplade banktransaktionen och blir bokföringsbar igen i transaktionsvyn — användaren kan alltid klicka på transaktionen och bokföra om. Vid en rättelse följer transaktionen och underlaget med till rättelseverifikationen.',
+  '  • En storno på 0 kr med status "Makulerad" i kedjan är resterna av ett avbrutet rättelseförsök — den påverkar inga saldon. Oförklarade luckor i löpnummerserien dokumenteras via verifikationsluckor (gnubok_list_voucher_gaps / gnubok_explain_voucher_gap).',
+  '',
   // -- Representation: headcount + per-person VAT cap --
   '- REPRESENTATION (måltid/restaurang): innan du bokför, fånga ANTAL deltagare, vilka de var (namn + företag), och syftet. Antalet är inte valfritt: momsavdraget beräknas per person. Fråga "Hur många var ni, och vilka?" om det inte redan framgår.',
   '  • Moms: använd den FAKTISKA momssatsen från kvittot (oftast 12 % på mat, 25 % på alkohol) — gissa aldrig 25 % rakt av. Avdraget gäller på ett underlag om max 300 kr exkl. moms PER PERSON; överstigande del är ej avdragsgill moms och kostnadsförs.',

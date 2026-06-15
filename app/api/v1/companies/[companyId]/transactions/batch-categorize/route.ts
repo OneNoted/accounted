@@ -27,7 +27,7 @@ import {
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { collectMappingResultAccounts, findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
+import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
@@ -204,8 +204,9 @@ async function categorizeOne(
   // engine throws AccountsNotInChartError mid-flight and the legacy
   // partial-success branch silently marks the row bokförd with no
   // verifikation. Validate in both dry-run and live paths so previews
-  // surface the same actionable error.
-  const missingAccounts = await findMissingActiveAccounts(
+  // surface the same actionable error. Standard BAS accounts merely absent
+  // from the chart pass — the engine seeds them on demand.
+  const missingAccounts = await findUnresolvableAccounts(
     supabase,
     companyId,
     collectMappingResultAccounts(mappingResult),

@@ -9,6 +9,7 @@ import {
   calculateGrossMargin,
   calculateExpenseRatio,
   calculateAvgPaymentDays,
+  calculateVatLiability,
 } from '@/lib/reports/kpi'
 import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
 import { requireCompanyId } from '@/lib/company/context'
@@ -93,27 +94,10 @@ export async function GET(request: Request) {
   }
 
   // VAT liability — use account overrides if set
-  const vatOverrides = preferences.accountOverrides['vatLiability']
-  let vatLiability: number
-  if (vatOverrides && vatOverrides.length > 0) {
-    const outputVat = trialBalanceResult.rows
-      .filter((r) => vatOverrides.includes(r.account_number) && r.account_number.startsWith('26') && !r.account_number.startsWith('264'))
-      .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0)
-    const inputVat = trialBalanceResult.rows
-      .filter((r) => vatOverrides.includes(r.account_number) && r.account_number.startsWith('264'))
-      .reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
-    vatLiability = Math.round((outputVat - inputVat) * 100) / 100
-  } else {
-    const vatOutputAccounts = ['2611', '2621', '2631']
-    const vatInputAccounts = ['2641', '2645']
-    const outputVat = trialBalanceResult.rows
-      .filter((r) => vatOutputAccounts.includes(r.account_number))
-      .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0)
-    const inputVat = trialBalanceResult.rows
-      .filter((r) => vatInputAccounts.includes(r.account_number))
-      .reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
-    vatLiability = Math.round((outputVat - inputVat) * 100) / 100
-  }
+  const vatLiability = calculateVatLiability(
+    trialBalanceResult.rows,
+    preferences.accountOverrides['vatLiability']
+  )
 
   // Avg payment days from paid invoices
   const paidInvoices = (paidInvoicesResult.data ?? []).map((inv) => ({

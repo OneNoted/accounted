@@ -60,6 +60,11 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
           const role = getRole(entry)
           const total = getTotal(entry)
           const isCurrent = entry.id === currentEntryId
+          // A cancelled entry is residue from an aborted correction attempt:
+          // it was voided before taking effect and its lines were removed, so
+          // it always sums to 0,00. Without the status badge it renders
+          // exactly like a live storno — dim it and say what it is.
+          const isCancelled = entry.status === 'cancelled'
 
           return (
             <Link
@@ -67,9 +72,9 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
               href={`/bookkeeping/${entry.id}`}
               className="block"
             >
-              <div className={`relative pl-7 py-2 rounded-md transition-colors hover:bg-muted/50 ${isCurrent ? 'bg-muted/30' : ''}`}>
+              <div className={`relative pl-7 py-2 rounded-md transition-colors hover:bg-muted/50 ${isCurrent ? 'bg-muted/30' : ''} ${isCancelled ? 'opacity-60' : ''}`}>
                 {/* Timeline dot */}
-                <div className={`absolute left-0.5 top-[18px] h-3 w-3 rounded-full border-2 border-background ${role.color}`} />
+                <div className={`absolute left-0.5 top-[18px] h-3 w-3 rounded-full border-2 border-background ${isCancelled ? 'bg-muted-foreground' : role.color}`} />
 
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium text-muted-foreground">{role.label}</span>
@@ -77,7 +82,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
                     {formatVoucher(entry)}
                   </span>
                   <span className="text-sm text-muted-foreground tabular-nums">{formatDate(entry.entry_date)}</span>
-                  <JournalEntryStatusBadge entry={entry} showStatus={false} />
+                  <JournalEntryStatusBadge entry={entry} showStatus={isCancelled} />
                   {isCurrent && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                       {t('current')}

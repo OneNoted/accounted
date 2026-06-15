@@ -26,8 +26,8 @@ vi.mock('@supabase/supabase-js', async () => {
 
 const { createTxJE, findMissingAccountsMock } = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
-  // Default: every mapped account exists and is active. Per-test overrides
-  // simulate the bug surface.
+  // Default: every mapped account resolves (active, or seedable standard
+  // BAS). Per-test overrides simulate the bug surface (inactive/unknown).
   findMissingAccountsMock: vi.fn().mockResolvedValue([]),
 }))
 
@@ -43,7 +43,7 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   )
   return {
     ...actual,
-    findMissingActiveAccounts: findMissingAccountsMock,
+    findUnresolvableAccounts: findMissingAccountsMock,
   }
 })
 // category mapping is real — gives the route real BAS accounts to validate.

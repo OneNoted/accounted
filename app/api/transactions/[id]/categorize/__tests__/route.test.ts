@@ -67,7 +67,7 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   )
   return {
     ...actual,
-    findMissingActiveAccounts: (...args: unknown[]) => mockFindMissingActiveAccounts(...args),
+    findUnresolvableAccounts: (...args: unknown[]) => mockFindMissingActiveAccounts(...args),
   }
 })
 

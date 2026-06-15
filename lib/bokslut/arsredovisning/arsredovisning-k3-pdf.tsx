@@ -380,6 +380,12 @@ export function ArsredovisningK3PDF({ data }: { data: ArsredovisningData }) {
               {fmt(data.kassaflodesanalys.finansierings.nyemission)}
             </Text>
           </View>
+          <View style={styles.tableRow}>
+            <Text style={styles.colLabel}>Erhållna aktieägartillskott</Text>
+            <Text style={styles.colAmount}>
+              {fmt(data.kassaflodesanalys.finansierings.erhallna_aktieagartillskott)}
+            </Text>
+          </View>
           <View style={styles.tableRowSubtotal}>
             <Text style={styles.colLabel}>Kassaflöde från finansieringsverksamheten</Text>
             <Text style={styles.colAmount}>

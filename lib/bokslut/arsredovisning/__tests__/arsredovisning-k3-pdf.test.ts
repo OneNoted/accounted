@@ -96,7 +96,7 @@ function makeMinimalK3Data(): ArsredovisningData {
         total: 300_000,
       },
       investerings: { forvarv_anlaggningar: 0, avyttring_anlaggningar: 0, total: 0 },
-      finansierings: { delta_lan: 0, utdelningar: 0, nyemission: 0, total: 0 },
+      finansierings: { delta_lan: 0, utdelningar: 0, nyemission: 0, erhallna_aktieagartillskott: 0, total: 0 },
       total_cash_flow: 300_000,
       reconciliation: {
         opening_cash_1xxx: 300_000,

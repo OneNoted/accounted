@@ -314,6 +314,12 @@ export function KassaflodesanalysPDF({
             <Text style={styles.label}>Nyemission</Text>
             <Text style={styles.amount}>{formatAmount(report.finansierings.nyemission)}</Text>
           </View>
+          <View style={styles.row}>
+            <Text style={styles.label}>Erhållna aktieägartillskott</Text>
+            <Text style={styles.amount}>
+              {formatAmount(report.finansierings.erhallna_aktieagartillskott)}
+            </Text>
+          </View>
           <View style={styles.subtotalRow}>
             <Text style={styles.subtotalLabel}>
               Kassaflöde från finansieringsverksamheten

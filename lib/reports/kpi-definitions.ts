@@ -1,4 +1,5 @@
 import type { KPIPreferences } from '@/types'
+import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 
 export interface KPIDefinition {
   id: string
@@ -37,7 +38,8 @@ export const KPI_DEFINITIONS: KPIDefinition[] = [
   },
   {
     id: 'vatLiability',
-    defaultAccounts: ['2611', '2621', '2631', '2641', '2645'],
+    // Same 26xx accounts as the momsdeklaration (ruta 49) — see vat-declaration.ts
+    defaultAccounts: [...VAT_OUTPUT_ACCOUNTS, ...VAT_INPUT_ACCOUNTS],
     customizableAccounts: true,
     defaultVisible: true,
     format: 'currency',
