@@ -5,7 +5,9 @@ import {
   calculateRevenueGrowth,
   calculateExpenseRatio,
   calculateAvgPaymentDays,
+  calculateVatLiability,
 } from '../kpi'
+import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '../vat-declaration'
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
 
 function makeIncomeStatement(
@@ -102,6 +104,112 @@ describe('calculateCashPosition', () => {
       makeTrialBalanceRow({ account_number: '1930', closing_debit: 0, closing_credit: 5000 }),
     ]
     expect(calculateCashPosition(rows)).toBe(-5000)
+  })
+})
+
+describe('calculateVatLiability', () => {
+  it('returns positive liability for standard output VAT', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2611', closing_credit: 25000 }),
+      makeTrialBalanceRow({ account_number: '2641', closing_debit: 10000 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(15000)
+  })
+
+  it('nets EU reverse charge (2614 + 2645) to zero — issue #715', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2614', closing_credit: 2500 }),
+      makeTrialBalanceRow({ account_number: '2645', closing_debit: 2500 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(0)
+  })
+
+  it('nets domestic reverse charge (2614 + 2647) to zero', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2614', closing_credit: 1200 }),
+      makeTrialBalanceRow({ account_number: '2647', closing_debit: 1200 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(0)
+  })
+
+  it('nets import VAT (2615 + 2645) to zero', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2615', closing_credit: 800 }),
+      makeTrialBalanceRow({ account_number: '2645', closing_debit: 800 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(0)
+  })
+
+  it('reverse charge does not distort the net position alongside regular sales', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2611', closing_credit: 5000 }),
+      makeTrialBalanceRow({ account_number: '2641', closing_debit: 2000 }),
+      makeTrialBalanceRow({ account_number: '2614', closing_credit: 1000 }),
+      makeTrialBalanceRow({ account_number: '2645', closing_debit: 1000 }),
+    ]
+    // Old formula gave 5000 − (2000 + 1000) = 2000; correct is 3000
+    expect(calculateVatLiability(rows)).toBe(3000)
+  })
+
+  it('returns negative for net VAT receivable', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2611', closing_credit: 1000 }),
+      makeTrialBalanceRow({ account_number: '2641', closing_debit: 4000 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(-3000)
+  })
+
+  it('ignores accounts outside the VAT declaration set', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2650', closing_credit: 9000 }), // redovisningskonto för moms
+      makeTrialBalanceRow({ account_number: '1930', closing_debit: 9000 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(0)
+  })
+
+  it('respects account overrides, splitting input/output on the 264x prefix', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2611', closing_credit: 5000 }),
+      makeTrialBalanceRow({ account_number: '2614', closing_credit: 1000 }),
+      makeTrialBalanceRow({ account_number: '2641', closing_debit: 2000 }),
+    ]
+    // Override excludes 2614
+    expect(calculateVatLiability(rows, ['2611', '2641'])).toBe(3000)
+  })
+
+  it('handles debit balances on output accounts (corrections)', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2611', closing_credit: 5000, closing_debit: 500 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(4500)
+  })
+})
+
+describe('VAT widget account lists (derived from ACCOUNT_RUTA)', () => {
+  // Drift guard: an ACCOUNT_RUTA change that alters these lists changes the
+  // dashboard widget's semantics — update this snapshot deliberately.
+  it('output accounts cover rutor 10–12, 30–32 and 60–62', () => {
+    expect([...VAT_OUTPUT_ACCOUNTS].sort()).toEqual([
+      '2610', '2611', '2612', '2613', '2614', '2615', '2616', '2618',
+      '2620', '2621', '2622', '2623', '2624', '2625', '2626', '2628',
+      '2630', '2631', '2632', '2633', '2634', '2635', '2636', '2638',
+    ])
+  })
+
+  it('input accounts cover ruta 48', () => {
+    expect([...VAT_INPUT_ACCOUNTS].sort()).toEqual([
+      '2640', '2641', '2642', '2645', '2646', '2647', '2649',
+    ])
+  })
+
+  it('the prefix split used by calculateVatLiability is exact for the defaults', () => {
+    for (const account of VAT_OUTPUT_ACCOUNTS) {
+      expect(account.startsWith('26')).toBe(true)
+      expect(account.startsWith('264')).toBe(false)
+    }
+    for (const account of VAT_INPUT_ACCOUNTS) {
+      expect(account.startsWith('264')).toBe(true)
+    }
   })
 })
 

@@ -70,7 +70,7 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
   )
   return {
     ...actual,
-    findMissingActiveAccounts: findMissingAccountsMock,
+    findUnresolvableAccounts: findMissingAccountsMock,
   }
 })
 // category mapping is real — provides the debit/credit account guarantees.

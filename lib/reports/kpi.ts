@@ -1,4 +1,5 @@
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
+import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 
 /**
  * Calculate gross margin from income statement.
@@ -28,6 +29,45 @@ export function calculateCashPosition(rows: TrialBalanceRow[]): number {
     0
   )
   return Math.round(total * 100) / 100
+}
+
+/**
+ * Calculate net VAT liability (positive = att betala) or receivable
+ * (negative = att återfå) from trial balance rows.
+ *
+ * Uses the same 26xx accounts as the momsdeklaration so the result mirrors
+ * ruta 49: output VAT (rutor 10–12, 30–32, 60–62) − input VAT (ruta 48).
+ * Reverse-charge and import pairs (e.g. 2614 credit + 2645 debit) therefore
+ * net to zero instead of inflating the receivable (#715).
+ *
+ * `accounts` overrides the default list (user KPI preferences); accounts in
+ * the 264x range count as input VAT, all other 26xx accounts as output VAT.
+ */
+export function calculateVatLiability(
+  rows: TrialBalanceRow[],
+  accounts?: string[]
+): number {
+  const vatAccounts =
+    accounts && accounts.length > 0
+      ? accounts
+      : [...VAT_OUTPUT_ACCOUNTS, ...VAT_INPUT_ACCOUNTS]
+
+  const outputVat = rows
+    .filter(
+      (r) =>
+        vatAccounts.includes(r.account_number) &&
+        r.account_number.startsWith('26') &&
+        !r.account_number.startsWith('264')
+    )
+    .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0)
+  const inputVat = rows
+    .filter(
+      (r) =>
+        vatAccounts.includes(r.account_number) && r.account_number.startsWith('264')
+    )
+    .reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0)
+
+  return Math.round((outputVat - inputVat) * 100) / 100
 }
 
 /**

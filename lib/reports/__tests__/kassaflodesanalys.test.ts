@@ -296,6 +296,87 @@ describe('generateKassaflodesanalys', () => {
     expect(report.reconciliation.is_reconciled).toBe(true)
   })
 
+  it('records erhållna aktieägartillskott (2093) as financing inflow and reconciles (#716)', async () => {
+    // Repro from issue #716: debit 1930, credit 2093 (10 000 kr shareholder
+    // contribution). Before the fix, 2093 was unmapped — financing showed 0
+    // and the reconciliation failed by exactly the contributed amount.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '1930',
+          account_class: 1,
+          period_debit: 10000,
+          closing_debit: 10000,
+        }),
+        makeRow({
+          account_number: '2093',
+          account_class: 2,
+          period_credit: 10000,
+          closing_credit: 10000,
+        }),
+      ],
+      totalDebit: 10000,
+      totalCredit: 10000,
+      isBalanced: true,
+    })
+    mockIncomeStatement.mockResolvedValue(makeIs())
+
+    const report = await generateKassaflodesanalys(
+      makeSupabase(PERIOD),
+      'company-1',
+      'period-1'
+    )
+
+    expect(report.finansierings.erhallna_aktieagartillskott).toBe(10000)
+    expect(report.finansierings.nyemission).toBe(0)
+    expect(report.finansierings.total).toBe(10000)
+    expect(report.reconciliation.delta_actual).toBe(10000)
+    expect(report.reconciliation.delta_calculated).toBe(10000)
+    expect(report.reconciliation.is_reconciled).toBe(true)
+  })
+
+  it('records nyemission premium on överkursfond (2097) as financing inflow and reconciles', async () => {
+    // A 100 000 kr emission: 25 000 to 2081 (aktiekapital), 75 000 premium to
+    // 2097 (fri överkursfond). 2097 was previously outside the nyemission
+    // prefixes — same reconciliation-failure class as #716.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({
+          account_number: '1930',
+          account_class: 1,
+          period_debit: 100000,
+          closing_debit: 100000,
+        }),
+        makeRow({
+          account_number: '2081',
+          account_class: 2,
+          period_credit: 25000,
+          closing_credit: 25000,
+        }),
+        makeRow({
+          account_number: '2097',
+          account_class: 2,
+          period_credit: 75000,
+          closing_credit: 75000,
+        }),
+      ],
+      totalDebit: 100000,
+      totalCredit: 100000,
+      isBalanced: true,
+    })
+    mockIncomeStatement.mockResolvedValue(makeIs())
+
+    const report = await generateKassaflodesanalys(
+      makeSupabase(PERIOD),
+      'company-1',
+      'period-1'
+    )
+
+    expect(report.finansierings.nyemission).toBe(100000)
+    expect(report.finansierings.total).toBe(100000)
+    expect(report.reconciliation.is_reconciled).toBe(true)
+  })
+
   it('detects mismatch when a cash movement has no balancing classification', async () => {
     // Plant an invariant violation: 1930 went up by 10 000 but no offsetting
     // entry on any tracked account class. This is the kind of bug a real

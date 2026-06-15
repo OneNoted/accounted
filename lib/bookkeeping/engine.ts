@@ -614,6 +614,21 @@ export async function reverseEntry(
     throw new EntryAlreadyReversedError()
   }
 
+  // Unlink any bank transactions booked by the reversed entry so they return
+  // to "Att bokföra" and can be booked again from the transactions view.
+  // Without this the row keeps pointing at a status='reversed' entry, reads
+  // as bokförd forever, and has no re-booking affordance — the agent paths
+  // (lib/pending-operations/commit.ts) already did this manually after every
+  // reverseEntry call; the dashboard reverse route did not.
+  const { error: unlinkError } = await supabase
+    .from('transactions')
+    .update({ journal_entry_id: null })
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', entryId)
+  if (unlinkError) {
+    log.error('failed to unlink transactions from reversed entry', unlinkError, { entryId })
+  }
+
   // If this was a payment entry, sync the linked invoice/supplier-invoice status.
   // Helper is shared with the DELETE journal entry route so both code paths leave
   // the invoice in a consistent state (BFL 5 kap 5§ requires GL reversal; this

@@ -154,6 +154,7 @@ export interface KassaflodesAnalysisSummary {
     delta_lan: number
     utdelningar: number
     nyemission: number
+    erhallna_aktieagartillskott: number
     total: number
   }
   total_cash_flow: number

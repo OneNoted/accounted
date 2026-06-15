@@ -23,6 +23,7 @@ import {
   calculateCashPosition,
   calculateExpenseRatio,
   calculateAvgPaymentDays,
+  calculateVatLiability,
 } from '@/lib/reports/kpi'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
@@ -3504,16 +3505,8 @@ export const tools: McpTool[] = [
       const outstandingReceivables = arLedger.total_outstanding
       const overdueReceivables = arLedger.total_overdue
 
-      // VAT liability from trial balance
-      const getClosing = (accNum: string) => {
-        const row = trialBalance.rows.find((r) => r.account_number === accNum)
-        if (!row) return 0
-        return row.closing_credit - row.closing_debit
-      }
-      const vatLiability = Math.round(
-        (getClosing('2611') + getClosing('2621') + getClosing('2631') -
-          getClosing('2641') - getClosing('2645')) * 100
-      ) / 100
+      // VAT liability from trial balance (same accounts as momsdeklaration ruta 49)
+      const vatLiability = calculateVatLiability(trialBalance.rows)
 
       return {
         period_name: period.name,

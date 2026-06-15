@@ -35,7 +35,7 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { collectMappingResultAccounts, findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
+import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import type {
@@ -293,14 +293,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // would reach the engine and throw AccountsNotInChartError mid-flight,
     // leaving the legacy partial-success branch to silently mark the row as
     // bokförd with no verifikation. We validate in both live AND dry-run
-    // paths so previews surface the same actionable error.
-    const missingAccounts = await findMissingActiveAccounts(
+    // paths so previews surface the same actionable error. Standard BAS
+    // accounts merely absent from the chart pass — the engine seeds them.
+    const missingAccounts = await findUnresolvableAccounts(
       ctx.supabase,
       ctx.companyId!,
       collectMappingResultAccounts(mappingResult),
     )
     if (missingAccounts.length > 0) {
-      txLog.warn('mapping references inactive/missing accounts', { missingAccounts })
+      txLog.warn('mapping references inactive/unknown accounts', { missingAccounts })
       return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
         requestId: ctx.requestId,
       })

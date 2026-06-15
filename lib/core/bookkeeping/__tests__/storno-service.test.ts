@@ -37,6 +37,12 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   getNextVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
 }))
 
+// On-demand BAS backfill — default: nothing seedable. Tests override.
+const mockBackfill = vi.fn()
+vi.mock('@/lib/bookkeeping/account-backfill', () => ({
+  backfillStandardBASAccounts: (...args: unknown[]) => mockBackfill(...args),
+}))
+
 import { correctEntry } from '../storno-service'
 import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
 
@@ -51,6 +57,7 @@ beforeEach(() => {
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 })
   let voucherNum = 0
   vi.mocked(getNextVoucherNumber).mockImplementation(async () => ++voucherNum)
+  mockBackfill.mockResolvedValue([])
 })
 
 describe('correctEntry', () => {
@@ -78,15 +85,14 @@ describe('correctEntry', () => {
     results = [
       // 0: fetch original (.single())
       { data: originalEntry, error: null },
-      // 1: insert reversal entry (.single())
-      { data: reversalEntry, error: null },
-      // 2: insert reversal lines (thenable)
-      { data: null, error: null },
-      // 3: update reversal to posted (thenable)
-      { data: null, error: null },
-      // -- getNextVoucherNumber increments resultIdx --
-      // 4: fetch accounts for corrected lines (thenable)
+      // 1: fetch accounts for corrected lines — Step 0 pre-validation (thenable)
       { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null },
+      // 2: insert reversal entry (.single())
+      { data: reversalEntry, error: null },
+      // 3: insert reversal lines (thenable)
+      { data: null, error: null },
+      // 4: update reversal to posted (thenable)
+      { data: null, error: null },
       // 5: insert corrected entry (.single())
       { data: correctedEntry, error: null },
       // 6: insert corrected lines (thenable)
@@ -95,9 +101,13 @@ describe('correctEntry', () => {
       { data: null, error: null },
       // 8: CAS update original to reversed (thenable, needs array for .length check)
       { data: [{ id: 'orig-1' }], error: null },
-      // 9: fetch final reversal (.single())
+      // 9: relink transactions original → corrected (thenable)
+      { data: null, error: null },
+      // 10: relink documents original → corrected (thenable)
+      { data: null, error: null },
+      // 11: fetch final reversal (.single())
       { data: { ...reversalEntry, lines: [] }, error: null },
-      // 10: fetch final corrected (.single())
+      // 12: fetch final corrected (.single())
       { data: { ...correctedEntry, lines: correctedLines }, error: null },
     ]
   }
@@ -141,10 +151,10 @@ describe('correctEntry', () => {
 
     results = [
       { data: originalEntry, error: null },         // 0: fetch original
-      { data: reversalEntry, error: null },          // 1: insert reversal
-      { data: null, error: null },                   // 2: insert reversal lines
-      { data: null, error: null },                   // 3: post reversal
-      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
+      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts (Step 0)
+      { data: reversalEntry, error: null },          // 2: insert reversal
+      { data: null, error: null },                   // 3: insert reversal lines
+      { data: null, error: null },                   // 4: post reversal
       { data: correctedEntry, error: null },         // 5: insert corrected
       { data: null, error: null },                   // 6: insert corrected lines
       { data: null, error: null },                   // 7: post corrected
@@ -166,10 +176,10 @@ describe('correctEntry', () => {
 
     results = [
       { data: originalEntry, error: null },          // 0: fetch original
-      { data: reversalEntry, error: null },           // 1: insert reversal
-      { data: null, error: null },                    // 2: insert reversal lines
-      { data: null, error: null },                    // 3: post reversal
-      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
+      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts (Step 0)
+      { data: reversalEntry, error: null },           // 2: insert reversal
+      { data: null, error: null },                    // 3: insert reversal lines
+      { data: null, error: null },                    // 4: post reversal
       { data: null, error: { message: 'DB error' } }, // 5: insert corrected FAILS
       { data: null, error: null },                    // 6: cancelEntry reversal update
       { data: null, error: null },                    // 7: cancelEntry reversal lines delete
@@ -186,10 +196,11 @@ describe('correctEntry', () => {
 
     results = [
       { data: originalEntry, error: null },           // 0: fetch original
-      { data: reversalEntry, error: null },            // 1: insert reversal
-      { data: null, error: { message: 'line error' } }, // 2: insert reversal lines FAILS
-      { data: null, error: null },                     // 3: cancelEntry update
-      { data: null, error: null },                     // 4: cancelEntry lines delete
+      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts (Step 0)
+      { data: reversalEntry, error: null },            // 2: insert reversal
+      { data: null, error: { message: 'line error' } }, // 3: insert reversal lines FAILS
+      { data: null, error: null },                     // 4: cancelEntry update
+      { data: null, error: null },                     // 5: cancelEntry lines delete
     ]
 
     const supabase = makeClient()
@@ -302,16 +313,18 @@ describe('correctEntry', () => {
 
     results = [
       { data: correctionAsOriginal, error: null },                            // 0: fetch original (the prior correction)
-      { data: secondReversal, error: null },                                  // 1: insert reversal
-      { data: null, error: null },                                            // 2: insert reversal lines
-      { data: null, error: null },                                            // 3: post reversal
-      { data: [{ id: 'acc-5430', account_number: '5430' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 4: accounts
+      { data: [{ id: 'acc-5430', account_number: '5430' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts (Step 0)
+      { data: secondReversal, error: null },                                  // 2: insert reversal
+      { data: null, error: null },                                            // 3: insert reversal lines
+      { data: null, error: null },                                            // 4: post reversal
       { data: secondCorrection, error: null },                                // 5: insert corrected
       { data: null, error: null },                                            // 6: insert corrected lines
       { data: null, error: null },                                            // 7: post corrected
       { data: [{ id: 'correction-1' }], error: null },                        // 8: CAS update
-      { data: { ...secondReversal, lines: [] }, error: null },                // 9: fetch final reversal
-      { data: { ...secondCorrection, lines: [] }, error: null },              // 10: fetch final corrected
+      { data: null, error: null },                                            // 9: relink transactions
+      { data: null, error: null },                                            // 10: relink documents
+      { data: { ...secondReversal, lines: [] }, error: null },                // 11: fetch final reversal
+      { data: { ...secondCorrection, lines: [] }, error: null },              // 12: fetch final corrected
     ]
 
     const supabase = makeClient()
@@ -323,6 +336,58 @@ describe('correctEntry', () => {
     expect(result.reversal.reverses_id).toBe('correction-1')
     expect(result.corrected.correction_of_id).toBe('correction-1')
     expect(result.corrected.source_type).toBe('correction')
+  })
+
+  it('fails fast on unknown accounts — BEFORE the storno exists or a voucher number is consumed', async () => {
+    // Regression: the old flow created+posted the storno first, then hit
+    // AccountsNotInChartError on the corrected lines and had to cancel the
+    // storno again — leaving a voided 0 kr storno in the chain (the user's
+    // "A98") and burning voucher numbers (the missing "A99").
+    results = [
+      { data: originalEntry, error: null }, // 0: fetch original
+      { data: [{ id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts — 5420 missing
+    ]
+    mockBackfill.mockResolvedValue([]) // not seedable (e.g. deactivated / unknown)
+
+    const supabase = makeClient()
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+    ).rejects.toMatchObject({ code: 'ACCOUNTS_NOT_IN_CHART' })
+
+    // Nothing was written to the journal and no voucher number was fetched.
+    expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
+    expect(inserts.filter((i) => i.table === 'journal_entry_lines')).toHaveLength(0)
+    expect(getNextVoucherNumber).not.toHaveBeenCalled()
+  })
+
+  it('seeds a standard BAS account missing from the chart and proceeds', async () => {
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    results = [
+      { data: originalEntry, error: null },                                  // 0: fetch original
+      { data: [{ id: 'acc-1930', account_number: '1930' }], error: null },   // 1: accounts — 5420 missing
+      // -- backfill seeds 5420 --
+      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 2: re-resolve
+      { data: reversalEntry, error: null },                                  // 3: insert reversal
+      { data: null, error: null },                                           // 4: reversal lines
+      { data: null, error: null },                                           // 5: post reversal
+      { data: correctedEntry, error: null },                                 // 6: insert corrected
+      { data: null, error: null },                                           // 7: corrected lines
+      { data: null, error: null },                                           // 8: post corrected
+      { data: [{ id: 'orig-1' }], error: null },                             // 9: CAS
+      { data: null, error: null },                                           // 10: relink transactions
+      { data: null, error: null },                                           // 11: relink documents
+      { data: { ...reversalEntry, lines: [] }, error: null },                // 12: final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },               // 13: final corrected
+    ]
+    mockBackfill.mockResolvedValue(['5420'])
+
+    const supabase = makeClient()
+    const result = await correctEntry(
+      supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines
+    )
+    expect(result.corrected.id).toBe('corrected-1')
+    expect(mockBackfill).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', ['5420'])
   })
 
   it('emits journal_entry.corrected event', async () => {
@@ -368,16 +433,18 @@ describe('correctEntry — date/period override (recordate engine)', () => {
     results = [
       { data: originalEntry, error: null },                                                          // 0 fetch original
       { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null },  // 1 target period
-      { data: reversalEntry, error: null },                                                          // 2 insert reversal
-      { data: null, error: null },                                                                   // 3 reversal lines
-      { data: null, error: null },                                                                   // 4 post reversal
-      { data: [{ id: 'acc-5410', account_number: '5410' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 5 accounts
+      { data: [{ id: 'acc-5410', account_number: '5410' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 2 accounts (Step 0)
+      { data: reversalEntry, error: null },                                                          // 3 insert reversal
+      { data: null, error: null },                                                                   // 4 reversal lines
+      { data: null, error: null },                                                                   // 5 post reversal
       { data: correctedEntry, error: null },                                                         // 6 insert corrected
       { data: null, error: null },                                                                   // 7 corrected lines
       { data: null, error: null },                                                                   // 8 post corrected
       { data: [{ id: 'orig-1' }], error: null },                                                     // 9 CAS
-      { data: { ...reversalEntry, lines: [] }, error: null },                                        // 10 final reversal
-      { data: { ...correctedEntry, lines: [] }, error: null },                                       // 11 final corrected
+      { data: null, error: null },                                                                   // 10 relink transactions
+      { data: null, error: null },                                                                   // 11 relink documents
+      { data: { ...reversalEntry, lines: [] }, error: null },                                        // 12 final reversal
+      { data: { ...correctedEntry, lines: [] }, error: null },                                       // 13 final corrected
     ]
     const supabase = makeClient()
     const result = await correctEntry(

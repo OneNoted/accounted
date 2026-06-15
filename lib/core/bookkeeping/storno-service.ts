@@ -6,6 +6,7 @@ import type {
   JournalEntryLine,
 } from '@/types'
 import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
   AccountsNotInChartError,
@@ -204,6 +205,43 @@ export async function correctEntry(
     }
   }
 
+  // ===== Step 0: Resolve corrected-line accounts BEFORE any journal write =====
+  // The old flow created and posted the storno first and only then discovered
+  // that a corrected line referenced an account outside the chart. The storno
+  // then had to be cancelled again, which left a voided 0 kr storno in the
+  // correction chain and permanently burned voucher numbers (next_voucher_number
+  // is a consuming counter → an unexplained BFNAR 2013:2 gap). Validate up
+  // front instead: standard BAS accounts missing from the chart are seeded on
+  // demand (same as createDraftEntry); unknown numbers or deliberately
+  // deactivated accounts fail fast with nothing written.
+  const accountNumbers = [...new Set(correctedLines.map((l) => l.account_number))]
+  const resolveActiveAccountIds = async (): Promise<Map<string, string>> => {
+    const { data: accounts } = await supabase
+      .from('chart_of_accounts')
+      .select('id, account_number')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .in('account_number', accountNumbers)
+    const map = new Map<string, string>()
+    for (const account of accounts || []) {
+      map.set(account.account_number, account.id)
+    }
+    return map
+  }
+
+  let accountIdMap = await resolveActiveAccountIds()
+  let missingAccounts = accountNumbers.filter((num) => !accountIdMap.has(num))
+  if (missingAccounts.length > 0) {
+    const seeded = await backfillStandardBASAccounts(supabase, companyId, userId, missingAccounts)
+    if (seeded.length > 0) {
+      accountIdMap = await resolveActiveAccountIds()
+      missingAccounts = accountNumbers.filter((num) => !accountIdMap.has(num))
+    }
+    if (missingAccounts.length > 0) {
+      throw new AccountsNotInChartError(missingAccounts)
+    }
+  }
+
   // ===== Step 1: Create storno (reversal) entry =====
   const reversalVoucherNumber = await getNextVoucherNumber(
     supabase,
@@ -288,26 +326,8 @@ export async function correctEntry(
       original.voucher_series || 'A'
     )
 
-    // Resolve account IDs for corrected lines — only active rows count
-    const accountNumbers = [...new Set(correctedLines.map((l) => l.account_number))]
-    const { data: accounts } = await supabase
-      .from('chart_of_accounts')
-      .select('id, account_number')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .in('account_number', accountNumbers)
-
-    const accountIdMap = new Map<string, string>()
-    for (const account of accounts || []) {
-      accountIdMap.set(account.account_number, account.id)
-    }
-
-    // Validate all account numbers resolved to IDs
-    const missingAccounts = accountNumbers.filter(num => !accountIdMap.has(num))
-    if (missingAccounts.length > 0) {
-      throw new AccountsNotInChartError(missingAccounts)
-    }
-
+    // Account IDs were resolved (and standard BAS accounts seeded) in Step 0,
+    // before the storno existed — nothing to clean up if we got this far.
     const { data: newEntry, error: correctedError } = await supabase
       .from('journal_entries')
       .insert({
@@ -393,6 +413,15 @@ export async function correctEntry(
     await cancelEntry(supabase, correctedEntry!.id)
     throw new EntryAlreadyReversedError()
   }
+
+  // Re-point bank transactions and underlag from the original to the corrected
+  // entry. The original is now status 'reversed'; the corrected entry is the
+  // live representation of the affärshändelse, so the transaction row should
+  // keep reading as booked against it (and stay correctable/uncategorizable),
+  // and the underlag should travel with it. Best-effort — the correction_of_id
+  // chain preserves traceability even if either relink fails.
+  await relinkTransactionsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+  await relinkDocumentsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
 
   // ===== Step 3: Fetch complete entries =====
   const { data: finalReversal } = await supabase
@@ -516,12 +545,34 @@ export async function recordateEntry(
     }
   )
 
-  // Move the underlag to the corrected entry so it doesn't surface as a
-  // "verifikat utan underlag" in the target year. Best-effort — the
-  // correction_of_id chain preserves traceability even if this fails.
-  await relinkDocumentsToEntry(supabase, companyId, originalEntryId, result.corrected.id)
-
+  // Underlag and bank-transaction links follow the corrected entry —
+  // correctEntry handles both relinks for every correction flavour.
   return result
+}
+
+/**
+ * Re-point every bank transaction from one entry to another. Used when a
+ * verifikation is corrected so the transaction row keeps reading as booked
+ * against the live (corrected) entry instead of the reversed original.
+ * Failures are logged, not thrown — the correction chain stays traceable.
+ */
+async function relinkTransactionsToEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromEntryId: string,
+  toEntryId: string
+): Promise<void> {
+  const { error } = await supabase
+    .from('transactions')
+    .update({ journal_entry_id: toEntryId })
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', fromEntryId)
+  if (error) {
+    console.error(
+      `[storno] relinkTransactionsToEntry: failed to move transactions ${fromEntryId} → ${toEntryId}:`,
+      error.message
+    )
+  }
 }
 
 /**

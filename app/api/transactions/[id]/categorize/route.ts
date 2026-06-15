@@ -16,7 +16,7 @@ import {
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
 import { AccountsNotInChartError, accountsNotInChartResponse, isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { collectMappingResultAccounts, findMissingActiveAccounts } from '@/lib/bookkeeping/account-validation'
+import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
 import type { CategorizationTemplate } from '@/types'
@@ -305,13 +305,17 @@ export const POST = withRouteContext(
     // catch below silently marks the transaction as bokförd with no
     // verifikation. Catching it here means the row stays in "Att bokföra"
     // and the user gets a clear actionable message.
-    const missingAccounts = await findMissingActiveAccounts(
+    //
+    // Only truly unresolvable accounts block: a standard BAS account that is
+    // merely absent from the chart is seeded on demand by the engine, so the
+    // user can always book the row without registering accounts first.
+    const missingAccounts = await findUnresolvableAccounts(
       supabase,
       companyId,
       collectMappingResultAccounts(mappingResult),
     )
     if (missingAccounts.length > 0) {
-      txLog.warn('mapping references inactive/missing accounts', { missingAccounts })
+      txLog.warn('mapping references inactive/unknown accounts', { missingAccounts })
       return accountsNotInChartResponse(new AccountsNotInChartError(missingAccounts))
     }
 
