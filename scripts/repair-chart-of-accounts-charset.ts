@@ -61,32 +61,32 @@ interface Row {
   account_name: string
 }
 
-async function fetchAll(
-  supabase: ReturnType<typeof createClient>,
-): Promise<Row[]> {
-  const rows: Row[] = []
-  const PAGE = 1000
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('chart_of_accounts')
-      .select('id, company_id, account_number, account_name')
-      .order('id', { ascending: true })
-      .range(from, from + PAGE - 1)
-    if (error) throw new Error(`fetch chart_of_accounts failed: ${error.message}`)
-    const batch = (data ?? []) as Row[]
-    rows.push(...batch)
-    if (batch.length < PAGE) break
-  }
-  return rows
-}
-
 async function main() {
   const { url, key } = loadEnv()
   const supabase = createClient(url, key, { auth: { persistSession: false } })
 
   console.log(`=== chart_of_accounts charset repair — ${EXECUTE ? 'EXECUTE' : 'DRY RUN'} ===\n`)
 
-  const rows = await fetchAll(supabase)
+  // Closure over the inferred client so we don't annotate (and mismatch) the
+  // supabase-js generic parameters.
+  const fetchAll = async (): Promise<Row[]> => {
+    const out: Row[] = []
+    const PAGE = 1000
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('chart_of_accounts')
+        .select('id, company_id, account_number, account_name')
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1)
+      if (error) throw new Error(`fetch chart_of_accounts failed: ${error.message}`)
+      const batch = (data ?? []) as Row[]
+      out.push(...batch)
+      if (batch.length < PAGE) break
+    }
+    return out
+  }
+
+  const rows = await fetchAll()
   console.log(`Scanned ${rows.length} chart_of_accounts rows across ${new Set(rows.map((r) => r.company_id)).size} companies.\n`)
 
   // Candidate correct names per account number = clean sibling names in the
