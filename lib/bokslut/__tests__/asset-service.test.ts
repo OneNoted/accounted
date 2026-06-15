@@ -324,22 +324,54 @@ describe('updateAsset — acquisition-basis correction guard', () => {
   const asSupabase = (s: unknown) => s as Parameters<typeof updateAsset>[0]
 
   /**
-   * Minimal Supabase mock that captures the final UPDATE payload. updateAsset
-   * touches two tables:
+   * Minimal Supabase mock that captures the final UPDATE payload. updateAsset's
+   * correction guard touches three tables:
    *   - 'assets'                 → getAsset (.maybeSingle) and the update (.single)
-   *   - 'depreciation_schedules' → hasPostedDepreciation (thenable, resolves {count})
+   *   - 'depreciation_schedules' → hasPostedDepreciation (1st call, head {count})
+   *                                then hasManualDepreciationPosted (2nd call,
+   *                                .select('journal_entry_id') → {data})
+   *   - 'journal_entry_lines'    → hasManualDepreciationPosted ledger scan → {data}
    */
-  function mockForUpdate(asset: Asset, opts: { postedCount?: number } = {}) {
+  function mockForUpdate(
+    asset: Asset,
+    opts: {
+      postedCount?: number
+      otherAssetEntryIds?: string[]
+      accumulatedCredits?: { journal_entry_id: string }[]
+    } = {},
+  ) {
     const captured: { update: Record<string, unknown> | null } = { update: null }
+    let schedCall = 0
     const supabase = {
       from: vi.fn((table: string) => {
         if (table === 'depreciation_schedules') {
+          schedCall += 1
+          const isCountQuery = schedCall === 1
           const chain: Record<string, unknown> = {}
           chain.select = vi.fn(() => chain)
           chain.eq = vi.fn(() => chain)
+          chain.neq = vi.fn(() => chain)
           chain.not = vi.fn(() => chain)
-          chain.then = (resolve: (v: { count: number; error: null }) => void) =>
-            resolve({ count: opts.postedCount ?? 0, error: null })
+          chain.then = (resolve: (v: unknown) => void) =>
+            resolve(
+              isCountQuery
+                ? { count: opts.postedCount ?? 0, error: null }
+                : {
+                    data: (opts.otherAssetEntryIds ?? []).map((id) => ({
+                      journal_entry_id: id,
+                    })),
+                    error: null,
+                  },
+            )
+          return chain
+        }
+        if (table === 'journal_entry_lines') {
+          const chain: Record<string, unknown> = {}
+          chain.select = vi.fn(() => chain)
+          chain.eq = vi.fn(() => chain)
+          chain.gt = vi.fn(() => chain)
+          chain.then = (resolve: (v: unknown) => void) =>
+            resolve({ data: opts.accumulatedCredits ?? [], error: null })
           return chain
         }
         const chain: Record<string, unknown> = {}
@@ -404,5 +436,34 @@ describe('updateAsset — acquisition-basis correction guard', () => {
       bas_accumulated_account: '1229',
       bas_expense_account: '7832',
     })
+  })
+
+  it('blocks a correction when depreciation was hand-posted (no engine schedule)', async () => {
+    // No depreciation_schedules row, but a manual credit to the asset's 1259
+    // accumulated account exists in the ledger — must still block.
+    const { supabase } = mockForUpdate(makeAssetRow(), {
+      postedCount: 0,
+      otherAssetEntryIds: [],
+      accumulatedCredits: [{ journal_entry_id: 'manual-entry-1' }],
+    })
+    await expect(
+      updateAsset(asSupabase(supabase), 'co', 'asset-1', { acquisition_date: '2025-08-15' }),
+    ).rejects.toBeInstanceOf(AssetCorrectionBlockedError)
+  })
+
+  it('allows a correction when the only 1259 credit is a sibling asset’s engine entry', async () => {
+    // Two computers share 1259. The sibling was depreciated via the engine, so
+    // its journal entry is attributable to the OTHER asset and must NOT block a
+    // correction of this still-undepreciated asset (no false positive).
+    const { supabase, captured } = mockForUpdate(makeAssetRow(), {
+      postedCount: 0,
+      otherAssetEntryIds: ['sibling-engine-entry'],
+      accumulatedCredits: [{ journal_entry_id: 'sibling-engine-entry' }],
+    })
+    const result = await updateAsset(asSupabase(supabase), 'co', 'asset-1', {
+      acquisition_date: '2025-08-15',
+    })
+    expect(result.acquisition_date).toBe('2025-08-15')
+    expect(captured.update).toMatchObject({ acquisition_date: '2025-08-15' })
   })
 })

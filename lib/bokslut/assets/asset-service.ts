@@ -213,6 +213,61 @@ async function hasPostedDepreciation(
   return (count ?? 0) > 0
 }
 
+/**
+ * Catch depreciation that was posted by hand (a manual avskrivningsverifikat),
+ * which leaves no depreciation_schedules row and so slips past
+ * hasPostedDepreciation. We look at the ledger instead: any posted CREDIT to
+ * the asset's ackumulerade-avskrivningar account (12x9) is depreciation.
+ *
+ * The wrinkle is shared accounts — siblings in the same category default to
+ * the same 12x9, so a sibling's *engine* avskrivning would otherwise look like
+ * depreciation of this asset. We exclude entries that depreciation_schedules
+ * attributes to a *different* asset, so engine siblings don't cause a false
+ * block. What remains is depreciation tied to this asset (engine or manual)
+ * plus the rare case of a manual sibling entry on a shared account — there we
+ * err toward blocking, which is the safe direction for a basis correction.
+ */
+async function hasManualDepreciationPosted(
+  supabase: SupabaseClient,
+  companyId: string,
+  asset: Asset,
+): Promise<boolean> {
+  // Engine-posted depreciation entries that belong to OTHER assets — these are
+  // safely attributable and must not block a correction of this asset.
+  const { data: otherSched, error: schedError } = await supabase
+    .from('depreciation_schedules')
+    .select('journal_entry_id')
+    .eq('company_id', companyId)
+    .neq('asset_id', asset.id)
+    .not('journal_entry_id', 'is', null)
+  if (schedError) {
+    throw new Error(
+      `Failed to load sibling depreciation entries for asset ${asset.id}: ${schedError.message}`,
+    )
+  }
+  const siblingEngineEntries = new Set(
+    ((otherSched ?? []) as { journal_entry_id: string | null }[])
+      .map((r) => r.journal_entry_id)
+      .filter((id): id is string => id !== null),
+  )
+
+  const { data: lines, error } = await supabase
+    .from('journal_entry_lines')
+    .select('journal_entry_id, journal_entries!inner(company_id, status)')
+    .eq('account_number', asset.bas_accumulated_account)
+    .eq('journal_entries.company_id', companyId)
+    .eq('journal_entries.status', 'posted')
+    .gt('credit_amount', 0)
+  if (error) {
+    throw new Error(
+      `Failed to scan ledger depreciation for asset ${asset.id}: ${error.message}`,
+    )
+  }
+  return ((lines ?? []) as { journal_entry_id: string }[]).some(
+    (line) => !siblingEngineEntries.has(line.journal_entry_id),
+  )
+}
+
 export async function updateAsset(
   supabase: SupabaseClient,
   companyId: string,
@@ -253,7 +308,12 @@ export async function updateAsset(
     if (existing.disposed_at) {
       throw new AssetCorrectionBlockedError('disposed')
     }
-    if (await hasPostedDepreciation(supabase, companyId, assetId)) {
+    // Engine-driven (depreciation_schedules) OR hand-posted (ledger) — either
+    // means the basis has driven postings and a correction must go via storno.
+    if (
+      (await hasPostedDepreciation(supabase, companyId, assetId)) ||
+      (await hasManualDepreciationPosted(supabase, companyId, existing))
+    ) {
       throw new AssetCorrectionBlockedError('depreciation_posted')
     }
   }
