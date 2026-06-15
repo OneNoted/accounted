@@ -191,6 +191,12 @@
     "description": "Manage your company and account"
   },
   "settings": {
+    "section_name": "Name",
+    "name_label": "Your name",
+    "name_description": "The name we use to address you and that appears as the contact person on some documents. We greet you by your first name, so put the name you go by first.",
+    "name_placeholder": "First name Last name",
+    "name_saved": "Name updated",
+    "name_save_failed": "Could not save name",
     "section_appearance": "Appearance",
     "section_language": "Language",
     "language_description": "Choose the language for the interface. Invoices and reports always stay in Swedish.",

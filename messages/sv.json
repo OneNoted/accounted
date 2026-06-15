@@ -191,6 +191,12 @@
     "description": "Hantera ditt företag och konto"
   },
   "settings": {
+    "section_name": "Namn",
+    "name_label": "Ditt namn",
+    "name_description": "Namnet vi använder för att tilltala dig och som visas som kontaktperson på vissa underlag. Vi hälsar med ditt första namn, så skriv det du vill bli kallad först.",
+    "name_placeholder": "Förnamn Efternamn",
+    "name_saved": "Namnet har uppdaterats",
+    "name_save_failed": "Kunde inte spara namnet",
     "section_appearance": "Utseende",
     "section_language": "Språk",
     "language_description": "Välj språket för gränssnittet. Fakturor och rapporter förblir alltid på svenska.",
