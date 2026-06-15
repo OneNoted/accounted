@@ -2391,6 +2391,16 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
   },
 }
 
+const ASSETS: Record<string, StructuredErrorEntry> = {
+  ASSET_CORRECTION_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Anskaffningsdatum, anskaffningsvärde och kategori kan inte ändras efter att tillgången avyttrats eller avskrivningar bokförts. Återför (storno) först, eller använd avyttringsflödet.',
+    message_en:
+      'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
+  },
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
@@ -2433,6 +2443,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...PROVIDER,
   ...SKATTEVERKET,
   ...BOLAGSVERKET,
+  ...ASSETS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

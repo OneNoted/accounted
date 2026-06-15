@@ -477,6 +477,7 @@
     "useful_life_format": "{years} yr ({months} mo)",
     "status_disposed": "Disposed",
     "status_active": "Active",
+    "action_edit": "Edit",
     "action_dispose": "Dispose",
     "category_immaterial": "Intangible",
     "category_building": "Building",

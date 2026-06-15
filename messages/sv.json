@@ -477,6 +477,7 @@
     "useful_life_format": "{years} år ({months} mån)",
     "status_disposed": "Avyttrad",
     "status_active": "Aktiv",
+    "action_edit": "Ändra",
     "action_dispose": "Avyttra",
     "category_immaterial": "Immateriell",
     "category_building": "Byggnad",
