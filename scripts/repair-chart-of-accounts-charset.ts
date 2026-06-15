@@ -150,6 +150,7 @@ async function main() {
 
   // ── Apply (chunked) ─────────────────────────────────────────────
   let applied = 0
+  let skipped = 0
   let errors = 0
   const CHUNK = 25
   for (let i = 0; i < fixes.length; i += CHUNK) {
@@ -161,19 +162,30 @@ async function main() {
           .update({ account_name: f.result.corrected })
           .eq('id', f.id)
           .eq('company_id', f.company_id)
-          .then(({ error }) => (error ? { ok: false, msg: error.message } : { ok: true })),
+          // TOCTOU guard: only write if the row still holds the exact corrupted
+          // value we read. A concurrent rename → 0 rows changed (skipped, not
+          // clobbered). Also makes the script strictly idempotent.
+          .eq('account_name', f.account_name)
+          .select('id')
+          .then(({ data, error }) =>
+            error
+              ? { ok: false as const, msg: error.message }
+              : { ok: true as const, changed: (data?.length ?? 0) > 0 }),
       ),
     )
     for (const r of results) {
-      if (r.ok) applied++
-      else {
+      if (!r.ok) {
         errors++
         console.error(`  update failed: ${r.msg}`)
+      } else if (r.changed) {
+        applied++
+      } else {
+        skipped++ // row changed under us since the read — left as-is
       }
     }
     if ((i / CHUNK) % 10 === 0) console.log(`  …${applied}/${fixes.length} applied`)
   }
-  console.log(`\nDone. Applied ${applied}, errors ${errors}.`)
+  console.log(`\nDone. Applied ${applied}, skipped ${skipped}, errors ${errors}.`)
 }
 
 main().catch((err) => {
