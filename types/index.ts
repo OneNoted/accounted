@@ -659,6 +659,9 @@ export interface SupplierInvoice {
   total: number
   total_sek: number | null
 
+  /** Per-invoice öresavrundning override (display-only). null = off. */
+  ore_rounding: boolean | null
+
   vat_treatment: VatTreatment
   reverse_charge: boolean
 
@@ -796,6 +799,9 @@ export interface Invoice {
 
   total: number
   total_sek: number | null
+
+  /** Per-invoice öresavrundning override (display-only). null = inherit company_settings.ore_rounding. */
+  ore_rounding: boolean | null
 
   // VAT
   vat_treatment: VatTreatment
@@ -1056,6 +1062,8 @@ export interface CreateSupplierInvoiceInput {
   reverse_charge?: boolean
   payment_reference?: string
   notes?: string
+  /** Per-invoice öresavrundning override (display-only). Omitted = null (off). */
+  ore_rounding?: boolean
   items: CreateSupplierInvoiceItemInput[]
 }
 
@@ -1092,6 +1100,8 @@ export interface CreateInvoiceInput {
   /** Save as an unnumbered draft (no F-number, no invoice.created) until the
    *  user finalizes via "Granska & skapa". Lets the draft be hard-deleted. */
   save_as_draft?: boolean
+  /** Per-invoice öresavrundning override (display-only). Omitted = null (inherit company setting). */
+  ore_rounding?: boolean
   items: CreateInvoiceItemInput[]
 }
 
