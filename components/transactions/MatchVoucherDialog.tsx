@@ -10,7 +10,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import {
   MatchVerifikationPicker,
@@ -245,11 +244,6 @@ export function MatchVoucherDialog({
             </div>
           ) : (
             <>
-              {selectedLine &&
-                (selectedLine.confidence ?? 0) >= 0.85 &&
-                !(selectedLine.linked_transaction_count ?? 0) && (
-                  <Badge variant="success" className="mb-1">Föreslagen träff</Badge>
-                )}
               <MatchVerifikationPicker glLines={glLines} value={selected} onChange={setSelected} inline />
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
