@@ -1246,7 +1246,7 @@ export default function NewSupplierInvoicePage() {
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('page_title')}</h1>
+          <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('page_title')}</h1>
         </div>
       </div>
 

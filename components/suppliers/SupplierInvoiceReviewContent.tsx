@@ -259,7 +259,7 @@ export function SupplierInvoiceReviewContent({
         </div>
         <div className="flex flex-wrap gap-1.5 sm:gap-2 shrink-0">
           {reverseCharge && (
-            <Badge variant="outline" className="border-orange-300 text-orange-700 dark:text-orange-400">
+            <Badge variant="warning">
               {t('reverse_charge_badge')}
             </Badge>
           )}

@@ -404,7 +404,7 @@ export default function SupplierInvoiceDetailPage() {
     return (
       <div className="space-y-6">
         <Skeleton className="h-8 w-48" />
-        <Card className="animate-pulse"><CardContent className="h-48" /></Card>
+        <Card><CardContent className="p-6"><Skeleton className="h-48 w-full" /></CardContent></Card>
       </div>
     )
   }
@@ -442,7 +442,7 @@ export default function SupplierInvoiceDetailPage() {
           </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className="font-display text-2xl sm:text-3xl font-medium tracking-tight">
+              <h1 className="font-display text-2xl sm:text-3xl tracking-tight">
                 {t('arrival_header', { number: invoice.arrival_number })}
               </h1>
               <Badge variant={statusVariants[invoice.status] || 'secondary'}>
@@ -614,10 +614,10 @@ export default function SupplierInvoiceDetailPage() {
             {rounding.applies && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('ore_rounding')}</span>
-                <span className="font-mono">{formatAmount(rounding.roundingDelta)} {invoice.currency}</span>
+                <span className="tabular-nums">{formatAmount(rounding.roundingDelta)} {invoice.currency}</span>
               </div>
             )}
-            <div className="flex justify-between font-bold text-base pt-2 border-t">
+            <div className="flex justify-between font-semibold text-base pt-2 border-t">
               <span>{t('total_label')}</span>
               <span className="font-mono">{formatAmount(rounding.displayed)} {invoice.currency}</span>
             </div>
