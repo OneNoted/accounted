@@ -1745,17 +1745,17 @@ export default function NewSupplierInvoicePage() {
               <div className="mt-4 pt-4 border-t flex flex-wrap gap-2 text-xs">
                 <span className="text-muted-foreground">{t('ai_totals_label')}</span>
                 {extractedData.totals.subtotal != null && (
-                  <span className="px-2 py-1 rounded bg-muted font-mono">
+                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
                     {t('ai_net', { amount: formatAmount(extractedData.totals.subtotal) })}
                   </span>
                 )}
                 {extractedData.totals.vatAmount != null && (
-                  <span className="px-2 py-1 rounded bg-muted font-mono">
+                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
                     {t('ai_vat', { amount: formatAmount(extractedData.totals.vatAmount) })}
                   </span>
                 )}
                 {extractedData.totals.total != null && (
-                  <span className="px-2 py-1 rounded bg-muted font-mono">
+                  <span className="px-2 py-1 rounded bg-muted tabular-nums">
                     {t('ai_total', { amount: formatAmount(extractedData.totals.total) })}
                   </span>
                 )}
@@ -1766,17 +1766,17 @@ export default function NewSupplierInvoicePage() {
             <div className="mt-4 pt-4 border-t space-y-2">
               <div className="flex justify-between sm:justify-end sm:gap-8">
                 <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-                <span className="font-mono sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
+                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(subtotal, watchedCurrency)}</span>
               </div>
               <div className="flex justify-between sm:justify-end sm:gap-8">
                 <span className="text-muted-foreground">
                   {watchedReverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}
                 </span>
-                <span className="font-mono sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
+                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
               </div>
               <div className="flex justify-between sm:justify-end sm:gap-8 font-bold text-lg">
                 <span>{t('total_label')}</span>
-                <span className="font-mono sm:w-32 text-right">{formatCurrency(total, watchedCurrency)}</span>
+                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(total, watchedCurrency)}</span>
               </div>
               {/* Öresavrundning — display-only rounding of the displayed total to
                   whole kronor (SEK only). The registered amount and the booked

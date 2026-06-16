@@ -172,7 +172,7 @@ export function MatchVoucherDialog({
       const result = await res.json()
       if (!res.ok || result.error) {
         toast({
-          title: 'Kunde inte koppla',
+          title: 'Kunde inte matcha',
           description: getErrorMessage(result, { context: 'transaction', statusCode: res.status }),
           variant: 'destructive',
         })
@@ -287,10 +287,10 @@ export function MatchVoucherDialog({
             {submitting ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Kopplar…
+                Matchar…
               </>
             ) : (
-              'Koppla'
+              'Matcha'
             )}
           </Button>
         </DialogFooter>

@@ -7,6 +7,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Inbox,
@@ -25,6 +31,7 @@ import {
   Search,
   Circle,
   X,
+  ChevronDown,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -1648,19 +1655,36 @@ function FieldsRail({
             >
               Matcha mot transaktion
             </Button>
-            <Link href={`/supplier-invoices/new?inbox_item_id=${item.id}`} className="block">
-              <Button variant="outline" size="sm" className="w-full">
-                Skapa leverantörsfaktura
-              </Button>
-            </Link>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full"
-              onClick={onBookDirect}
-            >
-              Bokför som verifikat
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="w-full justify-between">
+                  Andra sätt att bokföra
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuItem asChild>
+                  <Link
+                    href={`/supplier-invoices/new?inbox_item_id=${item.id}`}
+                    className="flex flex-col items-start gap-1"
+                  >
+                    <span>Skapa leverantörsfaktura</span>
+                    <span className="text-xs text-muted-foreground">
+                      För leverantörsskulder du vill följa (periodisering).
+                    </span>
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={onBookDirect}
+                  className="flex flex-col items-start gap-1"
+                >
+                  <span>Bokför som verifikat</span>
+                  <span className="text-xs text-muted-foreground">
+                    För underlag som inte är en leverantörsfaktura (bankavgift, utlägg).
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         )}
         <Button
