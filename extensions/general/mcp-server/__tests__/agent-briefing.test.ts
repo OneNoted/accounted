@@ -156,7 +156,7 @@ describe('gnubok_get_agent_briefing tool', () => {
     expect(result.user_name).toBeNull()
   })
 
-  it('returns the user\'s own preferred name (tilltalsnamn) so the agent can address them', async () => {
+  it('returns only the first name (tilltalsnamn) — data minimisation, not the full legal name', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
     const supabase = mockSupabase({ profile: null, userFullName: 'Peter Bennet' })
     const result = (await tool.execute(
@@ -166,7 +166,8 @@ describe('gnubok_get_agent_briefing tool', () => {
       supabase as never,
       { type: 'api_key' }
     )) as { user_name: string | null }
-    expect(result.user_name).toBe('Peter Bennet')
+    // GDPR Art.5(1)(c): the surname never enters the LLM prompt.
+    expect(result.user_name).toBe('Peter')
   })
 
   it('treats a blank full_name as no name (null)', async () => {

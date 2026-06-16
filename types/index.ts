@@ -2721,6 +2721,16 @@ export interface YearEndResult {
    */
   resultAppropriationEntry: JournalEntry | null
   /**
+   * True when the year-open omföring (2099 → 2098) was attempted but threw.
+   * The close + IB are already valid and immutable, so the failure is
+   * non-fatal to the year-end itself — but it leaves 2099 carrying the prior
+   * result into the new period, which is non-compliant. Surfaced so the UI can
+   * alert the user (and an alertable log line fires server-side); the
+   * retroactive catch-up script (scripts/repair-result-appropriation.ts) then
+   * posts the missing omföring. False on success or when there was nothing to do.
+   */
+  resultAppropriationFailed: boolean
+  /**
    * IB/UB reconciliation per balance sheet account, computed after the
    * opening balances are posted. Surfaced to the UI's ResultStep so the
    * user can verify continuity before navigating away. Always within

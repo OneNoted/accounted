@@ -114,6 +114,26 @@ export async function POST(request: Request) {
       // No predecessor here means the new period reaches back over the earliest
       // existing period (an overlap) — the overlap check below returns 409.
 
+      // Gap fill: the new period must also butt up against its SUCCESSOR — end
+      // exactly the day before the successor starts — so it fills the hole
+      // completely. The predecessor check above only constrains the start side.
+      // Without this end check a too-short period would leave a fresh sub-gap
+      // yet still get the successor's previous_period_id relinked onto it
+      // (below), silently breaking the BFNAR 2013:2 continuity chain; a too-long
+      // period that bleeds past the successor is separately caught as an overlap
+      // (409). Appends have no successor, so this is skipped.
+      if (successor) {
+        const prevDay = new Date(successor.period_start + 'T12:00:00Z')
+        prevDay.setUTCDate(prevDay.getUTCDate() - 1)
+        const expectedEnd = prevDay.toISOString().split('T')[0]
+        if (body.period_end !== expectedEnd) {
+          return NextResponse.json(
+            { error: `Period must end on ${expectedEnd} (day before the following period starts)` },
+            { status: 400 }
+          )
+        }
+      }
+
       // The "prior year must be locked" guard applies only when appending a new
       // latest räkenskapsår, not when backfilling a gap between existing years.
       // A gap fill is a backfill (like prepend) and must not be blocked by an

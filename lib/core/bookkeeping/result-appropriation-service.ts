@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { createLogger } from '@/lib/logger'
 import type { JournalEntry, CreateJournalEntryLineInput } from '@/types'
@@ -69,19 +69,24 @@ export async function planResultAppropriation(
 
   const { data: period } = await supabase
     .from('fiscal_periods')
-    .select('period_start, name')
+    .select('period_start, name, opening_balance_entry_id')
     .eq('id', periodId)
     .eq('company_id', companyId)
     .single()
   if (!period) throw new Error('Fiscal period not found')
 
-  // Current 2099 net in this period. generateTrialBalance folds the IB entry
-  // into the opening balance and reports closing = IB + period activity, so a
-  // freshly opened period's closing 2099 equals the carried-forward result.
-  // credit − debit is positive for a profit (2099 is credit-normal).
-  const { rows } = await generateTrialBalance(supabase, companyId, periodId)
-  const row2099 = rows.find((r) => r.account_number === RESULT_ACCOUNT)
-  const net = row2099 ? roundOre(row2099.closing_credit - row2099.closing_debit) : 0
+  // Read 2099 from the period's INGÅENDE BALANS only — the carried-forward
+  // prior result that the IB entry mirrored from last year's UB — NOT the full
+  // trial balance. The omföring must reclassify exactly that carried amount;
+  // scoping to IB makes it correct even when the period already has current-year
+  // 2099 activity (e.g. the retroactive catch-up script running mid-year, where
+  // closing = IB + activity would over/under-reclassify). getOpeningBalances
+  // reads the committed opening_balance entry, falling back to a server-side
+  // aggregate of prior posted lines when none is set. credit − debit is positive
+  // for a profit (2099 is credit-normal).
+  const { balances } = await getOpeningBalances(supabase, companyId, period)
+  const ib2099 = balances.get(RESULT_ACCOUNT)
+  const net = ib2099 ? roundOre(ib2099.credit - ib2099.debit) : 0
   if (Math.abs(net) < ORE_TOLERANCE) return null
 
   const amount = roundOre(Math.abs(net))

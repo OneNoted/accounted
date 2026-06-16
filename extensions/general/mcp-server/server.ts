@@ -2166,9 +2166,14 @@ export const tools: McpTool[] = [
       }>
 
       // profiles read is best-effort — ignore userRes.error so a missing name
-      // never blocks the briefing.
+      // never blocks the briefing. Data minimisation (GDPR Art.5(1)(c)): the
+      // agent only needs the tilltalsnamn to address the user, so pass the first
+      // token only — never the full legal name — into the LLM prompt. Mirrors
+      // app/api/agent/invoke/route.ts, which also derives firstName via split.
       const userName =
-        ((userRes.data as { full_name: string | null } | null)?.full_name ?? '').trim() || null
+        (((userRes.data as { full_name: string | null } | null)?.full_name ?? '')
+          .trim()
+          .split(/\s+/)[0] || null)
 
       const atomIds = [
         ...(profile?.horizontal_atoms ?? []),

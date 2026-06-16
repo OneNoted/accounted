@@ -318,6 +318,26 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(body.error).toMatch(/must start on 2025-01-01/)
   })
 
+  // Regression: the start check only constrains the predecessor side. A gap-fill
+  // period that starts correctly (day after FY 2024) but ends BEFORE the day
+  // before FY 2026 would leave a fresh sub-gap while still relinking FY 2026's
+  // previous_period_id onto it — a broken continuity chain. The end-adjacency
+  // guard must reject it.
+  it('rejects a gap-fill period that does not end the day before the successor', async () => {
+    buildMockSupabase({
+      allPeriods: [
+        { id: 'p1', period_start: '2024-01-01', period_end: '2024-12-31', is_closed: true },
+        { id: 'p2', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false },
+      ],
+    })
+    // Correct start (2025-01-01) but ends 2025-11-30 — leaves a hole before FY 2026.
+    const req = createMockRequest({ name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-11-30' })
+    const res = await POST(req)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toMatch(/must end on 2025-12-31/)
+  })
+
   // A gap fill is a backfill (like backward chaining), so the "prior year must be
   // locked" guard must NOT apply — otherwise the two open neighbours would block it.
   it('allows a gap fill even when both neighbouring years are open', async () => {

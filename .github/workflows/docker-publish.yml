@@ -88,9 +88,14 @@ jobs:
         # signed above, so failing here would only redden the run — it would not
         # unship a vulnerable image. exit-code:0 + continue-on-error keep CVEs
         # (and even a Trivy/DB outage) from failing the build; findings still
-        # flow to the Security tab below. The real blocking gate is the daily
+        # flow to the Security tab below. The real blocking gate is
         # docker-image-scan.yml, which re-scans the published image and fails
-        # (notifying admins) on a newly-disclosed, fixable CRITICAL/HIGH CVE.
+        # (notifying admins) on a fixable CRITICAL/HIGH CVE. It runs on a
+        # workflow_run trigger the moment THIS workflow completes — so the gap
+        # between publish and the blocking scan is the scan's own duration
+        # (minutes), not a 24h cron window — plus a daily cron as a safety net.
+        # Accepted residual risk: an image is live for that short scan window
+        # before the gate fires; see SELF-HOSTING.md / the risk register.
         continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -102,9 +107,12 @@ jobs:
           output: trivy-results.sarif
 
       - name: Upload Trivy results to GitHub Security tab
-        # Upload only when the scan produced a report, and keep it non-fatal so
-        # a Security-tab hiccup can't redden an otherwise-good publish.
-        if: always() && steps.trivy.outcome == 'success'
+        # if: always() — evidence must reach the Security tab regardless of the
+        # scan step's exit status. With the previous `outcome == 'success'` guard,
+        # a Trivy/DB outage that errored the scan would silently drop findings.
+        # Kept non-fatal (continue-on-error) so a missing SARIF or a Security-tab
+        # hiccup can't redden an otherwise-good publish.
+        if: always()
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:

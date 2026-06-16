@@ -81,6 +81,23 @@ export function ResultStep({ result }: ResultStepProps) {
         </CardContent>
       </Card>
 
+      {result.resultAppropriationFailed && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="p-4 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
+            <p className="text-sm">
+              <span className="font-medium">
+                Omföringen av föregående års resultat (2099 → 2098) kunde inte bokföras.
+              </span>{' '}
+              Bokslutet och de ingående balanserna är klara, men konto 2099 “Årets
+              resultat” bär fortfarande föregående års resultat in i den nya perioden.
+              Det måste flyttas till 2098 innan balansräkningen stämmer. Kör om bokslutet
+              eller kontakta support — felet är loggat.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {continuity && (
         <ContinuityPanel
           discrepancies={discrepancies}

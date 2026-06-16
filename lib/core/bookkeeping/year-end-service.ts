@@ -620,6 +620,7 @@ export async function executeYearEndClosing(
   //     already valid and immutable; a failure here is logged and left for the
   //     retroactive catch-up script (scripts/repair-result-appropriation.ts).
   let resultAppropriationEntry: JournalEntry | null = null
+  let resultAppropriationFailed = false
   try {
     resultAppropriationEntry = await generateResultAppropriation(
       supabase,
@@ -628,8 +629,15 @@ export async function executeYearEndClosing(
       nextPeriod.id
     )
   } catch (err) {
+    resultAppropriationFailed = true
+    // alert:true marks this for out-of-band alerting (the log sink / Sentry
+    // integration filters on it) — a silent accounting failure must not wait
+    // for a manual audit. The new period now opens with 2099 still carrying the
+    // prior result; resultAppropriationFailed below drives a UI warning and the
+    // catch-up script (scripts/repair-result-appropriation.ts) posts the fix.
     log.error('year-end: result appropriation omföring failed (non-fatal)', err as Error, {
       operation: 'year_end.result_appropriation',
+      alert: true,
       companyId,
       entityType: 'fiscal_period',
       entityId: nextPeriod.id,
@@ -657,6 +665,7 @@ export async function executeYearEndClosing(
     openingBalanceEntry,
     revaluationEntry: revaluationResult?.entry ?? null,
     resultAppropriationEntry,
+    resultAppropriationFailed,
     continuity,
   }
 }
