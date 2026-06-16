@@ -126,7 +126,11 @@ export function MatchVerifikationPicker({
 
   if (selected) {
     const amount = selected.debit_amount > 0 ? selected.debit_amount : -selected.credit_amount
-    const strength = confidenceBadge(selected.confidence)
+    // Suppress the match-strength badge on an already-matched verifikat so a
+    // green "Stark träff" can't visually encourage an accidental double-match —
+    // "Redan matchad" is the signal that matters there (N:1 stays opt-in).
+    const strength =
+      (selected.linked_transaction_count ?? 0) > 0 ? null : confidenceBadge(selected.confidence)
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm">
         <span className="font-mono text-xs shrink-0">{formatVoucher(selected)}</span>
@@ -168,7 +172,8 @@ export function MatchVerifikationPicker({
       <div className="max-h-72 overflow-y-auto">
         {filtered.map((line) => {
           const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
-          const strength = confidenceBadge(line.confidence)
+          const strength =
+            (line.linked_transaction_count ?? 0) > 0 ? null : confidenceBadge(line.confidence)
           return (
             <button
               key={line.line_id}
