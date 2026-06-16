@@ -6,6 +6,7 @@ import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mappi
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { detectBookedDuplicateTransaction } from '@/lib/transactions/booking-duplicate-detection'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -179,6 +180,30 @@ export const POST = withRouteContext(
           requestId,
           dismissedTransactionId: candidate.transaction_id,
         })
+        // Persist the dismissal to behandlingshistorik (BFNAR 2013:2 kap 8) —
+        // booking over a DETECTED possible double-booking is a bookkeeping
+        // decision that needs a durable record. Best-effort; never blocks the
+        // booking.
+        try {
+          await appendProcessingHistory({
+            companyId,
+            correlationId: id,
+            aggregateType: 'BankTransaction',
+            aggregateId: id,
+            eventType: 'BankTransactionDuplicateDismissed',
+            payload: {
+              transaction_id: id,
+              dismissed_transaction_id: candidate.transaction_id,
+              dismissed_journal_entry_id: candidate.journal_entry_id,
+              amount_ore: Math.round(candidate.amount * 100),
+              entry_date: candidate.entry_date,
+            },
+            actor: { type: 'user', id: user.id },
+            occurredAt: new Date(),
+          })
+        } catch (logErr) {
+          txLog.error('failed to append duplicate-dismissal behandlingshistorik', logErr as Error)
+        }
       }
     } catch (err) {
       if (body.force) {

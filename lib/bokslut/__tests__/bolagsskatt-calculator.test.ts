@@ -107,16 +107,17 @@ describe('calculateBolagsskatt', () => {
     expect(generateIncomeStatement).not.toHaveBeenCalled()
   })
 
-  it('sumPostedYearEndDispositions adds back class-88 + SLP, ignores tax/liability', async () => {
+  it('sumPostedYearEndDispositions adds back periodiseringsfond + överavskrivning (class-88) + SLP, ignores tax/liability', async () => {
     // Commit path: bolagsskatt is computed after the other dispositions are
     // posted. They carry source_type='year_end' (excluded from the income
     // statement), so the tax base must add their P&L effect back.
     const rows = [
-      { account_number: '8811', debit_amount: 150_000, credit_amount: 0 }, // avsättning  −150k
-      { account_number: '8819', debit_amount: 0, credit_amount: 20_000 },  // återföring  +20k
-      { account_number: '7533', debit_amount: 5_000, credit_amount: 0 },   // SLP          −5k
-      { account_number: '8910', debit_amount: 123_600, credit_amount: 0 }, // skatt   — ignored
-      { account_number: '2124', debit_amount: 0, credit_amount: 150_000 }, // skuld   — ignored
+      { account_number: '8811', debit_amount: 150_000, credit_amount: 0 }, // avsättning      −150k
+      { account_number: '8819', debit_amount: 0, credit_amount: 20_000 },  // återföring       +20k
+      { account_number: '8853', debit_amount: 39_000, credit_amount: 0 },  // överavskrivning  −39k
+      { account_number: '7533', debit_amount: 5_000, credit_amount: 0 },   // SLP               −5k
+      { account_number: '8910', debit_amount: 123_600, credit_amount: 0 }, // skatt    — ignored
+      { account_number: '2124', debit_amount: 0, credit_amount: 150_000 }, // skuld    — ignored
     ]
     const result = { data: rows, error: null }
     const handler: ProxyHandler<object> = {
@@ -130,7 +131,7 @@ describe('calculateBolagsskatt', () => {
     >[0]
 
     const effect = await sumPostedYearEndDispositions(client, 'co', 'fp')
-    expect(effect).toBe(-135_000) // -150k + 20k - 5k
+    expect(effect).toBe(-174_000) // -150k + 20k - 39k - 5k
   })
 
   it('truncates taxable result to whole krona before applying tax', async () => {

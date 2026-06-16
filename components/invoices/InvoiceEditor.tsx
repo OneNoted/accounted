@@ -1952,7 +1952,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
             <div>
               <p className="text-xs text-muted-foreground">
-                {hasAnyDeduction ? 'Att betala' : t('total_label')}
+                {hasAnyDeduction ? t('to_pay_label') : t('total_label')}
               </p>
               <p className="text-lg font-bold tabular-nums">
                 {formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}

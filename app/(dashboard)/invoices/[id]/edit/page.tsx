@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2 } from 'lucide-react'
 import InvoiceEditor, { type InvoiceForEdit } from '@/components/invoices/InvoiceEditor'
+import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceItem } from '@/types'
 
 /**
@@ -47,8 +48,9 @@ export default function EditInvoicePage({ params }: { params: Promise<{ id: stri
       }
 
       // Only drafts (no committed verifikat, not sent, not a received
-      // self-billing document) may be edited — mirror the PATCH route guard.
-      const editable = data.status === 'draft' && !data.journal_entry_id && !data.is_self_billed
+      // self-billing document) may be edited — shared predicate, the same one
+      // the PATCH route enforces server-side.
+      const editable = isEditableInvoiceDraft(data)
       if (!editable) {
         toast({
           title: t('edit_not_allowed_title'),

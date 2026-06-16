@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Loader2, Lock } from 'lucide-react'
+import { AlertTriangle, Loader2, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -293,6 +293,18 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
             </Select>
             <p className="text-xs text-muted-foreground">{methodHint}</p>
           </div>
+
+          {basisLocked && depreciationMethod !== asset.depreciation_method && (
+            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                Byte av avskrivningsmetod efter att avskrivning påbörjats. Enligt K2
+                (BFNAR 2016:10 p. 10.26) ska vald metod tillämpas konsekvent — ändra
+                bara vid särskilda skäl och lämna i så fall upplysning i bokslutet.
+                Ändringen gäller framåt; redan bokförda avskrivningar påverkas inte.
+              </span>
+            </div>
+          )}
 
           {isRestvarde && (
             <div className="space-y-1.5">

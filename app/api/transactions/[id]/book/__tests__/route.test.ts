@@ -40,6 +40,13 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookedDuplicateTransaction: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
+// Behandlingshistorik append — mocked so we can assert the dismissal is
+// persisted without reaching the service-role client.
+const mockAppendProcessingHistory = vi.fn()
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => mockAppendProcessingHistory(...args),
+}))
+
 import { POST } from '../route'
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
@@ -65,6 +72,7 @@ describe('POST /api/transactions/[id]/book', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     // No booking-duplicate by default; guard tests override per-case.
     mockDetectDup.mockResolvedValue(null)
+    mockAppendProcessingHistory.mockResolvedValue('evt-1')
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -236,6 +244,8 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(body.error.details.candidate.voucher_label).toBe('A142')
     // Critically: no verifikat is created when a duplicate is flagged.
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    // Blocking a duplicate is not a dismissal — nothing is logged.
+    expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 
   it('books when force=true and the expected sibling still matches', async () => {
@@ -264,6 +274,19 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBe('je-new')
     expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    // The dismissal is recorded to behandlingshistorik (BFNAR 2013:2 kap 8).
+    expect(mockAppendProcessingHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'BankTransactionDuplicateDismissed',
+        aggregateType: 'BankTransaction',
+        aggregateId: 'tx-1',
+        actor: { type: 'user', id: 'user-1' },
+        payload: expect.objectContaining({
+          transaction_id: 'tx-1',
+          dismissed_transaction_id: SIBLING_UUID,
+        }),
+      }),
+    )
   })
 
   it('rejects force=true when the expected sibling no longer matches the detected one', async () => {

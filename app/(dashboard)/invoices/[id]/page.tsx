@@ -14,6 +14,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import {
   Loader2,
   ArrowLeft,
@@ -523,7 +524,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // A draft (no committed verifikat, not sent, not self-billed) can be edited
   // in place — header + lines — via /invoices/{id}/edit. Sent/paid invoices are
   // immutable (BFL); they are corrected with a credit note instead.
-  const isEditableDraft = invoice.status === 'draft' && !invoice.journal_entry_id && !isSelfBilled
+  const isEditableDraft = isEditableInvoiceDraft(invoice)
   const hasAccruedItems = invoice.items.some(itemHasAccrual)
   return (
     <div className="space-y-8">

@@ -10,6 +10,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateInvoiceSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceDocumentType } from '@/types'
 
 ensureInitialized() // Module-level — wires the audit-log handler for invoice.draft_deleted.
@@ -171,7 +172,9 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // journal_entry_id is belt-and-suspenders — a draft shouldn't carry one,
     // but if some flow ever booked it, refuse the edit (the entry is immutable).
-    if (existing.status !== 'draft' || existing.journal_entry_id || existing.is_self_billed) {
+    // Shared predicate (lib/invoices/is-editable-draft) — the single source of
+    // truth the detail and edit pages also gate on, so the rule can't drift.
+    if (!isEditableInvoiceDraft(existing)) {
       return errorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctxLog, { requestId })
     }
 

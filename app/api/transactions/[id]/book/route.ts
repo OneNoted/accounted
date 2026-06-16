@@ -11,6 +11,7 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { detectBookedDuplicateTransaction } from '@/lib/transactions/booking-duplicate-detection'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger } from '@/lib/logger'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { Transaction } from '@/types'
 
 ensureInitialized()
@@ -91,6 +92,31 @@ export async function POST(
         transactionId: id,
         dismissedTransactionId: candidate.transaction_id,
       })
+      // Persist the dismissal to behandlingshistorik (BFNAR 2013:2 kap 8): the
+      // decision to book over a DETECTED possible double-booking is a
+      // bookkeeping act that must leave a durable, queryable record — a warn in
+      // the application log is ephemeral and does not satisfy the requirement.
+      // Best-effort — a logging failure must never block a legitimate booking.
+      try {
+        await appendProcessingHistory({
+          companyId,
+          correlationId: id,
+          aggregateType: 'BankTransaction',
+          aggregateId: id,
+          eventType: 'BankTransactionDuplicateDismissed',
+          payload: {
+            transaction_id: id,
+            dismissed_transaction_id: candidate.transaction_id,
+            dismissed_journal_entry_id: candidate.journal_entry_id,
+            amount_ore: Math.round(candidate.amount * 100),
+            entry_date: candidate.entry_date,
+          },
+          actor: { type: 'user', id: user.id },
+          occurredAt: new Date(),
+        })
+      } catch (logErr) {
+        dupLog.error('failed to append duplicate-dismissal behandlingshistorik', logErr as Error)
+      }
     }
   } catch (err) {
     // Detection is fail-open for the non-force path; force requires a confirmed
