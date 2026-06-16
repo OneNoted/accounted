@@ -405,7 +405,7 @@ describe('ingestTransactions', () => {
   // 2c-bis. Cross-channel mirror: the SAME bank account imported via two feeds
   //     (Nordea CSV payee text vs PSD2 OCR/message) — same date+amount, one row
   //     per channel, descriptions that do NOT bridge — IS deduped on
-  //     (date, öre). This is the AXMD/Axel case: a CSV import landing on top of
+  //     (date, öre). This is the anonymized case: a CSV import landing on top of
   //     existing Enable Banking rows whose descriptions share no text.
   // -----------------------------------------------------------------------
   it('dedupes a cross-channel mirror (CSV vs PSD2) even when descriptions do not bridge', async () => {
@@ -547,7 +547,7 @@ describe('ingestTransactions', () => {
     enqueue({
       data: [{
         date: '2024-06-15', amount: -250,
-        original_description: 'LAN AXMD 19', description: 'LAN AXMD 19',
+        original_description: 'Loan payment 19', description: 'Loan payment 19',
         import_source: 'enable_banking', bank_connection_id: 'conn-1',
         cash_account_id: 'ca-1930', external_id: 'eb_SE_OLD_2024-06-15_-25000_0',
       }],
