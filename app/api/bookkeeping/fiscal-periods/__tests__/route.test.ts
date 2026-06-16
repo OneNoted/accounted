@@ -284,7 +284,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     expect(res.status).toBe(200)
   })
 
-  // Regression (Example AB, 2026-06-16): a company with FY 2024 + FY 2026 but no
+  // Regression (2026-06-16): a company with FY 2024 + FY 2026 but no
   // FY 2025 could not create the missing year — the old code only allowed
   // chaining before the earliest or after the latest period. A period that
   // exactly fills an interior gap must be allowed.

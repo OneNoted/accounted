@@ -24,7 +24,7 @@ describe('computeSuggestedPeriod', () => {
   })
 
   it('suggests the missing year when the entry date is in an interior gap', () => {
-    // FY 2024 + FY 2026 exist, 2025 is the hole — the Example AB case.
+    // FY 2024 + FY 2026 exist, 2025 is the hole (interior-gap scenario).
     expect(computeSuggestedPeriod('2025-06-15', [FY2024, FY2026])).toEqual({
       name: 'Räkenskapsår 2025',
       period_start: '2025-01-01',
