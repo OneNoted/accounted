@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   const rawLimit = parseInt(searchParams.get('limit') || '50', 10)
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : 50
   const rawOffset = parseInt(searchParams.get('offset') || '0', 10)
-  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
+  const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0
   const dateFrom = searchParams.get('date_from')
   const dateTo = searchParams.get('date_to')
   const sortDate = searchParams.get('sort_date') // 'asc' | 'desc'

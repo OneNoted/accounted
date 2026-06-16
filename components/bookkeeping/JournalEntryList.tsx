@@ -1295,10 +1295,11 @@ export default function JournalEntryList() {
         onOpenChange={(open) => { if (!open) setPreviewEntryId(null) }}
       />
 
-      {/* Pagination + page-size selector. Shown when the result set is larger
-          than the smallest page size, or when "Alla" is active (so the user can
-          switch back to a paginated view). */}
-      {(count > PAGE_SIZE_OPTIONS[0] || showingAll) && (
+      {/* Pagination + page-size selector. Shown when the result set spans more
+          than one page at the default size, OR when a non-default page size
+          ('all' included) is active — so a user who narrowed the list below the
+          default can always switch the size back. Hidden for an empty result. */}
+      {count > 0 && (count > PAGE_SIZE_OPTIONS[0] || pageSizeChoice !== '20') && (
         <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
           {/* Page size + result range */}
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
