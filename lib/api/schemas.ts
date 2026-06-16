@@ -734,24 +734,43 @@ export const CreateTransactionSchema = z.object({
   notes: z.string().max(2000).optional(),
 })
 
-export const CategorizeTransactionSchema = z.object({
-  is_business: z.boolean(),
-  category: TransactionCategorySchema.optional(),
-  template_id: z.string().optional(),
-  vat_treatment: VatTreatmentSchema.optional(),
-  account_override: accountNumber.optional(),
-  counterparty_template_id: z.string().uuid().optional(),
-  user_description: z.string().max(500).optional(),
-  inbox_item_id: z.string().uuid().optional(),
-  confirm_no_match: z.boolean().optional(),
-})
+export const CategorizeTransactionSchema = z
+  .object({
+    is_business: z.boolean(),
+    category: TransactionCategorySchema.optional(),
+    template_id: z.string().optional(),
+    vat_treatment: VatTreatmentSchema.optional(),
+    account_override: accountNumber.optional(),
+    counterparty_template_id: z.string().uuid().optional(),
+    user_description: z.string().max(500).optional(),
+    inbox_item_id: z.string().uuid().optional(),
+    confirm_no_match: z.boolean().optional(),
+    // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). force
+    // bypasses it after the user reviews the candidate; the bypass is bound to
+    // the specific already-booked sibling via expected_duplicate_transaction_id
+    // (re-detected server-side, so a guessed id can't wave the guard away).
+    force: z.boolean().optional(),
+    expected_duplicate_transaction_id: uuid.optional(),
+  })
+  .refine((v) => !v.force || !!v.expected_duplicate_transaction_id, {
+    message: 'expected_duplicate_transaction_id is required when force=true',
+    path: ['expected_duplicate_transaction_id'],
+  })
 
-export const BookTransactionSchema = z.object({
-  fiscal_period_id: uuid,
-  entry_date: isoDate,
-  description: z.string().min(1, 'Description is required'),
-  lines: z.array(CreateJournalEntryLineSchema).min(1, 'At least one line is required'),
-})
+export const BookTransactionSchema = z
+  .object({
+    fiscal_period_id: uuid,
+    entry_date: isoDate,
+    description: z.string().min(1, 'Description is required'),
+    lines: z.array(CreateJournalEntryLineSchema).min(1, 'At least one line is required'),
+    // Booking-time duplicate guard — see CategorizeTransactionSchema.
+    force: z.boolean().optional(),
+    expected_duplicate_transaction_id: uuid.optional(),
+  })
+  .refine((v) => !v.force || !!v.expected_duplicate_transaction_id, {
+    message: 'expected_duplicate_transaction_id is required when force=true',
+    path: ['expected_duplicate_transaction_id'],
+  })
 
 /**
  * Edit a bank transaction's title (description). Only the working label —
