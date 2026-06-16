@@ -136,7 +136,10 @@ export function TaxTodoWidget({ deadlines, onStatusChange }: TaxTodoWidgetProps)
           const isOverdue = deadline.status === 'overdue'
 
           return (
-            <div key={deadline.id} className="p-3">
+            <div
+              key={deadline.id}
+              className={`p-3 rounded-lg ${isOverdue ? 'bg-destructive/5' : ''}`}
+            >
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2 min-w-0 flex-1">
                   {isOverdue ? (
