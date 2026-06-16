@@ -2988,6 +2988,13 @@ export interface IngestResult {
   transaction_ids: string[]
   /** First insert error encountered, surfaced for debugging. Optional. */
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
+  /**
+   * SHADOW-MODE counter: rows that an enforcing same-feed scope-drift dedup rule
+   * WOULD have treated as re-imports (IBAN-drift re-imports the external_id
+   * check misses). These are still imported — the field only measures how often
+   * the rule would fire, so it can be validated on real data before enforcement.
+   */
+  shadow_scope_drift_candidates?: number
 }
 
 // ── Invoice extraction (used by invoice-inbox extension and core utils) ──
