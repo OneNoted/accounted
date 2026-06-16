@@ -24,8 +24,14 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   const status = searchParams.get('status')
-  const limit = parseInt(searchParams.get('limit') || '50')
-  const offset = parseInt(searchParams.get('offset') || '0')
+  // Clamp pagination to bound DB work against oversized/pathological inputs
+  // (compliance A.8.28 / ASVS V1.2.5). The UI page-size selector offers
+  // 20/50/100/Alla; "Alla" sends a large limit which is capped at MAX_LIMIT.
+  const MAX_LIMIT = 100000
+  const rawLimit = parseInt(searchParams.get('limit') || '50', 10)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), MAX_LIMIT) : 50
+  const rawOffset = parseInt(searchParams.get('offset') || '0', 10)
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0
   const dateFrom = searchParams.get('date_from')
   const dateTo = searchParams.get('date_to')
   const sortDate = searchParams.get('sort_date') // 'asc' | 'desc'

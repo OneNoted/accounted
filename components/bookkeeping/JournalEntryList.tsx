@@ -26,7 +26,7 @@ import {
   STORAGE_KEY_PREFIX as FISCAL_YEAR_STORAGE_KEY_PREFIX,
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
-import { ChevronDown, ChevronRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { Input } from '@/components/ui/input'
@@ -58,6 +58,16 @@ type SortBy = 'date_desc' | 'date_asc' | 'voucher_asc' | 'voucher_desc'
 // convention used by FiscalYearSelector ('Accounted:fiscal-year:<companyId>').
 const SORT_STORAGE_KEY_PREFIX = 'Accounted:journal-sort:'
 const SORT_VALUES = new Set<SortBy>(['date_desc', 'date_asc', 'voucher_asc', 'voucher_desc'])
+
+// Page-size selector. Persisted per company, mirroring the sort key convention.
+// 'all' fetches everything in the current scope (capped server-side at MAX_LIMIT);
+// the numeric options paginate normally.
+type PageSizeChoice = '20' | '50' | '100' | 'all'
+const PAGE_SIZE_STORAGE_KEY_PREFIX = 'Accounted:journal-page-size:'
+const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
+const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
+// Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
+const ALL_PAGE_SIZE = 100000
 
 export default function JournalEntryList() {
   const router = useRouter()
@@ -96,7 +106,10 @@ export default function JournalEntryList() {
   const [seriesFilter, setSeriesFilter] = useState<string>('all')
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
-  const pageSize = 20
+  const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
+  const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
+  const showingAll = pageSizeChoice === 'all'
+  const pageSize = showingAll ? ALL_PAGE_SIZE : Number(pageSizeChoice)
 
   const normalizeDate = (v: string): string | null => {
     const trimmed = v.trim()
@@ -181,6 +194,17 @@ export default function JournalEntryList() {
       if (stored && SORT_VALUES.has(stored as SortBy)) setSortBy(stored as SortBy)
     }
     setSortHydrated(true)
+  }, [company?.id])
+
+  // Restore the persisted page-size choice (per company). Same hydration pattern
+  // as the sort order — read in an effect to avoid an SSR mismatch, and gate the
+  // first fetch so the list is fetched once at the saved size.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY_PREFIX + (company?.id ?? 'default'))
+      if (stored && PAGE_SIZE_VALUES.has(stored as PageSizeChoice)) setPageSizeChoice(stored as PageSizeChoice)
+    }
+    setPageSizeHydrated(true)
   }, [company?.id])
 
   // Restore the persisted fiscal-year selection (per company), reading the same
@@ -268,9 +292,9 @@ export default function JournalEntryList() {
   }
 
   useEffect(() => {
-    if (!sortHydrated || !periodHydrated) return
+    if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, sortBy, dateFrom, dateTo, seriesFilter, search, sortHydrated, periodHydrated])
+  }, [periodId, page, pageSize, sortBy, dateFrom, dateTo, seriesFilter, search, sortHydrated, periodHydrated, pageSizeHydrated])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
@@ -454,6 +478,16 @@ export default function JournalEntryList() {
   const handlePeriodChange = (next: string | null) => {
     setPeriodId(next)
     setPage(0)
+  }
+
+  // Change how many verifikat are shown per page. Resets to the first page and
+  // persists the choice per company (same convention as the sort order).
+  const handlePageSizeChange = (next: PageSizeChoice) => {
+    setPageSizeChoice(next)
+    setPage(0)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next)
+    }
   }
 
   const clearAllFilters = () => {
@@ -1261,28 +1295,92 @@ export default function JournalEntryList() {
         onOpenChange={(open) => { if (!open) setPreviewEntryId(null) }}
       />
 
-      {/* Pagination */}
-      {count > pageSize && (
-        <div className="flex justify-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={page === 0}
-            onClick={() => setPage(page - 1)}
-          >
-            {t('previous')}
-          </Button>
-          <span className="text-sm text-muted-foreground self-center">
-            {t('page_of', { page: page + 1, total: Math.ceil(count / pageSize) })}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={(page + 1) * pageSize >= count}
-            onClick={() => setPage(page + 1)}
-          >
-            {t('next')}
-          </Button>
+      {/* Pagination + page-size selector. Shown when the result set is larger
+          than the smallest page size, or when "Alla" is active (so the user can
+          switch back to a paginated view). */}
+      {(count > PAGE_SIZE_OPTIONS[0] || showingAll) && (
+        <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
+          {/* Page size + result range */}
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Label htmlFor="journal-page-size" className="text-xs font-normal shrink-0">
+              {t('page_size_label')}
+            </Label>
+            <Select value={pageSizeChoice} onValueChange={(v) => handlePageSizeChange(v as PageSizeChoice)}>
+              <SelectTrigger id="journal-page-size" className="h-8 w-[88px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAGE_SIZE_OPTIONS.map((n) => (
+                  <SelectItem key={n} value={String(n)} className="text-xs tabular-nums">
+                    {n}
+                  </SelectItem>
+                ))}
+                <SelectItem value="all" className="text-xs">{t('page_size_all')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="tabular-nums whitespace-nowrap">
+              {showingAll
+                ? t('showing_all', { total: count })
+                : t('showing_range', {
+                    from: count === 0 ? 0 : page * pageSize + 1,
+                    to: Math.min((page + 1) * pageSize, count),
+                    total: count,
+                  })}
+            </span>
+          </div>
+
+          {/* Page navigation — hidden when showing all or when everything fits on one page */}
+          {!showingAll && count > pageSize && (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                disabled={page === 0}
+                onClick={() => setPage(0)}
+                aria-label={t('first_page')}
+                title={t('first_page')}
+              >
+                <ChevronsLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                disabled={page === 0}
+                onClick={() => setPage(page - 1)}
+                aria-label={t('previous')}
+                title={t('previous')}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="px-2 text-xs text-muted-foreground tabular-nums self-center whitespace-nowrap">
+                {t('page_of', { page: page + 1, total: Math.ceil(count / pageSize) })}
+              </span>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                disabled={(page + 1) * pageSize >= count}
+                onClick={() => setPage(page + 1)}
+                aria-label={t('next')}
+                title={t('next')}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                disabled={(page + 1) * pageSize >= count}
+                onClick={() => setPage(Math.ceil(count / pageSize) - 1)}
+                aria-label={t('last_page')}
+                title={t('last_page')}
+              >
+                <ChevronsRight className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </div>

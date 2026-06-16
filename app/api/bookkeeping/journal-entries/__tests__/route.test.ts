@@ -156,6 +156,21 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('accepts a large limit (the "Alla" page size) and a negative offset without erroring', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      // 'Alla' sends a large limit; the route clamps it to MAX_LIMIT. A negative
+      // offset is floored to 0. Both are bounded server-side (ASVS V1.2.5).
+      searchParams: { limit: '999999', offset: '-5', include_related: 'false' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
+  })
+
   it('returns 500 on database error', async () => {
     enqueue({ data: null, error: { message: 'DB error' } })
 
