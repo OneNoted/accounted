@@ -70,6 +70,13 @@ export function ResultStep({ result }: ResultStepProps) {
             value={formatVoucher(result.openingBalanceEntry)}
             href={`/bookkeeping/${result.openingBalanceEntry.id}`}
           />
+          {result.resultAppropriationEntry && (
+            <ResultRow
+              label="Omföring av föregående års resultat (2099 → 2098)"
+              value={formatVoucher(result.resultAppropriationEntry)}
+              href={`/bookkeeping/${result.resultAppropriationEntry.id}`}
+            />
+          )}
           <ResultRow label="Ny räkenskapsperiod" value={result.nextPeriod.name} />
         </CardContent>
       </Card>

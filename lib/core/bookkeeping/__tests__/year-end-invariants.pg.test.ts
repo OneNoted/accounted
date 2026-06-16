@@ -111,6 +111,66 @@ describe('year-end invariants (pg-real)', () => {
     expect(Math.abs(net)).toBeLessThanOrEqual(ORE_TOLERANCE)
   })
 
+  it('result appropriation omföring commits and zeros 2099 onto 2098', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    // Simulate the year-end closing posting the result onto 2099: a balanced
+    // 3001 → 2099 transfer leaving 2099 with a 5000 credit balance.
+    const closeId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      entryDate: '2026-12-31',
+      description: 'Årsbokslut',
+    })
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '3001', 5000.00, 0),
+              ($1, '2099', 0, 5000.00)`,
+      [closeId],
+    )
+    await getPool().query(`SELECT commit_journal_entry($1, $2)`, [companyId, closeId])
+
+    // The year-open omföring: Dr 2099 / Cr 2098. source_type must be accepted
+    // by the CHECK constraint (see source-type-constraint.pg.test.ts) and the
+    // balance trigger must pass.
+    const omforId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      entryDate: '2026-12-31',
+      description: 'Omföring av föregående års resultat (2099 → 2098)',
+      sourceType: 'result_appropriation',
+    })
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '2099', 5000.00, 0),
+              ($1, '2098', 0, 5000.00)`,
+      [omforId],
+    )
+    await getPool().query(`SELECT commit_journal_entry($1, $2)`, [companyId, omforId])
+
+    // 2099 net across posted lines must now be 0; 2098 must hold the result
+    // (credit-normal, so debit − credit = −5000).
+    const { rows } = await getPool().query<{ acct: string; net: string }>(
+      `SELECT l.account_number AS acct,
+              COALESCE(SUM(l.debit_amount - l.credit_amount), 0) AS net
+         FROM public.journal_entry_lines l
+         JOIN public.journal_entries je ON je.id = l.journal_entry_id
+        WHERE je.company_id = $1
+          AND je.fiscal_period_id = $2
+          AND je.status = 'posted'
+          AND l.account_number IN ('2099', '2098')
+        GROUP BY l.account_number`,
+      [companyId, fiscalPeriodId],
+    )
+    const net = Object.fromEntries(rows.map((r) => [r.acct, roundOre(Number(r.net))]))
+    expect(Math.abs(net['2099'] ?? 0)).toBeLessThanOrEqual(ORE_TOLERANCE)
+    expect(net['2098']).toBe(-5000)
+  })
+
   it('rejects a one-öre IB/UB style discrepancy in opening balance lines', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
