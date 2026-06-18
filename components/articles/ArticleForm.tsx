@@ -13,6 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ChevronDown, Loader2, Lock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompany } from '@/contexts/CompanyContext'
+import { createClient } from '@/lib/supabase/client'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import type { BASAccount, CreateArticleInput } from '@/types'
@@ -36,6 +38,8 @@ export default function ArticleForm({
   initialData,
 }: ArticleFormProps) {
   const { canWrite } = useCanWrite()
+  const { company } = useCompany()
+  const supabase = createClient()
   const t = useTranslations('form_article')
   // Active class-3 (revenue) accounts for the combobox. The combobox accepts
   // unknown 4-digit numbers optimistically — the API answers with
@@ -45,6 +49,9 @@ export default function ArticleForm({
   // Inline account creation: what the user typed in the combobox when they hit
   // "Skapa konto" — non-null opens AddAccountDialog prefilled with it.
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string | null>(null)
+  // Momsregistrerad? A non-VAT-registered company never charges moms, so the
+  // VAT field is hidden and the rate forced to 0 — mirrors the invoice editor.
+  const [vatRegistered, setVatRegistered] = useState(true)
 
   async function fetchRevenueAccounts() {
     try {
@@ -59,6 +66,25 @@ export default function ArticleForm({
   useEffect(() => {
     fetchRevenueAccounts()
   }, [])
+
+  useEffect(() => {
+    if (!company?.id) return
+    let cancelled = false
+    supabase
+      .from('company_settings')
+      .select('vat_registered')
+      .eq('company_id', company.id)
+      .single()
+      .then(({ data }) => {
+        if (!cancelled && typeof data?.vat_registered === 'boolean') {
+          setVatRegistered(data.vat_registered)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id])
   // Open the advanced section by default when it already holds data, so an
   // edit never hides a value the user previously set.
   const [advancedOpen, setAdvancedOpen] = useState(
@@ -125,7 +151,7 @@ export default function ArticleForm({
       type: data.type,
       unit: data.unit,
       price_excl_vat: data.price_excl_vat,
-      vat_rate: data.vat_rate,
+      vat_rate: vatRegistered ? data.vat_rate : 0,
       revenue_account: data.revenue_account || null,
       cost_price: data.cost_price ?? null,
       ean: data.ean || null,
@@ -180,8 +206,8 @@ export default function ArticleForm({
         <p className="text-xs text-muted-foreground">{t('name_en_hint')}</p>
       </div>
 
-      {/* Unit + price + VAT */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* Unit + price + VAT (moms hidden for non-momsregistrerade) */}
+      <div className={`grid grid-cols-1 gap-4 ${vatRegistered ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <div className="space-y-2">
           <Label>{t('unit_label')}</Label>
           <Controller
@@ -215,6 +241,7 @@ export default function ArticleForm({
             <p className="text-sm text-destructive">{errors.price_excl_vat.message}</p>
           )}
         </div>
+        {vatRegistered && (
         <div className="space-y-2">
           <Label>{t('vat_rate_label')}</Label>
           <Controller
@@ -237,6 +264,7 @@ export default function ArticleForm({
             )}
           />
         </div>
+        )}
       </div>
 
       {/* Advanced (collapsible) */}
