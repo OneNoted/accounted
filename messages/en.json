@@ -3001,6 +3001,9 @@
     "send_failed_fallback": "Please try again."
   },
   "journal_list": {
+    "mode_vouchers": "Vouchers",
+    "mode_drafts": "Drafts",
+    "show_correction_chain": "Show storno & corrected entries",
     "loading": "Loading journal entries...",
     "empty_title": "No journal entries",
     "empty_description": "Journal entries are created automatically from invoicing and transaction posting, or manually via the \"New entry\" tab.",

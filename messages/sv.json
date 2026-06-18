@@ -3001,6 +3001,9 @@
     "send_failed_fallback": "Försök igen."
   },
   "journal_list": {
+    "mode_vouchers": "Verifikat",
+    "mode_drafts": "Utkast",
+    "show_correction_chain": "Visa storno- och rättade poster",
     "loading": "Laddar verifikationer...",
     "empty_title": "Inga verifikationer",
     "empty_description": "Verifikationer skapas automatiskt vid fakturering och transaktionsbokföring, eller manuellt via fliken \"Ny verifikation\".",

@@ -106,6 +106,13 @@ export default function JournalEntryList() {
   const [seriesFilter, setSeriesFilter] = useState<string>('all')
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
+  // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
+  // committed list server-side and surfaced here behind a count badge.
+  const [listMode, setListMode] = useState<'committed' | 'drafts'>('committed')
+  // Collapse correction groups to the live correction (hide storno + reversed
+  // original). Toggled off via the filter dialog to reveal the full chain.
+  const [collapseCorrections, setCollapseCorrections] = useState(true)
+  const [draftCount, setDraftCount] = useState(0)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
   const showingAll = pageSizeChoice === 'all'
@@ -269,10 +276,18 @@ export default function JournalEntryList() {
       offset: String(page * pageSize),
       sort_by: sortBy,
     })
-    if (periodId) params.set('period_id', periodId)
-    if (dateFrom) params.set('date_from', dateFrom)
-    if (dateTo) params.set('date_to', dateTo)
-    if (seriesFilter !== 'all') params.set('series', seriesFilter)
+    if (listMode === 'drafts') {
+      // Drafts get their own view spanning all years — they're work-in-progress
+      // and shouldn't be hidden by the selected fiscal-year scope.
+      params.set('status', 'draft')
+    } else {
+      params.set('exclude_draft', 'true')
+      if (collapseCorrections) params.set('collapse_corrections', 'true')
+      if (periodId) params.set('period_id', periodId)
+      if (dateFrom) params.set('date_from', dateFrom)
+      if (dateTo) params.set('date_to', dateTo)
+      if (seriesFilter !== 'all') params.set('series', seriesFilter)
+    }
     if (search) params.set('search', search)
 
     const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
@@ -289,12 +304,27 @@ export default function JournalEntryList() {
     // Fetch attachment counts for the loaded entries
     const ids = loadedEntries.map((e: JournalEntry) => e.id)
     fetchAttachmentCounts(ids)
+
+    fetchDraftCount()
+  }
+
+  // Cheap count-only query for the "Utkast" badge — all years, so the badge
+  // surfaces drafts regardless of the selected fiscal-year scope.
+  async function fetchDraftCount() {
+    try {
+      const res = await fetch('/api/bookkeeping/journal-entries?status=draft&limit=1')
+      if (!res.ok) return
+      const { count: total } = await res.json()
+      setDraftCount(total || 0)
+    } catch {
+      // Non-fatal: the badge keeps its last value.
+    }
   }
 
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortBy, dateFrom, dateTo, seriesFilter, search, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortBy, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
@@ -302,6 +332,14 @@ export default function JournalEntryList() {
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id)
+  }
+
+  function switchMode(mode: 'committed' | 'drafts') {
+    if (mode === listMode) return
+    setListMode(mode)
+    setPage(0)
+    setSelectedIds(new Set())
+    if (mode === 'drafts') setShowMissingOnly(false)
   }
 
   const handleCommit = async (entryId: string) => {
@@ -714,6 +752,19 @@ export default function JournalEntryList() {
                   </Badge>
                 )}
               </div>
+
+              {/* Reveal the storno + reversed-original rows the default view folds
+                  into the surviving correction (3 rows → 1). */}
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="show-correction-chain"
+                  checked={!collapseCorrections}
+                  onCheckedChange={(on) => { setCollapseCorrections(!on); setPage(0) }}
+                />
+                <Label htmlFor="show-correction-chain" className="text-sm cursor-pointer">
+                  {t('show_correction_chain')}
+                </Label>
+              </div>
             </div>
 
             <DialogFooter className="sm:justify-between">
@@ -733,10 +784,36 @@ export default function JournalEntryList() {
         </Dialog>
       </div>
 
+      {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
+          they don't sink to the last page of the committed list. */}
+      <div className="flex items-center gap-2">
+        <div className="inline-flex rounded-md border border-border p-0.5">
+          <button
+            type="button"
+            onClick={() => switchMode('committed')}
+            className={`h-7 rounded px-3 text-xs font-medium transition-colors ${listMode === 'committed' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t('mode_vouchers')}
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode('drafts')}
+            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${listMode === 'drafts' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t('mode_drafts')}
+            {draftCount > 0 && (
+              <Badge variant="secondary" className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums">
+                {draftCount}
+              </Badge>
+            )}
+          </button>
+        </div>
+      </div>
+
       {/* Active fiscal-year scope — visible without opening the filter dialog so
           the user always sees which räkenskapsår the ledger is scoped to (BFL
           period-correctness). Clicking it opens the dialog to change the scope. */}
-      {periodHydrated && scopeLabel && (
+      {listMode === 'committed' && periodHydrated && scopeLabel && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>{t('scope_label')}</span>
           <button

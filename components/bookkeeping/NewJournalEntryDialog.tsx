@@ -45,7 +45,16 @@ export default function NewJournalEntryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+        // A half-typed verifikat must survive an accidental click on the
+        // backdrop (easy to do across multiple windows/screens). Closing is
+        // explicit — the header X or Cancel. This also stops nested popovers
+        // (AccountCombobox, date pickers) and the form's own confirm dialogs
+        // from collapsing the parent when they portal outside it.
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{t('new_entry_dialog_title')}</DialogTitle>
         </DialogHeader>

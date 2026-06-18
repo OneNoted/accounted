@@ -24,6 +24,11 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   const status = searchParams.get('status')
+  // Drafts get their own surface in the UI; the committed list excludes them.
+  const excludeDraft = searchParams.get('exclude_draft') === 'true'
+  // Collapse a correction group to the live correction (hide the storno and the
+  // reversed original it replaced). The full chain stays reachable.
+  const collapseCorrections = searchParams.get('collapse_corrections') === 'true'
   // Clamp pagination to bound DB work against oversized/pathological inputs
   // (compliance A.8.28 / ASVS V1.2.5). The UI page-size selector offers
   // 20/50/100/Alla; "Alla" sends a large limit which is capped at MAX_LIMIT.
@@ -81,6 +86,8 @@ export async function GET(request: Request) {
       p_sort_date: sortDateParam,
       p_limit: limit,
       p_offset: offset,
+      p_exclude_draft: excludeDraft,
+      p_collapse_corrections: collapseCorrections,
     })
 
     if (error) {
@@ -134,6 +141,9 @@ export async function GET(request: Request) {
     query = query.eq('status', status)
   } else {
     query = query.neq('status', 'cancelled')
+    if (excludeDraft) {
+      query = query.neq('status', 'draft')
+    }
   }
 
   if (dateFrom) {
@@ -155,6 +165,26 @@ export async function GET(request: Request) {
     // A.8.28 / ASVS V1.2.5); escaping prevents silent over-matching on values
     // like "50%". Supabase parameterises the value, so this is not about SQLi.
     query = query.ilike('description', `%${escapeLikePattern(search)}%`)
+  }
+
+  // Collapse correction groups (voucher-sort / search path): hide the storno
+  // and the reversed originals a posted correction replaced, leaving the live
+  // correction. Pagination/count stay correct because these are query filters.
+  if (collapseCorrections) {
+    query = query.neq('source_type', 'storno')
+    const { data: corrections } = await supabase
+      .from('journal_entries')
+      .select('correction_of_id')
+      .eq('company_id', companyId)
+      .eq('source_type', 'correction')
+      .eq('status', 'posted')
+      .not('correction_of_id', 'is', null)
+    const correctedOriginalIds = Array.from(
+      new Set((corrections ?? []).map((r) => r.correction_of_id).filter(Boolean) as string[])
+    )
+    if (correctedOriginalIds.length > 0) {
+      query = query.not('id', 'in', `(${correctedOriginalIds.join(',')})`)
+    }
   }
 
   const { data, error, count } = await query
