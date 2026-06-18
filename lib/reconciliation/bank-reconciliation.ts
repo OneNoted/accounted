@@ -427,6 +427,13 @@ export async function getReconciliationStatus(
     .filter((l) => entryOf(l)?.source_type === 'opening_balance')
     .map((l) => entryOf(l)?.entry_date)
     .filter((d): d is string => typeof d === 'string' && d.length > 0)
+  // Take the LATEST IB date. The invariant is one opening_balance entry per
+  // fiscal period (set_opening_balances / SIE import / year-end rollover all
+  // create exactly one, dated period_start), so within a single-period window
+  // there is only one. Across a multi-year window the most recent IB is the
+  // correct floor — an earlier year's IB and the movements it summarises are
+  // prior history we deliberately drop. Same-date duplicates are harmless: they
+  // land in both countedLines and glOpeningBalance and cancel.
   const ibFloor = ibDates.length ? ibDates.reduce((a, b) => (a > b ? a : b)) : null
   const effectiveFrom =
     dateFrom && ibFloor ? (dateFrom > ibFloor ? dateFrom : ibFloor) : dateFrom || ibFloor || null

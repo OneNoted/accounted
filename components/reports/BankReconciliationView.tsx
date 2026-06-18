@@ -328,11 +328,15 @@ export function BankReconciliationView() {
   // briefly render the phantom-diff numbers before the period seeds the dates.
   // The date-seeding setState in handlePeriodChange updates dateFromRef/dateToRef
   // (the effects above) before this effect runs on the same render, so fetchAll
-  // reads the freshly-seeded window. Re-runs on account/currency/matched changes.
+  // reads the freshly-seeded window. selectedPeriodId is a dependency so that
+  // switching räkenskapsår re-fetches with the new window, and so a late period
+  // selection (e.g. if the selector signals ready before the company context has
+  // hydrated and onChange arrives a tick later) still triggers the real fetch.
+  // Manual date edits intentionally do NOT auto-fetch — that stays on "Filtrera".
   useEffect(() => {
     if (!periodReady) return
     fetchAll()
-  }, [fetchAll, periodReady])
+  }, [fetchAll, periodReady, selectedPeriodId])
 
   // Reset transient per-account UI state when the selected account changes. A
   // verifikation pick or a dry-run preview computed for the previous account is
