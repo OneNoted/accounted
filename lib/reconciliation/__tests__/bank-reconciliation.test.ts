@@ -1031,4 +1031,39 @@ describe('getReconciliationStatus', () => {
     expect(status.difference).toBe(0)
     expect(status.is_reconciled).toBe(true)
   })
+
+  it('reconciles a mid-period window (dateFrom after the IB date) on movements alone', async () => {
+    // Per-month reconciliation: the user scopes to March, after the fiscal-year
+    // IB (2026-01-01). effectiveFrom = max(dateFrom, ibDate) = the March dateFrom,
+    // so the IB and Jan/Feb movements are correctly excluded — they belong to the
+    // opening position of a March window, not its movements. gl_1930_opening_balance
+    // is 0 here BY DESIGN: a mid-period window contains no fiscal-year IB, so the
+    // "räknas inte" note is simply absent (not misleadingly zero). The window
+    // reconciles on March's movements vs March's feed.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [
+        { date: '2026-02-10', amount: 2000, journal_entry_id: 'je-feb', reconciliation_method: 'manual' },
+        { date: '2026-03-15', amount: 3000, journal_entry_id: 'je-mar', reconciliation_method: 'manual' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 9000, credit_amount: 0, journal_entries: { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' } },
+        { debit_amount: 2000, credit_amount: 0, journal_entries: { id: 'je-feb1', status: 'posted', source_type: 'import', entry_date: '2026-02-10' } },
+        { debit_amount: 3000, credit_amount: 0, journal_entries: { id: 'je-mar1', status: 'posted', source_type: 'import', entry_date: '2026-03-15' } },
+      ],
+    })
+    enqueue({ data: [] })
+
+    // dateFrom in March — after the 2026-01-01 IB.
+    const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-03-01')
+
+    expect(status.gl_1930_opening_balance).toBe(0)      // IB not part of a March window
+    expect(status.gl_1930_period_movement).toBe(3000)   // only March movements
+    expect(status.bank_transaction_total).toBe(3000)    // only March feed
+    expect(status.difference).toBe(0)
+    expect(status.is_reconciled).toBe(true)
+  })
 })
