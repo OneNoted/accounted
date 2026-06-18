@@ -72,6 +72,7 @@ vi.mock('@/lib/email/invoice-templates', () => ({
 vi.mock('@/lib/invoices/pdf-template', () => ({
   InvoicePDF: vi.fn().mockReturnValue({}),
   brandingFromCompanySettings: vi.fn().mockReturnValue({}),
+  SHOW_SWISH_ON_INVOICE: false,
 }))
 
 // The sandbox guard reads company_settings.is_sandbox at the top of the
