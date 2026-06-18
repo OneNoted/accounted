@@ -43,7 +43,7 @@ import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -362,6 +362,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let pdfBuffer: Buffer
     try {
       const { branding } = prepareInvoicePdfRender(settings)
+      const swishQrDataUrl = await buildSwishQrDataUrl(settings, renderableInvoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -370,6 +371,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           company: settings,
           originalInvoiceNumber,
           branding,
+          swishQrDataUrl,
         }),
       )
     } catch (err) {

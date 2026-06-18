@@ -21,3 +21,29 @@ export function normaliseSwish(value: string | null | undefined): string {
 export function isValidSwish(normalised: string): boolean {
   return normalised === '' || SWISH_FORETAG.test(normalised) || SWEDISH_MOBILE.test(normalised)
 }
+
+/**
+ * Build the Swish "Type C" QR payload — `C<payee>;<amount>;<message>;<editmask>`.
+ *
+ * editmask 0 locks payee, amount and message, so the Swish app opens prefilled
+ * and uneditable. This is the documented format the Swish app scans directly,
+ * so the QR can be generated entirely offline (no call to Swish's QR API).
+ * Works for both Swish-företag (123XXXXXXX) and mobile (07XXXXXXXX) payees.
+ *
+ * Returns null when the number is missing/invalid or the amount is not positive.
+ * Spec: Swish QR Code Design Specification (Getswish AB).
+ */
+export function buildSwishQrPayload(
+  swishNumber: string | null | undefined,
+  amount: number,
+  message: string,
+): string | null {
+  const number = normaliseSwish(swishNumber)
+  if (!number || !isValidSwish(number)) return null
+  if (!(amount > 0)) return null
+  // Amount uses a dot decimal with at most two decimals. The message must not
+  // contain the ';' field delimiter; cap its length to keep the QR scannable.
+  const amt = (Math.round(amount * 100) / 100).toFixed(2)
+  const msg = (message ?? '').replace(/;/g, ' ').trim().slice(0, 50)
+  return `C${number};${amt};${msg};0`
+}

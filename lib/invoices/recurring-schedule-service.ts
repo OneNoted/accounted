@@ -19,7 +19,7 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -385,6 +385,7 @@ async function sendInvoiceFromSchedule(
   // receive a "UTKAST" stamp.
   const renderableInvoice = { ...invoice, status: 'sent' as const }
   const { branding } = prepareInvoicePdfRender(company)
+  const swishQrDataUrl = await buildSwishQrDataUrl(company, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -392,6 +393,7 @@ async function sendInvoiceFromSchedule(
       items,
       company,
       branding,
+      swishQrDataUrl,
     }),
   )
 

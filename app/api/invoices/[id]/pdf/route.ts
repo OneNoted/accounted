@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { requireCompanyId } from '@/lib/company/context'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 
@@ -68,6 +68,7 @@ export async function GET(
   try {
     // Generate PDF
     const { branding } = prepareInvoicePdfRender(company as CompanySettings)
+    const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, invoice as Invoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: invoice as Invoice,
@@ -76,6 +77,7 @@ export async function GET(
         company: company as CompanySettings,
         originalInvoiceNumber,
         branding,
+        swishQrDataUrl,
       })
     )
 

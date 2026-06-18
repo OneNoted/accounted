@@ -65,7 +65,7 @@ import {
 import { uploadDocument, linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -996,6 +996,7 @@ async function commitSendInvoice(
   // would stamp the customer's PDF with "UTKAST – inte en giltig faktura".
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding } = prepareInvoicePdfRender(company as CompanySettings)
+  const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -1004,6 +1005,7 @@ async function commitSendInvoice(
       company: company as CompanySettings,
       originalInvoiceNumber,
       branding,
+      swishQrDataUrl,
     })
   )
 

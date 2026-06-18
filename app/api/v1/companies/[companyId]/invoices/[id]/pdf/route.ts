@@ -20,7 +20,7 @@
 import { z } from 'zod'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -150,6 +150,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     let pdfBuffer: Buffer
     try {
       const { branding } = prepareInvoicePdfRender(company as CompanySettings)
+      const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, typed as Invoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: typed as Invoice,
@@ -158,6 +159,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
           company: company as CompanySettings,
           originalInvoiceNumber,
           branding,
+          swishQrDataUrl,
         }),
       )
     } catch (err) {

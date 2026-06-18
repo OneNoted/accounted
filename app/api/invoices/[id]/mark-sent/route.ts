@@ -6,7 +6,7 @@ import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/fr
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { ensureInitialized } from '@/lib/init'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
@@ -170,6 +170,7 @@ export async function POST(
       // underlag isn't stamped "UTKAST – inte en giltig faktura".
       const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
       const { branding } = prepareInvoicePdfRender(settings as CompanySettings)
+      const swishQrDataUrl = await buildSwishQrDataUrl(settings as CompanySettings, renderableInvoice)
       const pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -178,6 +179,7 @@ export async function POST(
           company: settings as CompanySettings,
           originalInvoiceNumber,
           branding,
+          swishQrDataUrl,
         })
       )
 
