@@ -37,8 +37,13 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
   account deltas) without committing. The same call without dry-run commits.
 - **Idempotency-Key on every write.** Pass a UUID in \`Idempotency-Key\`; replays
   return the cached response (24h TTL) with \`Idempotent-Replayed: true\`.
-- **Test mode.** API keys prefixed \`gnubok_sk_test_\` are bound to deterministic
-  sandbox companies — safe for evals and agent learning. Live keys hit real data.
+- **Test mode.** Create a key with mode \`test\` (prefix \`gnubok_sk_test_\`) in the
+  dashboard. A test key forces \`dry_run\` on every write against your real company —
+  you get a realistic 200 + preview of what *would* happen, but nothing is ever
+  saved or sent. Reads return real data; responses carry \`X-Gnubok-Mode: test\`.
+  Writes on endpoints that can't be simulated are refused (403
+  \`TEST_KEY_WRITE_BLOCKED\`). It's \`?dry_run=true\` baked into the credential, so
+  you can develop safely before switching to a live key.
 - **Compliance pre-flight.** \`GET /api/v1/companies/{id}/compliance/check?type=…\`
   returns structured findings (voucher gaps, locked-period violations, VAT close
   blockers, missing receipts) before you submit.

@@ -7,7 +7,7 @@ import {
 } from '@/lib/auth/api-keys'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { ApiKeyScope } from '@/lib/auth/api-keys'
+import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
 
 /** GET /api/settings/api-keys — list the company's API keys (key value never returned). */
 export const GET = withRouteContext(
@@ -15,9 +15,11 @@ export const GET = withRouteContext(
   async (_request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
+    // Both live and test keys for the active company. (Test keys are bound to the
+    // active company too — they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, rate_limit_rpm, last_used_at, revoked_at, created_at')
+      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, last_used_at, revoked_at, created_at')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
 
@@ -44,12 +46,14 @@ export const POST = withRouteContext(
     let name = 'Unnamed key'
     let scopes: ApiKeyScope[] = DEFAULT_SCOPES
     let acknowledgeSod = false
+    let mode: ApiKeyMode = 'live'
     try {
       const body = await request.json()
       if (body.name && typeof body.name === 'string') {
         name = body.name.slice(0, 100)
       }
       acknowledgeSod = body.acknowledge_sod === true
+      if (body.mode === 'test') mode = 'test'
       const parsed = validateScopes(body.scopes)
       if (parsed) {
         scopes = parsed
@@ -62,6 +66,10 @@ export const POST = withRouteContext(
     } catch {
       // Empty body — use defaults.
     }
+
+    // Both live and test keys bind to the active company. A test key is
+    // simulation-only — the v1 wrapper forces dry-run on every write — so it can
+    // safely point at the real company without ever persisting anything.
 
     // Segregation of duties: warn + require explicit acknowledgement (not block)
     // when a single key both stages bookkeeping AND can approve it. Surfacing a
@@ -92,7 +100,7 @@ export const POST = withRouteContext(
       })
     }
 
-    const { key, hash, prefix } = generateApiKey()
+    const { key, hash, prefix } = generateApiKey(mode)
 
     const { data, error } = await supabase
       .from('api_keys')
@@ -103,11 +111,12 @@ export const POST = withRouteContext(
         key_prefix: prefix,
         name,
         scopes,
+        mode,
         ...(sodAcknowledgedAt
           ? { sod_acknowledged_at: sodAcknowledgedAt, sod_acknowledged_by: user.id }
           : {}),
       })
-      .select('id, key_prefix, name, scopes, created_at')
+      .select('id, key_prefix, name, scopes, mode, created_at')
       .single()
 
     if (error) {

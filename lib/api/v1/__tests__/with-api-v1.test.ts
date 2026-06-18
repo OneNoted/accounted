@@ -388,6 +388,76 @@ describe('withApiV1 — dry-run', () => {
   })
 })
 
+describe('withApiV1 — test mode', () => {
+  it('blocks a test-key write on a non-simulatable endpoint (403 TEST_KEY_WRITE_BLOCKED)', async () => {
+    // No route modules are imported here, so the endpoint registry is empty →
+    // getEndpointByConcretePath returns undefined → the wrapper must refuse the
+    // write rather than let a test key mutate real data.
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['invoices:write'],
+      mode: 'test',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+
+    let handlerCalled = false
+    const handler = withApiV1(
+      'invoices.create',
+      async (_req, ctx) => {
+        handlerCalled = true
+        return ok({ ok: true }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'invoices:write' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gnubok_sk_x', 'Content-Type': 'application/json' },
+        body: '{}',
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('TEST_KEY_WRITE_BLOCKED')
+    expect(handlerCalled).toBe(false)
+  })
+
+  it('allows a test-key READ unchanged — no forced dry-run, real data, X-Gnubok-Mode header', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'test',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+
+    let observedDryRun: boolean | null = null
+    const handler = withApiV1(
+      'companies.get',
+      async (_req, ctx) => {
+        observedDryRun = ctx.dryRun
+        return ok({ ok: true }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'companies:read' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(res.status).toBe(200)
+    expect(observedDryRun).toBe(false)
+    expect(res.headers.get('X-Gnubok-Mode')).toBe('test')
+  })
+})
+
 describe('withApiV1 — public endpoints', () => {
   it('invokes the handler without authentication for /api/v1/health', async () => {
     let observedUserId: string | null = null

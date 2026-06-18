@@ -117,6 +117,16 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
       resource: 'Accounted://capabilities',
     },
   },
+  TEST_KEY_WRITE_BLOCKED: {
+    httpStatus: 403,
+    message_sv:
+      'Den här åtgärden kan inte simuleras och är därför inte tillgänglig med en testnyckel. Använd en live-nyckel.',
+    message_en:
+      'This endpoint cannot be simulated, so it is not available with a test key. Test keys force dry-run on every write; use a live key for endpoints that do not support dry-run.',
+    remediation: {
+      description: 'Use a live key for this endpoint, or pick an endpoint that supports dry-run.',
+    },
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────

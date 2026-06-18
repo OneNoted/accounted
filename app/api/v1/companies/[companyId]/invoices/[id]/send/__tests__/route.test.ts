@@ -411,6 +411,40 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(finalRenderArgs.invoice.invoice_number).toBe('2026-0043')
   })
 
+  it('test-mode key forces dry-run: returns a preview, no email, no number burned', async () => {
+    // A test key has no ?dry_run flag, but the wrapper forces dry-run because
+    // the key is mode='test'. The send endpoint declares dryRunSupported, so the
+    // request is allowed and short-circuits to the preview.
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_test',
+      apiKeyName: 'Test key',
+      scopes: ['invoices:write'],
+      mode: 'test',
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: { data: COMPANY_SETTINGS, error: null },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Gnubok-Mode')).toBe('test')
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.status).toBe('sent')
+    expect(body.data.preview.would_send_to).toBe('billing@acme.test')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('rejects keys without invoices:write scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,

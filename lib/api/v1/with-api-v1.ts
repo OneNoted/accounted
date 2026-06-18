@@ -51,6 +51,7 @@ import {
 // idempotent (guarded by a module-level boolean).
 ensureInitialized()
 import { resolveRequiredScope } from '@/lib/auth/scopes'
+import { getEndpointByConcretePath } from './registry'
 import {
   checkIdempotencyKey,
   hashRequest,
@@ -79,7 +80,11 @@ export interface ApiV1Context {
   apiKeyName: string | undefined
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
-  /** test|live — handlers branch on this to short-circuit external providers in test mode. */
+  /**
+   * test|live. Test keys are simulation-only — the wrapper forces `dryRun` on
+   * for every write, so handlers never need to special-case `mode`; they just
+   * honor `dryRun` as usual.
+   */
   mode: ApiKeyMode
   /** Service-role Supabase client (no cookies). All queries MUST filter by company_id. */
   supabase: SupabaseClient
@@ -353,6 +358,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const idempotencyKey = request.headers.get(IDEMPOTENCY_HEADER)
       const isMutation = REQUIRES_IDEMPOTENCY.has(request.method)
 
+      // Test keys are simulation-only: every write is forced to dry-run so
+      // nothing persists (the credential bakes in `?dry_run=true`). A mutating
+      // endpoint that can't be simulated (dryRunSupported=false, or unregistered)
+      // would otherwise write for real — block it outright so a test key can
+      // never touch real data. Reads pass through unchanged (real data, no write).
+      let forceDryRun = false
+      if (auth.mode === 'test' && isMutation) {
+        const endpoint = getEndpointByConcretePath(request.method, path)
+        if (!endpoint || !endpoint.dryRunSupported) {
+          userLog.warn('test key blocked from non-simulatable endpoint', {
+            path,
+            method: request.method,
+            ...forensic,
+          })
+          return await v1ErrorResponseFromCode('TEST_KEY_WRITE_BLOCKED', userLog, {
+            requestId,
+            details: { path, method: request.method },
+          })
+        }
+        forceDryRun = true
+      }
+
       if (options.requireIdempotencyKey && isMutation && !idempotencyKey) {
         userLog.warn('missing idempotency key on mutating request')
         return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
@@ -391,8 +418,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         }
       }
 
-      // 8. Dry-run resolution.
-      const dryRun = isDryRun(workingRequest, url)
+      // 8. Dry-run resolution. Test keys force it on regardless of the flag.
+      const dryRun = isDryRun(workingRequest, url) || forceDryRun
 
       const ctx: ApiV1Context = {
         requestId,
@@ -410,6 +437,12 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
       // 9. Invoke handler.
       const response = await handler(workingRequest, ctx, params)
+
+      // Signal test mode on every test-key response so integrators can see the
+      // request was simulation-only without inspecting the body.
+      if (ctx.mode === 'test') {
+        response.headers.set('X-Gnubok-Mode', 'test')
+      }
 
       // 10. Persist idempotency cache (best-effort).
       if (idempotencyKey && isMutation && companyId && response.status < 500) {

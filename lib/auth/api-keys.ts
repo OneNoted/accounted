@@ -291,10 +291,19 @@ export function createServiceClientNoCookies() {
   )
 }
 
-export function generateApiKey(): { key: string; hash: string; prefix: string } {
+export function generateApiKey(mode: ApiKeyMode = 'live'): { key: string; hash: string; prefix: string } {
   const random = crypto.randomBytes(32).toString('base64url')
-  const key = `${KEY_PREFIX}${random}`
+  // Test keys carry an explicit `test_` infix so integrators can tell at a
+  // glance which environment a key targets (matches the llms.txt contract:
+  // `gnubok_sk_test_<random>`). The infix is purely cosmetic — the authoritative
+  // mode is the `mode` column on api_keys, read back by hash in validateApiKey,
+  // so nothing trusts the key string. Both variants keep the `gnubok_sk_`
+  // prefix so the `startsWith(KEY_PREFIX)` check in validateApiKey still holds.
+  const key = mode === 'test' ? `${KEY_PREFIX}test_${random}` : `${KEY_PREFIX}${random}`
   const hash = hashApiKey(key)
+  // First 18 chars: 'gnubok_sk_test_xyz' for test keys, 'gnubok_sk_xxxxxxxx'
+  // for live — the stored prefix is what the settings UI shows, so the test_
+  // infix is visible in the key list without exposing the secret.
   const prefix = key.slice(0, KEY_PREFIX.length + 8)
   return { key, hash, prefix }
 }

@@ -135,6 +135,26 @@ export function getEndpoint(method: HttpMethod, path: string): EndpointDefinitio
   return ENDPOINTS.get(`${method} ${path}`)
 }
 
+/**
+ * Resolve the registered endpoint for a CONCRETE request path (e.g.
+ * `/api/v1/companies/abc/customers`) by matching it against the registered
+ * `:param` patterns. Used by the wrapper to read an endpoint's `dryRunSupported`
+ * flag at request time — the route module being served has already run its
+ * `registerEndpoint()` call, so its pattern is present. Returns undefined when
+ * no pattern matches (the wrapper treats that as "cannot be simulated").
+ */
+export function getEndpointByConcretePath(
+  method: string,
+  concretePath: string,
+): EndpointDefinition | undefined {
+  for (const def of ENDPOINTS.values()) {
+    if (def.method !== method) continue
+    const regex = new RegExp('^' + def.path.replace(/:[^/]+/g, '[^/]+') + '$')
+    if (regex.test(concretePath)) return def
+  }
+  return undefined
+}
+
 // ──────────────────────────────────────────────────────────────────
 // Minimal Zod → JSON Schema converter
 // ──────────────────────────────────────────────────────────────────

@@ -155,6 +155,7 @@ interface ApiKey {
   name: string
   scopes: string[] | null
   rate_limit_rpm: number
+  mode?: 'live' | 'test'
   last_used_at: string | null
   revoked_at: string | null
   created_at: string
@@ -252,6 +253,10 @@ export function ApiKeysPanel() {
   const [showKeyDialog, setShowKeyDialog] = useState(false)
   const [showApiKeyMethods, setShowApiKeyMethods] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
+  // 'live' by default: this is the general MCP-key surface and the dominant case
+  // is a key for the user's real company. 'test' is an explicit opt-in — a
+  // simulation-only key that forces dry-run on every write (nothing is saved).
+  const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
   const [copied, setCopied] = useState(false)
@@ -305,13 +310,21 @@ export function ApiKeysPanel() {
         body: JSON.stringify({
           name: newKeyName || t('default_key_name'),
           scopes: Array.from(newKeyScopes),
+          mode: newKeyMode,
           ...(hasSodConflict ? { acknowledge_sod: true } : {}),
         }),
       })
       const json = await res.json()
 
       if (!res.ok) {
-        toast({ title: json.error, variant: 'destructive' })
+        // The route returns the canonical { error: { code, message, message_en } }
+        // envelope — render the message string, never the object (a React child
+        // must be a string, not { code, message, ... }).
+        const message =
+          typeof json.error === 'string'
+            ? json.error
+            : json.error?.message ?? t('toast_create_failed')
+        toast({ title: message, variant: 'destructive' })
         return
       }
 
@@ -319,6 +332,7 @@ export function ApiKeysPanel() {
       setShowCreateDialog(false)
       setShowKeyDialog(true)
       setNewKeyName('')
+      setNewKeyMode('live')
       setNewKeyScopes(new Set(ALL_SCOPES))
       fetchKeys()
     } catch {
@@ -413,6 +427,11 @@ export function ApiKeysPanel() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-medium truncate">{key.name}</p>
+                        {key.mode === 'test' && (
+                          <Badge variant="secondary" className="shrink-0 text-[10px] font-normal px-1.5 py-0">
+                            {t('badge_test')}
+                          </Badge>
+                        )}
                         <span className="text-xs text-muted-foreground">
                           {scopeCount === ALL_SCOPES.length
                             ? t('all_permissions')
@@ -546,6 +565,31 @@ export function ApiKeysPanel() {
                 onChange={(e) => setNewKeyName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
               />
+            </div>
+            <div className="space-y-2">
+              <Label>{t('mode_label')}</Label>
+              <div className="inline-flex rounded-md border p-0.5" role="radiogroup" aria-label={t('mode_label')}>
+                {(['live', 'test'] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="radio"
+                    aria-checked={newKeyMode === m}
+                    onClick={() => setNewKeyMode(m)}
+                    className={cn(
+                      'rounded-[5px] px-3 py-1.5 text-xs transition-colors',
+                      newKeyMode === m
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {t(m === 'live' ? 'mode_live' : 'mode_test')}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {newKeyMode === 'test' ? t('mode_test_help') : t('mode_live_help')}
+              </p>
             </div>
             <div className="space-y-3">
               <div className="flex items-baseline justify-between gap-3">

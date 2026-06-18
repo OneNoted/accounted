@@ -189,5 +189,40 @@ describe('POST /api/settings/api-keys', () => {
     expect(payload).not.toHaveProperty('sod_acknowledged_at')
     expect(payload).not.toHaveProperty('sod_acknowledged_by')
     expect(payload.scopes).toEqual(['reports:read'])
+    // Default mode is live, bound to the active company.
+    expect(payload.mode).toBe('live')
+    expect(payload.company_id).toBe('company-1')
+  })
+
+  it('creates a test key bound to the active company with mode=test', async () => {
+    const { insertSpy } = setupFrom({
+      count: 0,
+      insertResult: {
+        data: {
+          id: 'ak-3',
+          key_prefix: 'gnubok_sk_test_abc',
+          name: 'pilot',
+          scopes: ['reports:read'],
+          mode: 'test',
+          created_at: '2026-06-05T10:00:00Z',
+        },
+      },
+    })
+    const res = await POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'pilot', scopes: ['reports:read'], mode: 'test' },
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ data: { key: string } }>(res)
+    expect(status).toBe(200)
+    // Real generateApiKey('test') runs — the returned secret carries the infix.
+    expect(body.data.key).toMatch(/^gnubok_sk_test_/)
+
+    const payload = insertSpy.mock.calls[0][0] as Record<string, unknown>
+    expect(payload.mode).toBe('test')
+    // Test keys are simulation-only — they bind to the active company (the v1
+    // wrapper forces dry-run so they never persist).
+    expect(payload.company_id).toBe('company-1')
   })
 })
