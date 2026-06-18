@@ -370,7 +370,9 @@ describe('ensureFiscalPeriod validation', () => {
       { data: null, error: null },
       { data: [], error: null },
       { data: [], error: null }, // no earlier period
+      { data: [], error: null }, // no predecessor in the continuity chain
       { data: { id: 'new-period-id' }, error: null }, // insert result
+      { data: [], error: null }, // no successor to relink
     ])
 
     const id = await ensureFiscalPeriod(
@@ -393,7 +395,9 @@ describe('ensureFiscalPeriod validation', () => {
       { data: null, error: null }, // containing check — no match
       { data: [], error: null },   // overlapping check — none (2017 vs 2026)
       { data: [], error: null },   // no earlier period than 2017-07-28
+      { data: [], error: null },   // no predecessor in the continuity chain
       { data: { id: 'retro-first-year-id' }, error: null }, // insert
+      { data: [], error: null },   // no successor to relink
     ])
 
     const id = await ensureFiscalPeriod(
@@ -482,7 +486,9 @@ describe('ensureFiscalPeriod validation', () => {
       { data: [], error: null }, // journal_entries — none
       { data: [], error: null }, // earlier-period check — none (mid-month start)
       { data: null, error: null }, // delete result
+      { data: [], error: null }, // no predecessor in the continuity chain
       { data: { id: 'replaced-id' }, error: null }, // insert result
+      { data: [], error: null }, // no successor to relink
     ])
 
     const id = await ensureFiscalPeriod(

@@ -61,18 +61,36 @@ export async function generateResultatrapport(
   let priorRows: TrialBalanceRow[] = []
   let priorPeriodInfo: { start: string; end: string } | null = null
   const isFullPeriod = !options?.fromDate && !options?.toDate
-  if (isFullPeriod && period.previous_period_id) {
-    const { data: prior } = await supabase
-      .from('fiscal_periods')
-      .select('period_start, period_end')
-      .eq('id', period.previous_period_id)
-      .eq('company_id', companyId)
-      .single()
+  if (isFullPeriod) {
+    // Prefer the explicit continuity chain; fall back to the period that ends
+    // immediately before this one. The fallback keeps the comparison working
+    // for companies whose chain was never linked — e.g. multi-year SIE imports
+    // created before the importer started setting previous_period_id.
+    let priorPeriodId: string | null = period.previous_period_id ?? null
+    if (!priorPeriodId) {
+      const { data: priorByDate } = await supabase
+        .from('fiscal_periods')
+        .select('id')
+        .eq('company_id', companyId)
+        .lt('period_end', period.period_start)
+        .order('period_end', { ascending: false })
+        .limit(1)
+      priorPeriodId = priorByDate && priorByDate.length > 0 ? priorByDate[0].id : null
+    }
 
-    if (prior) {
-      const priorTb = await generateTrialBalance(supabase, companyId, period.previous_period_id)
-      priorRows = filterPnl(priorTb.rows)
-      priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
+    if (priorPeriodId) {
+      const { data: prior } = await supabase
+        .from('fiscal_periods')
+        .select('period_start, period_end')
+        .eq('id', priorPeriodId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (prior) {
+        const priorTb = await generateTrialBalance(supabase, companyId, priorPeriodId)
+        priorRows = filterPnl(priorTb.rows)
+        priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
+      }
     }
   }
 

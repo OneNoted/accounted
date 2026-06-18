@@ -487,6 +487,20 @@ export async function ensureFiscalPeriod(
     ? `Räkenskapsår ${startYear}`
     : `Räkenskapsår ${startYear}/${endYear}`
 
+  // Link the BFNAR 2013:2 continuity chain so the resultatrapport can find the
+  // prior year for its comparison column. Mirrors the manual fiscal-periods
+  // route: point this period at its closest predecessor, then relink the
+  // immediate successor (if any) to follow this one — so multi-year SIE files
+  // chain correctly regardless of the order #RAR years are processed in.
+  const { data: predecessors } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .lt('period_end', startDate)
+    .order('period_end', { ascending: false })
+    .limit(1)
+  const previousPeriodId = predecessors && predecessors.length > 0 ? predecessors[0].id : null
+
   const { data: newPeriod, error } = await supabase
     .from('fiscal_periods')
     .insert({
@@ -496,12 +510,31 @@ export async function ensureFiscalPeriod(
       period_end: endDate,
       is_closed: false,
       opening_balances_set: false,
+      previous_period_id: previousPeriodId,
     })
     .select()
     .single()
 
   if (error || !newPeriod) {
     throw new Error(`Failed to create fiscal period: ${error?.message}`)
+  }
+
+  // Relink the immediate successor (e.g. when an earlier year is imported after
+  // a later one) so the chain holds in both directions.
+  const { data: successors } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .gt('period_start', endDate)
+    .neq('id', newPeriod.id)
+    .order('period_start', { ascending: true })
+    .limit(1)
+  if (successors && successors.length > 0) {
+    await supabase
+      .from('fiscal_periods')
+      .update({ previous_period_id: newPeriod.id })
+      .eq('id', successors[0].id)
+      .eq('company_id', companyId)
   }
 
   return newPeriod.id

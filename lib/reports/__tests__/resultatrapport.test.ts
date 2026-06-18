@@ -219,6 +219,57 @@ describe('generateResultatrapport', () => {
     expect(report.groups[0].rows[0].account_number).toBe('3001')
   })
 
+  it('falls back to the date-adjacent prior period when previous_period_id is null', async () => {
+    // Reproduces the multi-year-SIE bug: the continuity chain was never linked,
+    // so the comparison must resolve the prior year by date instead.
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+    // Date-range fallback finds the immediately-preceding period.
+    q.enqueue({ data: [{ id: 'period-0' }], error: null })
+    // Prior-period dates.
+    q.enqueue({ data: { period_start: '2025-01-01', period_end: '2025-12-31' }, error: null })
+
+    mockTrialBalance
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 200000 })])
+      )
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 150000 })])
+      )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.groups[0].rows[0].current_period).toBe(200000)
+    expect(report.groups[0].rows[0].prior_period).toBe(150000)
+    expect(report.prior_period).toEqual({ start: '2025-01-01', end: '2025-12-31' })
+    // The fallback resolved 'period-0' and the prior TB was fetched for it.
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-0')
+  })
+
+  it('leaves the prior column empty when there is no earlier period at all', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+    q.enqueue({ data: [], error: null }) // no date-adjacent predecessor
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 })])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.prior_period).toBeNull()
+    expect(report.net_result_prior).toBe(0)
+    expect(mockTrialBalance).toHaveBeenCalledTimes(1)
+  })
+
   it('throws when fiscal period not found', async () => {
     const q = createQueuedMockSupabase()
     q.enqueue({ data: null, error: null })
