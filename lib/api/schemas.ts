@@ -1061,6 +1061,7 @@ export const UpdateSettingsSchema = z.object({
   next_invoice_number: z.number().int().positive().optional(),
   invoice_default_days: z.number().int().positive().optional(),
   invoice_default_notes: z.string().nullable().optional(),
+  default_our_reference: z.string().max(200).nullable().optional(),
   phone: z.string().optional(),
   email: z.string().email().optional().or(z.literal('')),
   website: z.string().optional().or(z.literal('')),

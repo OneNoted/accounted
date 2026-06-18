@@ -54,9 +54,10 @@ import {
   computeDeduction,
 } from '@/lib/invoices/rot-rut-rules'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
+import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
-import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem } from '@/types'
+import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -212,6 +213,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Artikelregister: active articles for the line picker + which line is mid quick-create.
   const [articles, setArticles] = useState<ArticleOption[]>([])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
+  // Class-3 (revenue) accounts for the optional per-line försäljningskonto
+  // override, plus which rows currently show that picker.
+  const [revenueAccounts, setRevenueAccounts] = useState<BASAccount[]>([])
+  const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
   // True only when the user had zero invoices when this page loaded. The
   // post-create flow uses this to offer a one-shot "upload a logo?" prompt
   // — issue #520. Self-limits: once count > 0 it stays false.
@@ -349,6 +354,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     fetchCustomers()
     fetchDefaultNotes()
     fetchArticles()
+    fetchRevenueAccounts()
   }, [company?.id])
 
   async function fetchArticles() {
@@ -360,6 +366,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       .eq('active', true)
       .order('name')
     setArticles((data ?? []) as ArticleOption[])
+  }
+
+  async function fetchRevenueAccounts() {
+    if (!company?.id) return
+    try {
+      const res = await fetch('/api/bookkeeping/accounts?class=3')
+      const body = await res.json()
+      setRevenueAccounts((body?.data as BASAccount[]) || [])
+    } catch {
+      // Non-fatal: the override picker degrades to free 4-digit entry.
+    }
   }
 
   // Apply a chosen article's defaults onto a line. Selecting "none" detaches the
@@ -431,12 +448,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!company?.id) return
     const { data } = await supabase
       .from('company_settings')
-      .select('invoice_default_notes, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered')
+      .select('invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered')
       .eq('company_id', company.id)
       .single()
     if (data?.invoice_default_notes) {
       setDefaultNotes(data.invoice_default_notes)
       setValue('notes', data.invoice_default_notes)
+    }
+    // Pre-fill "Vår referens" from the company default — only when creating a
+    // fresh invoice, so an edited draft's own reference is never overwritten.
+    if (!isEditMode && data?.default_our_reference) {
+      setValue('our_reference', data.default_our_reference)
     }
     setHasBankDetails(
       !!(data?.clearing_number && data?.account_number) || !!data?.bankgiro
@@ -666,6 +688,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         DEFAULT_DEFERRED_REVENUE_ACCOUNT,
         { shouldDirty: true },
       )
+    }
+  }
+
+  // Open/close the optional per-line försäljningskonto override. Closing clears
+  // the value so the engine falls back to the VAT-rate-derived revenue account.
+  function toggleAccountOverride(index: number) {
+    const isOpen = accountOverrideRows.has(index) || !!watchItems[index]?.revenue_account
+    if (isOpen) {
+      setValue(`items.${index}.revenue_account`, null, { shouldDirty: true })
+      setAccountOverrideRows((prev) => {
+        const next = new Set(prev)
+        next.delete(index)
+        return next
+      })
+    } else {
+      setAccountOverrideRows((prev) => new Set(prev).add(index))
     }
   }
 
@@ -1283,6 +1321,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               </DropdownMenuItem>
                             </>
                           )}
+                          {watchItems[index]?.line_type !== 'text' && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onSelect={() => toggleAccountOverride(index)} className="py-2">
+                                <Landmark className="h-4 w-4" />
+                                {(accountOverrideRows.has(index) || watchItems[index]?.revenue_account)
+                                  ? t('row_menu_remove_account')
+                                  : t('row_menu_set_account')}
+                              </DropdownMenuItem>
+                            </>
+                          )}
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             className="py-2 text-destructive focus:text-destructive"
@@ -1571,6 +1620,34 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               {errors.items[index].accrual_period_end?.message}
                             </p>
                           )}
+                        </div>
+                      )}
+
+                      {/* Optional försäljningskonto override (engångsartikel). When
+                          unset the engine derives the revenue account from the VAT
+                          rate; reverse-charge/export lines ignore the override. */}
+                      {isInvoiceDoc && watchItems[index]?.line_type !== 'text' &&
+                        (accountOverrideRows.has(index) || watchItems[index]?.revenue_account) && (
+                        <div className="md:col-span-12 mt-2 md:mt-3">
+                          <div className="flex flex-wrap items-end gap-2">
+                            <div className="min-w-[220px] flex-1 space-y-1 md:space-y-2">
+                              <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">
+                                {t('revenue_account_label')}
+                              </Label>
+                              <Controller
+                                name={`items.${index}.revenue_account`}
+                                control={control}
+                                render={({ field }) => (
+                                  <AccountCombobox
+                                    value={field.value ?? ''}
+                                    accounts={revenueAccounts}
+                                    onChange={(v) => field.onChange(v || null)}
+                                  />
+                                )}
+                              />
+                            </div>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{t('revenue_account_hint')}</p>
                         </div>
                       )}
 

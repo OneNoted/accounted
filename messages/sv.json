@@ -1228,6 +1228,9 @@
     "swish_error": "Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)"
   },
   "settings_invoice_form": {
+    "default_our_reference_label": "Standard för Vår referens",
+    "default_our_reference_placeholder": "T.ex. ditt namn",
+    "default_our_reference_help": "Förifylls automatiskt på nya fakturor. Kan ändras per faktura.",
     "heading": "Fakturainställningar",
     "prefix_label": "Fakturaprefix",
     "prefix_placeholder": "t.ex. F-",
@@ -2140,6 +2143,10 @@
     "cancel": "Avbryt"
   },
   "invoice_editor": {
+    "row_menu_set_account": "Ange försäljningskonto",
+    "row_menu_remove_account": "Ta bort försäljningskonto",
+    "revenue_account_label": "Försäljningskonto",
+    "revenue_account_hint": "Lämna tomt för att härleda kontot från momssatsen. Ignoreras för omvänd skattskyldighet och export.",
     "ore_rounding_label": "Öresavrundning",
     "ore_rounding_help": "Avrunda fakturatotal till hel krona",
     "back": "Tillbaka",

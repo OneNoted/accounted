@@ -1228,6 +1228,9 @@
     "swish_error": "Invalid Swish number (business number 123XXXXXXX or mobile number 07XXXXXXXX)"
   },
   "settings_invoice_form": {
+    "default_our_reference_label": "Default \"Our reference\"",
+    "default_our_reference_placeholder": "E.g. your name",
+    "default_our_reference_help": "Pre-filled on new invoices. Editable per invoice.",
     "heading": "Invoice settings",
     "prefix_label": "Invoice prefix",
     "prefix_placeholder": "e.g. F-",
@@ -2140,6 +2143,10 @@
     "cancel": "Cancel"
   },
   "invoice_editor": {
+    "row_menu_set_account": "Set sales account",
+    "row_menu_remove_account": "Remove sales account",
+    "revenue_account_label": "Sales account",
+    "revenue_account_hint": "Leave blank to derive the account from the VAT rate. Ignored for reverse charge and export.",
     "ore_rounding_label": "Öre rounding",
     "ore_rounding_help": "Round the invoice total to whole kronor",
     "back": "Back",

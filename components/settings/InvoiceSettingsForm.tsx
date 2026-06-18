@@ -63,6 +63,19 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
           {t('default_notes_help')}
         </p>
       </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="default_our_reference">{t('default_our_reference_label')}</Label>
+        <Input
+          id="default_our_reference"
+          name="default_our_reference"
+          placeholder={t('default_our_reference_placeholder')}
+          defaultValue={settings.default_our_reference || ''}
+        />
+        <p className="text-xs text-muted-foreground">
+          {t('default_our_reference_help')}
+        </p>
+      </div>
     </section>
   )
 }

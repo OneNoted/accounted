@@ -240,6 +240,8 @@ export interface CompanySettings {
   next_delivery_note_number: number
   invoice_default_days: number
   invoice_default_notes: string | null
+  // Default "Vår referens" — pre-fills the per-invoice our_reference field.
+  default_our_reference: string | null
 
   // Bookkeeping lock
   bookkeeping_locked_through: string | null
