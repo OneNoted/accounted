@@ -10,6 +10,8 @@
  * canonicalised.
  */
 
+import { roundOre } from '@/lib/money'
+
 const SWISH_FORETAG = /^123\d{7}$/
 const SWEDISH_MOBILE = /^07\d{8}$/
 
@@ -43,7 +45,7 @@ export function buildSwishQrPayload(
   if (!(amount > 0)) return null
   // Amount uses a dot decimal with at most two decimals. The message must not
   // contain the ';' field delimiter; cap its length to keep the QR scannable.
-  const amt = (Math.round(amount * 100) / 100).toFixed(2)
+  const amt = roundOre(amount).toFixed(2)
   const msg = (message ?? '').replace(/;/g, ' ').trim().slice(0, 50)
   return `C${number};${amt};${msg};0`
 }
