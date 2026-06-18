@@ -11,6 +11,7 @@ export const ENTRY_DATE_OUTSIDE_FISCAL_PERIOD = 'ENTRY_DATE_OUTSIDE_FISCAL_PERIO
 export const JOURNAL_ENTRY_NOT_FOUND = 'JOURNAL_ENTRY_NOT_FOUND' as const
 export const CANNOT_REVERSE_NON_POSTED = 'CANNOT_REVERSE_NON_POSTED' as const
 export const CANNOT_CORRECT_NON_POSTED = 'CANNOT_CORRECT_NON_POSTED' as const
+export const CANNOT_EDIT_NON_DRAFT = 'CANNOT_EDIT_NON_DRAFT' as const
 export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
@@ -123,6 +124,20 @@ export class CannotCorrectNonPostedError extends Error {
   constructor(public readonly currentStatus: string) {
     super('Can only correct posted entries')
     this.name = 'CannotCorrectNonPostedError'
+  }
+}
+
+/**
+ * Raised when an edit is attempted on a committed entry. Only drafts are
+ * editable in place; posted/reversed/cancelled entries are immutable per BFL
+ * 5 kap. (corrections go through storno). The DB immutability trigger is the
+ * backstop — this gives a clean, translatable 409 before we reach it.
+ */
+export class CannotEditNonDraftError extends Error {
+  readonly code = CANNOT_EDIT_NON_DRAFT
+  constructor(public readonly currentStatus: string) {
+    super('Only draft entries can be edited')
+    this.name = 'CannotEditNonDraftError'
   }
 }
 
@@ -269,6 +284,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof JournalEntryNotFoundError ||
     err instanceof CannotReverseNonPostedError ||
     err instanceof CannotCorrectNonPostedError ||
+    err instanceof CannotEditNonDraftError ||
     err instanceof EntryAlreadyReversedError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
@@ -393,6 +409,19 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
         },
       },
       { status: 400 }
+    )
+  }
+
+  if (err instanceof CannotEditNonDraftError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { currentStatus: err.currentStatus },
+        },
+      },
+      { status: 409 }
     )
   }
 

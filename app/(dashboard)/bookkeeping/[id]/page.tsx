@@ -21,6 +21,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
+import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -41,6 +42,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCorrection, setShowCorrection] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -233,6 +235,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         {(entry.status === 'posted' || entry.status === 'draft') && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            {entry.status === 'draft' && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full sm:w-auto"
+                onClick={() => setShowEdit(true)}
+                disabled={!canWrite}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
+              >
+                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                {t('edit_draft')}
+              </Button>
+            )}
             {entry.status === 'draft' && (
               <Button
                 size="sm"
@@ -655,6 +670,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           onOpenChange={setShowRecordate}
           onMoved={() => {
             setShowRecordate(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Edit draft dialog — drafts only; PATCHes the entry in place */}
+      {showEdit && entry && entry.status === 'draft' && (
+        <EditDraftEntryDialog
+          entry={entry}
+          open={showEdit}
+          onOpenChange={setShowEdit}
+          onUpdated={() => {
+            setShowEdit(false)
             fetchData()
           }}
         />

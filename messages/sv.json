@@ -1241,6 +1241,7 @@
     "default_notes_help": "Föreslås automatiskt vid ny faktura."
   },
   "settings_pdf_print": {
+    "coming_soon": "Kommer snart",
     "heading": "Utskrift & PDF",
     "toast_save_failed": "Kunde inte spara",
     "ore_rounding_label": "Öresavrundning",
@@ -1252,7 +1253,7 @@
     "show_plusgiro_label": "Visa plusgiro",
     "show_plusgiro_help": "Visa plusgironummer på fakturautskrift",
     "show_swish_label": "Visa Swish",
-    "show_swish_help": "Visa Swish-nummer på fakturautskrift",
+    "show_swish_help": "Visa swish nummer och qr kod på faktura",
     "show_logo_label": "Visa logga",
     "show_logo_help": "Visa uppladdad logga i fakturahuvudet",
     "show_company_name_label": "Visa företagsnamn i faktura",
@@ -3171,6 +3172,7 @@
     "current": "Aktuell"
   },
   "journal_detail": {
+    "edit_draft": "Redigera",
     "back": "Tillbaka till bokföring",
     "loading": "Laddar verifikation...",
     "error_not_found": "Verifikation hittades inte",
@@ -3235,6 +3237,10 @@
     "delete_dialog_entry_body": "Verifikatet och dess kontorader tas bort. Kopplade transaktioner och fakturor behåller sina uppgifter men markeras som ej bokförda. Underlag (kvitton, dokument) behålls men avlänkas."
   },
   "journal_form": {
+    "save_edit": "Spara ändringar",
+    "toast_updated_title": "Utkast uppdaterat",
+    "toast_updated_description": "Ändringarna i utkastet har sparats.",
+    "toast_update_failed": "Kunde inte spara ändringarna",
     "card_title": "Ny verifikation",
     "fiscal_year": "Räkenskapsår",
     "fiscal_year_placeholder": "Välj period",
@@ -3618,6 +3624,7 @@
     "import_psd2_active_warning_body": "Transaktioner synkas automatiskt varje natt. Filimport behövs bara för äldre historik eller om PSD2 inte fungerar — annars kan dubbletter uppstå."
   },
   "bookkeeping": {
+    "edit_draft_dialog_title": "Redigera utkast",
     "title": "Bokföring",
     "year_end": "Årsbokslut",
     "tab_journal": "Verifikationer",

@@ -4,6 +4,7 @@ import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
+  CannotEditNonDraftError,
   CannotReverseNonPostedError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
@@ -350,6 +351,138 @@ export async function createDraftEntry(
   })
 
   return result
+}
+
+/**
+ * Update an existing DRAFT journal entry in place — header + lines. Only drafts
+ * are editable; committed entries (posted/reversed/cancelled) are immutable per
+ * BFL 5 kap. and rejected with CannotEditNonDraftError (the DB immutability
+ * trigger is the backstop). Mirrors createDraftEntry's validate-everything-first
+ * order so an unbalanced set, a bad period, or a locked period fails before any
+ * row is mutated — the header UPDATE is the first write, so a locked period
+ * aborts cleanly with the draft untouched.
+ */
+export async function updateDraftEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string,
+  input: CreateJournalEntryInput
+): Promise<JournalEntry> {
+  // Load the entry and assert it is an editable draft.
+  const { data: existing, error: loadError } = await supabase
+    .from('journal_entries')
+    .select('id, status, voucher_series')
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (loadError || !existing) {
+    throw new JournalEntryNotFoundError()
+  }
+  if (existing.status !== 'draft') {
+    throw new CannotEditNonDraftError(existing.status as string)
+  }
+
+  // Same balance gate as createDraftEntry.
+  const balance = validateBalance(input.lines)
+  if (!balance.valid) {
+    throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
+  }
+
+  // Entry date must fall within the selected fiscal period.
+  const { data: period, error: periodError } = await supabase
+    .from('fiscal_periods')
+    .select('name, period_start, period_end')
+    .eq('id', input.fiscal_period_id)
+    .eq('company_id', companyId)
+    .single()
+
+  if (periodError || !period) {
+    throw new FiscalPeriodNotFoundError()
+  }
+  if (input.entry_date < period.period_start || input.entry_date > period.period_end) {
+    throw new EntryDateOutsideFiscalPeriodError(
+      input.entry_date,
+      period.name,
+      period.period_start,
+      period.period_end
+    )
+  }
+
+  // Resolve account IDs (seeding standard BAS accounts on demand) up front, so
+  // the line insert below cannot fail on a missing account — same as create.
+  const accountIdMap = await resolveAccountIds(supabase, companyId, input.lines)
+  const allAccountNumbers = [...new Set(input.lines.map((l) => l.account_number))]
+  let missingAccounts = allAccountNumbers.filter((num) => !accountIdMap.has(num))
+  if (missingAccounts.length > 0) {
+    const seeded = await backfillStandardBASAccounts(supabase, companyId, userId, missingAccounts)
+    if (seeded.length > 0) {
+      const refreshed = await resolveAccountIds(supabase, companyId, input.lines)
+      for (const [num, id] of refreshed) accountIdMap.set(num, id)
+      missingAccounts = allAccountNumbers.filter((num) => !accountIdMap.has(num))
+    }
+    if (missingAccounts.length > 0) {
+      throw new AccountsNotInChartError(missingAccounts)
+    }
+  }
+
+  const resolvedSeries = input.voucher_series || (existing.voucher_series as string) || 'A'
+
+  // All validation passed — mutate. Update the header first; a locked/closed
+  // period blocks this write (enforce_period_lock) before any line is touched.
+  // source_type / source_id / status are intentionally preserved.
+  const { error: headerError } = await supabase
+    .from('journal_entries')
+    .update({
+      fiscal_period_id: input.fiscal_period_id,
+      entry_date: input.entry_date,
+      description: input.description,
+      voucher_series: resolvedSeries,
+      notes: input.notes || null,
+    })
+    .eq('id', entryId)
+    .eq('company_id', companyId)
+
+  if (headerError) {
+    throw new BookkeepingDatabaseError('create_draft_entry', headerError.message)
+  }
+
+  // Replace the lines: delete the old set, insert the new one.
+  const { error: deleteError } = await supabase
+    .from('journal_entry_lines')
+    .delete()
+    .eq('journal_entry_id', entryId)
+
+  if (deleteError) {
+    throw new BookkeepingDatabaseError('create_entry_lines', deleteError.message)
+  }
+
+  const lineInserts = buildLineInserts(entryId, input.lines, accountIdMap)
+  const { error: linesError } = await supabase
+    .from('journal_entry_lines')
+    .insert(lineInserts)
+
+  if (linesError) {
+    log.error('update draft: insert journal_entry_lines failed', linesError, {
+      operation: 'create_entry_lines',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      entityId: entryId,
+      lineCount: lineInserts.length,
+      pgCode: (linesError as { code?: string }).code,
+    })
+    throw new BookkeepingDatabaseError('create_entry_lines', linesError.message)
+  }
+
+  const { data: completeEntry } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .eq('id', entryId)
+    .single()
+
+  return completeEntry as JournalEntry
 }
 
 /**

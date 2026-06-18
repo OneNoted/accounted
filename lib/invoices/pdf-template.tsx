@@ -159,6 +159,11 @@ const LABELS = {
   },
 } as const
 
+// Swish on invoices (the number row + the payment QR) is "coming soon" — gated
+// off until the QR flow is finished. Flip to true to re-enable both at once;
+// the settings "Visa Swish" toggle is disabled while this is false.
+export const SHOW_SWISH_ON_INVOICE = false
+
 // Labor-only disclaimer for the ROT/RUT block. Kept Swedish-only in both
 // locales — references Skatteverket's fakturamodell directly, which is a
 // statutory Swedish concept and has no formal English equivalent.
@@ -1046,7 +1051,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 <Text style={styles.paymentValue}>{company.plusgiro}</Text>
               </View>
             )}
-            {company.swish && (company.invoice_show_swish ?? false) && (
+            {SHOW_SWISH_ON_INVOICE && company.swish && (company.invoice_show_swish ?? false) && (
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{L.swish}</Text>
                 <Text style={styles.paymentValue}>{company.swish}</Text>

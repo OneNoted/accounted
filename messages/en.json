@@ -1241,6 +1241,7 @@
     "default_notes_help": "Suggested automatically for new invoices."
   },
   "settings_pdf_print": {
+    "coming_soon": "Coming soon",
     "heading": "Print & PDF",
     "toast_save_failed": "Could not save",
     "ore_rounding_label": "Öre rounding",
@@ -1252,7 +1253,7 @@
     "show_plusgiro_label": "Show plusgiro",
     "show_plusgiro_help": "Show plusgiro number on invoice printout",
     "show_swish_label": "Show Swish",
-    "show_swish_help": "Show Swish number on invoice printout",
+    "show_swish_help": "Show swish number and qr code on invoice",
     "show_logo_label": "Show logo",
     "show_logo_help": "Show uploaded logo in the invoice header",
     "show_company_name_label": "Show company name on invoice",
@@ -3171,6 +3172,7 @@
     "current": "Current"
   },
   "journal_detail": {
+    "edit_draft": "Edit",
     "back": "Back to bookkeeping",
     "loading": "Loading journal entry...",
     "error_not_found": "Journal entry not found",
@@ -3235,6 +3237,10 @@
     "delete_dialog_entry_body": "The journal entry and its lines are removed. Linked transactions and invoices keep their data but are marked as unposted. Documents (receipts, files) are kept but unlinked."
   },
   "journal_form": {
+    "save_edit": "Save changes",
+    "toast_updated_title": "Draft updated",
+    "toast_updated_description": "Your changes to the draft were saved.",
+    "toast_update_failed": "Could not save changes",
     "card_title": "New journal entry",
     "fiscal_year": "Fiscal year",
     "fiscal_year_placeholder": "Select period",
@@ -3618,6 +3624,7 @@
     "import_psd2_active_warning_body": "Transactions sync automatically each night. File imports are only needed for older history or when PSD2 isn't working — otherwise duplicates may occur."
   },
   "bookkeeping": {
+    "edit_draft_dialog_title": "Edit draft",
     "title": "Bookkeeping",
     "year_end": "Year-end (Årsbokslut)",
     "tab_journal": "Journal entries",

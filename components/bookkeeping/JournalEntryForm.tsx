@@ -59,6 +59,7 @@ interface Props {
   initialDate?: string
   initialDescription?: string
   initialNotes?: string
+  initialVoucherSeries?: string
   sourceType?: JournalEntrySourceType
   sourceId?: string
   submitUrl?: string
@@ -66,6 +67,11 @@ interface Props {
   /** Render without the Card chrome (e.g. inside a dialog) but keep the full
    *  non-embedded field set (series, notes, documents, voucher hint). */
   bare?: boolean
+  /** Edit an existing DRAFT in place: the form PATCHes this entry instead of
+   *  creating a new one. Only the draft's header + lines are updated. */
+  editEntryId?: string
+  /** Fired after a successful draft edit (editEntryId path). */
+  onUpdated?: () => void
 }
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '', line_description: '' }
@@ -77,11 +83,14 @@ export default function JournalEntryForm({
   initialDate,
   initialDescription,
   initialNotes,
+  initialVoucherSeries,
   sourceType,
   sourceId,
   submitUrl,
   embedded,
   bare,
+  editEntryId,
+  onUpdated,
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -97,7 +106,7 @@ export default function JournalEntryForm({
   const [lines, setLines] = useState<FormLine[]>(
     initialLines ?? [{ ...BLANK_LINE }, { ...BLANK_LINE }]
   )
-  const [voucherSeries, setVoucherSeries] = useState('A')
+  const [voucherSeries, setVoucherSeries] = useState(initialVoucherSeries ?? 'A')
   const [nextVoucherNumber, setNextVoucherNumber] = useState<number | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showReview, setShowReview] = useState(false)
@@ -170,7 +179,9 @@ export default function JournalEntryForm({
     // Fetch default voucher series from company settings — prefer the
     // per-source-type mapping when present; fall back to the legacy
     // default_voucher_series, then to 'A'.
-    if (!embedded) {
+    // In edit mode the draft's own series is pre-filled — never override it
+    // from the company defaults.
+    if (!embedded && !editEntryId) {
       fetch('/api/settings').then(r => r.json()).then(({ data }) => {
         if (!data) return
         const effectiveSourceType = sourceType ?? 'manual'
@@ -182,7 +193,7 @@ export default function JournalEntryForm({
         setVoucherSeries(perSource !== 'A' ? perSource : fallback)
       }).catch(() => {/* keep 'A' */})
     }
-  }, [embedded, sourceType])
+  }, [embedded, sourceType, editEntryId])
 
   // Auto-select period when entry date changes
   useEffect(() => {
@@ -539,9 +550,15 @@ export default function JournalEntryForm({
       })
 
     const baseUrl = submitUrl ?? '/api/bookkeeping/journal-entries'
-    const url = saveAsDraftRef.current ? `${baseUrl}?as_draft=true` : baseUrl
+    // Edit mode PATCHes the draft in place; create mode POSTs (with ?as_draft
+    // when saving a draft rather than posting).
+    const url = editEntryId
+      ? `${baseUrl}/${editEntryId}`
+      : saveAsDraftRef.current
+        ? `${baseUrl}?as_draft=true`
+        : baseUrl
     const res = await fetch(url, {
-      method: 'POST',
+      method: editEntryId ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fiscal_period_id: selectedPeriod,
@@ -555,7 +572,7 @@ export default function JournalEntryForm({
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, isForeign, rate, entryCurrency, computedForeignAmount, submitUrl, selectedPeriod, entryDate, description, sourceType, sourceId, voucherSeries, notes])
+  }, [lines, isForeign, rate, entryCurrency, computedForeignAmount, submitUrl, editEntryId, selectedPeriod, entryDate, description, sourceType, sourceId, voucherSeries, notes])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
@@ -674,6 +691,35 @@ export default function JournalEntryForm({
       }
     } finally {
       saveAsDraftRef.current = false
+      setIsSavingDraft(false)
+    }
+  }
+
+  // Edit an existing draft: PATCH in place (postJournalEntry routes to the
+  // editEntryId URL) and keep it a draft. No field reset — the host dialog
+  // closes on success via onUpdated.
+  const handleSaveEdit = async () => {
+    if (!selectedPeriod || !description || !isBalanced || periodMismatch) return
+    setIsSavingDraft(true)
+    try {
+      await runSubmit()
+      toast({
+        title: t('toast_updated_title'),
+        description: t('toast_updated_description'),
+      })
+      onUpdated?.()
+    } catch (err) {
+      if (err instanceof Error && err.message === 'cancelled') {
+        // Activation dialog dismissed — silent
+      } else {
+        const anyErr = err as { body?: unknown; status?: number }
+        toast({
+          title: t('toast_update_failed'),
+          description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
+          variant: 'destructive',
+        })
+      }
+    } finally {
       setIsSavingDraft(false)
     }
   }
@@ -1175,8 +1221,9 @@ export default function JournalEntryForm({
         <p className="mt-1.5 text-xs text-muted-foreground">{t('fill_balance_hint')}</p>
       </div>
 
-      {/* Document attachments */}
-      {!embedded && (
+      {/* Document attachments — hidden when editing a draft; underlag is
+          managed from the verifikat detail page (JournalEntryAttachments). */}
+      {!embedded && !editEntryId && (
         <div>
           <Label className="mb-2 block">{t('attachments_label')}</Label>
           <DocumentUploadZone
@@ -1194,34 +1241,47 @@ export default function JournalEntryForm({
 
       <div className="flex flex-col items-end gap-1">
         <div className="flex gap-2">
-          {!embedded && (
+          {editEntryId ? (
             <Button
-              variant="ghost"
-              onClick={() => setShowClearConfirm(true)}
-              disabled={!hasContent || isSubmitting || isSavingDraft}
-              title={t('clear_all_tooltip')}
+              onClick={handleSaveEdit}
+              disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+              title={!canWrite ? t('read_only_tooltip') : undefined}
             >
-              <Eraser className="mr-2 h-4 w-4" />
-              {t('clear_all')}
+              {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('save_edit')}
             </Button>
+          ) : (
+            <>
+              {!embedded && (
+                <Button
+                  variant="ghost"
+                  onClick={() => setShowClearConfirm(true)}
+                  disabled={!hasContent || isSubmitting || isSavingDraft}
+                  title={t('clear_all_tooltip')}
+                >
+                  <Eraser className="mr-2 h-4 w-4" />
+                  {t('clear_all')}
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                onClick={handleSaveDraft}
+                disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+                title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
+              >
+                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {t('save_draft')}
+              </Button>
+              <Button
+                onClick={handleReview}
+                disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
+              >
+                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                {t('review_and_create')}
+              </Button>
+            </>
           )}
-          <Button
-            variant="outline"
-            onClick={handleSaveDraft}
-            disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
-            title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
-          >
-            {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {t('save_draft')}
-          </Button>
-          <Button
-            onClick={handleReview}
-            disabled={!isBalanced || !description || !selectedPeriod || !!periodMismatch || isSubmitting || isSavingDraft || isUploading || !canWrite}
-            title={!canWrite ? t('read_only_tooltip') : undefined}
-          >
-            {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-            {t('review_and_create')}
-          </Button>
         </div>
         {(!description || !selectedPeriod || isUploading || periodMismatch || incompleteLineCount > 0 || (!isBalanced && submittableLines.length < 2)) && (
           <div className="text-xs text-muted-foreground space-y-0.5 text-right">
