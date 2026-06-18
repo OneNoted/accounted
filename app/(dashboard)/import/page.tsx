@@ -1864,12 +1864,17 @@ export default function ImportPage() {
   // Sync mode + view from URL search params (reacts to client-side navigation changes)
   const searchParams = useSearchParams()
   useEffect(() => {
-    if (isSandbox) return
-    if (searchParams.get('migration')) {
+    // External imports (provider migration, PSD2 bank connection) need live
+    // third-party credentials, so their deep links are ignored in the sandbox.
+    // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
+    const allowedModes = isSandbox
+      ? ['bank', 'sie', 'csv_data']
+      : ['psd2', 'bank', 'sie', 'csv_data', 'migration']
+    if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
       const modeParam = searchParams.get('mode')
-      if (modeParam && ['psd2', 'bank', 'sie', 'csv_data', 'migration'].includes(modeParam)) {
+      if (modeParam && allowedModes.includes(modeParam)) {
         setMode(modeParam as ImportMode)
       }
     }
@@ -2012,19 +2017,20 @@ export default function ImportPage() {
               </div>
             )}
 
-            {/* 3. Banktransaktioner */}
+            {/* 3. Banktransaktioner — manual file imports (bank file, CSV/Excel,
+                SIE) run entirely on uploaded data with no external service, so
+                they stay available in the sandbox, unlike the API-backed options
+                above (bank connection, provider migration) which need live
+                credentials. */}
             <div
               role="button"
-              tabIndex={isSandbox ? -1 : 0}
-              aria-disabled={isSandbox}
+              tabIndex={0}
               className={cn(
                 'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
-                isSandbox
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
               )}
-              onClick={() => { if (!isSandbox) setMode('bank') }}
-              onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('bank') } }}
+              onClick={() => setMode('bank')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('bank') } }}
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
                 <ArrowLeftRight className="h-[18px] w-[18px] text-foreground/60" />
@@ -2048,16 +2054,13 @@ export default function ImportPage() {
             {/* 4. CSV/Excel-data (ingående balanser, kunder, leverantörer) */}
             <div
               role="button"
-              tabIndex={isSandbox ? -1 : 0}
-              aria-disabled={isSandbox}
+              tabIndex={0}
               className={cn(
                 'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
-                isSandbox
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
               )}
-              onClick={() => { if (!isSandbox) setMode('csv_data') }}
-              onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('csv_data') } }}
+              onClick={() => setMode('csv_data')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('csv_data') } }}
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
                 <FileSpreadsheet className="h-[18px] w-[18px] text-foreground/60" />
@@ -2087,16 +2090,13 @@ export default function ImportPage() {
             {/* 5. Bokföringsdata (SIE) */}
             <div
               role="button"
-              tabIndex={isSandbox ? -1 : 0}
-              aria-disabled={isSandbox}
+              tabIndex={0}
               className={cn(
                 'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
-                isSandbox
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
               )}
-              onClick={() => { if (!isSandbox) setMode('sie') }}
-              onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('sie') } }}
+              onClick={() => setMode('sie')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('sie') } }}
             >
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
                 <FileText className="h-[18px] w-[18px] text-foreground/60" />
@@ -2163,7 +2163,7 @@ export default function ImportPage() {
                             window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
                           }
                         }}
-                        disabled={!exportPeriodId || isSandbox}
+                        disabled={!exportPeriodId}
                         className="w-full sm:w-auto"
                       >
                         <Download className="mr-2 h-4 w-4" />

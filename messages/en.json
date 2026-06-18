@@ -4184,7 +4184,7 @@
     "export_subtitle": "Download your bookkeeping as a SIE file or back it up to Google Drive",
     "tab_import": "Import",
     "tab_export": "Export",
-    "sandbox_disabled": "Import is not available in the sandbox. Create an account to import data.",
+    "sandbox_disabled": "Bank connections and migration from other systems require a real account and are disabled in the sandbox. File-based imports (bank files, CSV/Excel and SIE) work as usual.",
     "back_to_choices": "Back to choices",
     "psd2_title": "Connect bank",
     "psd2_recommended": "Recommended",

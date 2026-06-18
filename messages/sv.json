@@ -4184,7 +4184,7 @@
     "export_subtitle": "Ladda ner bokföringen som SIE-fil eller säkerhetskopia till Google Drive",
     "tab_import": "Importera",
     "tab_export": "Exportera",
-    "sandbox_disabled": "Import är inte tillgängligt i sandlådemiljön. Skapa ett konto för att importera data.",
+    "sandbox_disabled": "Bankkoppling och migrering från andra system kräver ett riktigt konto och är avstängda i sandlådan. Filbaserad import (bankfiler, CSV/Excel och SIE) fungerar som vanligt.",
     "back_to_choices": "Tillbaka till val",
     "psd2_title": "Koppla bank",
     "psd2_recommended": "Rekommenderat",
