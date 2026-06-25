@@ -98,19 +98,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 404 })
   }
 
-  // VAT rules are customer-type-driven; the seller's registration status no
-  // longer constrains the preview. A non-momsregistrerad seller who chose a
-  // non-zero rate sees the rate they picked rendered — the form surfaces the
-  // ML 16 kap. 23 § warning at submit time.
+  // VAT rules are customer-type-driven and only know the customer side.
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
 
   const docType: InvoiceDocumentType = document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
 
+  // VAT registration gate — mirror the server-side write gate
+  // (lib/invoices/build-invoice-write.ts) so the preview never shows output VAT
+  // for a non-momsregistrerad seller. Without this the per-item fallback below
+  // (`?? vatRules.rate`) would render 25% for a Swedish customer even though the
+  // created invoice books no VAT, misleading the user at the review step.
+  const notVatRegistered = (company as { vat_registered?: boolean }).vat_registered === false
+  const zeroVat = notVatRegistered && !isDeliveryNote
+
   // Build items with line totals and per-item VAT
   const invoiceItems: InvoiceItem[] = items.map((item: { description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number }, index: number) => {
     const lineTotal = Math.round(item.quantity * item.unit_price * 100) / 100
-    const rate = item.vat_rate ?? vatRules.rate
+    const rate = zeroVat ? 0 : (item.vat_rate ?? vatRules.rate)
     return {
       id: `preview-${index}`,
       invoice_id: 'preview',
