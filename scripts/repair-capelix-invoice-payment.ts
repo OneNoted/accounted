@@ -155,6 +155,7 @@ async function main() {
     const { data: relinkPay } = await supabase
       .from('invoice_payments')
       .update({ journal_entry_id: clearingId })
+      .eq('company_id', COMPANY_ID)
       .eq('journal_entry_id', WRONG_CASH_ENTRY_ID)
       .select('id')
     console.log(`✓ Step 3b: relinked ${relinkPay?.length ?? 0} invoice_payments row(s) A41 → clearing`)
