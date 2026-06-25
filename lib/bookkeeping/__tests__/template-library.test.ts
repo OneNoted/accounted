@@ -245,3 +245,52 @@ describe('applyTemplate on shapes the converter rejects', () => {
     expect(result[1].credit_amount).toBe('250.00')
   })
 })
+
+describe('library mall books its literal accounts (regression)', () => {
+  // A user's "Inbetalning från kund" mall is D 1930 (bank) / K 1510
+  // (kundfordran). The QuickReview fast path used to reduce a library template
+  // to a category + one account_override and book D 6991 / K 1930 — or, with a
+  // VAT line, D 1930 / K 1930 / K 2611 — silently dropping the chosen accounts.
+  // The transaction picker now routes EVERY library template through the
+  // journal-entry editor, whose lines come from applyTemplate. These tests pin
+  // the guarantee the editor path relies on: applyTemplate books exactly the
+  // accounts/sides the user defined, and never re-derives a counter account.
+  const AMOUNT = 5000
+
+  const customerPaymentLines: BookingTemplateLibraryLine[] = [
+    { account: '1930', label: 'Inbetalning', side: 'debit', type: 'settlement', ratio: 1 },
+    { account: '1510', label: 'Kundfordran', side: 'credit', type: 'business', ratio: 1 },
+  ]
+
+  it('books exactly D 1930 / K 1510 with no re-derived accounts', () => {
+    const result = applyTemplate(customerPaymentLines, AMOUNT)
+    expect(result).toEqual([
+      { account_number: '1930', debit_amount: '5000.00', credit_amount: '', line_description: 'Inbetalning' },
+      { account_number: '1510', debit_amount: '', credit_amount: '5000.00', line_description: 'Kundfordran' },
+    ])
+    // The accounts the lossy fast path used to inject must never appear.
+    const accounts = result.map((l) => l.account_number)
+    expect(accounts).not.toContain('6991')
+    expect(accounts).not.toContain('3001')
+    expect(accounts).not.toContain('2611')
+  })
+
+  it('is blind to business/settlement tagging — same accounts either way', () => {
+    // The old converter keyed "direction" (and thus the whole booking) off which
+    // leg was tagged business vs settlement. applyTemplate must not: swapping the
+    // tags leaves the same accounts on the same sides.
+    const swappedTags: BookingTemplateLibraryLine[] = [
+      { account: '1930', label: 'Inbetalning', side: 'debit', type: 'business', ratio: 1 },
+      { account: '1510', label: 'Kundfordran', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    expect(applyTemplate(swappedTags, AMOUNT)).toEqual(applyTemplate(customerPaymentLines, AMOUNT))
+  })
+
+  it('stays balanced (sum debit === sum credit)', () => {
+    const result = applyTemplate(customerPaymentLines, 4999.99)
+    const sumDebit = result.reduce((s, l) => s + (parseFloat(l.debit_amount || '0') || 0), 0)
+    const sumCredit = result.reduce((s, l) => s + (parseFloat(l.credit_amount || '0') || 0), 0)
+    expect(sumDebit).toBeCloseTo(sumCredit, 2)
+    expect(sumDebit).toBeCloseTo(4999.99, 2)
+  })
+})

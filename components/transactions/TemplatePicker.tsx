@@ -345,21 +345,36 @@ export default function TemplatePicker({
     onSelect(template)
   }
 
-  // Click a raw library card. Convertible → fast QuickReview path via onSelect.
-  // Non-convertible → route to manual booking dialog pre-filled via the new
-  // onPickLibraryTemplate callback. MRU is only bumped after we confirm the
-  // click will actually do something — otherwise consumers that omit the
-  // callback would corrupt MRU ordering for templates the user never applied.
+  // Click a raw library card. Always book a user's mall from its LITERAL lines
+  // via the journal-entry editor (onPickLibraryTemplate → applyTemplate → /book),
+  // for both convertible and non-convertible shapes.
+  //
+  // The old "convertible → onSelect(converted)" branch routed through the
+  // QuickReview fast path, which books a single category + one account_override
+  // and silently discards the template's chosen debit/credit. A kundinbetalning
+  // mall (D 1930 / K 1510) came out as a generic cost (D 6991 / K 1930), or with
+  // a VAT line as D 1930 / K 1930 / K 2611 — and the result flipped with the
+  // direction the converter happened to infer from the business/settlement tags.
+  // Routing every library template through the editor books exactly the accounts
+  // the user defined, independent of those tags. See template-library.test.ts.
+  //
+  // MRU is only bumped once we know the click will do something — otherwise a
+  // consumer that omits onPickLibraryTemplate would reorder MRU for a template
+  // the user never actually applied.
   const handleSelectLibraryRaw = (raw: BookingTemplateLibrary) => {
+    if (onPickLibraryTemplate) {
+      bumpLibraryMru(raw.id)
+      onPickLibraryTemplate(raw)
+      return
+    }
+    // Fallback only for consumers that didn't wire the editor path: fall back to
+    // the lossy converted shape rather than leaving the click dead. The single
+    // render site (the transactions page) always passes onPickLibraryTemplate,
+    // so this branch is not reached in the app today.
     const converted = convertedById.get(raw.id) ?? null
     if (converted) {
       bumpLibraryMru(raw.id)
       onSelect(converted)
-      return
-    }
-    if (onPickLibraryTemplate) {
-      bumpLibraryMru(raw.id)
-      onPickLibraryTemplate(raw)
     }
   }
 
