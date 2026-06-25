@@ -43,7 +43,7 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
 // unit-tested in lib/transactions/__tests__/booking-duplicate-detection.test.ts.
 const mockDetectDup = vi.fn()
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
-  detectBookedDuplicateTransaction: (...args: unknown[]) => mockDetectDup(...args),
+  detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
 // Behandlingshistorik append — mocked so we can assert the dismissal is

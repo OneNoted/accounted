@@ -748,14 +748,18 @@ export const CategorizeTransactionSchema = z
     confirm_no_match: z.boolean().optional(),
     // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). force
     // bypasses it after the user reviews the candidate; the bypass is bound to
-    // the specific already-booked sibling via expected_duplicate_transaction_id
-    // (re-detected server-side, so a guessed id can't wave the guard away).
+    // the specific already-booked candidate (re-detected server-side, so a
+    // guessed id can't wave the guard away). The candidate is either a sibling
+    // transaction (expected_duplicate_transaction_id) or a ledger-only voucher
+    // with no transaction behind it (expected_duplicate_journal_entry_id) — both
+    // carry a journal_entry_id, so new callers bind on that.
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
+    expected_duplicate_journal_entry_id: uuid.optional(),
   })
-  .refine((v) => !v.force || !!v.expected_duplicate_transaction_id, {
-    message: 'expected_duplicate_transaction_id is required when force=true',
-    path: ['expected_duplicate_transaction_id'],
+  .refine((v) => !v.force || !!v.expected_duplicate_transaction_id || !!v.expected_duplicate_journal_entry_id, {
+    message: 'expected_duplicate_transaction_id or expected_duplicate_journal_entry_id is required when force=true',
+    path: ['expected_duplicate_journal_entry_id'],
   })
 
 export const BookTransactionSchema = z
@@ -767,10 +771,11 @@ export const BookTransactionSchema = z
     // Booking-time duplicate guard — see CategorizeTransactionSchema.
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
+    expected_duplicate_journal_entry_id: uuid.optional(),
   })
-  .refine((v) => !v.force || !!v.expected_duplicate_transaction_id, {
-    message: 'expected_duplicate_transaction_id is required when force=true',
-    path: ['expected_duplicate_transaction_id'],
+  .refine((v) => !v.force || !!v.expected_duplicate_transaction_id || !!v.expected_duplicate_journal_entry_id, {
+    message: 'expected_duplicate_transaction_id or expected_duplicate_journal_entry_id is required when force=true',
+    path: ['expected_duplicate_journal_entry_id'],
   })
 
 /**

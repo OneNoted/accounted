@@ -43,6 +43,7 @@ import TransactionBookingDialog from '@/components/transactions/TransactionBooki
 import TransactionAttachDocumentDialog from '@/components/transactions/TransactionAttachDocumentDialog'
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 import EditTransactionTitleDialog from '@/components/transactions/EditTransactionTitleDialog'
+import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
@@ -188,6 +189,29 @@ export default function TransactionsPage() {
     }>
   } | null>(null)
   const [ciMatchProcessing, setCiMatchProcessing] = useState(false)
+
+  // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): the
+  // server found this affärshändelse already booked — either another booked
+  // transaction sharing this one's date+amount+bank account, OR an unlinked
+  // voucher that already books the amount on the bank account (a paid invoice,
+  // a salary payout). Surface the existing verifikat and let the user book
+  // anyway — genuinely repeated same-day payments (e.g. identical Swish
+  // transfers) are legitimate. "Bokför ändå" retries with force bound to the
+  // reviewed candidate via expected_duplicate_journal_entry_id (present on both
+  // candidate kinds), which the server re-detects so a stale id can't wave it.
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    transactionId: string
+    retry: () => Promise<string | null>
+    candidate: {
+      transaction_id: string | null
+      journal_entry_id: string
+      voucher_label: string
+      entry_date: string
+      description: string | null
+      amount: number
+    }
+  } | null>(null)
+  const [duplicateProcessing, setDuplicateProcessing] = useState(false)
 
   // Entity type for tooltip context
   const [entityType, setEntityType] = useState<string>('enskild_firma')
@@ -602,8 +626,14 @@ export default function TransactionsPage() {
     templateId?: string
     inboxItemId?: string
     confirmNoMatch: boolean
+    // Set after the user confirms the booking-time duplicate warning. force
+    // bypasses the guard; the bypass is bound to the reviewed candidate's
+    // voucher (journal_entry_id), present on both a sibling-transaction and a
+    // ledger-only voucher candidate.
+    force?: boolean
+    expectedDuplicateJournalEntryId?: string
   }): Promise<string | null> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, confirmNoMatch } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, inboxItemId, confirmNoMatch, force, expectedDuplicateJournalEntryId } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -617,6 +647,9 @@ export default function TransactionsPage() {
           template_id: templateId,
           inbox_item_id: inboxItemId,
           ...(confirmNoMatch ? { confirm_no_match: true } : {}),
+          ...(force && expectedDuplicateJournalEntryId
+            ? { force: true, expected_duplicate_journal_entry_id: expectedDuplicateJournalEntryId }
+            : {}),
         }),
       })
 
@@ -780,6 +813,35 @@ export default function TransactionsPage() {
                 Aktivera och bokför
               </ToastAction>
             ) : undefined,
+          })
+          setProcessingId(null)
+          return null
+        }
+        if (
+          result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
+          result.error.details?.candidate
+        ) {
+          // Booking-time duplicate guard fired. Don't dead-end on a toast that
+          // merely says "book anyway" with no way to do so — open a dialog with
+          // the already-booked sibling and let the user confirm. "Bokför ändå"
+          // re-runs with force bound to this candidate (server re-detects it).
+          const candidate = result.error.details.candidate as {
+            transaction_id: string | null
+            journal_entry_id: string
+            voucher_label: string
+            entry_date: string
+            description: string | null
+            amount: number
+          }
+          setDuplicateWarning({
+            transactionId: id,
+            retry: () =>
+              runCategorize({
+                ...args,
+                force: true,
+                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
+              }),
+            candidate,
           })
           setProcessingId(null)
           return null
@@ -2530,6 +2592,22 @@ export default function TransactionsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <DuplicateBookingDialog
+        candidate={duplicateWarning?.candidate ?? null}
+        processing={duplicateProcessing}
+        onCancel={() => setDuplicateWarning(null)}
+        onBookAnyway={async () => {
+          const retry = duplicateWarning?.retry
+          setDuplicateProcessing(true)
+          try {
+            setDuplicateWarning(null)
+            if (retry) await retry()
+          } finally {
+            setDuplicateProcessing(false)
+          }
+        }}
+      />
 
     </div>
   )

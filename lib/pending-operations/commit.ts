@@ -43,6 +43,8 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -272,6 +274,41 @@ async function commitCategorizeTransaction(
   }
   if (transaction.journal_entry_id) {
     return { error: 'Transaction already has a journal entry — it was categorized in the meantime.', status: 409 }
+  }
+
+  // Booking-time duplicate guard — parity with the web /categorize route, which
+  // the agent path otherwise bypassed entirely. Refuse to mint a second
+  // verifikat for an affärshändelse already in the ledger: an already-booked
+  // sibling transaction, OR an unlinked voucher that already books this amount
+  // on the bank account (invoice "markera som betald", the salary run's net-wage
+  // payout, a manual verifikat). The agent has no interactive "Bokför ändå", so
+  // it fails closed; re-stage with allow_duplicate=true after the user confirms
+  // in chat that the bank line is a genuinely separate event. Fail-open on a
+  // detection error so a transient query failure never blocks a real booking.
+  if (params.allow_duplicate !== true) {
+    let dup = null
+    try {
+      dup = await detectBookingDuplicate(supabase, companyId, {
+        id: txId,
+        date: transaction.date,
+        amount: transaction.amount,
+        cash_account_id: transaction.cash_account_id ?? null,
+      })
+    } catch (err) {
+      log.warn('booking-time duplicate detection failed (continuing)', err)
+    }
+    if (dup) {
+      const amountAbs = Math.round(Math.abs(Number(transaction.amount)) * 100) / 100
+      const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
+      return {
+        error:
+          `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) bokför redan ${amountAbs} kr på bankkontot. ` +
+          `Den här affärshändelsen ser redan ut att vara bokförd — länka transaktionen till den befintliga ` +
+          `verifikationen i stället för att bokföra den igen. Om banktransaktionen verkligen är en separat ` +
+          `affärshändelse, kör om med allow_duplicate=true.`,
+        status: 409,
+      }
+    }
   }
 
   const isBusiness = category !== 'private'
@@ -849,6 +886,42 @@ async function commitMarkInvoicePaid(
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
   if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
     return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
+  }
+
+  // Duplicate-payment guard — parity with the web mark-paid route, which the
+  // agent path otherwise bypassed. If an unlinked inbound bank transaction
+  // already looks like this invoice's payment, booking a parallel payment
+  // voucher here creates exactly the orphan that later double-counts the
+  // receipt. Fail closed; the agent re-stages with allow_duplicate=true (after
+  // the user confirms) or, better, matches the transaction to the invoice
+  // instead. Fail-open on a detection error so it never blocks a real payment.
+  if (params.allow_duplicate !== true) {
+    const customerName = (invoice as { customer?: { name?: string } }).customer?.name
+    if (customerName) {
+      const remainingAmount =
+        (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
+      let candidates: Awaited<ReturnType<typeof findDuplicatePaymentCandidatesForInvoice>> = []
+      try {
+        candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+          companyId,
+          invoice: { invoice_number: invoice.invoice_number, customer_name: customerName },
+          paymentAmount: remainingAmount,
+          paymentDate,
+        })
+      } catch (err) {
+        log.warn('duplicate-payment detection failed (continuing)', err)
+      }
+      if (candidates.length > 0) {
+        return {
+          error:
+            `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
+            `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan (gnubok_match_transaction_to_invoice) ` +
+            `i stället för att bokföra en separat betalning. Om det verkligen rör sig om en annan betalning, ` +
+            `kör om med allow_duplicate=true.`,
+          status: 409,
+        }
+      }
+    }
   }
 
   const { data: settings } = await supabase

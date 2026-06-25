@@ -37,7 +37,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 // lib/transactions/__tests__/booking-duplicate-detection.test.ts.
 const mockDetectDup = vi.fn()
 vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
-  detectBookedDuplicateTransaction: (...args: unknown[]) => mockDetectDup(...args),
+  detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
 // Behandlingshistorik append — mocked so we can assert the dismissal is
@@ -52,6 +52,7 @@ import { POST } from '../route'
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const SIBLING_UUID = '660e8400-e29b-41d4-a716-446655440111'
 const OTHER_UUID = '770e8400-e29b-41d4-a716-446655440222'
+const VOUCHER_JE_UUID = '880e8400-e29b-41d4-a716-446655440333'
 
 describe('POST /api/transactions/[id]/book', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -284,6 +285,68 @@ describe('POST /api/transactions/[id]/book', () => {
         payload: expect.objectContaining({
           transaction_id: 'tx-1',
           dismissed_transaction_id: SIBLING_UUID,
+        }),
+      }),
+    )
+  })
+
+  it('returns 409 when a ledger-only voucher (no sibling transaction) already books this movement', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch
+    // A voucher-keyed candidate has no transaction_id — it's bound by je id.
+    mockDetectDup.mockResolvedValue({
+      transaction_id: null,
+      journal_entry_id: VOUCHER_JE_UUID,
+      voucher_label: 'A2',
+      entry_date: '2026-03-30',
+      description: 'Inbetalning kundfaktura 2026001',
+      amount: 98565,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidate: { transaction_id: string | null; journal_entry_id: string } } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect(body.error.details.candidate.transaction_id).toBeNull()
+    expect(body.error.details.candidate.journal_entry_id).toBe(VOUCHER_JE_UUID)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books a voucher-keyed duplicate when force=true binds the expected journal_entry_id', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
+    const je = makeJournalEntry({ id: 'je-new' })
+    enqueue({ data: tx, error: null }) // fetch
+    enqueue({ data: null, error: null }) // update
+    mockDetectDup.mockResolvedValue({
+      transaction_id: null,
+      journal_entry_id: VOUCHER_JE_UUID,
+      voucher_label: 'A2',
+      entry_date: '2026-03-30',
+      description: null,
+      amount: 98565,
+    })
+    mockCreateJournalEntry.mockResolvedValue(je)
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: { ...validBody, force: true, expected_duplicate_journal_entry_id: VOUCHER_JE_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockAppendProcessingHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'BankTransactionDuplicateDismissed',
+        payload: expect.objectContaining({
+          dismissed_transaction_id: null,
+          dismissed_journal_entry_id: VOUCHER_JE_UUID,
         }),
       }),
     )

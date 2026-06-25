@@ -8,7 +8,7 @@ import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { requireCompanyId } from '@/lib/company/context'
 import { requireWritePermission } from '@/lib/auth/require-write'
-import { detectBookedDuplicateTransaction } from '@/lib/transactions/booking-duplicate-detection'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -36,7 +36,7 @@ export async function POST(
 
   const validation = await validateBody(request, BookTransactionSchema)
   if (!validation.success) return validation.response
-  const { fiscal_period_id, entry_date, description, lines, force, expected_duplicate_transaction_id } = validation.data
+  const { fiscal_period_id, entry_date, description, lines, force, expected_duplicate_transaction_id, expected_duplicate_journal_entry_id } = validation.data
 
   // Fetch transaction (validates ownership)
   const { data: transaction, error: fetchError } = await supabase
@@ -65,7 +65,7 @@ export async function POST(
   // match-invoice soft-duplicate guard.
   const dupLog = createLogger('transactions.book', { companyId, userId: user.id })
   try {
-    const candidate = await detectBookedDuplicateTransaction(supabase, companyId, {
+    const candidate = await detectBookingDuplicate(supabase, companyId, {
       id,
       date: transaction.date,
       amount: transaction.amount,
@@ -77,13 +77,24 @@ export async function POST(
           details: { candidate },
         })
       }
-    } else if (!candidate || candidate.transaction_id !== expected_duplicate_transaction_id) {
-      // force=true is bound to a specific candidate. Re-detect and refuse the
-      // bypass unless it still matches, so a guessed id can't wave the guard.
+    } else if (
+      // force=true is bound to the reviewed candidate. A sibling-transaction
+      // candidate carries a transaction_id; a ledger-only voucher candidate does
+      // not, so both are bound by journal_entry_id. Either echoed id confirms.
+      // Re-detect and refuse the bypass unless it still matches, so a guessed id
+      // can't wave the guard.
+      !candidate ||
+      !(
+        (candidate.journal_entry_id && candidate.journal_entry_id === expected_duplicate_journal_entry_id) ||
+        (candidate.transaction_id && candidate.transaction_id === expected_duplicate_transaction_id)
+      )
+    ) {
       return errorResponseFromCode('TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH', dupLog, {
         details: {
           expected_duplicate_transaction_id: expected_duplicate_transaction_id ?? null,
+          expected_duplicate_journal_entry_id: expected_duplicate_journal_entry_id ?? null,
           detected_transaction_id: candidate?.transaction_id ?? null,
+          detected_journal_entry_id: candidate?.journal_entry_id ?? null,
         },
       })
     } else {

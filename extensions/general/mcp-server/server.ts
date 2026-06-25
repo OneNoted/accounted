@@ -65,6 +65,8 @@ import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { getSuggestedCategories } from '@/lib/transactions/category-suggestions'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { getEmailService } from '@/lib/email/service'
@@ -2675,6 +2677,7 @@ export const tools: McpTool[] = [
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp — e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only — foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
+        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard (default false). Set true ONLY after the user confirms this bank line is a genuinely separate event — the guard blocks a second verifikat for an event already booked (e.g. a paid invoice or a salary payout).' },
       },
       required: ['transaction_id', 'category'],
     },
@@ -2711,10 +2714,33 @@ export const tools: McpTool[] = [
       // Fetch transaction description (and date for period_status) for the title
       const { data: tx } = await supabase
         .from('transactions')
-        .select('description, merchant_name, amount, currency, date')
+        .select('description, merchant_name, amount, currency, date, cash_account_id')
         .eq('id', args.transaction_id as string)
         .eq('company_id', companyId)
         .single()
+
+      // Booking-time duplicate guard — surface a likely double-booking to the
+      // agent NOW (before staging) so it can link to the existing verifikat
+      // instead of queuing a second one for approval. The commit executor
+      // re-checks as the hard gate; this is the early, actionable signal.
+      // Mirrors the web /categorize route's guard.
+      if (args.allow_duplicate !== true && tx) {
+        const dup = await detectBookingDuplicate(supabase, companyId, {
+          id: args.transaction_id as string,
+          date: tx.date,
+          amount: tx.amount,
+          cash_account_id: (tx as { cash_account_id?: string | null }).cash_account_id ?? null,
+        })
+        if (dup) {
+          const amountAbs = Math.round(Math.abs(Number(tx.amount)) * 100) / 100
+          const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
+          throw new Error(
+            `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) bokför redan ${amountAbs} kr på bankkontot. ` +
+            `Den här affärshändelsen ser redan ut att vara bokförd — länka transaktionen till den befintliga ` +
+            `verifikationen i stället. Anropa igen med allow_duplicate=true först om det är en genuint separat affärshändelse.`,
+          )
+        }
+      }
 
       const txDesc = tx
         ? `${tx.merchant_name || tx.description || 'Transaktion'} ${tx.amount} ${tx.currency}`
@@ -2731,6 +2757,7 @@ export const tools: McpTool[] = [
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
             ? (args.notes as string).trim()
             : null,
+          allow_duplicate: args.allow_duplicate === true,
         },
         {
           debit_account: result.debit_account,
@@ -3705,6 +3732,7 @@ export const tools: McpTool[] = [
       properties: {
         invoice_id: { type: 'string', description: 'UUID of the invoice' },
         payment_date: { type: 'string', description: 'Payment date YYYY-MM-DD (default: today)' },
+        allow_duplicate: { type: 'boolean', description: 'Override the duplicate-payment guard (default false). Set true ONLY after the user confirms; the guard blocks marking paid when an unlinked bank transaction already looks like this invoice\'s payment — match that transaction instead.' },
       },
       required: ['invoice_id'],
     },
@@ -3733,9 +3761,32 @@ export const tools: McpTool[] = [
 
       const paymentDate = (args.payment_date as string) || new Date().toISOString().split('T')[0]
 
+      // Duplicate-payment guard — surface a likely existing bank payment to the
+      // agent before staging, so it matches the transaction to the invoice
+      // instead of booking a parallel payment voucher (the orphan that later
+      // double-counts the receipt). The commit executor re-checks as the hard
+      // gate. Mirrors the web mark-paid route's guard.
+      if (args.allow_duplicate !== true && invoice.customer?.name) {
+        const remainingAmount =
+          (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
+        const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+          companyId,
+          invoice: { invoice_number: invoice.invoice_number, customer_name: invoice.customer.name },
+          paymentAmount: remainingAmount,
+          paymentDate,
+        })
+        if (candidates.length > 0) {
+          throw new Error(
+            `Möjlig dubbelbetalning: en obokförd banktransaktion ser ut att vara betalningen för faktura ` +
+            `${invoice.invoice_number}. Matcha banktransaktionen mot fakturan med gnubok_match_transaction_to_invoice ` +
+            `i stället. Anropa igen med allow_duplicate=true om det verkligen är en separat betalning.`,
+          )
+        }
+      }
+
       return stagePendingOperation(supabase, companyId, userId, 'mark_invoice_paid',
         `Betald: ${invoice.invoice_number} ${invoice.customer?.name || ''} ${invoice.total} ${invoice.currency}`,
-        { invoice_id: invoiceId, payment_date: paymentDate },
+        { invoice_id: invoiceId, payment_date: paymentDate, allow_duplicate: args.allow_duplicate === true },
         {
           invoice_number: invoice.invoice_number,
           customer_name: invoice.customer?.name,

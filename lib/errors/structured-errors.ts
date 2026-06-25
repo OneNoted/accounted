@@ -298,16 +298,16 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
-      'En annan transaktion på samma datum och belopp är redan bokförd. Det här ser ut som en dubblett — bokför inte samma affärshändelse två gånger. Granska den befintliga verifikationen, eller bokför ändå om transaktionerna inte hör ihop.',
+      'Den här affärshändelsen ser redan ut att vara bokförd — antingen en annan transaktion på samma datum och belopp, eller en verifikation som redan bokar samma belopp på bankkontot (t.ex. en betald faktura eller en lönekörning). Bokför inte samma affärshändelse två gånger. Granska den befintliga verifikationen och länka transaktionen till den, eller bokför ändå om de inte hör ihop.',
     message_en:
-      'Another transaction with the same date and amount is already booked. This looks like a duplicate — do not book the same business event twice. Review the existing voucher, or pass force=true to book it anyway if they are genuinely unrelated.',
+      'This business event already appears to be booked — either another transaction with the same date and amount, or a voucher that already books the same amount on the bank account (e.g. a paid invoice or a salary run). Do not book the same business event twice. Review the existing voucher and link this transaction to it, or pass force=true to book it anyway if they are genuinely unrelated.',
   },
   TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH: {
     httpStatus: 409,
     message_sv:
-      'Den möjliga dubbletten som visades matchar inte längre. Ladda om och försök igen så att rätt transaktion visas.',
+      'Den möjliga dubbletten som visades matchar inte längre. Ladda om och försök igen så att rätt kandidat visas.',
     message_en:
-      'The duplicate transaction echoed in expected_duplicate_transaction_id no longer matches the one detected at request time. Re-run the booking pre-flight to obtain the current candidate, then retry.',
+      'The duplicate candidate echoed in expected_duplicate_transaction_id / expected_duplicate_journal_entry_id no longer matches the one detected at request time. Re-run the booking pre-flight to obtain the current candidate, then retry.',
   },
   TX_CATEGORIZE_TX_NOT_FOUND: {
     httpStatus: 404,

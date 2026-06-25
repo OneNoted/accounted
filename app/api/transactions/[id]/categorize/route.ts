@@ -5,7 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { detectBookedDuplicateTransaction } from '@/lib/transactions/booking-duplicate-detection'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { upsertCounterpartyTemplate, buildMappingResultFromCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
@@ -153,7 +153,7 @@ export const POST = withRouteContext(
     // bound to the reviewed sibling. Mirrors the match-invoice soft-duplicate
     // guard. Runs before any categorization work so the user resolves it first.
     try {
-      const candidate = await detectBookedDuplicateTransaction(supabase, companyId, {
+      const candidate = await detectBookingDuplicate(supabase, companyId, {
         id,
         date: transaction.date,
         amount: transaction.amount,
@@ -166,12 +166,24 @@ export const POST = withRouteContext(
             details: { candidate },
           })
         }
-      } else if (!candidate || candidate.transaction_id !== body.expected_duplicate_transaction_id) {
+      } else if (
+        // force=true is bound to the reviewed candidate. A sibling-transaction
+        // candidate carries a transaction_id; a ledger-only voucher candidate
+        // does not, so both are bound by journal_entry_id. Re-detect and refuse
+        // the bypass unless it still matches, so a guessed id can't wave it away.
+        !candidate ||
+        !(
+          (candidate.journal_entry_id && candidate.journal_entry_id === body.expected_duplicate_journal_entry_id) ||
+          (candidate.transaction_id && candidate.transaction_id === body.expected_duplicate_transaction_id)
+        )
+      ) {
         return errorResponseFromCode('TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH', txLog, {
           requestId,
           details: {
             expected_duplicate_transaction_id: body.expected_duplicate_transaction_id ?? null,
+            expected_duplicate_journal_entry_id: body.expected_duplicate_journal_entry_id ?? null,
             detected_transaction_id: candidate?.transaction_id ?? null,
+            detected_journal_entry_id: candidate?.journal_entry_id ?? null,
           },
         })
       } else {
