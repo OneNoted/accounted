@@ -61,7 +61,11 @@ describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
 
     const { company: resolved } = await prepareInvoicePdfRender(company)
 
-    expect(fetchMock).toHaveBeenCalledWith('https://example.test/svg-logo-1.svg')
+    // Fetched with a timeout signal so a slow logo host can't hang the render.
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.test/svg-logo-1.svg',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
     await expectValidEmbeddedPng(resolved.logo_url)
   })
 
@@ -115,6 +119,26 @@ describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
 
     const { company: resolved } = await prepareInvoicePdfRender(company)
 
+    expect(resolved.logo_url).toBe(url)
+  })
+
+  it('falls back to the original URL when the logo exceeds the size cap', async () => {
+    // Declared content-length over the cap is rejected before reading the body.
+    const fn = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: (h: string) =>
+          h.toLowerCase() === 'content-length' ? String(6 * 1024 * 1024) : 'image/png',
+      },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    })
+    vi.stubGlobal('fetch', fn)
+    const url = 'https://example.test/oversized-logo.png'
+    const company = makeCompanySettings({ logo_url: url })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company)
+
+    expect(fn).toHaveBeenCalled()
     expect(resolved.logo_url).toBe(url)
   })
 

@@ -54,11 +54,24 @@ const logoDataUrlCache = new Map<string, { dataUrl: string; at: number }>()
 // base64 payload.
 const LOGO_MAX_PX = 600
 
+// Bound the logo fetch so a slow or oversized response can't hang or balloon an
+// invoice render. logo_url is currently always a Supabase `logos`-bucket public
+// URL (set only by the upload route), so SSRF is not reachable today — these
+// caps are defense-in-depth for that invariant plus plain robustness.
+const LOGO_FETCH_TIMEOUT_MS = 5_000
+const LOGO_MAX_BYTES = 5 * 1024 * 1024 // 5 MB — generous for a logo, bounds memory
+
+// Coalesce concurrent renders of the same logo (preflight + final on a send, and
+// every invoice in a recurring/batch loop) onto one in-flight fetch+encode
+// instead of each doing the full round-trip before the first result is cached.
+const logoInflight = new Map<string, Promise<string | null>>()
+
 /**
  * Fetch a stored logo and re-encode it to a PNG data URL. Returns null on any
- * failure (network error, unreadable image, sharp unavailable) — the caller
- * then keeps the original URL, which @react-pdf can still fetch directly for
- * PNG/JPEG logos.
+ * failure (network error, timeout, oversized payload, unreadable image, sharp
+ * unavailable) — the caller then keeps the original URL, which @react-pdf can
+ * still fetch directly for PNG/JPEG logos. Concurrent calls for the same URL
+ * share a single in-flight request.
  */
 async function resolveLogoDataUrl(logoUrl: string): Promise<string | null> {
   // Already embedded — nothing to fetch or convert.
@@ -67,10 +80,31 @@ async function resolveLogoDataUrl(logoUrl: string): Promise<string | null> {
   const cached = logoDataUrlCache.get(logoUrl)
   if (cached && Date.now() - cached.at < LOGO_CACHE_TTL_MS) return cached.dataUrl
 
+  const inflight = logoInflight.get(logoUrl)
+  if (inflight) return inflight
+
+  const work = encodeLogo(logoUrl)
+  logoInflight.set(logoUrl, work)
   try {
-    const res = await fetch(logoUrl)
+    return await work
+  } finally {
+    // Only successes are cached (in encodeLogo); dropping the in-flight entry
+    // here lets a transient failure be retried on the next render.
+    logoInflight.delete(logoUrl)
+  }
+}
+
+async function encodeLogo(logoUrl: string): Promise<string | null> {
+  try {
+    const res = await fetch(logoUrl, { signal: AbortSignal.timeout(LOGO_FETCH_TIMEOUT_MS) })
     if (!res.ok) return null
+
+    // Reject oversized payloads up front when the server declares a length, and
+    // again after reading in case the header lied or was absent.
+    const declared = Number(res.headers.get('content-length') ?? '')
+    if (Number.isFinite(declared) && declared > LOGO_MAX_BYTES) return null
     const input = Buffer.from(await res.arrayBuffer())
+    if (input.byteLength > LOGO_MAX_BYTES) return null
 
     // SVGs must be rasterized at a higher density or sharp renders them at
     // their intrinsic (often tiny) pixel size and the result looks blurry.
