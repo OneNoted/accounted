@@ -25,6 +25,11 @@ vi.mock('@/lib/invoices/duplicate-payment-candidates', () => ({
   findDuplicatePaymentCandidatesForInvoice: (...args: unknown[]) => mockFindDupPayments(...args),
 }))
 
+const mockAppendProcessingHistory = vi.fn()
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => mockAppendProcessingHistory(...args),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 /** Queue-based supabase mock: each `from()` resolves to the next queued result. */
@@ -105,10 +110,48 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
     expect(result.http_status).toBe(409)
   })
 
-  it('skips the guard entirely when allow_duplicate=true (no detection query)', async () => {
+  it('does not enforce the guard when allow_duplicate=true, but records the dismissal to behandlingshistorik', async () => {
     mockDetectBookingDuplicate.mockResolvedValue(voucherCandidate)
-    // The booking proceeds past the guard; we only assert the guard was skipped,
-    // so the downstream booking is allowed to fail against the bare mock.
+    // The booking proceeds past the guard (not auto-rejected); the downstream
+    // booking is allowed to fail against the bare mock. Before that, the bypass
+    // must leave a durable BankTransactionDuplicateDismissed record so an
+    // auditor can reconstruct why the duplicate was allowed (BFNAR 2013:2 kap 8).
+    const supabase = queuedSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [] },
+    ])
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'income', allow_duplicate: true },
+    })
+
+    const result = await commitPendingOperation(supabase, 'user-1', 'company-1', op)
+
+    // Guard not enforced: the op is not auto-rejected at the duplicate guard.
+    expect(result.status).not.toBe('rejected')
+    // Detection still runs once — to capture the dismissed candidate for audit.
+    expect(mockDetectBookingDuplicate).toHaveBeenCalledTimes(1)
+    expect(mockAppendProcessingHistory).toHaveBeenCalledTimes(1)
+    const event = mockAppendProcessingHistory.mock.calls[0][0]
+    expect(event).toMatchObject({
+      companyId: 'company-1',
+      aggregateType: 'BankTransaction',
+      aggregateId: 'tx-1',
+      eventType: 'BankTransactionDuplicateDismissed',
+      actor: { type: 'user', id: 'user-1' },
+    })
+    expect(event.payload).toMatchObject({
+      transaction_id: 'tx-1',
+      dismissed_journal_entry_id: 'je-existing',
+      via: 'allow_duplicate',
+    })
+  })
+
+  it('records no dismissal when allow_duplicate=true but no duplicate is actually present', async () => {
+    mockDetectBookingDuplicate.mockResolvedValue(null)
     const supabase = queuedSupabase([
       { data: { id: 'op-1' } },
       { data: { id: 'tx-1', date: '2026-03-26', amount: 98565, cash_account_id: null, journal_entry_id: null } },
@@ -123,7 +166,8 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
 
     await commitPendingOperation(supabase, 'user-1', 'company-1', op)
 
-    expect(mockDetectBookingDuplicate).not.toHaveBeenCalled()
+    expect(mockDetectBookingDuplicate).toHaveBeenCalledTimes(1)
+    expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 })
 
@@ -149,5 +193,45 @@ describe('commit duplicate guard: mark_invoice_paid (forward / book the payment)
     expect(mockFindDupPayments).toHaveBeenCalledTimes(1)
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
+  })
+
+  it('does not enforce the guard when allow_duplicate=true, but records the dismissal to behandlingshistorik', async () => {
+    mockFindDupPayments.mockResolvedValue([
+      { id: 'tx-9', date: '2026-03-26', amount: 98565, description: '2026001', merchant_name: null, reference: null, match_reason: 'ocr_exact', match_confidence: 0.99 },
+    ])
+    // claim → invoice fetch → company_settings → bare downstream (allowed to fail)
+    const supabase = queuedSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'inv-1', invoice_number: '2026001', status: 'sent', total: 98565, remaining_amount: 98565, customer: { name: 'Arcim Technology AB' } } },
+      { data: { accounting_method: 'accrual', entity_type: 'aktiebolag' } },
+    ])
+
+    const op = makePendingOp({
+      operation_type: 'mark_invoice_paid',
+      params: { invoice_id: 'inv-1', payment_date: '2026-03-30', allow_duplicate: true },
+    })
+
+    const result = await commitPendingOperation(supabase, 'user-1', 'company-1', op)
+
+    // Guard not enforced: not auto-rejected at the duplicate-payment guard.
+    expect(result.status).not.toBe('rejected')
+    expect(mockFindDupPayments).toHaveBeenCalledTimes(1)
+    expect(mockAppendProcessingHistory).toHaveBeenCalledTimes(1)
+    const event = mockAppendProcessingHistory.mock.calls[0][0]
+    expect(event).toMatchObject({
+      companyId: 'company-1',
+      aggregateType: 'System',
+      aggregateId: 'inv-1',
+      eventType: 'InvoiceDuplicatePaymentDismissed',
+      actor: { type: 'user', id: 'user-1' },
+    })
+    expect(event.payload).toMatchObject({
+      invoice_id: 'inv-1',
+      dismissed_transaction_ids: ['tx-9'],
+      candidate_count: 1,
+      via: 'allow_duplicate',
+    })
+    // PII-safe: no customer or merchant name in the payload.
+    expect(JSON.stringify(event.payload)).not.toContain('Arcim')
   })
 })

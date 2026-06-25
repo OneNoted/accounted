@@ -16,8 +16,10 @@ import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplic
  * Shared by the /transactions list (runCategorize) and the manual booking
  * dialog (JournalEntryForm → /api/transactions/[id]/book). The caller owns the
  * retry: "Bokför ändå" must re-issue the request with force=true bound to
- * `candidate.transaction_id` (the server re-detects it, so a stale id can't
- * wave the guard away).
+ * `candidate.journal_entry_id` via `expected_duplicate_journal_entry_id` — it
+ * is present on both candidate kinds (a sibling-transaction candidate and a
+ * ledger-only voucher candidate, which has no transaction_id), and the server
+ * re-detects it so a stale id can't wave the guard away.
  */
 export default function DuplicateBookingDialog({
   candidate,

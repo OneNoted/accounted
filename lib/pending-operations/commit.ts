@@ -309,6 +309,43 @@ async function commitCategorizeTransaction(
         status: 409,
       }
     }
+  } else {
+    // allow_duplicate=true bypassed the guard. Booking over a possible
+    // double-booking is a bookkeeping act that must leave a durable
+    // behandlingshistorik record (BFNAR 2013:2 kap 8) — the web /book and
+    // /categorize routes log BankTransactionDuplicateDismissed, and the agent
+    // commit path must reach parity so an auditor can reconstruct why the
+    // duplicate was allowed. Re-detect to capture the dismissed candidate;
+    // best-effort, a logging failure must never block a legitimate booking.
+    try {
+      const dismissed = await detectBookingDuplicate(supabase, companyId, {
+        id: txId,
+        date: transaction.date,
+        amount: transaction.amount,
+        cash_account_id: transaction.cash_account_id ?? null,
+      })
+      if (dismissed) {
+        await appendProcessingHistory({
+          companyId,
+          correlationId: txId,
+          aggregateType: 'BankTransaction',
+          aggregateId: txId,
+          eventType: 'BankTransactionDuplicateDismissed',
+          payload: {
+            transaction_id: txId,
+            dismissed_transaction_id: dismissed.transaction_id,
+            dismissed_journal_entry_id: dismissed.journal_entry_id,
+            amount_ore: Math.round(dismissed.amount * 100),
+            entry_date: dismissed.entry_date,
+            via: 'allow_duplicate',
+          },
+          actor: { type: 'user', id: userId },
+          occurredAt: new Date(),
+        })
+      }
+    } catch (logErr) {
+      log.warn('failed to record duplicate-dismissal behandlingshistorik', logErr)
+    }
   }
 
   const isBusiness = category !== 'private'
@@ -920,6 +957,46 @@ async function commitMarkInvoicePaid(
             `kör om med allow_duplicate=true.`,
           status: 409,
         }
+      }
+    }
+  } else {
+    // allow_duplicate=true bypassed the duplicate-payment guard. The decision
+    // to book a payment over a possible existing one must leave a durable
+    // behandlingshistorik record (BFNAR 2013:2 kap 8) so an auditor can see why
+    // the duplicate was allowed. Re-detect to capture the dismissed candidate;
+    // best-effort, never blocks the payment. Payload stays PII-safe
+    // (ids/amounts/dates only — no customer or merchant name).
+    const customerName = (invoice as { customer?: { name?: string } }).customer?.name
+    if (customerName) {
+      try {
+        const remainingAmount =
+          (invoice as { remaining_amount?: number }).remaining_amount ?? invoice.total
+        const dismissed = await findDuplicatePaymentCandidatesForInvoice(supabase, {
+          companyId,
+          invoice: { invoice_number: invoice.invoice_number, customer_name: customerName },
+          paymentAmount: remainingAmount,
+          paymentDate,
+        })
+        if (dismissed.length > 0) {
+          await appendProcessingHistory({
+            companyId,
+            correlationId: invoiceId,
+            aggregateType: 'System',
+            aggregateId: invoiceId,
+            eventType: 'InvoiceDuplicatePaymentDismissed',
+            payload: {
+              invoice_id: invoiceId,
+              payment_date: paymentDate,
+              dismissed_transaction_ids: dismissed.map((c) => c.id),
+              candidate_count: dismissed.length,
+              via: 'allow_duplicate',
+            },
+            actor: { type: 'user', id: userId },
+            occurredAt: new Date(),
+          })
+        }
+      } catch (logErr) {
+        log.warn('failed to record duplicate-payment-dismissal behandlingshistorik', logErr)
       }
     }
   }
