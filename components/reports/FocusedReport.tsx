@@ -178,7 +178,7 @@ function FocusedView({
     case 'supplier-ledger':
       return <SupplierLedgerView periodId={periodId} />
     case 'bank-reconciliation':
-      return <BankReconciliationView />
+      return <BankReconciliationView periodId={periodId} periodBounds={periodBounds} />
     default:
       return null
   }

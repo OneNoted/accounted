@@ -236,7 +236,12 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_bank_reconciliation',
     descKey: 'desc_bank_reconciliation',
     category: 'reconciliation',
-    params: 'none',
+    // Period-scoped like the ledgers: the report page's räkenskapsår selector
+    // drives the reconciliation window (issue #751). Was 'none' (periodless),
+    // which left the view to host its OWN fiscal-year selector inside a
+    // loading-gated action bar — a render deadlock that hung the page on a
+    // permanent skeleton (#771).
+    params: 'fiscal',
   },
 
   // --- Export & arkiv — library-only ---

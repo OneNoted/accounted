@@ -13,7 +13,6 @@ import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye, EyeOf
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { MatchVerifikationPicker, type UnlinkedGLLine } from '@/components/reconciliation/MatchVerifikationPicker'
 import {
   DropdownMenu,
@@ -29,7 +28,7 @@ import {
 } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
-import type { CashAccount, FiscalPeriod } from '@/types'
+import type { CashAccount } from '@/types'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -122,7 +121,19 @@ interface DryRunMatch {
 // Component
 // ============================================================
 
-export function BankReconciliationView() {
+interface BankReconciliationViewProps {
+  /**
+   * The fiscal period to reconcile, from the page-level räkenskapsår selector in
+   * the report header (FocusedReport). The view no longer owns a selector of its
+   * own — that duplicate, hidden behind the loading skeleton, deadlocked the page
+   * (#771).
+   */
+  periodId: string
+  /** period_start / period_end of that period; seeds the date window (#751). */
+  periodBounds: { start: string; end: string } | null
+}
+
+export function BankReconciliationView({ periodId, periodBounds }: BankReconciliationViewProps) {
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
   const [unmatchedTx, setUnmatchedTx] = useState<UnmatchedTransaction[]>([])
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
@@ -130,17 +141,23 @@ export function BankReconciliationView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // The window is scoped to a fiscal period (issue #751): a bank reconciliation
-  // is inherently per-period, and a "full history" window spans the fiscal-year
-  // boundary — mixing a prior period's movements with the current year's IB and
-  // manufacturing a phantom difference equal to the IB. dateFrom/dateTo are
-  // seeded from the selected räkenskapsår below (and stay editable as a manual
-  // override). The first fetch is gated on `periodReady` so we never flash the
-  // full-history numbers before the period is known.
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10))
-  const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null)
-  const [periodReady, setPeriodReady] = useState(false)
+  // The window is scoped to a fiscal period (issue #751/#771): a bank
+  // reconciliation is inherently per-period, and a "full history" window spans
+  // the fiscal-year boundary — mixing a prior period's movements with the current
+  // year's IB and manufacturing a phantom difference equal to the IB. The period
+  // is owned by the page-level FiscalYearSelector in the report header and passed
+  // in as props, so the view always mounts with a known window. It used to host
+  // its OWN selector inside the action bar and gate the first fetch on a
+  // `periodReady` flag — but that selector lived below the loading-skeleton
+  // early-return, so it never mounted, the flag never flipped, and the page hung
+  // on a permanent skeleton (#771). dateFrom/dateTo are seeded from periodBounds
+  // here and stay editable as a manual override (applied via "Filtrera").
+  const [dateFrom, setDateFrom] = useState(periodBounds?.start ?? '')
+  const [dateTo, setDateTo] = useState(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    if (periodBounds && periodBounds.end < today) return periodBounds.end
+    return today
+  })
   const [accountNumber, setAccountNumber] = useState('1930')
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
   // Date filters apply on demand (the "Filtrera" button or an account switch),
@@ -306,37 +323,42 @@ export function BankReconciliationView() {
     // "Filtrera" button calls fetchAll() explicitly for date changes.
   }, [accountNumber, accountCurrency, includeMatched])
 
-  // Seed the reconciliation window from the selected räkenskapsår. dateTo is
-  // clamped to today for the current (open) year so we don't claim to reconcile
-  // into the future; a past year ends at its period_end. periodReady unblocks the
-  // gated initial fetch below. The dates stay editable via the manual inputs.
-  const handlePeriodChange = useCallback(
-    (periodId: string | null, period?: FiscalPeriod | null) => {
-      setSelectedPeriodId(periodId)
-      if (period) {
-        const today = new Date().toISOString().slice(0, 10)
-        setDateFrom(period.period_start)
-        setDateTo(period.period_end < today ? period.period_end : today)
-      }
-      setPeriodReady(true)
-    },
-    [],
-  )
-
-  // Gate the first load until the fiscal period (and therefore the date window)
-  // is known — otherwise we'd fetch once with the empty full-history window and
-  // briefly render the phantom-diff numbers before the period seeds the dates.
-  // The date-seeding setState in handlePeriodChange updates dateFromRef/dateToRef
-  // (the effects above) before this effect runs on the same render, so fetchAll
-  // reads the freshly-seeded window. selectedPeriodId is a dependency so that
-  // switching räkenskapsår re-fetches with the new window, and so a late period
-  // selection (e.g. if the selector signals ready before the company context has
-  // hydrated and onChange arrives a tick later) still triggers the real fetch.
-  // Manual date edits intentionally do NOT auto-fetch — that stays on "Filtrera".
+  // Re-seed the date window whenever the selected räkenskapsår changes (driven
+  // by the page-level FiscalYearSelector in the report header). dateTo is clamped
+  // to today for the current (open) year so we don't claim to reconcile into the
+  // future; a past year ends at its period_end.
+  //
+  // We write dateFromRef/dateToRef SYNCHRONOUSLY here, not just the state: fetchAll
+  // reads the window from the refs, and the [dateFrom]/[dateTo] sync effects above
+  // only refresh them on the NEXT commit — too late for the fetch effect below,
+  // which runs on this same period-switch commit. Without the synchronous ref
+  // write the first load after a year switch would use the PREVIOUS period's
+  // window (off-by-one). This effect MUST stay declared ABOVE the fetch effect so
+  // React runs it first.
+  //
+  // Keyed on periodId ONLY: switching the bank account must re-fetch (via the
+  // fetch effect, whose fetchAll identity changes) but must NOT re-seed the dates
+  // and discard a manual "Datum från/till" edit.
   useEffect(() => {
-    if (!periodReady) return
+    if (!periodBounds) return
+    const today = new Date().toISOString().slice(0, 10)
+    const from = periodBounds.start
+    const to = periodBounds.end < today ? periodBounds.end : today
+    setDateFrom(from)
+    setDateTo(to)
+    dateFromRef.current = from
+    dateToRef.current = to
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [periodId])
+
+  // Load on mount, when the bank account / currency / matched-toggle change
+  // (fetchAll identity), and when the räkenskapsår switches (periodId). fetchAll
+  // reads the window from the refs, which the effect above has already refreshed
+  // for a period switch. Manual date edits intentionally do NOT auto-fetch — that
+  // stays on the explicit "Filtrera" button (which calls fetchAll() directly).
+  useEffect(() => {
     fetchAll()
-  }, [fetchAll, periodReady, selectedPeriodId])
+  }, [fetchAll, periodId])
 
   // Reset transient per-account UI state when the selected account changes. A
   // verifikation pick or a dry-run preview computed for the previous account is
@@ -678,13 +700,6 @@ export function BankReconciliationView() {
             <CashAccountSelector
               value={accountNumber}
               onChange={setAccountNumber}
-            />
-            <FiscalYearSelector
-              value={selectedPeriodId}
-              onChange={handlePeriodChange}
-              onReady={() => setPeriodReady(true)}
-              includeAllOption={false}
-              hideFuturePeriods
             />
             <div>
               <Label>Datum från</Label>
