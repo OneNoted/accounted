@@ -2120,7 +2120,7 @@ export const tools: McpTool[] = [
             accounting_method: {
               type: ['string', 'null'],
               enum: ['accrual', 'cash', null],
-              description: 'accrual = faktureringsmetoden (credit 1510 on payment); cash = kontantmetoden (debit 19xx). Drives reconciliation account choice. Null defaults to accrual.',
+              description: 'accrual = faktureringsmetoden: payment debits 19xx AND credits 1510 (both sides). cash = kontantmetoden: payment debits 19xx and books revenue + moms. Drives the settlement posting. Null defaults to accrual.',
             },
           },
           required: ['id'],
