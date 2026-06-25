@@ -11,6 +11,7 @@ import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSk
 import { useSettings } from '@/components/settings/useSettings'
 import { useToast } from '@/components/ui/use-toast'
 import { normaliseSwish } from '@/lib/payments/swish'
+import { formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
 import type { CompanySettings } from '@/types'
 
 export function InvoicingSettingsContent() {
@@ -37,6 +38,9 @@ export function InvoicingSettingsContent() {
       clearing_number: formData.get('clearing_number') as string,
       account_number: formData.get('account_number') as string,
       bankgiro: (formData.get('bankgiro') as string) || null,
+      plusgiro: (formData.get('plusgiro') as string)?.trim()
+        ? formatPlusgiroNumber((formData.get('plusgiro') as string).trim())
+        : null,
       swish: normaliseSwish(formData.get('swish') as string) || null,
       invoice_prefix: (formData.get('invoice_prefix') as string) || null,
       next_invoice_number: parseInt(formData.get('next_invoice_number') as string) || 1,

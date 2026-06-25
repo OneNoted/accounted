@@ -3,6 +3,8 @@ import {
   luhnValidate,
   validateBankgiroNumber,
   formatBankgiroNumber,
+  validatePlusgiroNumber,
+  formatPlusgiroNumber,
   generateOcrReference,
   validateOcrReference,
 } from '../luhn'
@@ -89,6 +91,68 @@ describe('formatBankgiroNumber', () => {
 
   it('returns input unchanged for invalid lengths', () => {
     expect(formatBankgiroNumber('12345')).toBe('12345')
+  })
+})
+
+// -- Plusgiro --
+
+describe('validatePlusgiroNumber', () => {
+  it('validates plusgiro with hyphen', () => {
+    // 4567 → Luhn check digit 4 → "4567-4"
+    expect(validatePlusgiroNumber('4567-4')).toBe(true)
+  })
+
+  it('validates raw digits without hyphen', () => {
+    expect(validatePlusgiroNumber('45674')).toBe(true)
+    expect(validatePlusgiroNumber('1234566')).toBe(true)
+  })
+
+  it('validates short (2-digit) plusgiro', () => {
+    // "0" → check digit 0 → "00"
+    expect(validatePlusgiroNumber('00')).toBe(true)
+  })
+
+  it('validates full 8-digit plusgiro', () => {
+    expect(validatePlusgiroNumber('55555551')).toBe(true)
+  })
+
+  it('rejects wrong check digit', () => {
+    expect(validatePlusgiroNumber('4567-5')).toBe(false)
+  })
+
+  it('rejects too long (>8 digits)', () => {
+    expect(validatePlusgiroNumber('123456789')).toBe(false)
+  })
+
+  it('rejects single-digit input', () => {
+    expect(validatePlusgiroNumber('5')).toBe(false)
+  })
+
+  it('rejects non-numeric input', () => {
+    expect(validatePlusgiroNumber('abc-d')).toBe(false)
+  })
+
+  it('handles spaces', () => {
+    expect(validatePlusgiroNumber('4567 4')).toBe(true)
+  })
+})
+
+describe('formatPlusgiroNumber', () => {
+  it('places hyphen before the check digit', () => {
+    expect(formatPlusgiroNumber('45674')).toBe('4567-4')
+  })
+
+  it('formats 8-digit as XXXXXXX-X', () => {
+    expect(formatPlusgiroNumber('55555551')).toBe('5555555-1')
+  })
+
+  it('handles already-formatted input', () => {
+    expect(formatPlusgiroNumber('4567-4')).toBe('4567-4')
+  })
+
+  it('returns input unchanged for invalid lengths', () => {
+    expect(formatPlusgiroNumber('5')).toBe('5')
+    expect(formatPlusgiroNumber('123456789')).toBe('123456789')
   })
 })
 

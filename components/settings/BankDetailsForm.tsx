@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
-import { validateBankgiroNumber, formatBankgiroNumber } from '@/lib/bankgiro/luhn'
+import { validateBankgiroNumber, formatBankgiroNumber, validatePlusgiroNumber, formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import type { CompanySettings } from '@/types'
@@ -17,6 +17,7 @@ interface BankDetailsFormProps {
 export function BankDetailsForm({ settings }: BankDetailsFormProps) {
   const t = useTranslations('settings_bank_details_form')
   const [bankgiroError, setBankgiroError] = useState<string | null>(null)
+  const [plusgiroError, setPlusgiroError] = useState<string | null>(null)
   const [clearingError, setClearingError] = useState<string | null>(null)
   const [accountNumberError, setAccountNumberError] = useState<string | null>(null)
   const [swishError, setSwishError] = useState<string | null>(null)
@@ -81,7 +82,7 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="space-y-2">
           <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
           <Input
@@ -101,6 +102,27 @@ export function BankDetailsForm({ settings }: BankDetailsFormProps) {
             }}
           />
           {bankgiroError && <p className="text-xs text-destructive">{bankgiroError}</p>}
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="plusgiro">{t('plusgiro_label')}</Label>
+          <Input
+            id="plusgiro"
+            name="plusgiro"
+            placeholder="XXXXXX-X"
+            defaultValue={settings.plusgiro || ''}
+            onBlur={(e) => {
+              const val = e.target.value.trim()
+              if (!val) { setPlusgiroError(null); return }
+              if (validatePlusgiroNumber(val)) {
+                e.target.value = formatPlusgiroNumber(val)
+                setPlusgiroError(null)
+              } else {
+                setPlusgiroError(t('plusgiro_error'))
+              }
+            }}
+          />
+          {plusgiroError && <p className="text-xs text-destructive">{plusgiroError}</p>}
         </div>
 
         <div className="space-y-2">
@@ -134,6 +156,7 @@ export function validateBankFields(formData: FormData): { field: string; message
   const clearing = (formData.get('clearing_number') as string || '').trim()
   const account = (formData.get('account_number') as string || '').trim()
   const bankgiro = (formData.get('bankgiro') as string || '').trim()
+  const plusgiro = (formData.get('plusgiro') as string || '').trim()
   const swish = normaliseSwish(formData.get('swish') as string)
 
   if (clearing && !/^\d{4,5}$/.test(clearing)) {
@@ -144,6 +167,9 @@ export function validateBankFields(formData: FormData): { field: string; message
   }
   if (bankgiro && !validateBankgiroNumber(bankgiro)) {
     errors.push({ field: 'bankgiro', message: 'Ogiltigt bankgironummer' })
+  }
+  if (plusgiro && !validatePlusgiroNumber(plusgiro)) {
+    errors.push({ field: 'plusgiro', message: 'Ogiltigt plusgironummer' })
   }
   if (swish && !isValidSwish(swish)) {
     errors.push({ field: 'swish', message: 'Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)' })

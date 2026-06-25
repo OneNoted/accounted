@@ -1223,6 +1223,8 @@
     "account_number_error": "Måste vara 6-12 siffror",
     "bankgiro_label": "Bankgiro",
     "bankgiro_error": "Ogiltigt bankgironummer",
+    "plusgiro_label": "Plusgiro",
+    "plusgiro_error": "Ogiltigt plusgironummer",
     "swish_label": "Swish",
     "swish_placeholder": "123 XXX XX XX eller 07X XXX XX XX",
     "swish_error": "Ogiltigt Swish-nummer (företagsnummer 123XXXXXXX eller mobilnummer 07XXXXXXXX)"

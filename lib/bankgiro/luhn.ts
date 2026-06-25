@@ -55,6 +55,30 @@ export function formatBankgiroNumber(input: string): string {
   return input
 }
 
+// -- Plusgiro --
+
+/**
+ * Validate a Swedish Plusgiro number (2-8 digits, Luhn check digit).
+ * The final digit is the Luhn check digit. Accepts formats:
+ * "XXXXXXX-X", spaced, or raw digits.
+ */
+export function validatePlusgiroNumber(input: string): boolean {
+  const digits = input.replace(/[-\s]/g, '')
+  if (!/^\d+$/.test(digits)) return false
+  if (digits.length < 2 || digits.length > 8) return false
+  return luhnValidate(digits)
+}
+
+/**
+ * Format a Plusgiro number with the standard hyphen before the check digit.
+ * e.g. "45674" → "4567-4". Returns input unchanged for invalid lengths.
+ */
+export function formatPlusgiroNumber(input: string): string {
+  const digits = input.replace(/[-\s]/g, '')
+  if (digits.length < 2 || digits.length > 8) return input
+  return digits.slice(0, -1) + '-' + digits.slice(-1)
+}
+
 // -- OCR reference --
 
 /**

@@ -1223,6 +1223,8 @@
     "account_number_error": "Must be 6-12 digits",
     "bankgiro_label": "Bankgiro",
     "bankgiro_error": "Invalid bankgiro number",
+    "plusgiro_label": "Plusgiro",
+    "plusgiro_error": "Invalid plusgiro number",
     "swish_label": "Swish",
     "swish_placeholder": "123 XXX XX XX or 07X XXX XX XX",
     "swish_error": "Invalid Swish number (business number 123XXXXXXX or mobile number 07XXXXXXXX)"
