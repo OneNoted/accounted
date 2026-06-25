@@ -71,6 +71,7 @@ import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { roundOre } from '@/lib/money'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
@@ -298,7 +299,7 @@ async function commitCategorizeTransaction(
       log.warn('booking-time duplicate detection failed (continuing)', err)
     }
     if (dup) {
-      const amountAbs = Math.round(Math.abs(Number(transaction.amount)) * 100) / 100
+      const amountAbs = roundOre(Math.abs(Number(transaction.amount)))
       const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
       return {
         error:

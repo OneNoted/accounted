@@ -2732,7 +2732,7 @@ export const tools: McpTool[] = [
           cash_account_id: (tx as { cash_account_id?: string | null }).cash_account_id ?? null,
         })
         if (dup) {
-          const amountAbs = Math.round(Math.abs(Number(tx.amount)) * 100) / 100
+          const amountAbs = roundOre(Math.abs(Number(tx.amount)))
           const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
           throw new Error(
             `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) bokför redan ${amountAbs} kr på bankkontot. ` +

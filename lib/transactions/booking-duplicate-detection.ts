@@ -24,6 +24,7 @@
  * sibling TRANSACTION rather than a manually-posted journal entry.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 
 /** Integer öre — representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -133,7 +134,7 @@ export async function detectBookedDuplicateTransaction(
     voucher_label: voucherLabel,
     entry_date: entryDate,
     description: best.description,
-    amount: Math.round(Number(best.amount) * 100) / 100,
+    amount: roundOre(Number(best.amount)),
   }
 }
 
@@ -181,7 +182,7 @@ export async function detectLedgerDuplicateVoucher(
 ): Promise<BookedDuplicateCandidate | null> {
   const targetOre = toOre(target.amount)
   if (targetOre === 0 || Number.isNaN(targetOre)) return null
-  const targetAmount = Math.round(Math.abs(Number(target.amount)) * 100) / 100
+  const targetAmount = roundOre(Math.abs(Number(target.amount)))
   const inbound = targetOre > 0
 
   const dateMs = new Date(target.date).getTime()
@@ -251,7 +252,7 @@ export async function detectLedgerDuplicateVoucher(
   }
   const candidates = (lines as unknown as LineRow[])
     .filter((l) => {
-      const legAmount = Math.round(Number(inbound ? l.debit_amount : l.credit_amount) * 100) / 100
+      const legAmount = roundOre(Number(inbound ? l.debit_amount : l.credit_amount))
       return Math.abs(legAmount - targetAmount) < 0.01
     })
     // Reversals/corrections are valid second vouchers, not duplicate bookings.
@@ -292,7 +293,7 @@ export async function detectLedgerDuplicateVoucher(
     voucher_label: `${best.journal_entry.voucher_series ?? 'A'}${best.journal_entry.voucher_number ?? ''}`,
     entry_date: best.journal_entry.entry_date,
     description: best.journal_entry.description,
-    amount: Math.round(Number(inbound ? best.debit_amount : best.credit_amount) * 100) / 100,
+    amount: roundOre(Number(inbound ? best.debit_amount : best.credit_amount)),
   }
 }
 
