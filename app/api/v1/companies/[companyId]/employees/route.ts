@@ -24,11 +24,13 @@ import {
   encodeDefaultCursor,
   parsePaginationParams,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
+import { getCompanyEntityType } from '@/lib/company/context'
+import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -51,7 +53,7 @@ const EmployeeSummary = z.object({
   created_at: z.string(),
 })
 
-const EmployeesListResponse = z.object({ employees: z.array(EmployeeSummary) })
+const EmployeesListResponse = listEnvelope(EmployeeSummary)
 
 // Explicit projection — never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.
@@ -348,6 +350,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const body = parsed.data
+
+    // An enskild firma owner cannot be put on payroll (owner takes egna uttag,
+    // not lön). Reject owner/board employment types for EF — validated before
+    // dry-run so a dry run surfaces the error too. The DB trigger is the
+    // all-paths backstop. #782
+    const entityType = await getCompanyEntityType(ctx.supabase, ctx.companyId!)
+    if (!isEmploymentTypeAllowedForEntity(entityType, body.employment_type)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'employment_type', message: EF_OWNER_EMPLOYMENT_ERROR },
+      })
+    }
 
     if (ctx.dryRun) {
       return dryRunPreview(
