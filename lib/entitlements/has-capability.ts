@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-import type { CapabilityKey } from './keys'
+import { PAID_CAPABILITIES, type CapabilityKey } from './keys'
 
 /**
  * Entitlement gate — the single primitive behind the paywall ("non-payer loses
@@ -101,4 +101,54 @@ export async function requireCapability(
 ): Promise<NextResponse | null> {
   if (await hasCapability(supabase, companyId, key)) return null
   return capabilityBlockedResponse(key)
+}
+
+/**
+ * Resolve which PAID capabilities a company currently holds (entitled AND
+ * enabled), in two queries. Used to seed the client CompanyContext so the UI
+ * can hide/disable/upsell gated features. Self-hosted holds everything.
+ */
+export async function getCompanyCapabilities(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<CapabilityKey[]> {
+  if (isSelfHosted()) return [...PAID_CAPABILITIES]
+
+  const { data: company } = await supabase
+    .from('companies')
+    .select('team_id')
+    .eq('id', companyId)
+    .maybeSingle()
+  const teamId = (company as { team_id: string | null } | null)?.team_id ?? null
+
+  const scopeFilter = teamId
+    ? `company_id.eq.${companyId},team_id.eq.${teamId}`
+    : `company_id.eq.${companyId}`
+  const { data: grants } = await supabase
+    .from('capability_grants')
+    .select('capability_key, expires_at')
+    .in('capability_key', PAID_CAPABILITIES as unknown as string[])
+    .or(scopeFilter)
+
+  const now = Date.now()
+  const entitled = new Set<string>()
+  for (const g of grants ?? []) {
+    const row = g as { capability_key: string; expires_at: string | null }
+    if (row.expires_at === null || new Date(row.expires_at).getTime() > now) {
+      entitled.add(row.capability_key)
+    }
+  }
+  if (entitled.size === 0) return []
+
+  // Subtract any explicitly-disabled (enablement axis).
+  const { data: configs } = await supabase
+    .from('company_capability_config')
+    .select('capability_key, enabled')
+    .eq('company_id', companyId)
+    .eq('enabled', false)
+  for (const c of configs ?? []) {
+    entitled.delete((c as { capability_key: string }).capability_key)
+  }
+
+  return PAID_CAPABILITIES.filter((k) => entitled.has(k))
 }
