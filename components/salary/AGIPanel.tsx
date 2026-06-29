@@ -17,6 +17,8 @@ import {
 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 interface AGIPanelProps {
   salaryRunId: string
@@ -111,6 +113,8 @@ export function AGIPanel(props: AGIPanelProps) {
     readOnly,
     onChange,
   } = props
+
+  const hasSkatteverket = useCapability(CAPABILITY.skatteverket)
 
   const [extensionDisabled, setExtensionDisabled] = useState(false)
   const [status, setStatus] = useState<ConnectionStatus | null>(null)
@@ -874,7 +878,12 @@ export function AGIPanel(props: AGIPanelProps) {
               size="sm"
               variant="outline"
               onClick={handleSubmit}
-              disabled={actionLoading === 'submit'}
+              disabled={actionLoading === 'submit' || !hasSkatteverket}
+              title={
+                !hasSkatteverket
+                  ? 'Inlämning av AGI till Skatteverket ingår i en uppgraderad plan.'
+                  : undefined
+              }
             >
               {actionLoading === 'submit' ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -924,6 +933,16 @@ export function AGIPanel(props: AGIPanelProps) {
               </Button>
             )}
           </div>
+        )}
+
+        {!readOnly && !isSigned && !hasSkatteverket && (
+          <p className="text-xs text-muted-foreground">
+            Inlämning av AGI direkt till Skatteverket ingår i en uppgraderad plan.{' '}
+            <a href="/settings/billing" className="font-medium underline hover:no-underline">
+              Uppgradera
+            </a>
+            .
+          </p>
         )}
       </CardContent>
     </Card>
