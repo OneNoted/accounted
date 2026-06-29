@@ -3011,6 +3011,8 @@
     "loading": "Laddar verifikationer...",
     "empty_title": "Inga verifikationer",
     "empty_description": "Verifikationer skapas automatiskt vid fakturering och transaktionsbokföring, eller manuellt via fliken \"Ny verifikation\".",
+    "empty_drafts_title": "Inga utkast",
+    "empty_drafts_description": "Här samlas verifikationer du sparat men inte bokfört än. Växla till Verifikat för att se bokförda poster.",
     "show_missing": "Visa saknade underlag",
     "sort_date_desc": "Datum, nyast först",
     "sort_date_asc": "Datum, äldst först",

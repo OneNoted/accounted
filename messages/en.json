@@ -3011,6 +3011,8 @@
     "loading": "Loading journal entries...",
     "empty_title": "No journal entries",
     "empty_description": "Journal entries are created automatically from invoicing and transaction posting, or manually via the \"New entry\" tab.",
+    "empty_drafts_title": "No drafts",
+    "empty_drafts_description": "Entries you've saved but not yet posted collect here. Switch to Vouchers to see posted entries.",
     "show_missing": "Show entries missing documents",
     "sort_date_desc": "Date, newest first",
     "sort_date_asc": "Date, oldest first",

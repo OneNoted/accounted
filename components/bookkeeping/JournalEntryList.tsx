@@ -299,13 +299,21 @@ export default function JournalEntryList() {
     const loadedEntries = data || []
     setEntries(loadedEntries)
     setCount(total || 0)
+
+    // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
+    // on draftCount. When the committed list comes back empty, resolve the draft
+    // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
+    // a stale count of 0. Every other case refreshes the badge in the background.
+    if (loadedEntries.length === 0 && listMode === 'committed') {
+      await fetchDraftCount()
+    } else {
+      fetchDraftCount()
+    }
     setLoading(false)
 
     // Fetch attachment counts for the loaded entries
     const ids = loadedEntries.map((e: JournalEntry) => e.id)
     fetchAttachmentCounts(ids)
-
-    fetchDraftCount()
   }
 
   // Cheap count-only query for the "Utkast" badge — all years, so the badge
@@ -560,7 +568,12 @@ export default function JournalEntryList() {
     })
   }
 
-  if (!loading && entries.length === 0 && !hasActiveFilters) {
+  // Pristine, untouched ledger: nothing posted, no drafts, no filters, and we're
+  // on the committed view. ONLY this genuinely-empty case may short-circuit the
+  // whole component — every other empty state (a draft exists, or we're in the
+  // drafts view) must fall through to the main render below so the
+  // Verifikat/Utkast toggle stays reachable.
+  if (!loading && entries.length === 0 && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-12">
@@ -897,14 +910,32 @@ export default function JournalEntryList() {
           </CardContent>
         </Card>
       ) : filteredEntries.length === 0 ? (
+        // Empty placeholder, scoped to the situation: an empty drafts view, a
+        // filtered committed view with no matches, or a committed view with no
+        // posted entries yet (but drafts exist — hence we got here, not the
+        // pristine early return above).
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <div className="p-4 rounded-full bg-muted mb-4">
-              <Search className="h-6 w-6 text-muted-foreground" />
+              {listMode === 'drafts' || !hasActiveFilters ? (
+                <BookOpen className="h-6 w-6 text-muted-foreground" />
+              ) : (
+                <Search className="h-6 w-6 text-muted-foreground" />
+              )}
             </div>
-            <h3 className="text-lg font-medium mb-1">{t('no_results_title')}</h3>
+            <h3 className="text-lg font-medium mb-1">
+              {listMode === 'drafts'
+                ? t('empty_drafts_title')
+                : hasActiveFilters
+                  ? t('no_results_title')
+                  : t('empty_title')}
+            </h3>
             <p className="text-sm text-muted-foreground text-center max-w-sm">
-              {t('no_results_description')}
+              {listMode === 'drafts'
+                ? t('empty_drafts_description')
+                : hasActiveFilters
+                  ? t('no_results_description')
+                  : t('empty_description')}
             </p>
           </CardContent>
         </Card>
