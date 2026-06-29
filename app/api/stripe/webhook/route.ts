@@ -43,7 +43,14 @@ export async function POST(request: Request) {
     await handleStripeEvent(service, getStripe(), event)
     // Mark processed only AFTER success, so a failure lets Stripe retry.
     await service.from('stripe_webhook_events').insert({ event_id: event.id, type: event.type })
-  } catch {
+  } catch (err) {
+    // Log with context before the generic 500 so a failing webhook is visible
+    // to operators (Stripe will retry on the non-2xx).
+    console.error('[stripe-webhook] processing failed', {
+      eventId: event.id,
+      type: event.type,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return NextResponse.json({ error: 'processing_failed' }, { status: 500 })
   }
 

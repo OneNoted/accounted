@@ -23,12 +23,23 @@ function isSelfHosted(): boolean {
   return process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/**
+ * Only server-resolved UUIDs may be interpolated into the PostgREST `.or()`
+ * filter below — commas/dots/parens are filter syntax. companyId/teamId always
+ * come from the DB, but we validate at this boundary as defense in depth.
+ */
+function isUuid(v: string): boolean {
+  return UUID_RE.test(v)
+}
+
 export async function hasCapability(
   supabase: SupabaseClient,
   companyId: string,
   key: CapabilityKey,
 ): Promise<boolean> {
   if (isSelfHosted()) return true
+  if (!isUuid(companyId)) return false // fail-closed: never interpolate a non-UUID
 
   // Resolve the company's firm/team (firm-scoped grants cascade to clients).
   const { data: company } = await supabase
@@ -36,7 +47,8 @@ export async function hasCapability(
     .select('team_id')
     .eq('id', companyId)
     .maybeSingle()
-  const teamId = (company as { team_id: string | null } | null)?.team_id ?? null
+  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
+  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
 
   // ENTITLEMENT axis: any unexpired grant on the company or its team.
   const scopeFilter = teamId
@@ -113,13 +125,15 @@ export async function getCompanyCapabilities(
   companyId: string,
 ): Promise<CapabilityKey[]> {
   if (isSelfHosted()) return [...PAID_CAPABILITIES]
+  if (!isUuid(companyId)) return [] // fail-closed: never interpolate a non-UUID
 
   const { data: company } = await supabase
     .from('companies')
     .select('team_id')
     .eq('id', companyId)
     .maybeSingle()
-  const teamId = (company as { team_id: string | null } | null)?.team_id ?? null
+  const rawTeamId = (company as { team_id: string | null } | null)?.team_id ?? null
+  const teamId = rawTeamId && isUuid(rawTeamId) ? rawTeamId : null
 
   const scopeFilter = teamId
     ? `company_id.eq.${companyId},team_id.eq.${teamId}`

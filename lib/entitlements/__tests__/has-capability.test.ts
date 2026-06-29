@@ -45,7 +45,7 @@ describe('hasCapability', () => {
   it('returns true on self-hosted without touching the DB', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
     const supabase = makeSupabase({}) // would resolve to null/false if queried
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.ai)).toBe(true)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(true)
   })
 
   it('returns true for an unexpired company-scoped grant', async () => {
@@ -54,7 +54,7 @@ describe('hasCapability', () => {
       capability_grants: { data: [{ expires_at: iso(60_000) }] },
       company_capability_config: { data: null },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.ai)).toBe(true)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(true)
   })
 
   it('treats a null expiry as never-expiring (true)', async () => {
@@ -63,7 +63,7 @@ describe('hasCapability', () => {
       capability_grants: { data: [{ expires_at: null }] },
       company_capability_config: { data: null },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.bank_sync)).toBe(true)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.bank_sync)).toBe(true)
   })
 
   it('fails closed when there is no grant', async () => {
@@ -71,7 +71,7 @@ describe('hasCapability', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: [] },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.ai)).toBe(false)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
   })
 
   it('fails closed when the only grant is expired', async () => {
@@ -79,16 +79,16 @@ describe('hasCapability', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: [{ expires_at: iso(-60_000) }] },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.ai)).toBe(false)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
   })
 
   it('honours a firm/team-scoped grant (cascades to the client company)', async () => {
     const supabase = makeSupabase({
-      companies: { data: { team_id: 'team-1' } },
+      companies: { data: { team_id: '22222222-2222-4222-8222-222222222222' } },
       capability_grants: { data: [{ expires_at: iso(60_000) }] }, // grant lives on the team
       company_capability_config: { data: null },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.skatteverket)).toBe(true)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.skatteverket)).toBe(true)
   })
 
   it('returns false when entitled but explicitly disabled (enablement axis)', async () => {
@@ -97,7 +97,7 @@ describe('hasCapability', () => {
       capability_grants: { data: [{ expires_at: null }] },
       company_capability_config: { data: { enabled: false } },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.ai)).toBe(false)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
   })
 
   it('fails closed when the grants query errors', async () => {
@@ -105,7 +105,7 @@ describe('hasCapability', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: null, error: { message: 'boom' } },
     })
-    expect(await hasCapability(supabase, 'company-1', CAPABILITY.ai)).toBe(false)
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
   })
 })
 
@@ -116,7 +116,7 @@ describe('requireCapability', () => {
       capability_grants: { data: [{ expires_at: null }] },
       company_capability_config: { data: null },
     })
-    expect(await requireCapability(supabase, 'company-1', CAPABILITY.ai)).toBeNull()
+    expect(await requireCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBeNull()
   })
 
   it('returns a 403 capability_blocked response when missing', async () => {
@@ -124,7 +124,7 @@ describe('requireCapability', () => {
       companies: { data: { team_id: null } },
       capability_grants: { data: [] },
     })
-    const res = await requireCapability(supabase, 'company-1', CAPABILITY.ai)
+    const res = await requireCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)
     expect(res).not.toBeNull()
     expect(res!.status).toBe(403)
     const body = await res!.json()
