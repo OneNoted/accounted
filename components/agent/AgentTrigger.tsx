@@ -20,8 +20,10 @@ import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 //
 // Page-specific triggers (e.g. "Granska med assistent" on a supplier invoice)
 // still call useAgentSheet() directly from their own buttons because they
-// know exactly which entity to pass. (Per-transaction help is reached from
-// Dokumentinkorgen, not a transactions-page row button.)
+// know exactly which entity to pass. (Per-transaction help has its own
+// row-level "Fråga [namn]" button in TransactionInboxCard — and the matching
+// "Fråga assistenten" in Dokumentinkorgen — both passing a transaction_id the
+// pathname-only FAB can't know.)
 export default function AgentTrigger() {
   const { openAgentSheet, isOpen, identity } = useAgentSheet()
   const pathname = usePathname()
