@@ -6288,6 +6288,19 @@ export const tools: McpTool[] = [
         supplier_id_override: { type: 'string', description: 'Force this supplier UUID instead of the matched/extracted one' },
         vat_treatment_override: { type: 'string', enum: ['standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt'], description: 'Override extracted VAT treatment' },
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
+        line_overrides: {
+          type: 'array',
+          description: 'Per-line account overrides (1-based line_number). Wins over accountSuggestion and supplier default.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              line_number: { type: 'number', description: '1-based index matching items_preview' },
+              account_number: { type: 'string', description: 'BAS account number for this line (e.g. "6420")' },
+            },
+            required: ['line_number', 'account_number'],
+          },
+        },
         notes: { type: 'string', description: 'Optional notes appended to the supplier invoice' },
         dry_run: { type: 'boolean', description: 'If true, return the assembled payload without staging (default false)' },
         idempotency_key: { type: 'string', description: 'UUID. Repeat calls with same key + payload return cached response.' },
@@ -6407,19 +6420,26 @@ export const tools: McpTool[] = [
         }
       }
 
+      // Build a lookup for per-line account overrides keyed by 1-based line number.
+      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number: string }> | undefined) ?? []
+      const lineOverrideMap = new Map(rawLineOverrides.map((o) => [o.line_number, o.account_number]))
+
       // Translate extracted line items into the supplier_invoice_items shape.
-      // Priority: per-line accountSuggestion → supplier.default_expense_account → 4000.
-      const lineItems = lineItemsExt.map((li, idx) => ({
-        line_number: idx + 1,
-        description: (li.description as string) ?? `Position ${idx + 1}`,
-        quantity: Number(li.quantity) || 1,
-        unit: (li.unit as string) ?? 'st',
-        unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
-        line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
-        account_number: (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
-        vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
-        vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
-      }))
+      // Priority: line_overrides → per-line accountSuggestion → supplier.default_expense_account → 4000.
+      const lineItems = lineItemsExt.map((li, idx) => {
+        const lineNumber = idx + 1
+        return {
+          line_number: lineNumber,
+          description: (li.description as string) ?? `Position ${lineNumber}`,
+          quantity: Number(li.quantity) || 1,
+          unit: (li.unit as string) ?? 'st',
+          unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
+          line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
+          account_number: lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
+          vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
+          vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
+        }
+      })
 
       const params = {
         inbox_item_id: inboxItemId,
@@ -6825,6 +6845,95 @@ export const tools: McpTool[] = [
           // becomes part of the verifikation underlag once categorize
           // propagates it (BFL 5 kap 6 § rättelse-räkenskapsinformation).
           dateForPeriodCheck: typeof tx.date === 'string' ? tx.date : undefined,
+        }
+      )
+    },
+  },
+  {
+    name: 'gnubok_link_document_to_voucher',
+    title: 'Link Document to Voucher',
+    description: 'Stage linking a document to a posted verifikation. Use for imported/manual vouchers with no bank-tx row. Call gnubok_list_verifikat_without_documents first to find targets. Stages for approval.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+        journal_entry_id: { type: 'string', description: 'UUID of the target journal entry (verifikation)' },
+        journal_entry_line_id: { type: 'string', description: 'Optional UUID to pin the doc to a specific debit/credit line' },
+        idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries' },
+        dry_run: { type: 'boolean', description: 'Preview without staging' },
+      },
+      required: ['document_id', 'journal_entry_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const documentId = args.document_id as string
+      const journalEntryId = args.journal_entry_id as string
+      const journalEntryLineId = typeof args.journal_entry_line_id === 'string' ? args.journal_entry_line_id : undefined
+      if (!documentId) throw new Error('document_id is required')
+      if (!journalEntryId) throw new Error('journal_entry_id is required')
+
+      const [docRes, jeRes] = await Promise.all([
+        supabase
+          .from('document_attachments')
+          .select('id, file_name, mime_type, journal_entry_id')
+          .eq('id', documentId)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('journal_entries')
+          .select('id, entry_date, description, voucher_series, voucher_number, status')
+          .eq('id', journalEntryId)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+      ])
+
+      if (docRes.error || !docRes.data) throw new Error('Document not found')
+      if (jeRes.error || !jeRes.data) throw new Error('Journal entry not found')
+
+      const doc = docRes.data as {
+        id: string; file_name: string; mime_type: string; journal_entry_id: string | null
+      }
+      const je = jeRes.data as {
+        id: string; entry_date: string; description: string
+        voucher_series: string | null; voucher_number: number | null; status: string
+      }
+
+      const voucherLabel = je.voucher_series && je.voucher_number
+        ? `${je.voucher_series}${je.voucher_number}`
+        : je.id.slice(0, 8)
+
+      const currentlyLinkedToSameJe = doc.journal_entry_id === journalEntryId
+      const currentlyLinkedToOther = !!doc.journal_entry_id && !currentlyLinkedToSameJe
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'link_document_to_voucher',
+        `Koppla bilaga: ${doc.file_name} → verifikat ${voucherLabel}`,
+        { document_id: documentId, journal_entry_id: journalEntryId, journal_entry_line_id: journalEntryLineId ?? null },
+        {
+          document_file_name: doc.file_name,
+          document_mime_type: doc.mime_type,
+          document_already_linked: currentlyLinkedToSameJe,
+          document_currently_linked_to_other: currentlyLinkedToOther,
+          document_current_journal_entry_id: doc.journal_entry_id ?? null,
+          voucher_label: voucherLabel,
+          voucher_date: je.entry_date,
+          voucher_description: je.description,
+          voucher_status: je.status,
+          journal_entry_line_id: journalEntryLineId ?? null,
+        },
+        actor,
+        undefined,
+        {
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dryRun: args.dry_run === true,
+          dateForPeriodCheck: je.entry_date,
         }
       )
     },

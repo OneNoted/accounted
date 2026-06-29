@@ -74,8 +74,15 @@ export async function generateSIEExport(
       q = q.neq('source_type', 'year_end')
     }
 
-    return q.order('voucher_number').range(from, to)
-  })
+    // Stable TOTAL order: voucher_series + voucher_number is unique per
+    // company+period, so fetchAllRows paging can't duplicate or skip a voucher
+    // across the 1000-row boundary on large years (voucher_number alone is not
+    // unique across series). dedupeBy is defense-in-depth — see fetch-all.ts.
+    return q
+      .order('voucher_series', { ascending: true })
+      .order('voucher_number', { ascending: true })
+      .range(from, to)
+  }, { dedupeBy: (r) => r.id })
 
   // Fetch all lines for those entries, filtered server-side via an inner join
   // so the same company/period/status (and year-end exclusion) constraints
@@ -92,9 +99,11 @@ export async function generateSIEExport(
       q = q.neq('journal_entries.source_type', 'year_end')
     }
 
+    // Stable total order on the line PK so paging can't duplicate/skip a line
+    // across the 1000-row boundary; dedupeBy is the defense-in-depth net.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return q.range(from, to) as any
-  })
+    return q.order('id', { ascending: true }).range(from, to) as any
+  }, { dedupeBy: (r) => r.id })
 
   const linesByEntryId = new Map<string, JournalEntryLine[]>()
   for (const line of allLines) {
@@ -189,7 +198,7 @@ export async function generateSIEExport(
   // balances RPC derives IB from earlier journal lines instead of silently
   // emitting zero #IB records and producing wrong #UB values.
   const openingBalancesByAccount = new Map<string, number>()
-  const { balances: obBalances } = await getOpeningBalances(supabase, companyId, {
+  const { balances: obBalances, obEntryId } = await getOpeningBalances(supabase, companyId, {
     period_start: period.period_start,
     opening_balance_entry_id: period.opening_balance_entry_id ?? null,
   })
@@ -201,8 +210,12 @@ export async function generateSIEExport(
     openingBalancesByAccount.set(accountNumber, amount)
   }
 
+  // Exclude the OB entry from VER/TRANS and from movement calculations to
+  // prevent double-counting: it is already represented by the #IB records above.
+  const periodEntries = (entries as JournalEntry[])?.filter(e => e.id !== obEntryId) ?? []
+
   // === Journal entries (VER + TRANS) ===
-  for (const entry of (entries as JournalEntry[]) || []) {
+  for (const entry of periodEntries) {
     const entryLines = (entry.lines as JournalEntryLine[]) || []
     const entryDate = dateStringToSIE(entry.entry_date)
     const series = entry.voucher_series || 'A'
@@ -239,7 +252,7 @@ export async function generateSIEExport(
 
   // === Closing balances (UB for balance sheet, RES for income statement) ===
   // Movement balances from journal entries
-  const movementBalances = calculateBalances(entries as JournalEntry[])
+  const movementBalances = calculateBalances(periodEntries)
 
   // Merge all accounts that have either IB or movements
   const allAccountNumbers = new Set([
