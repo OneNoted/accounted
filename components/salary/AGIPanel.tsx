@@ -415,6 +415,35 @@ export function AGIPanel(props: AGIPanelProps) {
    * On DONE_REJECTED we surface the validation findings; the user can still
    * choose to save (so they can fix it in Mina Sidor) or abort.
    */
+  // Always-free: generate + download the AGI XML so the user can file manually
+  // in Skatteverket's e-service. AGI is a mandatory statutory filing, so this
+  // path must never be paywalled — only the direct API submission below is paid.
+  const handleDownloadXml = async () => {
+    setActionLoading('download')
+    setError(null)
+    try {
+      const res = await fetch(`/api/salary/runs/${salaryRunId}/agi/xml`)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Kunde inte generera AGI-filen')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `AGI_${period ?? 'underlag'}.xml`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      onChange?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Kunde inte ladda ner AGI-filen')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const handleSubmit = async () => {
     setActionLoading('submit')
     setError(null)
@@ -877,6 +906,20 @@ export function AGIPanel(props: AGIPanelProps) {
             <Button
               size="sm"
               variant="outline"
+              onClick={handleDownloadXml}
+              disabled={actionLoading === 'download'}
+              title="Ladda ner AGI-filen (XML) för manuell inlämning hos Skatteverket"
+            >
+              {actionLoading === 'download' ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Ladda ner AGI-fil
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               onClick={handleSubmit}
               disabled={actionLoading === 'submit' || !hasSkatteverket}
               title={
@@ -937,11 +980,12 @@ export function AGIPanel(props: AGIPanelProps) {
 
         {!readOnly && !isSigned && !hasSkatteverket && (
           <p className="text-xs text-muted-foreground">
-            Inlämning av AGI direkt till Skatteverket ingår i en uppgraderad plan.{' '}
+            Ladda ner AGI-filen ovan och lämna in den manuellt i Skatteverkets
+            e-tjänst — eller{' '}
             <a href="/settings/billing" className="font-medium underline hover:no-underline">
-              Uppgradera
-            </a>
-            .
+              uppgradera
+            </a>{' '}
+            för att skicka in direkt härifrån.
           </p>
         )}
       </CardContent>
