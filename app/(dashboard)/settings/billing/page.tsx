@@ -1,5 +1,9 @@
 import { Check } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { createClient } from '@/lib/supabase/server'
+import { getActiveCompanyId } from '@/lib/company/context'
+import { statusGrantsAccess } from '@/lib/stripe/subscription-sync'
+import { isStripeConfigured } from '@/lib/stripe/client'
+import { BillingActions } from '@/components/settings/BillingActions'
 
 export const metadata = { title: 'Abonnemang' }
 
@@ -12,24 +16,42 @@ const INCLUDED = [
 ]
 
 // Free for everyone — reassures users that the core ledger is never withheld.
-const ALWAYS_FREE = 'All bokföring, fakturering, rapporter, SIE-export, org.nr-uppslag och momsnummerkontroll ingår alltid utan kostnad.'
+const ALWAYS_FREE =
+  'All bokföring, fakturering, rapporter, SIE-export, org.nr-uppslag och momsnummerkontroll ingår alltid utan kostnad.'
 
 /**
  * Upgrade / subscription page — the destination every "Uppgradera" affordance
- * points to. v1 is intentionally minimal: it states the offer and routes to
- * checkout. The CTA uses a Stripe Payment Link (NEXT_PUBLIC_STRIPE_PAYMENT_LINK)
- * until the automated checkout route lands; without it, it degrades to a
- * clearly-labelled "coming soon" rather than a dead button.
+ * points to. Reads the active company's subscription status to show either the
+ * Checkout CTA or the manage-subscription portal; fulfilment itself happens via
+ * the Stripe webhook, never this page.
  */
-export default function BillingPage() {
-  const paymentLink = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK
+export default async function BillingPage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  let isActive = false
+  if (user) {
+    const companyId = await getActiveCompanyId(supabase, user.id)
+    if (companyId) {
+      const { data: sub } = await supabase
+        .from('company_subscriptions')
+        .select('status')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      isActive = statusGrantsAccess((sub as { status: string | null } | null)?.status)
+    }
+  }
+  const configured = isStripeConfigured()
 
   return (
     <div className="max-w-2xl">
       <h1 className="font-display text-2xl tracking-tight mb-1">Abonnemang</h1>
       <p className="text-muted-foreground mb-6">
-        Lås upp AI-assistenten, bankkoppling, Skatteverket-inlämning och
-        e-postutskick.
+        {isActive
+          ? 'Ditt abonnemang är aktivt. Du kan hantera eller avsluta det när som helst.'
+          : 'Lås upp AI-assistenten, bankkoppling, Skatteverket-inlämning och e-postutskick.'}
       </p>
 
       <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
@@ -51,15 +73,7 @@ export default function BillingPage() {
         </ul>
 
         <div className="mt-6">
-          {paymentLink ? (
-            <Button size="lg" asChild className="w-full sm:w-auto">
-              <a href={paymentLink}>Uppgradera</a>
-            </Button>
-          ) : (
-            <Button size="lg" disabled className="w-full sm:w-auto">
-              Uppgradering öppnar snart
-            </Button>
-          )}
+          <BillingActions isActive={isActive} configured={configured} />
         </div>
       </div>
 
