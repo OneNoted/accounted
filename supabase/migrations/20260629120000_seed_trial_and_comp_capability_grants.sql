@@ -63,14 +63,23 @@ ON CONFLICT (company_id, team_id, capability_key, source) DO NOTHING;
 -- =============================================================================
 -- 3. Comp companies: permanent grants (never expire)
 -- =============================================================================
--- Matched by name (no hardcoded UUIDs). If a name doesn't match in this DB,
--- zero rows are inserted — safe. Verify the names against prod before relying on
--- the comp status.
+-- Verified against prod (project pwxtzglxptnnvjrpixpg) on 2026-06-29:
+--   Arcim Technology AB — org 5595386219 (active), plus a no-org
+--                         "Arcim technology AB" variant (active) and 3 archived dupes
+--   Mattsson Systems AB — org 5595719864 (active)
+-- Match by org_number OR case-insensitive name, ACTIVE companies only. This is
+-- robust to the case variant, the missing-org variant, and future renames; it
+-- excludes the archived dupes and the unrelated "Amnäs Mattsson, Emil" enskild
+-- firma. No hardcoded UUIDs; idempotent.
 INSERT INTO public.capability_grants (company_id, capability_key, source, expires_at)
 SELECT c.id, k.key, 'comp', NULL
 FROM public.companies c
 CROSS JOIN (VALUES ('ai'), ('bank_sync'), ('skatteverket'), ('email_send')) AS k(key)
-WHERE c.name IN ('Arcim Technology AB', 'Mattsson Systems AB')
+WHERE c.archived_at IS NULL
+  AND (
+    c.org_number IN ('5595386219', '5595719864')
+    OR LOWER(c.name) IN ('arcim technology ab', 'mattsson systems ab')
+  )
 ON CONFLICT (company_id, team_id, capability_key, source) DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';
