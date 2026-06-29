@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from '../../../tests/pg/setup'
-import { seedCompany, insertAuthUser } from '../../../tests/pg/fixtures'
+import { seedCompany, insertAuthUser, insertCompany } from '../../../tests/pg/fixtures'
 
-// pg-real coverage for migration 20260628140000 (capability_grants /
+// pg-real coverage for migrations 20260628140000 (capability_grants /
 // company_capability_config / metered_events + company_has_capability RPC +
-// RLS). Required by .claude/rules/database.md for any RPC/RLS change.
+// RLS) and 20260629120000 (trial-grant trigger). Required by
+// .claude/rules/database.md for any RPC/RLS/trigger change.
+//
+// NOTE: as of 20260629120000 an AFTER INSERT trigger auto-seeds a trial grant
+// on the PAID keys for every new company. The resolver tests therefore call
+// clearGrants() first to assert against a controlled grant state.
 
 const future = () => new Date(Date.now() + 86_400_000).toISOString()
 const past = () => new Date(Date.now() - 86_400_000).toISOString()
@@ -24,6 +29,11 @@ async function insertGrant(p: {
   )
 }
 
+// Remove the trigger-seeded trial grants so a test can assert a controlled state.
+async function clearGrants(companyId: string): Promise<void> {
+  await getPool().query(`DELETE FROM public.capability_grants WHERE company_id = $1`, [companyId])
+}
+
 async function rpc(companyId: string, key: string): Promise<boolean> {
   const { rows } = await getPool().query<{ ok: boolean }>(
     `SELECT public.company_has_capability($1, $2) AS ok`,
@@ -35,29 +45,34 @@ async function rpc(companyId: string, key: string): Promise<boolean> {
 describe('company_has_capability (entitlement axis)', () => {
   it('is false when no grant exists (fail-closed)', async () => {
     const { companyId } = await seedCompany()
+    await clearGrants(companyId)
     expect(await rpc(companyId, 'ai')).toBe(false)
   })
 
   it('is true for an unexpired company-scoped grant', async () => {
     const { companyId } = await seedCompany()
+    await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', expiresAt: future() })
     expect(await rpc(companyId, 'ai')).toBe(true)
   })
 
   it('treats a null expiry as never-expiring', async () => {
     const { companyId } = await seedCompany()
+    await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', source: 'comp', expiresAt: null })
     expect(await rpc(companyId, 'ai')).toBe(true)
   })
 
   it('is false once the grant has expired', async () => {
     const { companyId } = await seedCompany()
+    await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', source: 'trial', expiresAt: past() })
     expect(await rpc(companyId, 'ai')).toBe(false)
   })
 
   it('cascades a firm/team-scoped grant to the client company', async () => {
     const { userId, companyId } = await seedCompany()
+    await clearGrants(companyId)
     const teamId = randomUUID()
     await getPool().query(
       `INSERT INTO public.teams (id, name, created_by) VALUES ($1, 'Firm', $2)`,
@@ -75,6 +90,7 @@ describe('company_has_capability (entitlement axis)', () => {
 describe('company_has_capability (enablement axis)', () => {
   it('is false when entitled but explicitly disabled', async () => {
     const { companyId } = await seedCompany()
+    await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', expiresAt: null })
     await getPool().query(
       `INSERT INTO public.company_capability_config (company_id, capability_key, enabled)
@@ -88,7 +104,6 @@ describe('company_has_capability (enablement axis)', () => {
 describe('company_has_capability tenant guard', () => {
   it('raises 42501 when a non-member asks about a company (authenticated ctx)', async () => {
     const { companyId } = await seedCompany()
-    await insertGrant({ companyId, key: 'ai', expiresAt: null })
     const outsider = await insertAuthUser()
     await expect(
       withUserContext(outsider, async (client) => {
@@ -99,7 +114,6 @@ describe('company_has_capability tenant guard', () => {
 
   it('lets a member resolve their own company under authenticated ctx', async () => {
     const { userId, companyId } = await seedCompany()
-    await insertGrant({ companyId, key: 'ai', expiresAt: null })
     const ok = await withUserContext(userId, async (client) => {
       const r = await client.query<{ ok: boolean }>(
         `SELECT public.company_has_capability($1, 'ai') AS ok`,
@@ -107,6 +121,7 @@ describe('company_has_capability tenant guard', () => {
       )
       return r.rows[0].ok
     })
+    // entitled via the auto-seeded trial grant
     expect(ok).toBe(true)
   })
 })
@@ -114,6 +129,7 @@ describe('company_has_capability tenant guard', () => {
 describe('capability_grants RLS', () => {
   it('lets a member read their own grants but hides them from non-members', async () => {
     const { userId, companyId } = await seedCompany()
+    await clearGrants(companyId)
     await insertGrant({ companyId, key: 'ai', expiresAt: null })
 
     const memberCount = await withUserContext(userId, async (client) => {
@@ -166,8 +182,33 @@ describe('capability_grants scope constraint', () => {
       `INSERT INTO public.teams (id, name, created_by) VALUES ($1, 'Firm', $2)`,
       [teamId, userId],
     )
-    await expect(
-      insertGrant({ companyId, teamId, key: 'ai' }),
-    ).rejects.toThrow()
+    await expect(insertGrant({ companyId, teamId, key: 'ai' })).rejects.toThrow()
+  })
+})
+
+describe('trial grant seeding trigger (20260629120000)', () => {
+  it('grants a new company a 30-day trial on the PAID keys at creation', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const { rows } = await getPool().query<{
+      capability_key: string
+      source: string
+      expires_at: string | null
+    }>(
+      `SELECT capability_key, source, expires_at FROM public.capability_grants
+       WHERE company_id = $1 ORDER BY capability_key`,
+      [companyId],
+    )
+    expect(rows.map((r) => r.capability_key)).toEqual(['ai', 'bank_sync', 'email_send', 'skatteverket'])
+    expect(rows.every((r) => r.source === 'trial')).toBe(true)
+    expect(rows.every((r) => r.expires_at !== null)).toBe(true)
+    expect(await rpc(companyId, 'ai')).toBe(true)
+  })
+
+  it('does not seed free keys (only the PAID set is granted)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    expect(await rpc(companyId, 'cloud_backup')).toBe(false)
+    expect(await rpc(companyId, 'org_lookup')).toBe(false)
   })
 })
