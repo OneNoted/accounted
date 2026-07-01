@@ -10,6 +10,7 @@ import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import NewJournalEntryDialog, { type CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
 import ChartOfAccountsManager from '@/components/bookkeeping/ChartOfAccountsManager'
+import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { useToast } from '@/components/ui/use-toast'
 import { Lock, Plus } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -35,7 +36,9 @@ export default function BookkeepingPage() {
   }, [searchParams])
 
   const [refreshKey, setRefreshKey] = useState(0)
-  const [activeTab, setActiveTab] = useState<TabValue>('journal')
+  const [activeTab, setActiveTab] = useState<TabValue>(
+    () => (searchParams.get('tab') === 'accounts' ? 'accounts' : 'journal'),
+  )
   const [showNewEntry, setShowNewEntry] = useState(false)
   const [copyPrefill, setCopyPrefill] = useState<CopyPrefill | null>(null)
   const [isLoadingCopy, setIsLoadingCopy] = useState(false)
@@ -102,6 +105,16 @@ export default function BookkeepingPage() {
   }, [copyFromId, toast, router])
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // Keep the active tab in sync with ?tab= so deep-links (e.g. the
+  // "Kontoplan (BAS)" cross-link in settings) land on the right tab even when
+  // this page is already mounted behind the settings modal.
+  /* eslint-disable react-hooks/set-state-in-effect -- URL→state sync requires sync setState */
+  useEffect(() => {
+    const tab = searchParams.get('tab')
+    if (tab === 'accounts' || tab === 'journal') setActiveTab(tab)
+  }, [searchParams])
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   // Fetch the next voucher number for today's fiscal period + default series.
   // Re-runs after each commit (refreshKey++) so the tab label stays current.
   useEffect(() => {
@@ -145,6 +158,13 @@ export default function BookkeepingPage() {
                 </span>
               )}
             </Button>
+            <AgentSparkleButton
+              intentId="verifikation.draft"
+              contextRef="verifikation:new"
+              label={t('create_with_assistant')}
+              size="default"
+              className="w-full sm:w-auto"
+            />
             <Button variant="outline" asChild className="w-full sm:w-auto">
               <Link href="/bookkeeping/year-end">
                 <Lock className="mr-2 h-4 w-4" />
