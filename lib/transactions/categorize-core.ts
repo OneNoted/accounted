@@ -28,7 +28,7 @@ import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-ent
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { detectBookingDuplicate, type BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
@@ -143,6 +143,13 @@ export async function categorizeMatchedTransaction(
   companyId: string,
   txId: string,
   opts: CategorizeMatchedTransactionOpts,
+  /**
+   * Same-batch siblings to exclude from the duplicate guard. Only set by the
+   * bulk driver so intra-batch bookings of DISTINCT same-(date,amount) events
+   * never dedupe against one another. Omitted (single-booking callers) = the
+   * full guard runs unchanged.
+   */
+  exclude?: BookingDuplicateExclusions,
 ): Promise<CategorizeCoreResult> {
   const { category, vatTreatment, vatAmount, notes, allowDuplicate } = opts
 
@@ -172,7 +179,7 @@ export async function categorizeMatchedTransaction(
         date: transaction.date,
         amount: transaction.amount,
         cash_account_id: transaction.cash_account_id ?? null,
-      })
+      }, exclude)
     } catch (err) {
       log.warn('booking-time duplicate detection failed (continuing)', err)
     }
@@ -200,7 +207,7 @@ export async function categorizeMatchedTransaction(
         date: transaction.date,
         amount: transaction.amount,
         cash_account_id: transaction.cash_account_id ?? null,
-      })
+      }, exclude)
       if (dismissed) {
         await appendProcessingHistory({
           companyId,
@@ -376,6 +383,14 @@ export async function bulkBookMatchedInboxItems(
   const booked: BulkBookInboxResult['booked'] = []
   const skipped: BulkBookInboxResult['skipped'] = []
 
+  // Ids booked so far in THIS batch. Passed as exclusions to each subsequent
+  // booking so two DISTINCT bank movements the user selected that share a
+  // (date, amount, cash account) don't dedupe against each other's freshly
+  // minted verifikat. Duplicates that existed BEFORE the batch are absent from
+  // these lists, so the guard still catches them (see BookingDuplicateExclusions).
+  const bookedTransactionIds: string[] = []
+  const bookedJournalEntryIds: string[] = []
+
   for (const itemId of item_ids) {
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
@@ -409,6 +424,8 @@ export async function bulkBookMatchedInboxItems(
         companyId,
         item.matched_transaction_id as string,
         { category, vatTreatment: vat_treatment, vatAmount: vat_amount, notes, allowDuplicate: allow_duplicate },
+        // Snapshot copies so the guard sees only the prior bookings of this batch.
+        { excludeTransactionIds: [...bookedTransactionIds], excludeJournalEntryIds: [...bookedJournalEntryIds] },
       )
     } catch (err) {
       // Caught per-item (incl. AccountsNotInChartError / period-lock bookkeeping
@@ -432,10 +449,15 @@ export async function bulkBookMatchedInboxItems(
       continue
     }
 
+    const bookedTxId = item.matched_transaction_id as string
+    const bookedJeId = (result.data?.journal_entry_id as string | null) ?? null
+    // Record this booking so it is excluded from the NEXT item's duplicate guard.
+    bookedTransactionIds.push(bookedTxId)
+    if (bookedJeId) bookedJournalEntryIds.push(bookedJeId)
     booked.push({
       item_id: itemId,
-      transaction_id: item.matched_transaction_id as string,
-      journal_entry_id: (result.data?.journal_entry_id as string | null) ?? null,
+      transaction_id: bookedTxId,
+      journal_entry_id: bookedJeId,
     })
   }
 

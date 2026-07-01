@@ -97,6 +97,24 @@ describe('GET /api/reports/trial-balance/account/[accountNumber]/sources', () =>
     expect(res.status).toBe(404)
   })
 
+  it('returns 400 when the cursor date component is not a structural ISO date', async () => {
+    // Defense-in-depth (ASVS V1.2): the cursor is applied in JS, but a
+    // malformed date component must still be rejected structurally.
+    mockCreateClient.mockResolvedValue(
+      buildSupabase(
+        { id: 'user-1' },
+        { account_number: '1930', account_name: 'Företagskonto' },
+        { data: [], error: null }
+      ) as never
+    )
+    const req = createMockRequest(
+      '/api/reports/trial-balance/account/1930/sources',
+      { searchParams: { fiscal_period_id: 'period-1', cursor: 'notadate|5' } }
+    )
+    const res = await GET(req, createMockRouteParams({ accountNumber: '1930' }))
+    expect(res.status).toBe(400)
+  })
+
   it('happy path: returns mapped lines for an account', async () => {
     const linesData = [
       {

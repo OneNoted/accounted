@@ -29,8 +29,9 @@ interface OpeningBalanceRowEditorProps {
   /** Seed rows. Read once on mount (later prop changes are ignored — remount
    *  via `key` or a conditional render to reset the grid). */
   initialRows: EditableRow[]
-  /** Fires whenever rows / totals / validity change. MUST be referentially
-   *  stable (a useState setter or useCallback) or this will update-loop. */
+  /** Fires whenever rows / totals / validity change. Held in a ref internally,
+   *  so it does NOT need to be referentially stable — passing an inline arrow
+   *  is safe and will not cause an update-loop. */
   onChange: (state: OpeningBalanceEditorState) => void
 }
 
@@ -121,6 +122,14 @@ export default function OpeningBalanceRowEditor({
   const [autocompleteQuery, setAutocompleteQuery] = useState('')
   const autocompleteRef = useRef<HTMLDivElement>(null)
 
+  // Hold onChange in a ref so an unstable (inline) callback identity can't
+  // retrigger the notifying effect below. Synced after each commit rather than
+  // during render (react-hooks/refs: refs must not be written while rendering).
+  const onChangeRef = useRef(onChange)
+  useEffect(() => {
+    onChangeRef.current = onChange
+  })
+
   const totals = useMemo(() => {
     let debit = 0
     let credit = 0
@@ -143,11 +152,12 @@ export default function OpeningBalanceRowEditor({
 
   const canSubmit = totals.isBalanced && !hasErrors && rows.length >= 2
 
-  // Push state up. Stable `onChange` + memoised `totals` mean this only fires
-  // when the user actually edits a row, never in a loop.
+  // Push state up via the ref so an unstable `onChange` identity can't retrigger
+  // this effect. Memoised `totals` means it only fires when the user actually
+  // edits a row, never in a loop.
   useEffect(() => {
-    onChange({ rows, totals, canSubmit })
-  }, [rows, totals, canSubmit, onChange])
+    onChangeRef.current({ rows, totals, canSubmit })
+  }, [rows, totals, canSubmit])
 
   const autocompleteResults = useMemo(() => {
     if (!autocompleteQuery || autocompleteQuery.length < 1) return []

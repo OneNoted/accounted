@@ -16,7 +16,7 @@ import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
-import type { InvoiceExtractionResult } from '@/types'
+import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 
 // Minimal shape the dialog needs from the workspace's inbox items.
 interface BulkBookInboxItem {
@@ -61,7 +61,14 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: 'private', label: 'Privat' },
 ]
 
-const VAT_OPTIONS: { value: string; label: string }[] = [
+// VAT treatment options. `value` is typed as `VatTreatment` (types/index.ts)
+// so this list can never drift from what the backend accepts: the bulk-book
+// route feeds the value straight into buildMappingResultFromCategory, which
+// only recognises these six. The 12% and 6% reduced rates are ALREADY covered
+// here by `reduced_12` / `reduced_6` — there is deliberately no `standard_12` /
+// `standard_6` (no such treatment exists; the backend would reject it). Keep
+// this list in sync with the union, not with rate labels.
+const VAT_OPTIONS: { value: VatTreatment; label: string }[] = [
   { value: 'standard_25', label: 'Moms 25%' },
   { value: 'reduced_12', label: 'Moms 12%' },
   { value: 'reduced_6', label: 'Moms 6%' },
@@ -77,7 +84,7 @@ function isBookable(it: BulkBookInboxItem): boolean {
 export default function BulkBookInboxDialog({ open, onOpenChange, items, onSuccess }: Props) {
   const { toast } = useToast()
   const [category, setCategory] = useState<string>('')
-  const [vatTreatment, setVatTreatment] = useState<string>('standard_25')
+  const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const bookable = useMemo(() => items.filter(isBookable), [items])
@@ -90,20 +97,16 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     [items],
   )
 
-  // All bookable underlag in a foreign currency → reverse charge is the common
-  // case (the seller didn't debit Swedish moms). Default the VAT picker to it
-  // so the typical USD/EUR-subscription batch is right out of the box; the user
-  // can still override.
-  const allForeign = useMemo(
-    () => bookable.length > 0 && bookable.every((it) => (it.extracted_data?.invoice?.currency ?? 'SEK').toUpperCase() !== 'SEK'),
-    [bookable],
-  )
-
+  // Reset to the safe default (25% svensk moms) each time the dialog opens.
+  // Currency is deliberately NOT used to preselect omvänd skattskyldighet: a
+  // foreign currency does not imply a foreign seller — a Swedish supplier can
+  // invoice in EUR and still debit 25% moms. Reverse charge is a property of
+  // the seller (utländsk, utan svenskt momsnr), never of the currency, so
+  // defaulting to it from currency alone would silently mis-book domestic VAT.
+  // The advisory rendered under the Moms picker spells this out to the user.
   useEffect(() => {
-    if (open) {
-      setVatTreatment(allForeign ? 'reverse_charge' : 'standard_25')
-    }
-  }, [open, allForeign])
+    if (open) setVatTreatment('standard_25')
+  }, [open])
 
   const totalSek = useMemo(
     () => bookable.reduce((s, it) => s + (it.extracted_data?.totals?.total ?? 0), 0),
@@ -190,14 +193,14 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
               <InfoTooltip
                 content={
                   <>
-                    Välj <strong>Omvänd skattskyldighet</strong> för utländska tjänster där säljaren inte
-                    debiterat svensk moms (t.ex. USD/EUR-prenumerationer). Svenska fakturor med moms: välj
-                    den sats kvittot visar.
+                    Välj <strong>Omvänd skattskyldighet</strong> för köp från en utländsk säljare utan
+                    svenskt momsnummer (t.ex. EU-tjänster som moln/mjukvara). Svenska fakturor med moms:
+                    välj den sats kvittot visar — valutan avgör inte.
                   </>
                 }
               />
             </div>
-            <Select value={vatTreatment} onValueChange={setVatTreatment}>
+            <Select value={vatTreatment} onValueChange={(v) => setVatTreatment(v as VatTreatment)}>
               <SelectTrigger id="bulk-vat">
                 <SelectValue />
               </SelectTrigger>
@@ -209,6 +212,17 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
                 ))}
               </SelectContent>
             </Select>
+
+            {vatTreatment === 'reverse_charge' && (
+              <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+                <strong className="font-medium text-foreground">Kontrollera säljaren.</strong>{' '}
+                Omvänd skattskyldighet gäller bara köp från en <strong className="font-medium text-foreground">utländsk
+                säljare utan svenskt momsregistreringsnummer</strong> — t.ex. EU-tjänster, EU-varor,
+                byggtjänster eller viss elektronik. Valutan avgör inte: en svensk säljare kan fakturera i
+                EUR och ändå debitera 25% moms. Är säljaren svensk och momsen står på kvittot, välj i
+                stället rätt momssats ovan.
+              </div>
+            )}
           </div>
 
           {totalSek > 0 && (

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, X, Loader2, MessageSquare, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useToast } from '@/components/ui/use-toast'
 import {
   type ConversationRow,
   BUCKET_LABELS,
@@ -33,6 +34,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
   const [editValue, setEditValue] = useState('')
   // Set by Esc so the blur that fires when the input unmounts doesn't save.
   const cancelRef = useRef(false)
+  const { toast } = useToast()
 
   useEffect(() => {
     let cancelled = false
@@ -87,12 +89,26 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
     const title = editValue.trim()
     const current = conversations.find((c) => c.id === id)
     if (!title || title === current?.title) return
+    // Capture the pre-rename title so we can roll back if the PATCH fails.
+    const previousTitle = current?.title ?? null
     setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)))
-    await fetch(`/api/agent/conversations/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    })
+    try {
+      const res = await fetch(`/api/agent/conversations/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } catch {
+      // Revert the optimistic rename so the list stays in sync with the server.
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, title: previousTitle } : c)),
+      )
+      toast({
+        variant: 'destructive',
+        title: 'Kunde inte byta namn på konversationen.',
+      })
+    }
   }
 
   return (

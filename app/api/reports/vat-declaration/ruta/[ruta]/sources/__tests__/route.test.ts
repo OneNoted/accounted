@@ -120,6 +120,27 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
     expect(body.data.lines[0].credit).toBe(250)
   })
 
+  it('returns 400 when the cursor date component is not a structural ISO date', async () => {
+    // Defense-in-depth (ASVS V1.2): the cursor is applied in JS, but a
+    // malformed date component must still be rejected structurally.
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, { data: [], error: null }) as never
+    )
+    const req = createMockRequest(
+      '/api/reports/vat-declaration/ruta/10/sources',
+      {
+        searchParams: {
+          periodType: 'monthly',
+          year: '2026',
+          period: '5',
+          cursor: 'notadate|5',
+        },
+      }
+    )
+    const res = await GET(req, createMockRouteParams({ ruta: '10' }))
+    expect(res.status).toBe(400)
+  })
+
   it('sorts lines by entry_date ASC then voucher_number ASC regardless of DB return order', async () => {
     // Regression: this endpoint relied on `.order({ foreignTable })`, which
     // sorts the embedded resource — not the parent — so lines came back in

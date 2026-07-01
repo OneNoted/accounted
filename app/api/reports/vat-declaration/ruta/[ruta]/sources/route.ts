@@ -101,7 +101,9 @@ export async function GET(
   if (cursor) {
     const [cd, cv] = cursor.split('|')
     cursorVoucherNum = parseInt(cv, 10)
-    if (!cd || isNaN(cursorVoucherNum)) {
+    // The cursor is applied in JS (string compare); structurally validating the
+    // date component here is defense-in-depth against malformed/injection cursors.
+    if (!cd || !/^\d{4}-\d{2}-\d{2}$/.test(cd) || isNaN(cursorVoucherNum)) {
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 })
     }
     cursorDate = cd

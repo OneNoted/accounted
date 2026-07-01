@@ -250,3 +250,83 @@ describe('bulkBookMatchedInboxItems — booking', () => {
     expect(mockCreateJE).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('bulkBookMatchedInboxItems — intra-batch duplicate handling', () => {
+  /** Six queued from() results for one successfully-booked item. */
+  const bookableItem = (itemId: string, txId: string, amount: number) => [
+    { data: { id: itemId, matched_transaction_id: txId, created_journal_entry_id: null, created_supplier_invoice_id: null } },
+    { data: { id: txId, date: '2026-06-01', amount, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+    { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+    { data: [{ id: 'fp-1' }] },
+    { error: null },
+    { data: [] },
+  ]
+
+  it('books BOTH distinct transactions that share (date, amount) in one bulk run', async () => {
+    // Model the reviewer-reported bug: the guard WOULD flag the second tx as a
+    // duplicate of the first tx's freshly-created verifikat — but only when the
+    // first tx is NOT excluded as a same-batch sibling. The fix must pass tx-1
+    // in as an exclusion so tx-2 books instead of being skipped 409.
+    mockDetectDup.mockImplementation(
+      (_sb: unknown, _co: unknown, target: { id: string }, exclude?: { excludeTransactionIds?: string[] }) => {
+        if (target.id === 'tx-2' && !(exclude?.excludeTransactionIds ?? []).includes('tx-1')) {
+          return Promise.resolve({
+            transaction_id: 'tx-1', journal_entry_id: 'je-1', voucher_label: 'A1',
+            entry_date: '2026-06-01', description: null, amount: 700.28,
+          })
+        }
+        return Promise.resolve(null)
+      },
+    )
+
+    const supabase = queuedSupabase([
+      ...bookableItem('i1', 'tx-1', -700.28),
+      ...bookableItem('i2', 'tx-2', -700.28),
+    ])
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1', 'i2'],
+      category: 'expense_software',
+    })
+
+    expect(skipped).toEqual([])
+    expect(booked).toEqual([
+      { item_id: 'i1', transaction_id: 'tx-1', journal_entry_id: 'je-1' },
+      { item_id: 'i2', transaction_id: 'tx-2', journal_entry_id: 'je-1' },
+    ])
+    expect(mockCreateJE).toHaveBeenCalledTimes(2)
+
+    // The SECOND booking was handed tx-1 (and its verifikat) as an intra-batch
+    // exclusion; the first was handed an empty set.
+    const firstCall = mockDetectDup.mock.calls.find((c) => (c[2] as { id: string }).id === 'tx-1')
+    const secondCall = mockDetectDup.mock.calls.find((c) => (c[2] as { id: string }).id === 'tx-2')
+    expect(firstCall?.[3]).toEqual({ excludeTransactionIds: [], excludeJournalEntryIds: [] })
+    expect(secondCall?.[3]).toEqual({ excludeTransactionIds: ['tx-1'], excludeJournalEntryIds: ['je-1'] })
+  })
+
+  it('STILL skips a pre-existing already-booked duplicate (cross-batch detection preserved)', async () => {
+    // The guard fires on a duplicate that existed BEFORE this batch: its ids are
+    // absent from the (empty) exclusion set, so the booking is refused (409) and
+    // the item is skipped as a possible duplicate rather than double-booked.
+    mockDetectDup.mockResolvedValue({
+      transaction_id: 'tx-preexisting', journal_entry_id: 'je-old', voucher_label: 'A9',
+      entry_date: '2026-06-01', description: null, amount: 700.28,
+    })
+
+    const supabase = queuedSupabase([
+      { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
+      { data: { id: 'tx-1', date: '2026-06-01', amount: -700.28, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+    ])
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'],
+      category: 'expense_software',
+    })
+
+    expect(booked).toEqual([])
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0].item_id).toBe('i1')
+    expect(skipped[0].reason).toBe('already_booked_or_duplicate')
+    expect(mockCreateJE).not.toHaveBeenCalled()
+  })
+})
