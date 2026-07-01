@@ -25,7 +25,6 @@ import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -1113,7 +1112,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="flex-1 min-w-0">
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
+          <h1 className="font-display text-2xl md:text-3xl tracking-tight">
             {titleText}
             {numberPreview && !isSelfBilled && (
               <span className="ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl">
@@ -1526,9 +1525,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       {isInvoiceDoc && watchItems[index]?.deduction_type && (
                         <div className="md:col-span-12 mt-2 md:mt-3">
                           <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="secondary" className="tabular-nums">
-                              {watchItems[index]?.deduction_type === 'rot' ? 'ROT(30)' : 'RUT(50)'}
-                            </Badge>
+                            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                              {watchItems[index]?.deduction_type === 'rot' ? 'ROT 30%' : 'RUT 50%'}
+                            </span>
                             <Controller
                               name={`items.${index}.work_type`}
                               control={control}

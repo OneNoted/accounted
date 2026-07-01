@@ -26,6 +26,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
@@ -56,6 +57,8 @@ import {
   type SkvSubmitResult,
 } from '@/lib/pending-operations/skatteverket-commit'
 import { getEmailService } from '@/lib/email/service'
+import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
+import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -769,6 +772,29 @@ async function commitMarkInvoicePaid(
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
+  // Paid/remaining/status math + overpayment guard via the shared
+  // planInvoicePayment helper — the single source of truth across the three
+  // mark-paid surfaces (this agent path, the dashboard route, and the v1 API).
+  // This path settles the full remaining (no custom lines), so it can never
+  // overpay, but routing through the helper keeps the state identical. Runs
+  // BEFORE the JE below so a rejected payment never burns a voucher number.
+  // Settle the full outstanding balance. Prefer remaining_amount; for legacy rows
+  // where it was never written, derive it from total − paid_amount rather than
+  // falling back to the full total (which would double-count a prior partial
+  // payment and trip the overpayment guard).
+  const inv = invoice as { remaining_amount?: number | null; paid_amount?: number | null }
+  const paymentAmount = inv.remaining_amount ?? (invoice.total - (inv.paid_amount ?? 0))
+  const payment = planInvoicePayment(invoice, paymentAmount)
+  if (!payment.ok) {
+    return {
+      error:
+        getErrorEntry('MATCH_AMOUNT_EXCEEDS_REMAINING')?.message_sv ??
+        'Betalningsbeloppet är större än fakturans återstående belopp.',
+      status: 400,
+    }
+  }
+  const { newPaidAmount, newRemaining, newStatus } = payment.plan
+
   if (isRealInvoice) {
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
@@ -781,18 +807,91 @@ async function commitMarkInvoicePaid(
       )
       journalEntryId = je?.id ?? null
     }
+
+    // Fail closed: a real invoice must produce a posted payment voucher.
+    // Marking it paid with no journal entry orphans the receivable and
+    // diverges the GL from the AR sub-ledger. Nothing was posted (the helper
+    // returned null), so there is no voucher to cancel.
+    if (!journalEntryId) {
+      return {
+        error:
+          'Betalningen kunde inte bokföras (ingen verifikation skapades — t.ex. stängd räkenskapsperiod). ' +
+          'Fakturan har inte markerats som betald.',
+        status: 422,
+      }
+    }
   }
 
   const now = new Date().toISOString()
-  const { error: updateError } = await supabase
+  // CAS guard: only flip from a payable status so a concurrently-settled
+  // invoice no-ops here instead of double-booking the payment.
+  const { data: updateResult, error: updateError } = await supabase
     .from('invoices')
-    .update({ status: 'paid', paid_at: now, paid_amount: invoice.total })
+    .update({
+      status: newStatus,
+      paid_amount: newPaidAmount,
+      remaining_amount: newRemaining,
+      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+    })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
+    .in('status', ['sent', 'overdue', 'partially_paid'])
+    .select('id')
 
-  if (updateError) return { error: 'Failed to update invoice status', status: 500 }
+  if (updateError) {
+    // The payment voucher already posted but the invoice row did not flip;
+    // cancel the orphan so the GL doesn't diverge from the sub-ledger.
+    if (journalEntryId) {
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId, userId, journalEntryId,
+        'Automatiskt makulerad: fakturauppdatering misslyckades efter bokförd betalning',
+      )
+    }
+    return { error: 'Failed to update invoice status', status: 500 }
+  }
 
-  return { data: { status: 'paid', journal_entry_id: journalEntryId } }
+  if (!updateResult || updateResult.length === 0) {
+    // Race lost: the invoice was settled concurrently between our read and
+    // write. Cancel the orphaned payment voucher and document the gap rather
+    // than leaving a double booking.
+    if (journalEntryId) {
+      await cancelOrphanedPaymentEntry(
+        supabase, companyId, userId, journalEntryId,
+        'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+      )
+    }
+    return {
+      error: 'Invoice can only be marked as paid from a payable status (sent, overdue or partially paid)',
+      status: 409,
+    }
+  }
+
+  // Notify subscribers — invoice.paid fans out to registered webhooks
+  // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
+  // so an emit failure must not fail the operation. Parity with the v1 and
+  // dashboard mark-paid routes, which previously emitted while this path did not.
+  try {
+    await eventBus.emit({
+      type: 'invoice.paid',
+      payload: {
+        invoice: {
+          ...(invoice as Invoice),
+          status: newStatus,
+          paid_amount: newPaidAmount,
+          remaining_amount: newRemaining,
+          paid_at: newStatus === 'paid' ? now : (invoice as Invoice).paid_at,
+        } as Invoice,
+        companyId,
+        userId,
+        paymentAmount,
+        paymentDate,
+      },
+    })
+  } catch (err) {
+    log.warn('invoice.paid emit failed', err)
+  }
+
+  return { data: { status: newStatus, remaining_amount: newRemaining, journal_entry_id: journalEntryId } }
 }
 
 async function commitSendInvoice(
@@ -3363,6 +3462,23 @@ async function commitPendingOperationInner(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
+  // ── Capability gate (commit-time twin of the MCP dispatch gate). The actual
+  //    external-service call (email / Skatteverket submit) happens below, so
+  //    this is the true paid chokepoint — it also catches an op STAGED during
+  //    the trial then approved AFTER the grant expired, regardless of caller
+  //    (MCP approve tool or the UI approval path). Checked BEFORE the atomic
+  //    claim so a blocked op stays 'pending' and is re-approvable once the
+  //    company subscribes. Self-hosted short-circuits to all-on in hasCapability.
+  const requiredCapability = PAID_OPERATION_CAPABILITY_MAP[pendingOp.operation_type]
+  if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
+    return {
+      status: 'failed',
+      error: CAPABILITY_BLOCKED_MESSAGE_SV,
+      http_status: 403,
+      code: 'capability_blocked',
+    }
+  }
+
   // ── Atomic claim: flip status pending → committing in a single conditional
   //    update. If 0 rows are affected, another caller (auto-commit ↔ human
   //    approval, or two parallel approvals) already claimed this op and we
@@ -3608,7 +3724,7 @@ async function commitPendingOperationInner(
   }
 
   const now = new Date().toISOString()
-  await supabase
+  const { error: finalizeError } = await supabase
     .from('pending_operations')
     .update({
       status: 'committed',
@@ -3616,6 +3732,20 @@ async function commitPendingOperationInner(
       result_data: result.data || {},
     })
     .eq('id', pendingOp.id)
+
+  if (finalizeError) {
+    // The executor's side-effects already committed (and are immutable); only
+    // the terminal status write failed. Without surfacing this, the row would
+    // sit in 'committing' indefinitely — the expire sweep only targets
+    // 'pending' ops, so nothing would ever reconcile it. Log loudly with the
+    // ids needed to finalize manually; the response still reports success
+    // because the actual work is done.
+    log.error('failed to finalize pending_operation to committed (left in committing)', finalizeError, {
+      pendingOperationId: pendingOp.id,
+      operationType: pendingOp.operation_type,
+      companyId,
+    })
+  }
 
   return {
     status: 'committed',

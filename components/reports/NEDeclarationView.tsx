@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Download, AlertCircle } from 'lucide-react'
 import { AccountNumber } from '@/components/ui/account-number'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
@@ -12,6 +11,7 @@ import { formatCurrency } from '@/lib/utils'
 export function NEDeclarationView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<NEDeclaration | null>(null)
   const [loading, setLoading] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const fetchDeclaration = async () => {
@@ -32,8 +32,24 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
     }
   }
 
-  const downloadSRU = () => {
-    window.open(`/api/reports/ne-bilaga?period_id=${periodId}&format=sru`, '_blank')
+  const downloadSRU = async () => {
+    setDownloading(true)
+    try {
+      const res = await fetch(`/api/reports/ne-bilaga?period_id=${periodId}&format=sru`)
+      if (!res.ok) throw new Error('Download failed')
+      const blob = await res.blob()
+      const filename = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'NE_SRU.zip'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setError('Kunde inte ladda ner SRU-filer')
+    } finally {
+      setDownloading(false)
+    }
   }
 
   // NE ruta labels
@@ -72,9 +88,9 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               {loading ? 'Laddar...' : 'Hämta NE-bilaga'}
             </Button>
             {data && (
-              <Button variant="outline" onClick={downloadSRU}>
+              <Button variant="outline" onClick={downloadSRU} disabled={downloading}>
                 <Download className="h-4 w-4 mr-2" />
-                Ladda ner SRU-fil
+                {downloading ? 'Laddar ner...' : 'Ladda ner SRU-fil'}
               </Button>
             )}
           </div>
@@ -94,13 +110,13 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
         <>
           {/* Warnings */}
           {data.warnings.length > 0 && (
-            <Card className="border-orange-200 bg-orange-50">
+            <Card className="border-border">
               <CardContent className="py-4">
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5" />
+                  <AlertCircle className="h-5 w-5 text-warning mt-0.5" />
                   <div>
                     {data.warnings.map((warning, i) => (
-                      <p key={i} className="text-sm text-orange-800">{warning}</p>
+                      <p key={i} className="text-sm text-foreground">{warning}</p>
                     ))}
                   </div>
                 </div>
@@ -111,14 +127,12 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
           {/* Company info */}
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>
-                  {data.companyInfo.companyName}
-                </CardTitle>
-                <Badge className="bg-primary/10 text-primary">
-                  {data.fiscalYear.name}
-                </Badge>
-              </div>
+              <CardTitle>
+                {data.companyInfo.companyName}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {data.fiscalYear.name}
+              </p>
               {data.companyInfo.orgNumber && (
                 <p className="text-sm text-muted-foreground">
                   Org.nr: {data.companyInfo.orgNumber}
@@ -152,7 +166,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">Summa intäkter</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right tabular-nums">
                       {formatCurrency(
                         data.rutor.R1 + data.rutor.R2 + data.rutor.R3 + data.rutor.R4
                       )}
@@ -189,7 +203,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
                 <tfoot>
                   <tr className="border-t-2 font-semibold">
                     <td className="py-2">Summa kostnader</td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right tabular-nums">
                       -{formatCurrency(
                         data.rutor.R5 + data.rutor.R6 + data.rutor.R7 +
                         data.rutor.R8 + data.rutor.R9 + data.rutor.R10
@@ -207,10 +221,10 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               <div className="flex justify-between items-center">
                 <div>
                   <span className="font-mono text-xs bg-muted px-1 rounded mr-2">R11</span>
-                  <span className="font-display font-medium text-xl">Årets resultat</span>
+                  <span className="font-display text-xl">Årets resultat</span>
                 </div>
                 <span
-                  className={`font-display text-2xl font-medium tabular-nums ${
+                  className={`font-display text-2xl tabular-nums ${
                     data.rutor.R11 >= 0 ? 'text-success' : 'text-destructive'
                   }`}
                 >
@@ -266,7 +280,7 @@ function NEDeclarationRow({
             </span>
           )}
         </td>
-        <td className="py-2 text-right">
+        <td className="py-2 text-right tabular-nums">
           {isExpense && amount > 0 ? '-' : ''}{formatCurrency(Math.abs(amount))}
         </td>
       </tr>

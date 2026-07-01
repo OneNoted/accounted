@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -103,7 +102,7 @@ export default function BankFileConfirmStep({
                 <FileText className="h-4 w-4" />
                 <span className="text-xs">Transaktioner</span>
               </div>
-              <p className="text-xl font-display font-medium tabular-nums">{stats.parsed_rows}</p>
+              <p className="text-xl font-display tabular-nums">{stats.parsed_rows}</p>
               {stats.skipped_rows > 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
                   {stats.skipped_rows} rader hoppades över
@@ -125,16 +124,16 @@ export default function BankFileConfirmStep({
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-xs">Inkomster</span>
               </div>
-              <p className="text-xl font-display font-medium tabular-nums">
+              <p className="text-xl font-display tabular-nums">
                 {formatCurrency(stats.total_income)}
               </p>
             </div>
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Leverantörsfakturor</span>
+                <span className="text-xs">Utgifter</span>
               </div>
-              <p className="text-xl font-display font-medium tabular-nums">
+              <p className="text-xl font-display tabular-nums">
                 {formatCurrency(stats.total_expenses)}
               </p>
             </div>
@@ -169,11 +168,9 @@ export default function BankFileConfirmStep({
 
           {/* Additional info */}
           {refsCount > 0 && (
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline" className="text-primary border-primary/30">
-                <Link2 className="mr-1 h-3 w-3" />
-                {refsCount} med OCR/referens
-              </Badge>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Link2 className="h-3 w-3" />
+              {refsCount} med OCR/referens
             </div>
           )}
         </CardContent>

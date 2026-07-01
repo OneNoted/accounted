@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
-  Receipt,
+  ReceiptText,
   Users,
   ArrowLeftRight,
   Camera,
@@ -53,7 +53,7 @@ export function EmptyState({
     <div className={cn('flex flex-col items-center justify-center py-12 px-4 text-center', className)}>
       {Icon && (
         <div className="mb-6">
-          <div className="p-5 rounded-full bg-muted">
+          <div className="p-4 rounded-full bg-muted">
             <Icon className="h-8 w-8 text-muted-foreground" />
           </div>
         </div>
@@ -103,7 +103,7 @@ export function EmptyInvoices() {
   const t = useTranslations('empty')
   return (
     <EmptyState
-      icon={Receipt}
+      icon={ReceiptText}
       title={t('preset_invoices_title')}
       description={t('preset_invoices_description')}
       actionLabel={t('preset_invoices_action')}

@@ -187,7 +187,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
         aria-label={copyAriaLabel}
       >
         {copied ? (
-          <Check className="h-3.5 w-3.5 text-green-600" />
+          <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}
@@ -479,7 +479,7 @@ export function ApiKeysPanel() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <p className="text-sm font-medium">Claude.ai</p>
-              <Badge variant="secondary" className="text-[10px] font-normal px-1.5 py-0">{t('recommended_badge')}</Badge>
+              <span className="text-xs text-muted-foreground">{t('recommended_badge')}</span>
             </div>
             <p className="text-xs text-muted-foreground mb-2">
               {t.rich('claude_ai_instructions', {
@@ -700,7 +700,7 @@ export function ApiKeysPanel() {
               onClick={handleCopy}
             >
               {copied ? (
-                <Check className="h-4 w-4 text-green-600" />
+                <Check className="h-4 w-4 text-success" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

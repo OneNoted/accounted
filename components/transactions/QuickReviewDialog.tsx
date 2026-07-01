@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -253,7 +252,7 @@ export default function QuickReviewDialog({
         {/* Transaction summary */}
         <div className="flex items-center gap-3 rounded-lg border p-3">
           <div
-            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIncome ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}
+            className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIncome ? 'text-success' : 'text-destructive'}`}
           >
             {isIncome ? (
               <ArrowUpRight className="h-4 w-4" />
@@ -309,9 +308,9 @@ export default function QuickReviewDialog({
             {isCounterpartyTemplate ? t('label_counterparty_template') : template ? t('label_template') : t('label_category')}
           </label>
           <div className="mt-1 flex items-center gap-2">
-            <Badge variant="outline" className="text-sm py-1 px-3">
+            <span className="text-sm font-medium text-foreground">
               {template ? template.name_sv : categoryLabel}
-            </Badge>
+            </span>
             {onChangeTemplate && !isCounterpartyTemplate && (
               <button
                 type="button"

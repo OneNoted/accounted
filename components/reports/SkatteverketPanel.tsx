@@ -554,7 +554,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
             Skicka till Skatteverket
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-success border-success/30 gap-1">
+            <Badge variant="success" className="gap-1">
               <CheckCircle2 className="h-3 w-3" />
               Ansluten
             </Badge>
@@ -604,7 +604,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
             {localChecks.map((c, i) => (
               <div
                 key={`${c.code}-${i}`}
-                className={`flex items-start gap-2 text-sm rounded-lg p-2.5 ${
+                className={`flex items-start gap-2 text-sm rounded-lg p-3 ${
                   c.status === 'ERROR'
                     ? 'bg-destructive/5 text-destructive'
                     : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'
@@ -756,7 +756,7 @@ function SkatteverketPanelInner({ periodType, year, period, hasData, rutor }: Sk
             {kontroller.map((k, i) => (
               <div
                 key={`${k.kod}-${i}`}
-                className={`flex items-start gap-2 text-sm rounded-lg p-2.5 ${
+                className={`flex items-start gap-2 text-sm rounded-lg p-3 ${
                   k.status === 'ERROR'
                     ? 'bg-destructive/5 text-destructive'
                     : 'bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-200'

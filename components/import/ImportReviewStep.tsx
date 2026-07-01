@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -13,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import {
   CheckCircle,
   AlertCircle,
@@ -183,7 +182,7 @@ export default function ImportReviewStep({
                   {preview.voucherCount} verifikationer bearbetas
                 </p>
               </div>
-              <div className="text-2xl font-display font-medium tabular-nums text-muted-foreground">
+              <div className="text-2xl font-display tabular-nums text-muted-foreground">
                 {elapsed}s
               </div>
               <p className="text-sm text-muted-foreground max-w-sm">
@@ -224,11 +223,11 @@ export default function ImportReviewStep({
                 <p className="font-medium">Räkenskapsår</p>
                 <p className="text-sm text-muted-foreground">
                   {preview.fiscalYearStart
-                    ? new Date(preview.fiscalYearStart).toLocaleDateString('sv-SE')
+                    ? formatDate(preview.fiscalYearStart)
                     : '?'}{' '}
                   -{' '}
                   {preview.fiscalYearEnd
-                    ? new Date(preview.fiscalYearEnd).toLocaleDateString('sv-SE')
+                    ? formatDate(preview.fiscalYearEnd)
                     : '?'}
                 </p>
               </div>
@@ -373,9 +372,9 @@ export default function ImportReviewStep({
               <Label htmlFor="mark-no-doc-required" className="font-medium flex items-center gap-2">
                 Markera som &quot;Inget underlag krävs&quot;
                 {isHistoricalImport && (
-                  <Badge variant="secondary" className="text-[10px] font-normal">
-                    Rekommenderas vid migrering
-                  </Badge>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    · Rekommenderas vid migrering
+                  </span>
                 )}
               </Label>
               <p className="text-sm text-muted-foreground">

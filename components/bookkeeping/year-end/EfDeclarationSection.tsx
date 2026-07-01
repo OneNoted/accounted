@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -327,9 +326,7 @@ export function EfDeclarationSection({
               <div className="flex-1">
                 <CardTitle className="text-base">{item.label}</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">{item.description}</p>
-                <Badge variant="outline" className="mt-2">
-                  {item.ne_ruta}
-                </Badge>
+                <p className="text-xs text-muted-foreground mt-1">NE-ruta {item.ne_ruta}</p>
               </div>
               <p className="font-display text-2xl tabular-nums shrink-0">
                 {formatCurrency(item.amount)}
@@ -361,11 +358,11 @@ export function EfDeclarationSection({
         <CardContent>
           <Button asChild variant="outline">
             <Link
-              href={`/api/reports/ne-bilaga?fiscal_period_id=${fiscalPeriodId}`}
+              href={`/api/reports/ne-bilaga?period_id=${fiscalPeriodId}&format=sru`}
               prefetch={false}
             >
               <FileDown className="mr-2 h-4 w-4" />
-              Förhandsgranska NE-bilaga
+              Ladda ner NE-bilaga (SRU)
             </Link>
           </Button>
         </CardContent>

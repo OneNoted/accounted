@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
-  Receipt,
+  ReceiptText,
   ArrowLeftRight,
   Users,
   Wallet,
   Building2,
   BookOpen,
+  ListTree,
   BarChart3,
   Upload,
   Package,
@@ -35,7 +36,7 @@ type Entry = {
 }
 
 const ACTION_ENTRIES: Entry[] = [
-  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: Receipt, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
+  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: ReceiptText, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
   { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
   { id: 'new-customer', label: 'Lägg till kund', icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
   { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices/new', keywords: 'leverantörsfaktura supplier invoice ny' },
@@ -47,6 +48,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'leverantörer', label: 'Leverantörer', icon: Building2, href: '/suppliers' },
   { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
   { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
+  { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
   { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: Package, href: '/assets', keywords: 'tillgångar assets' },
   { id: 'rapporter', label: 'Rapporter', icon: BarChart3, href: '/reports' },
   { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: BarChart3, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },

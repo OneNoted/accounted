@@ -83,13 +83,13 @@ describe('generateSIEExport', () => {
     const lines = output.split('\r\n')
 
     expect(lines[0]).toBe('#FLAGGA 0')
-    expect(lines[1]).toBe('#FORMAT PC8')
-    expect(lines[2]).toBe('#SIETYP 4')
-    expect(lines[3]).toMatch(/^#PROGRAM "ERPBase" "1\.0"$/)
-    expect(lines[4]).toMatch(/^#GEN \d{8}$/)
-    expect(lines[5]).toBe('#ORGNR 556677-8899')
-    expect(lines[6]).toBe('#FNAMN "Test AB"')
-    expect(lines[7]).toBe('#RAR 0 20240101 20241231')
+    expect(lines[1]).toBe('#SIETYP 4')
+    expect(lines[2]).toMatch(/^#PROGRAM "ERPBase" "1\.0"$/)
+    expect(lines[3]).toMatch(/^#GEN \d{8}$/)
+    expect(lines[4]).toBe('#ORGNR 556677-8899')
+    expect(lines[5]).toBe('#FNAMN "Test AB"')
+    expect(lines[6]).toBe('#RAR 0 20240101 20241231')
+    expect(output).not.toContain('#FORMAT PC8')
   })
 
   it('omits #ORGNR when org_number is null', async () => {
@@ -520,13 +520,16 @@ describe('generateSIEExport', () => {
         ],
         error: null,
       },
+      // journal_entry_lines (allLines) — #824 moved per-entry lines into a single
+      // paged join query; lines map back to entries by journal_entry_id (the inline
+      // entry.lines above are overwritten). The OB entry's lines (excluded from
+      // movement via obEntryId) and the real transfer's lines both flow through here.
       {
-        // journal_entry_lines (fetchAllRows) — split out from the entries query
         data: [
-          { journal_entry_id: 'ob-entry-1', account_number: '1933', debit_amount: 96466.59, credit_amount: 0, line_description: 'IB 1933', cost_center: null, project: null },
-          { journal_entry_id: 'ob-entry-1', account_number: '2019', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
-          { journal_entry_id: 'e2', account_number: '1930', debit_amount: 96466.59, credit_amount: 0, line_description: null, cost_center: null, project: null },
-          { journal_entry_id: 'e2', account_number: '1933', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
+          { id: 'l1', journal_entry_id: 'ob-entry-1', account_number: '1933', debit_amount: 96466.59, credit_amount: 0, line_description: 'IB 1933', cost_center: null, project: null },
+          { id: 'l2', journal_entry_id: 'ob-entry-1', account_number: '2019', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
+          { id: 'l3', journal_entry_id: 'e2', account_number: '1930', debit_amount: 96466.59, credit_amount: 0, line_description: null, cost_center: null, project: null },
+          { id: 'l4', journal_entry_id: 'e2', account_number: '1933', debit_amount: 0, credit_amount: 96466.59, line_description: null, cost_center: null, project: null },
         ],
         error: null,
       },
