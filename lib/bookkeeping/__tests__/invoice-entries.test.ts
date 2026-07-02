@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getRevenueAccount, getOutputVatAccount } from '../invoice-entries'
+import { roundOre } from '@/lib/money'
 import type { Invoice, InvoiceItem, CreateJournalEntryInput } from '@/types'
 
 // Mock the engine so we can capture the input passed to createJournalEntry
@@ -1060,10 +1061,10 @@ describe('dimensions propagation (PR7) — createInvoiceJournalEntry', () => {
     expect(rev3001[1].dimensions).toEqual({ '6': 'P001' })
 
     const revSum = rev3001.reduce((s, l) => s + l.credit_amount, 0)
-    expect(Math.round(revSum * 100) / 100).toBe(20.01)
+    expect(roundOre(revSum)).toBe(20.01)
 
-    const debit = Math.round(input.lines.reduce((s, l) => s + l.debit_amount, 0) * 100) / 100
-    const credit = Math.round(input.lines.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
+    const debit = roundOre(input.lines.reduce((s, l) => s + l.debit_amount, 0))
+    const credit = roundOre(input.lines.reduce((s, l) => s + l.credit_amount, 0))
     expect(debit).toBe(credit)
     expect(debit).toBe(25.01)
   })
