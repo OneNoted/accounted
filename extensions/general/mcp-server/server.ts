@@ -51,6 +51,7 @@ import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
+import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
@@ -7828,6 +7829,135 @@ export const tools: McpTool[] = [
         company_name: company.company_name,
         org_number: company.org_number,
         generated_at: new Date().toISOString(),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_generate_rot_rut_file',
+    title: 'Generate Rot/Rut Payout File',
+    description:
+      'Begäran om utbetalning for rot/rut (Skatteverket husavdrag): XML file from paid deduction invoices, uploaded manually on skatteverket.se (no API exists). Call with list_only=true first to see eligible invoices and blockers. Generating records an active begäran per invoice.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        deduction_type: { type: 'string', enum: ['rot', 'rut'] },
+        list_only: {
+          type: 'boolean',
+          description: 'Only list eligible + blocked invoices, generate nothing (default false)',
+        },
+        invoice_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Invoices to include. Omitted = all currently eligible.',
+        },
+        name: {
+          type: 'string',
+          maxLength: 16,
+          description: 'NamnPaBegaran shown in Skatteverkets e-tjänst (max 16 chars). Omitted = generated.',
+        },
+      },
+      required: ['deduction_type'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        deduction_type: { type: 'string' },
+        eligible: { type: 'array', items: { type: 'object' } },
+        blocked: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Invoices excluded from begäran with per-invoice blocker code + Swedish message',
+        },
+        generated: { type: 'boolean' },
+        request_id: { type: ['string', 'null'] },
+        file_name: { type: ['string', 'null'] },
+        xml: { type: ['string', 'null'], description: 'File content — save as UTF-8 .xml and upload on skatteverket.se' },
+        requested_total: { type: 'number' },
+        arenden: { type: 'array', items: { type: 'object' } },
+        warnings: { type: 'array', items: { type: 'string' } },
+        upload_url: { type: 'string' },
+      },
+      required: ['deduction_type', 'generated'],
+    },
+    annotations: {
+      readOnlyHint: false, // records a rot_rut_payout_requests row when generating
+      destructiveHint: false,
+      idempotentHint: false, // second call conflicts (one active begäran per invoice)
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const type = args.deduction_type as 'rot' | 'rut'
+      if (type !== 'rot' && type !== 'rut') throw new Error('deduction_type must be rot or rut')
+      const uploadUrl = 'https://www7.skatteverket.se/portal/rotrut/begar-utbetalning/fil'
+
+      const candidates = await listRotRutCandidates(supabase, companyId, type)
+      if (!candidates.ok) throw new Error('Failed to list rot/rut candidates')
+
+      if (args.list_only === true) {
+        return {
+          deduction_type: type,
+          eligible: candidates.eligible,
+          blocked: candidates.blocked,
+          generated: false,
+          request_id: null,
+          file_name: null,
+          xml: null,
+          requested_total: candidates.eligible.reduce((sum, e) => sum + e.begart_belopp, 0),
+          warnings: [],
+          upload_url: uploadUrl,
+        }
+      }
+
+      const requestedIds = Array.isArray(args.invoice_ids) && args.invoice_ids.length > 0
+        ? (args.invoice_ids as string[])
+        : candidates.eligible.map((e) => e.invoice_id)
+      if (requestedIds.length === 0) {
+        return {
+          deduction_type: type,
+          eligible: [],
+          blocked: candidates.blocked,
+          generated: false,
+          request_id: null,
+          file_name: null,
+          xml: null,
+          requested_total: 0,
+          warnings: ['Inga fakturor är redo att begäras. Se blocked för orsaker per faktura.'],
+          upload_url: uploadUrl,
+        }
+      }
+
+      const result = await createRotRutPayoutRequest(supabase, companyId, userId, {
+        type,
+        invoiceIds: requestedIds,
+        name: typeof args.name === 'string' ? args.name : undefined,
+      })
+
+      if (!result.ok) {
+        const blockerLines = (result.blockers ?? [])
+          .map((b) => `${b.invoice_number ?? b.invoice_id}: ${b.message}`)
+          .join(' | ')
+        throw new Error(
+          result.code === 'ROT_RUT_INVOICE_CONFLICT'
+            ? 'Minst en faktura ingår redan i en aktiv begäran om utbetalning.'
+            : `Filen kunde inte skapas (${result.code}).${blockerLines ? ` ${blockerLines}` : ''}`,
+        )
+      }
+
+      return {
+        deduction_type: type,
+        eligible: candidates.eligible,
+        blocked: candidates.blocked,
+        generated: true,
+        request_id: result.request.id as string,
+        file_name: result.file.file_name,
+        xml: result.file.xml,
+        requested_total: result.file.requested_total,
+        arenden: result.file.arenden,
+        warnings: result.file.warnings,
+        upload_url: uploadUrl,
       }
     },
   },

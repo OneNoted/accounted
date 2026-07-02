@@ -284,6 +284,8 @@ export const CreateInvoiceItemSchema = z
     work_type: z.string().max(64).nullable().optional(),
     housing_designation: z.string().max(128).nullable().optional(),
     apartment_number: z.string().max(32).nullable().optional(),
+    // Bostadsrättsföreningens orgnr (XSD BrfOrgNrTYPE: digits/dashes, ≤ 12).
+    brf_org_number: z.string().max(12).regex(/^[\d-]*$/).nullable().optional(),
     // Periodisering (förutbetald intäkt): defer the line's net revenue over
     // the service period. The revenue entry credits the 29xx interim account
     // instead of the revenue account; output VAT is never deferred.
@@ -350,6 +352,11 @@ export const CreateInvoiceSchema = z.object({
   // present (enforced via rot-rut-rules.validateInvoice in the API).
   deduction_personnummer: z.string().max(20).optional(),
   deduction_housing_designation: z.string().max(128).optional(),
+  // ROT i bostadsrätt: lägenhetsnummer + föreningens orgnr replace the
+  // fastighetsbeteckning (Begaran.xsd: LagenhetsNr + BrfOrgNr). Stamped onto
+  // the rot lines server-side, same as deduction_housing_designation.
+  deduction_apartment_number: z.string().max(25).optional(),
+  deduction_brf_org_number: z.string().max(12).regex(/^[\d-]*$/).optional(),
   // When true, save as an unnumbered draft: skip F-series allocation and the
   // invoice.created event until the user finalizes via POST /invoices/{id}/finalize
   // ("Granska och skapa"). An unnumbered draft is not yet an issued faktura
@@ -370,6 +377,30 @@ export const UpdateInvoiceSchema = CreateInvoiceSchema.omit({ save_as_draft: tru
 export const CreateCreditNoteSchema = z.object({
   credited_invoice_id: uuid,
   reason: z.string().optional(),
+})
+
+// ============================================================
+// Rot/rut begäran om utbetalning (Skatteverkets husavdragstjänst)
+// ============================================================
+
+export const RotRutPayoutFileSchema = z.object({
+  deduction_type: z.enum(['rot', 'rut']),
+  invoice_ids: z.array(uuid).min(1).max(500),
+  // NamnPaBegaran — the XSD caps it at 16 chars; omitted → generated.
+  name: z.string().min(1).max(16).optional(),
+})
+
+export const RotRutRequestPatchSchema = z.object({
+  status: z.enum(['submitted', 'paid', 'partially_paid', 'rejected', 'cancelled']),
+  // Godkänt belopp from Skatteverkets beslut. Only meaningful together with
+  // paid/partially_paid/rejected.
+  decided_total: nonNegativeAmount.optional(),
+})
+
+export const RotRutSettleSchema = z.object({
+  payment_date: isoDate,
+  // Defaults server-side to decided_total ?? requested_total.
+  amount: z.number().positive().optional(),
 })
 
 // ============================================================
@@ -1055,6 +1086,24 @@ export const MatchSupplierInvoiceSchema = z.object({
 // Settings schemas
 // ============================================================
 
+// Editable invoice email texts (standard invoices only). Nested JSONB —
+// unknown keys inside are stripped (Zod default, consistent with this file).
+// Empty strings pass validation; the template resolver treats whitespace-only
+// as unset, and the UI prunes empties before saving so the stored object
+// stays minimal. Subject is a mail header: CR/LF are stripped at render time
+// regardless.
+const InvoiceEmailTextsLangSchema = z.object({
+  subject: z.string().max(200, 'Ämnesraden får vara max 200 tecken').optional(),
+  greeting: z.string().max(200, 'Hälsningen får vara max 200 tecken').optional(),
+  body: z.string().max(2000, 'Brödtexten får vara max 2000 tecken').optional(),
+  signoff: z.string().max(200, 'Avslutningen får vara max 200 tecken').optional(),
+})
+
+export const InvoiceEmailTextsSchema = z.object({
+  sv: InvoiceEmailTextsLangSchema.optional(),
+  en: InvoiceEmailTextsLangSchema.optional(),
+})
+
 export const UpdateSettingsSchema = z.object({
   entity_type: EntityTypeSchema.optional(),
   company_name: z.string().optional(),
@@ -1132,6 +1181,10 @@ export const UpdateSettingsSchema = z.object({
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
+  // Editable invoice email texts — { sv?: {...}, en?: {...} }; null clears
+  // all overrides. Without this entry the generic PUT would silently strip
+  // the field (the schema is the de-facto column whitelist).
+  invoice_email_texts: InvoiceEmailTextsSchema.nullable().optional(),
   // Invoice branding — colors enforced as #RRGGBB at the DB level too
   // (see migration 20260526120200_invoice_branding.sql). The dedicated
   // /api/settings/invoicing/branding route is the primary path; these

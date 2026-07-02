@@ -945,8 +945,57 @@ export interface InvoiceItem {
   housing_designation?: string | null
   /** Lägenhetsnummer. Optional, used for ROT in flerbostadshus. */
   apartment_number?: string | null
+  /** Bostadsrättsföreningens orgnr. ROT i bostadsrätt reports lägenhetsnummer
+   *  + BRF orgnr instead of fastighetsbeteckning (Begaran.xsd: BrfOrgNr). */
+  brf_org_number?: string | null
 
   created_at: string
+}
+
+// Rot/rut payout request (begäran om utbetalning, Skatteverkets husavdragstjänst).
+// One row per generated HUS XML file; items link the invoices whose 1513
+// receivable the file requests. See lib/invoices/rot-rut-file.ts.
+export type RotRutPayoutRequestStatus =
+  | 'generated'
+  | 'submitted'
+  | 'paid'
+  | 'partially_paid'
+  | 'rejected'
+  | 'cancelled'
+
+export interface RotRutPayoutRequest {
+  id: string
+  company_id: string
+  user_id: string
+  deduction_type: 'rot' | 'rut'
+  /** NamnPaBegaran in the file — 1-16 chars, shown in Skatteverkets e-tjänst. */
+  name: string
+  status: RotRutPayoutRequestStatus
+  requested_total: number
+  decided_total: number | null
+  file_name: string
+  file_document_id: string | null
+  settlement_journal_entry_id: string | null
+  submitted_at: string | null
+  decided_at: string | null
+  created_at: string
+  updated_at: string
+
+  // Relations (populated when fetched)
+  items?: RotRutPayoutRequestItem[]
+}
+
+export interface RotRutPayoutRequestItem {
+  id: string
+  request_id: string
+  invoice_id: string
+  requested_amount: number
+  decided_amount: number | null
+  created_at: string
+  updated_at: string
+
+  // Relations (populated when fetched)
+  invoice?: Invoice
 }
 
 // Recurring Invoice Schedule (template + monthly cadence)
@@ -1263,6 +1312,7 @@ export type JournalEntrySourceType =
   | 'reminder_fee'
   | 'accrual'
   | 'result_appropriation'
+  | 'rot_rut_payout'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
