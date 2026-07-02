@@ -120,7 +120,10 @@ export function mergeDimensionBags(
  * Stable serialization of a dimensions bag for grouping keys, so generators
  * that aggregate amounts per account can keep items with different dimension
  * tags on separate journal lines (account + bag = the aggregation identity).
- * Key order is canonicalized; '' means "no dimensions".
+ * Key order is canonicalized; '' means "no dimensions". Callers must pass a
+ * NORMALIZED bag (mergeDimensionBags/normalizeLineDimensions output) — an
+ * unnormalized bag ('01' vs '1', untrimmed values) would key differently
+ * from its normalized twin.
  */
 export function dimensionsBagKey(dimensions?: LineDimensions): string {
   if (!dimensions) return ''

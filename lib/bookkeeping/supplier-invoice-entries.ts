@@ -305,7 +305,9 @@ export async function createSupplierInvoicePaymentEntry(
   }
 
   if (defaultDimensions) {
-    for (const line of lines) line.dimensions = defaultDimensions
+    // Copy per line — a shared bag object would let one line's mutation
+    // leak into every other line (same contract as proposal stamping).
+    for (const line of lines) line.dimensions = { ...defaultDimensions }
   }
 
   const input: CreateJournalEntryInput = {
