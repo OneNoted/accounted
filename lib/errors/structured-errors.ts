@@ -1505,6 +1505,11 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Filtypen stöds inte.',
     message_en: 'Unsupported file type.',
   },
+  DOC_UPLOAD_INVALID_CONTENT: {
+    httpStatus: 400,
+    message_sv: 'Filen kunde inte läsas som en giltig PDF eller bild. Kontrollera att filen inte är skadad.',
+    message_en: 'The file could not be read as a valid PDF or image. Check that the file is not corrupted.',
+  },
   DOC_UPLOAD_STORAGE_FAILED: {
     httpStatus: 500,
     message_sv: 'Filen kunde inte sparas.',
