@@ -180,6 +180,22 @@ export interface Profile {
   updated_at: string
 }
 
+// Editable invoice email texts (standard invoices only; sv + en).
+// Missing / whitespace-only fields fall back to the hardcoded defaults in
+// lib/email/invoice-templates.ts. Supports the fixed placeholder set
+// {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}.
+export interface InvoiceEmailTextOverrides {
+  subject?: string
+  greeting?: string
+  body?: string
+  signoff?: string
+}
+
+export interface InvoiceEmailTexts {
+  sv?: InvoiceEmailTextOverrides
+  en?: InvoiceEmailTextOverrides
+}
+
 // Company Settings
 export interface CompanySettings {
   id: string
@@ -287,6 +303,9 @@ export interface CompanySettings {
   invoice_font_family: 'Helvetica' | 'Times-Roman' | 'Courier'
   invoice_header_text: string | null
   invoice_footer_text: string | null
+
+  // Editable invoice email texts. null = all defaults.
+  invoice_email_texts: InvoiceEmailTexts | null
 
   // Automation
   send_invoice_reminders: boolean

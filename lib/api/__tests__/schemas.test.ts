@@ -1307,6 +1307,82 @@ describe('UpdateSettingsSchema', () => {
       expect(result.success).toBe(true)
     })
   })
+
+  describe('invoice_email_texts', () => {
+    it('accepts a valid nested partial', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { body: 'Tack för din beställning!' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.invoice_email_texts).toEqual({
+          sv: { body: 'Tack för din beställning!' },
+        })
+      }
+    })
+
+    it('accepts both languages with all four fields', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: {
+          sv: {
+            subject: 'Faktura {fakturanummer}',
+            greeting: 'Hejsan,',
+            body: 'Här kommer fakturan.',
+            signoff: 'Allt gott,',
+          },
+          en: {
+            subject: 'Invoice {fakturanummer}',
+            greeting: 'Hello,',
+            body: 'Please find the invoice attached.',
+            signoff: 'Best,',
+          },
+        },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts null to clear all overrides', () => {
+      const result = UpdateSettingsSchema.safeParse({ invoice_email_texts: null })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.invoice_email_texts).toBeNull()
+    })
+
+    it('rejects body over 2000 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { body: 'x'.repeat(2001) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects subject over 200 characters', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { subject: 'x'.repeat(201) } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects a non-string field value', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { subject: 123 } },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('strips unknown keys inside a language object', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        invoice_email_texts: { sv: { body: 'Hej', subjct: 'typo' } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.invoice_email_texts).toEqual({ sv: { body: 'Hej' } })
+      }
+    })
+
+    it('rejects a bare string as the column value', () => {
+      const result = UpdateSettingsSchema.safeParse({ invoice_email_texts: 'Tack!' })
+      expect(result.success).toBe(false)
+    })
+  })
 })
 
 // ============================================================
