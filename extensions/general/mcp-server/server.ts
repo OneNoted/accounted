@@ -10104,7 +10104,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'unknown_tool' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
   errorMessage: string | null
   requestId: string | number | null
   userId: string
@@ -10368,7 +10368,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     })
   }
 
-  const { userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName } = authResult
+  const { userId, companyId, scopes: keyScopes, apiKeyId, apiKeyName, mode: keyMode } = authResult
   const supabase = createServiceClientNoCookies()
   // The Mcp-Session-Id header (introduced in spec 2025-06-18) is the canonical
   // way for an agent to keep a stable identifier across tools/call invocations
@@ -10586,6 +10586,47 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             isError: true,
           })
         )
+      }
+
+      // Test-mode API keys are simulation-only. Mirror the v1 REST guard
+      // (lib/api/v1/with-api-v1.ts): force dry-run on any write tool that
+      // supports it, and block writes that cannot be simulated. Without this a
+      // gnubok_sk_test_ key — which is bound to the real active company — could
+      // stage real pending_operations here and, with the approve scope, commit
+      // them. Runs before execute() so nothing is ever staged for a test key.
+      if (keyMode === 'test' && tool.annotations?.readOnlyHint === false) {
+        const props = (tool.inputSchema as { properties?: Record<string, unknown> } | undefined)
+          ?.properties
+        if (props && 'dry_run' in props) {
+          ;(toolArgs as Record<string, unknown>).dry_run = true
+        } else {
+          const blocked = toToolError(
+            new Error(
+              'Test-nyckel kan inte utföra riktiga skrivningar mot det här verktyget. Använd en live-nyckel för skarpa operationer.'
+            ),
+            { toolName }
+          )
+          emitToolCallTelemetry({
+            tool: toolName,
+            requiredScope: requiredScope ?? null,
+            actor,
+            latencyMs: 0,
+            success: false,
+            isError: true,
+            errorCode: blocked.error.code,
+            errorKind: 'test_key_write_blocked',
+            errorMessage: blocked.error.message_sv,
+            requestId: id ?? null,
+            userId,
+            companyId,
+          })
+          return NextResponse.json(
+            jsonRpc(id ?? null, {
+              content: [{ type: 'text', text: JSON.stringify(blocked, null, 2) }],
+              isError: true,
+            })
+          )
+        }
       }
 
       // Detect if THIS call follows the previous call's `next` hint — must
