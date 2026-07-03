@@ -51,9 +51,13 @@ export async function updateSession(request: NextRequest) {
   // close the MFA gap. Many legacy routes hand-roll supabase.auth.getUser()
   // instead of requireAuth(), so without this an authenticated-but-not-MFA-
   // verified (AAL1) cookie session could reach them on the hosted product.
-  // Gate ONLY cookie sessions; Bearer callers and the AAL1 escape-hatch / OAuth
-  // routes pass straight through (see apiPathSkipsMfaGate). Everything else
-  // about /api auth stays the route's own responsibility.
+  // Gate ONLY cookie sessions. Bearer-auth SURFACES (/api/v1, the MCP
+  // endpoint) and the AAL1 escape-hatch / OAuth routes pass straight through
+  // (see apiPathSkipsMfaGate) — header presence alone never skips the gate,
+  // since the header is attacker-controlled and cookie-authenticated routes
+  // ignore it. Pure Bearer callers (cron, webhooks) carry no cookie session,
+  // so the `user` guard below already excludes them. Everything else about
+  // /api auth stays the route's own responsibility.
   if (pathname.startsWith('/api')) {
     const skipMfaGate = apiPathSkipsMfaGate(
       pathname,
