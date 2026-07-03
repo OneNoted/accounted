@@ -170,7 +170,10 @@ async function findExistingResendDomain(resend: Resend, domain: string): Promise
       after ? { limit: 100, after } : { limit: 100 }
     )
     if (error || !data) return null
-    const hit = data.data.find((d) => d.name.toLowerCase() === domain)
+    // `domain` is already normalized (lowercased, punycoded) — run Resend's
+    // name through the same normalization so an IDN stored in unicode form
+    // still matches.
+    const hit = data.data.find((d) => (normalizeInboundDomain(d.name) ?? d.name.toLowerCase()) === domain)
     if (hit) return hit
     if (!data.has_more || data.data.length === 0) return null
     after = data.data[data.data.length - 1].id
@@ -477,6 +480,34 @@ export async function applyDomainStatusFromWebhook(
   if (!row) return false
 
   const status = mapResendDomainStatus(event.status as DomainStatus)
+
+  // The event's 'verified' is the domain's mixed sending/receiving status —
+  // it carries no capability breakdown, so it can reflect sending-only
+  // records. Mirror checkCustomDomainVerification: confirm the receiving
+  // capability with Resend before ever flipping a row to verified. On a
+  // failed lookup or a sending-only profile, keep the stored status (the
+  // manual "Kontrollera igen" path remains available) — fail closed, never
+  // route inbound mail off an unproven capability.
+  if (status === 'verified') {
+    let receivingConfirmed = false
+    try {
+      const fetched = await getResend().domains.get(event.id)
+      receivingConfirmed =
+        !fetched.error && fetched.data?.capabilities?.receiving === 'enabled'
+    } catch {
+      receivingConfirmed = false
+    }
+    if (!receivingConfirmed) {
+      const { error } = await supabase
+        .from('company_inbound_domains')
+        .update({
+          ...(event.records !== undefined ? { dns_records: event.records } : {}),
+          last_checked_at: new Date().toISOString(),
+        })
+        .eq('id', (row as { id: string }).id)
+      return !error
+    }
+  }
   const { error } = await supabase
     .from('company_inbound_domains')
     .update({

@@ -285,8 +285,18 @@ export const CreateInvoiceItemSchema = z
     work_type: z.string().max(64).nullable().optional(),
     housing_designation: z.string().max(128).nullable().optional(),
     apartment_number: z.string().max(32).nullable().optional(),
-    // Bostadsrättsföreningens orgnr (XSD BrfOrgNrTYPE: digits/dashes, ≤ 12).
-    brf_org_number: z.string().max(12).regex(/^[\d-]*$/).nullable().optional(),
+    // Bostadsrättsföreningens orgnr (XSD BrfOrgNrTYPE). If present it must be
+    // a real orgnr shape — 10 digits (optional dash after position 6) or the
+    // 12-digit sekelsiffra form — or Skatteverkets schemavalidering rejects
+    // the whole file at upload time. Empty string = cleared field → null.
+    brf_org_number: z
+      .union([
+        z.string().regex(/^(\d{6}-?\d{4}|\d{12})$/, 'Ogiltigt organisationsnummer (10 siffror, ev. med bindestreck)'),
+        z.literal(''),
+      ])
+      .transform((v) => v || null)
+      .nullable()
+      .optional(),
     // Periodisering (förutbetald intäkt): defer the line's net revenue over
     // the service period. The revenue entry credits the 29xx interim account
     // instead of the revenue account; output VAT is never deferred.
@@ -360,7 +370,14 @@ export const CreateInvoiceSchema = z.object({
   // fastighetsbeteckning (Begaran.xsd: LagenhetsNr + BrfOrgNr). Stamped onto
   // the rot lines server-side, same as deduction_housing_designation.
   deduction_apartment_number: z.string().max(25).optional(),
-  deduction_brf_org_number: z.string().max(12).regex(/^[\d-]*$/).optional(),
+  // Same orgnr shape rule as items[].brf_org_number; empty string = not set.
+  deduction_brf_org_number: z
+    .union([
+      z.string().regex(/^(\d{6}-?\d{4}|\d{12})$/, 'Ogiltigt organisationsnummer (10 siffror, ev. med bindestreck)'),
+      z.literal(''),
+    ])
+    .transform((v) => v || undefined)
+    .optional(),
   // When true, save as an unnumbered draft: skip F-series allocation and the
   // invoice.created event until the user finalizes via POST /invoices/{id}/finalize
   // ("Granska och skapa"). An unnumbered draft is not yet an issued faktura
@@ -408,6 +425,12 @@ export const RotRutSettleSchema = z.object({
   payment_date: isoDate,
   // Defaults server-side to decided_total ?? requested_total.
   amount: z.number().positive().optional(),
+  // BAS 19xx account the payout landed on (1920 Bank, 1930 Företagskonto, …).
+  // Omitted → 1930. The engine validates existence against chart_of_accounts.
+  bank_account: z
+    .string()
+    .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
+    .optional(),
 })
 
 // ============================================================

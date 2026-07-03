@@ -319,6 +319,36 @@ describe('eligibility blockers', () => {
     if (!result.ok) expect(result.blocker.code).toBe('PRICE_BELOW_MINIMUM')
   })
 
+  it('DEDUCTION_EXCEEDS_PAYMENT when begärt belopp exceeds what the buyer paid', () => {
+    // 100 kr work, 60 kr deduction → buyer paid 40 kr < 60 kr requested.
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({}, [
+        makeItem({ line_total: 80, vat_amount: 20, deduction_amount: 60, labor_hours: 1 }),
+      ]),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('DEDUCTION_EXCEEDS_PAYMENT')
+  })
+
+  it('allows begärt belopp equal to betalt belopp (50 % rut)', () => {
+    const result = evaluateInvoiceForFile(
+      'rut',
+      makeRotInvoice({}, [
+        makeItem({
+          deduction_type: 'rut',
+          work_type: 'STAD',
+          line_total: 80,
+          vat_amount: 20,
+          deduction_amount: 50,
+          labor_hours: 2,
+          housing_designation: null,
+        }),
+      ]),
+    )
+    expect(result.ok).toBe(true)
+  })
+
   it('collects blockers per invoice while still emitting eligible ones', () => {
     const result = buildRotRutFile({
       type: 'rot',

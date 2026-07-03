@@ -19,6 +19,19 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
 }))
 
+// applyDomainStatusFromWebhook confirms the receiving capability with Resend
+// before flipping a row to verified — keep that lookup off the network.
+const { domainsMock } = vi.hoisted(() => ({
+  domainsMock: {
+    get: vi.fn(),
+  },
+}))
+vi.mock('resend', () => ({
+  Resend: class {
+    domains = domainsMock
+  },
+}))
+
 // Rate limiter is a thin RPC wrapper; bypass it so the queued-mock sequence
 // in each test doesn't have to account for the extra Supabase call.
 vi.mock('@/lib/rate-limits/inbox', () => ({
@@ -205,6 +218,16 @@ describe('POST /inbound', () => {
   })
 
   it('applies domain.updated events to custom-domain rows', async () => {
+    process.env.RESEND_API_KEY = 'test-key'
+    domainsMock.get.mockResolvedValue({
+      data: {
+        id: 'rd_123',
+        status: 'verified',
+        capabilities: { receiving: 'enabled', sending: 'disabled' },
+        records: [],
+      },
+      error: null,
+    })
     vi.mocked(verifyInboundWebhook).mockReturnValue({
       type: 'domain.updated',
       created_at: '2026-07-01T10:00:00Z',

@@ -87,14 +87,16 @@ AS $function$
 $function$;
 
 -- =============================================================================
--- 2. Role-gated write policies (40 tables)
+-- 2. Role-gated write policies (39 tables)
 --    DDL generated verbatim from the live staging catalog (pg_policies) so the
 --    predicates match exactly what the app has been running against.
 -- =============================================================================
 
-DROP POLICY IF EXISTS ai_usage_tracking_insert ON public.ai_usage_tracking;
-CREATE POLICY ai_usage_tracking_insert ON public.ai_usage_tracking FOR INSERT TO public
-  WITH CHECK (((company_id = current_active_company_id()) AND current_user_can_write()));
+-- NOTE: the staging catalog also carried an ai_usage_tracking_insert policy,
+-- but public.ai_usage_tracking was dropped by
+-- 20260504120000_remove_ai_subsystem.sql and no longer exists in the canonical
+-- schema — the table on staging is drift. That policy is intentionally NOT
+-- recreated here; a from-scratch migration chain would fail on it.
 
 DROP POLICY IF EXISTS automation_webhooks_insert ON public.automation_webhooks;
 CREATE POLICY automation_webhooks_insert ON public.automation_webhooks FOR INSERT TO public

@@ -30,7 +30,7 @@ const ALLOWED_TRANSITIONS: Record<RotRutPayoutRequestStatus, RotRutPayoutRequest
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'rot_rut.requests.patch',
   async (request, ctx, { params }) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     const { id } = await params
 
     const validation = await validateBody(request, RotRutRequestPatchSchema)
@@ -84,13 +84,25 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .update(update)
       .eq('company_id', companyId!)
       .eq('id', id)
-      .select()
+      .select(
+        'id, name, deduction_type, status, requested_total, decided_total, submitted_at, decided_at, settlement_journal_entry_id',
+      )
       .single()
 
     if (updateError) {
       log.error('failed to update rot/rut payout request', updateError)
       return errorResponse(updateError, log, { requestId })
     }
+
+    // Status transitions record Skatteverkets beslut — the audit trail must
+    // show who recorded them.
+    log.info('rot/rut payout request status changed', {
+      userId: user.id,
+      payoutRequestId: id,
+      from,
+      to: input.status,
+      decidedTotal: update.decided_total ?? null,
+    })
 
     // Full approval: mirror the per-invoice godkänt belopp onto the items.
     // Partial approval leaves item amounts null — the split is only known

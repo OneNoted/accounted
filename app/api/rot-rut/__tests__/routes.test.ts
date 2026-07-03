@@ -410,6 +410,39 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
     )
   })
 
+  it('forwards bank_account to the engine and defaults it to undefined', async () => {
+    mockCreatePayoutEntry.mockResolvedValue({ id: 'je-3' })
+    enqueue({ data: makePayoutRequestRow({ status: 'submitted' }) })
+    enqueue({ data: makePayoutRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-3' }) })
+    enqueue({ data: [] })
+
+    const response = await settlePOST(
+      createMockRequest(`/api/rot-rut/payout-requests/${REQUEST_ID}/settle`, {
+        method: 'POST',
+        body: { payment_date: '2026-07-10', bank_account: '1920' },
+      }),
+      routeParams,
+    )
+    expect(response.status).toBe(200)
+    expect(mockCreatePayoutEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ bankAccount: '1920' }),
+    )
+  })
+
+  it('rejects a non-19xx bank_account', async () => {
+    const response = await settlePOST(
+      createMockRequest(`/api/rot-rut/payout-requests/${REQUEST_ID}/settle`, {
+        method: 'POST',
+        body: { payment_date: '2026-07-10', bank_account: '3001' },
+      }),
+      routeParams,
+    )
+    expect(response.status).toBe(400)
+  })
+
   it('books a partial payout as partially_paid', async () => {
     mockCreatePayoutEntry.mockResolvedValue({ id: 'je-2' })
     enqueue({ data: makePayoutRequestRow({ status: 'submitted' }) })

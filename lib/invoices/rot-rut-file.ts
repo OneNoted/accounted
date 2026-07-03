@@ -85,6 +85,7 @@ export type RotRutBlockerCode =
   | 'INVALID_BRF_ORGNR'
   | 'PROPERTY_TOO_LONG'
   | 'PRICE_BELOW_MINIMUM'
+  | 'DEDUCTION_EXCEEDS_PAYMENT'
 
 export interface RotRutBlocker {
   invoice_id: string
@@ -276,6 +277,16 @@ export function evaluateInvoiceForFile(
   const betaltBelopp = prisForArbete - begartBelopp
   if (prisForArbete < 2) {
     return block('PRICE_BELOW_MINIMUM', 'Arbetskostnaden måste vara minst 2 kr (Skatteverkets filformat).')
+  }
+  // The buyer must have paid at least as much as is being requested
+  // (skattereduktionen är max 50 % av arbetskostnaden). Independent rounding
+  // of pris/begärt could otherwise even push BetaltBelopp negative, which
+  // Skatteverkets schema rejects outright.
+  if (begartBelopp > betaltBelopp) {
+    return block(
+      'DEDUCTION_EXCEEDS_PAYMENT',
+      `Begärt belopp (${begartBelopp} kr) överstiger vad kunden betalat för arbetet (${betaltBelopp} kr) — Skatteverket avslår. Kontrollera avdragsraderna.`,
+    )
   }
 
   return {

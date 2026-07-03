@@ -426,6 +426,26 @@ describe('CreateInvoiceItemSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  it('accepts orgnr-shaped brf_org_number values', () => {
+    for (const value of ['769600-0000', '7696000000', '167696000000']) {
+      const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: value }))
+      expect(result.success).toBe(true)
+    }
+  })
+
+  it('normalizes an empty brf_org_number to null', () => {
+    const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: '' }))
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.brf_org_number).toBeNull()
+  })
+
+  it('rejects malformed brf_org_number values', () => {
+    for (const value of ['---', '123', '76-96000000', 'ABC600-0000']) {
+      const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: value }))
+      expect(result.success).toBe(false)
+    }
+  })
+
   it('rejects a product row with an empty description', () => {
     const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ description: '   ' }))
     expect(result.success).toBe(false)

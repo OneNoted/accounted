@@ -17,6 +17,13 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
  * All-or-nothing: if any selected invoice fails eligibility the request is
  * rejected with per-invoice blockers — a silently thinner file would be a
  * guess about the user's intent.
+ *
+ * DELIBERATE: the XML (which embeds buyers' personnummer, as Skatteverkets
+ * schema requires) is returned inline. The file only exists to be saved and
+ * uploaded manually on skatteverket.se — there is no UI download surface for
+ * this headless flow, and a document-reference indirection would dead-end the
+ * user whenever the (best-effort) archive failed. Transport is TLS,
+ * authenticated, MFA-gated and write-role-gated via withRouteContext.
  */
 export const POST = withRouteContext(
   'rot_rut.payout_file',

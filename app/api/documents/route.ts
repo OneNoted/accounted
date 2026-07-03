@@ -81,11 +81,10 @@ export const POST = withRouteContext(
           details: { reason: message },
         })
       }
+      // Full error is logged above; the raw message can leak storage-layer
+      // internals, so the client only gets the generic code + requestId.
       opLog.error('document upload failed', err as Error)
-      return errorResponseFromCode('DOC_UPLOAD_STORAGE_FAILED', opLog, {
-        requestId,
-        details: { reason: message },
-      })
+      return errorResponseFromCode('DOC_UPLOAD_STORAGE_FAILED', opLog, { requestId })
     }
   },
   { requireWrite: true },

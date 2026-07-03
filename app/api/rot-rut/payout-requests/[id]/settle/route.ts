@@ -10,8 +10,8 @@ import { createRotRutPayoutEntry } from '@/lib/bookkeeping/rot-rut-entries'
  *
  * Books Skatteverkets utbetalning for a begäran:
  *
- *   Debit  1930 Företagskonto            [amount]
- *   Credit 1513 Skattereduktion rot/rut  [amount]
+ *   Debit  19xx bank account (default 1930)  [amount]
+ *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * The journal entry IS the accounting record here, so engine failure blocks
  * the operation (see .claude/skills/erp-api-route — payment entries block).
@@ -69,6 +69,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         deductionType: payoutRequest.deduction_type,
         paymentDate: input.payment_date,
         amount,
+        bankAccount: input.bank_account,
       })
       journalEntryId = entry.id
     } catch (engineError) {
@@ -91,7 +92,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .update(update)
       .eq('company_id', companyId!)
       .eq('id', id)
-      .select()
+      .select(
+        'id, name, deduction_type, status, requested_total, decided_total, decided_at, settlement_journal_entry_id',
+      )
       .single()
 
     if (updateError) {
@@ -105,19 +108,32 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     if (fullyPaid) {
-      const { data: items } = await supabase
+      const { data: items, error: itemsFetchError } = await supabase
         .from('rot_rut_payout_request_items')
         .select('id, requested_amount')
         .eq('request_id', id)
+      if (itemsFetchError) {
+        log.warn('failed to fetch items for decided_amount mirror', {
+          payoutRequestId: id,
+          message: itemsFetchError.message,
+        })
+      }
       for (const item of items ?? []) {
-        await supabase
+        const { error: mirrorError } = await supabase
           .from('rot_rut_payout_request_items')
           .update({ decided_amount: item.requested_amount })
           .eq('id', item.id)
+        if (mirrorError) {
+          log.warn('failed to mirror decided_amount onto item', {
+            itemId: item.id,
+            message: mirrorError.message,
+          })
+        }
       }
     }
 
     log.info('rot/rut payout settled', {
+      userId: user.id,
       payoutRequestId: id,
       journalEntryId,
       amount,

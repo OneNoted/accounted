@@ -471,7 +471,21 @@ describe('findCompanyForRecipientDomains', () => {
 })
 
 describe('applyDomainStatusFromWebhook', () => {
-  it('updates the matching row and reports true', async () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.RESEND_API_KEY = 'test-key'
+  })
+
+  it('updates the matching row and reports true when receiving is confirmed', async () => {
+    domainsMock.get.mockResolvedValue({
+      data: {
+        id: 'rd_1',
+        status: 'verified',
+        capabilities: { receiving: 'enabled', sending: 'disabled' },
+        records: [RECEIVING_RECORD],
+      },
+      error: null,
+    })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'row-1', verified_at: null } })
     enqueue({ data: null }) // update
@@ -481,6 +495,54 @@ describe('applyDomainStatusFromWebhook', () => {
       records: [],
     })
     expect(matched).toBe(true)
+    expect(domainsMock.get).toHaveBeenCalledWith('rd_1')
+  })
+
+  it('never flips a sending-only domain to verified off the event status', async () => {
+    domainsMock.get.mockResolvedValue({
+      data: {
+        id: 'rd_1',
+        status: 'verified',
+        capabilities: { receiving: 'disabled', sending: 'enabled' },
+        records: [],
+      },
+      error: null,
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'row-1', verified_at: null } })
+    enqueue({ data: null }) // update (last_checked_at only)
+    const matched = await applyDomainStatusFromWebhook(supabase as unknown as SupabaseClient, {
+      id: 'rd_1',
+      status: 'verified',
+      records: [],
+    })
+    // Row matched, but the verified transition was refused.
+    expect(matched).toBe(true)
+    expect(domainsMock.get).toHaveBeenCalledWith('rd_1')
+  })
+
+  it('keeps stored status when the capability lookup fails', async () => {
+    domainsMock.get.mockResolvedValue({ data: null, error: { message: 'boom' } })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'row-1', verified_at: null } })
+    enqueue({ data: null }) // update (last_checked_at only)
+    const matched = await applyDomainStatusFromWebhook(supabase as unknown as SupabaseClient, {
+      id: 'rd_1',
+      status: 'verified',
+    })
+    expect(matched).toBe(true)
+  })
+
+  it('skips the capability lookup for non-verified statuses', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'row-1', verified_at: null } })
+    enqueue({ data: null }) // update
+    const matched = await applyDomainStatusFromWebhook(supabase as unknown as SupabaseClient, {
+      id: 'rd_1',
+      status: 'failed',
+    })
+    expect(matched).toBe(true)
+    expect(domainsMock.get).not.toHaveBeenCalled()
   })
 
   it('reports false for unknown Resend domain ids', async () => {
@@ -491,5 +553,6 @@ describe('applyDomainStatusFromWebhook', () => {
       status: 'verified',
     })
     expect(matched).toBe(false)
+    expect(domainsMock.get).not.toHaveBeenCalled()
   })
 })

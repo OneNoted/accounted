@@ -8,8 +8,8 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  * When the agency pays out a begäran (one lump sum per request), the 1513
  * receivable created at invoicing (fakturamodellen) clears against the bank:
  *
- *   Debit  1930 Företagskonto            [amount]
- *   Credit 1513 Skattereduktion rot/rut  [amount]
+ *   Debit  19xx bank account (default 1930)  [amount]
+ *   Credit 1513 Skattereduktion rot/rut      [amount]
  *
  * One voucher per payout request — that mirrors the actual bank transaction.
  * At partial approval (delvis beviljad) the paid amount clears here and the
@@ -27,6 +27,8 @@ export async function createRotRutPayoutEntry(
     deductionType: 'rot' | 'rut'
     paymentDate: string
     amount: number
+    /** BAS 19xx account the payout landed on. Defaults to 1930. */
+    bankAccount?: string
   },
 ): Promise<JournalEntry> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.paymentDate)
@@ -35,6 +37,7 @@ export async function createRotRutPayoutEntry(
   }
 
   const amount = Math.round(params.amount * 100) / 100
+  const bankAccount = params.bankAccount ?? '1930'
   const label = params.deductionType === 'rot' ? 'ROT' : 'RUT'
   const description = `Utbetalning ${label}-avdrag från Skatteverket (${params.requestName})`
 
@@ -46,7 +49,7 @@ export async function createRotRutPayoutEntry(
     source_id: params.requestId,
     lines: [
       {
-        account_number: '1930',
+        account_number: bankAccount,
         debit_amount: amount,
         credit_amount: 0,
         line_description: description,
