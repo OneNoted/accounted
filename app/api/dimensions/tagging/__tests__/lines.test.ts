@@ -210,15 +210,67 @@ describe('GET /api/dimensions/tagging/lines', () => {
     expect(body.data.total_capped).toBe(false)
   })
 
-  it('accepts include_annulled=1', async () => {
-    enqueue({ data: [makeRawEntry({ reverses_id: 'entry-0' })] })
-    enqueue({ data: [makeRawLine()] })
+  it('include_annulled=1 pulls in a counter-voucher that fell outside the filters', async () => {
+    // Step 1 returns only the storno leg (its original, entry-0, is outside
+    // the date range). The route must fetch entry-0 anyway — otherwise the
+    // workbench's motverifikat guard cannot see the missing leg and one-sided
+    // tagging slips through silently.
+    enqueue({ data: [makeRawEntry({ reverses_id: 'entry-0', entry_date: '2026-05-01' })] })
+    // Counter-voucher fetch by id.
+    enqueue({
+      data: [
+        makeRawEntry({
+          id: 'entry-0',
+          entry_date: '2026-02-01',
+          voucher_number: 40,
+          description: 'Original',
+          reversed_by_id: 'entry-1',
+        }),
+      ],
+    })
+    // Complete line sets for BOTH vouchers.
+    enqueue({
+      data: [
+        makeRawLine({ id: 'line-0', journal_entry_id: 'entry-0' }),
+        makeRawLine(),
+      ],
+    })
 
     const response = await GET(request({ include_annulled: '1' }), noParams)
     const { status, body } = await parseJsonResponse<VouchersBody>(response)
 
     expect(status).toBe(200)
-    expect(body.data.vouchers[0].annulled).toBe(true)
+    expect(body.data.vouchers).toHaveLength(2)
+    // Sorted by entry_date: the pulled-in original first.
+    expect(body.data.vouchers[0]).toMatchObject({
+      journal_entry_id: 'entry-0',
+      annulled: true,
+      lines: [{ id: 'line-0' }],
+    })
+    expect(body.data.vouchers[1].annulled).toBe(true)
+  })
+
+  it('include_annulled=1 skips the counter fetch when both legs already qualified', async () => {
+    enqueue({
+      data: [
+        makeRawEntry({ reversed_by_id: 'entry-2' }),
+        makeRawEntry({ id: 'entry-2', reverses_id: 'entry-1', voucher_number: 43 }),
+      ],
+    })
+    // No counter query — next enqueued result is the line fetch.
+    enqueue({
+      data: [
+        makeRawLine(),
+        makeRawLine({ id: 'line-2', journal_entry_id: 'entry-2' }),
+      ],
+    })
+
+    const response = await GET(request({ include_annulled: '1' }), noParams)
+    const { status, body } = await parseJsonResponse<VouchersBody>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.vouchers).toHaveLength(2)
+    expect(body.data.vouchers.every((v) => v.annulled)).toBe(true)
   })
 
   it('returns 500 when the entry query fails', async () => {

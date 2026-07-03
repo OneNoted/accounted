@@ -127,11 +127,55 @@ export const GET = withRouteContext(
       return NextResponse.json({ data: { vouchers: [], total_capped: totalCapped } })
     }
 
+    // Pair completion (annulled view only): if a pair leg qualified but its
+    // counter-entry fell outside the filters (e.g. the storno is in a later
+    // month than the date range), pull the counter in anyway. Without it the
+    // workbench's motverifikat guard cannot see the missing leg and the user
+    // could tag one side alone — exactly the P&L skew the guard exists to
+    // prevent (Srf U 14 gross reporting). Counters ride on top of the cap:
+    // they are required for correctness, not part of the browsed page.
+    if (q.include_annulled === '1') {
+      const present = new Set(entries.map((e) => e.id))
+      const counterIds = [
+        ...new Set(
+          entries
+            .flatMap((e) => [e.reversed_by_id, e.reverses_id])
+            .filter((id): id is string => id !== null && !present.has(id)),
+        ),
+      ]
+      if (counterIds.length > 0) {
+        const { data: counterData, error: counterError } = await supabase
+          .from('journal_entries')
+          .select(
+            'id, entry_date, voucher_number, voucher_series, description, reversed_by_id, reverses_id, fiscal_period_id',
+          )
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .in('id', counterIds)
+
+        if (counterError) {
+          log.error('tagging counter-voucher fetch failed', counterError)
+          return errorResponse(counterError, log, { requestId })
+        }
+        entries.push(...((counterData ?? []) as unknown as RawEntry[]))
+        entries.sort(
+          (a, b) =>
+            a.entry_date.localeCompare(b.entry_date) ||
+            (a.voucher_series ?? '').localeCompare(b.voucher_series ?? '') ||
+            (a.voucher_number ?? 0) - (b.voucher_number ?? 0) ||
+            a.id.localeCompare(b.id),
+        )
+      }
+    }
+
     // Step 2: the COMPLETE line set for each qualifying voucher, so voucher-
-    // level tagging always covers the whole verifikat.
+    // level tagging always covers the whole verifikat. The entry IDs already
+    // come from the company-filtered step-1 query; the explicit parent scope
+    // here is defense in depth (repo convention).
     const { data: lineData, error: lineError } = await supabase
       .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, dimensions, journal_entry_id, sort_order')
+      .select('id, account_number, debit_amount, credit_amount, dimensions, journal_entry_id, sort_order, journal_entries!inner(company_id)')
+      .eq('journal_entries.company_id', companyId)
       .in('journal_entry_id', entries.map((e) => e.id))
       .order('journal_entry_id', { ascending: true })
       .order('sort_order', { ascending: true })
