@@ -1,7 +1,7 @@
 /**
  * Account dimension rules (dimensions PR10) — the policy layer over the
  * dimensions substrate. Rules live in account_dimension_rules
- * (20260703120000), one per (account, dimension):
+ * (20260703200000), one per (account, dimension):
  *
  *   'required'  the account cannot be POSTED without a value → enforced by
  *               assertMandatoryDimensions at commitEntry and the bulk-book

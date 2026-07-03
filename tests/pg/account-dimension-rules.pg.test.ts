@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
 import { seedCompany } from './fixtures'
 
-// PR10 account_dimension_rules (20260703120000_account_dimension_rules.sql):
+// PR10 account_dimension_rules (20260703200000_account_dimension_rules.sql):
 // RLS via user_company_ids() on all four operations, the adr_value_presence
 // CHECK (required ⇔ no value), UNIQUE (company_id, account_number,
 // dimension_id), value_id ON DELETE CASCADE, and the composite
