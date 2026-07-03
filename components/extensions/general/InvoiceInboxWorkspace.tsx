@@ -43,6 +43,8 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
+// InboxCustomDomainDialog (egen domän) is built but gated off — see
+// INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 

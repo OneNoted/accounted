@@ -2220,6 +2220,33 @@ export interface CompanyInbox {
   deprecated_at: string | null
 }
 
+export type CompanyInboundDomainStatus = 'pending' | 'verified' | 'failed'
+
+// A DNS record the user must publish to verify their custom inbound domain
+// (verbatim from the Resend domains API).
+export interface InboundDomainDnsRecord {
+  record: string
+  name: string
+  value: string
+  type: string
+  ttl: string
+  status: string
+  priority?: number
+}
+
+export interface CompanyInboundDomain {
+  id: string
+  company_id: string
+  domain: string
+  status: CompanyInboundDomainStatus
+  resend_domain_id: string | null
+  dns_records: InboundDomainDnsRecord[] | null
+  verified_at: string | null
+  last_checked_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface InvoiceInboxItem {
   id: string
   user_id: string
