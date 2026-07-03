@@ -1,6 +1,6 @@
 /**
  * pg-real tests for the rot/rut payout-request schema introduced in
- * 20260702100000_rot_rut_payout_requests.sql.
+ * 20260703090000_rot_rut_payout_requests.sql.
  *
  * Verifies:
  *   - invoice_items.brf_org_number exists with its length CHECK.
