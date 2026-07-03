@@ -3364,6 +3364,7 @@
     "toast_attach_failed_description": "{count} fil(er) kunde inte länkas till verifikationen. Försök igen via bokföringssidan.",
     "fill_balance_tooltip": "Dubbelklicka för att fylla i balanserande belopp",
     "fill_balance_hint": "Tips: dubbelklicka på debet eller kredit för att fylla i differensen.",
+    "keyboard_hint": "Enter hoppar till nästa fält — när verifikatet balanserar öppnar Enter granskningen.",
     "review_month_changed": "Obs: annan månad än föregående verifikat ({prev} → {current}).",
     "review_period_locked": "Perioden är stängd eller låst — bokföring kan nekas."
   },

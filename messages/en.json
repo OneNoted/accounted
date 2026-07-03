@@ -3364,6 +3364,7 @@
     "toast_attach_failed_description": "{count} file(s) could not be linked to the journal entry. Try again from the bookkeeping page.",
     "fill_balance_tooltip": "Double-click to fill the balancing amount",
     "fill_balance_hint": "Tip: double-click debit or credit to fill the remaining difference.",
+    "keyboard_hint": "Enter jumps to the next field — once the entry balances, Enter opens the review.",
     "review_month_changed": "Note: different month than the previous voucher ({prev} → {current}).",
     "review_period_locked": "This period is closed or locked — posting may be rejected."
   },
