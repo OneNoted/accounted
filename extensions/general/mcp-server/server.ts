@@ -36,6 +36,18 @@ import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX,
 import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
+import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
+import {
+  ensureCompanyDimensions,
+  fetchDimensionRegistry,
+  parseDimensionsArg,
+  mergeLineDimensions,
+  resolveDimensionBags,
+  type DimensionResolution,
+} from './dimensions'
+import { generateDimensionPnl } from '@/lib/reports/dimension-pnl'
+import Fuse from 'fuse.js'
 import { z } from 'zod'
 import {
   checkIdempotencyKey,
@@ -44,6 +56,7 @@ import {
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
 import { toToolError, type NextActionHint } from './tool-result'
+import { findSupplierCandidates } from './supplier-candidates'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
@@ -1538,6 +1551,47 @@ function previousPeriodArgs(
   return null
 }
 
+// Shared by the report tools' optional `dimensions` filter arg: parse the raw
+// bag, then resolve value NAMES → registry codes in one pass (resolve-don't-
+// select — the exact contract gnubok_create_voucher uses, incl. free-text
+// passthrough while dimensions_enabled is off). A DimensionResolutionError
+// propagates to the caller with ranked candidates. The resolved bag is echoed
+// back as `dimension_filter` so the agent can verify what a name attached to.
+async function resolveReportDimensionFilter(
+  supabase: SupabaseClient,
+  companyId: string,
+  raw: unknown,
+): Promise<{ filter?: Record<string, string>; resolutions: DimensionResolution[] }> {
+  if (!raw || typeof raw !== 'object' || Object.keys(raw as object).length === 0) {
+    return { resolutions: [] }
+  }
+  const parsed = parseDimensionsArg(raw, 'dimensions')
+  const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [parsed])
+  return { filter: bags[0], resolutions }
+}
+
+// Input-schema fragment for that arg — identical shape on trial balance,
+// income statement, and general ledger.
+const REPORT_DIMENSIONS_FILTER_SCHEMA = {
+  type: 'object',
+  additionalProperties: { type: 'string' },
+  description: 'Filter: SIE dim no → value (code OR name, resolved server-side), e.g. {"6":"P001"}. P&L view only — opening balances are excluded when set.',
+} as const
+
+// Output-schema fragments for the echo fields (never in `required`).
+const DIMENSION_FILTER_OUTPUT_PROPS = {
+  dimension_filter: {
+    type: 'object',
+    additionalProperties: { type: 'string' },
+    description: 'Echo of the applied filter, resolved to registry codes.',
+  },
+  dimension_resolutions: {
+    type: 'array',
+    items: { type: 'object' },
+    description: 'Non-exact name→code resolution echoes (resolve-don\'t-select).',
+  },
+} as const
+
 // ── Tools ────────────────────────────────────────────────────
 
 export const tools: McpTool[] = [
@@ -2111,7 +2165,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_agent_briefing',
     title: 'Get Agent Briefing',
-    description: 'Bootstrap this company\'s accountant context in one call: user_name, profile_summary, loaded atoms (metadata only — gnubok_load_skill for bodies), top-30 active memories. Call once at session start.',
+    description: 'Bootstrap this company\'s accountant context in one call: user_name, profile_summary, loaded atoms (metadata only — gnubok_load_skill for bodies), top-30 active memories, dimensions snapshot (when registered). Call once at session start.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2178,6 +2232,41 @@ export const tools: McpTool[] = [
             required: ['id', 'kind', 'content'],
           },
         },
+        dimensions: {
+          type: 'object',
+          additionalProperties: false,
+          description: 'Dimension registry snapshot (kostnadsställe/projekt). OMITTED when the company has none registered; presence means lines can be tagged via the dims bag on gnubok_create_voucher.',
+          properties: {
+            enabled: { type: 'boolean', description: 'When true, dims-bag values are validated against the registry.' },
+            dimensions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  sie_dim_no: { type: 'number' },
+                  name: { type: 'string' },
+                  active_value_count: { type: 'number' },
+                  top_values: {
+                    type: 'array',
+                    description: 'Up to 10 active values; full list via gnubok_list_dimension_values.',
+                    items: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        code: { type: 'string' },
+                        name: { type: 'string' },
+                      },
+                      required: ['code', 'name'],
+                    },
+                  },
+                },
+                required: ['sie_dim_no', 'name', 'active_value_count', 'top_values'],
+              },
+            },
+          },
+          required: ['enabled', 'dimensions'],
+        },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory'],
     },
@@ -2188,7 +2277,25 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(_args, companyId, userId, supabase) {
-      const [profileRes, memoryRes, userRes, companyRes, settingsRes] = await Promise.all([
+      // Dimension registry is best-effort and cheap: one indexed read, skipped
+      // output when empty (most companies never register dimensions — lazy
+      // seeding means zero rows until first use). Errors never block the
+      // briefing.
+      const safeDimensionsRead = (async () => {
+        try {
+          return await supabase
+            .from('dimensions')
+            .select('id, sie_dim_no, name')
+            .eq('company_id', companyId)
+            .eq('is_active', true)
+            .order('sort_order', { ascending: true })
+            .order('sie_dim_no', { ascending: true })
+        } catch {
+          return { data: null, error: new Error('dimensions read failed') }
+        }
+      })()
+
+      const [profileRes, memoryRes, userRes, companyRes, settingsRes, dimensionsRes] = await Promise.all([
         supabase
           .from('agent_profiles')
           .select('profile_summary, horizontal_atoms, vertical_atoms, modifier_atoms')
@@ -2223,9 +2330,10 @@ export const tools: McpTool[] = [
           .maybeSingle(),
         supabase
           .from('company_settings')
-          .select('accounting_method')
+          .select('accounting_method, dimensions_enabled')
           .eq('company_id', companyId)
           .maybeSingle(),
+        safeDimensionsRead,
       ])
 
       if (profileRes.error) throw new Error(`Failed to load agent profile: ${profileRes.error.message}`)
@@ -2261,13 +2369,67 @@ export const tools: McpTool[] = [
       const companyRow = companyRes.data as
         | { name: string | null; org_number: string | null; entity_type: string | null }
         | null
+      const settingsRow = settingsRes.data as
+        | { accounting_method: string | null; dimensions_enabled?: boolean | null }
+        | null
       const company = {
         id: companyId,
         name: companyRow?.name ?? null,
         org_number: companyRow?.org_number ?? null,
         entity_type: companyRow?.entity_type ?? null,
-        accounting_method:
-          (settingsRes.data as { accounting_method: string | null } | null)?.accounting_method ?? null,
+        accounting_method: settingsRow?.accounting_method ?? null,
+      }
+
+      // Dimensions block — skipped entirely when the registry is empty so an
+      // untagged company pays nothing (and the agent isn't told about a
+      // feature with no data behind it).
+      const dimensionRows = (dimensionsRes.error ? [] : dimensionsRes.data ?? []) as Array<{
+        id: string
+        sie_dim_no: number
+        name: string
+      }>
+      let dimensionsBlock:
+        | {
+            enabled: boolean
+            dimensions: Array<{
+              sie_dim_no: number
+              name: string
+              active_value_count: number
+              top_values: Array<{ code: string; name: string }>
+            }>
+          }
+        | undefined
+      if (dimensionRows.length > 0) {
+        try {
+          const { data: valueRows, error: valueErr } = await supabase
+            .from('dimension_values')
+            .select('dimension_id, code, name')
+            .eq('company_id', companyId)
+            .eq('is_active', true)
+            .order('code', { ascending: true })
+          if (!valueErr) {
+            const byDimension = new Map<string, Array<{ code: string; name: string }>>()
+            for (const v of (valueRows ?? []) as Array<{ dimension_id: string; code: string; name: string }>) {
+              const bucket = byDimension.get(v.dimension_id) ?? []
+              bucket.push({ code: v.code, name: v.name })
+              byDimension.set(v.dimension_id, bucket)
+            }
+            dimensionsBlock = {
+              enabled: settingsRow?.dimensions_enabled === true,
+              dimensions: dimensionRows.map((d) => {
+                const values = byDimension.get(d.id) ?? []
+                return {
+                  sie_dim_no: d.sie_dim_no,
+                  name: d.name,
+                  active_value_count: values.length,
+                  top_values: values.slice(0, 10),
+                }
+              }),
+            }
+          }
+        } catch {
+          // Best-effort — a values-read failure just omits the block.
+        }
       }
 
       const atomIds = [
@@ -2310,6 +2472,7 @@ export const tools: McpTool[] = [
           content: m.content,
           relevance_score: m.relevance_score,
         })),
+        ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
       }
     },
   },
@@ -2501,7 +2664,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_transactions_without_documents',
     title: 'List Transactions Missing Receipts',
-    description: 'List BANK TRANSACTIONS booked without an attached underlag. For imported/manual verifikat (no bank tx row) call gnubok_list_verifikat_without_documents — this tool only covers bank-driven entries.',
+    description: 'List booked bank transactions whose verifikat lacks an underlag. Strict subset of gnubok_list_verifikat_without_documents (same document truth, waivers respected) — use that tool for full coverage incl. imported/manual verifikat.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2515,7 +2678,8 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        id: { type: 'string' },
+        id: { type: 'string', description: 'Deprecated — read transaction_id instead' },
+        transaction_id: { type: 'string' },
         date: { type: 'string' },
         description: { type: 'string' },
         amount: { type: 'number' },
@@ -2538,42 +2702,39 @@ export const tools: McpTool[] = [
       const offset = Math.max(0, Number(args.offset) || 0)
       const since = typeof args.since === 'string' ? args.since : null
 
-      let countQuery = supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .not('journal_entry_id', 'is', null)
-        .is('document_id', null)
-      if (since) countQuery = countQuery.gte('date', since)
-
-      const { count: totalCount, error: countError } = await countQuery
-      if (countError) throw new Error(`Database error: ${countError.message}`)
-
-      let dataQuery = supabase
-        .from('transactions')
-        .select(
-          'id, date, description, amount, currency, merchant_name, reference, is_business, category, journal_entry_id'
-        )
-        .eq('company_id', companyId)
-        .not('journal_entry_id', 'is', null)
-        .is('document_id', null)
-      if (since) dataQuery = dataQuery.gte('date', since)
-
-      const { data, error } = await dataQuery
-        .order('date', { ascending: false })
-        .range(offset, offset + limit - 1)
-
+      // Same document truth as the verifikat surface: the RPC keys "has
+      // underlag" on document_attachments (current version) + waivers, never
+      // transactions.document_id — the two columns diverged historically
+      // (P1-3, dev_docs/mcp_optimization_plan.md) and this surface is the
+      // bank-driven SUBSET of gnubok_list_verifikat_without_documents by
+      // construction.
+      const { data, error } = await supabase.rpc('transactions_without_documents', {
+        p_company_id: companyId,
+        p_since: since,
+        p_limit: limit,
+        p_offset: offset,
+      })
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const total = totalCount ?? 0
-      const hasMore = total > offset + (data?.length ?? 0)
+      const result = data as {
+        ok: boolean
+        code?: string
+        total_count?: number
+        transactions?: unknown[]
+      } | null
+      if (!result?.ok) {
+        throw new Error(`transactions_without_documents failed: ${result?.code ?? 'unknown error'}`)
+      }
 
+      const rows = result.transactions ?? []
+      const total = result.total_count ?? 0
+      const hasMore = offset + rows.length < total
       return {
-        transactions: data,
-        count: data?.length ?? 0,
+        transactions: rows,
+        count: rows.length,
         total_count: total,
         has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + (data?.length ?? 0) } : {}),
+        ...(hasMore ? { next_offset: offset + rows.length } : {}),
       }
     },
   },
@@ -2581,7 +2742,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_verifikat_without_documents',
     title: 'List Verifikat Missing Documents',
-    description: 'List POSTED journal entries (verifikat) that have no document_attachments row. Covers SIE-imported, manual and salary vouchers that the transactions-based tool misses. Newest first, paginated.',
+    description: 'List posted verifikat that genuinely lack an underlag: needs-doc source types only, current document versions, user waivers respected. Superset of gnubok_list_transactions_without_documents (covers imported/manual too). Newest first, paginated.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2616,62 +2777,42 @@ export const tools: McpTool[] = [
       const offset = Math.max(0, Number(args.offset) || 0)
       const since = typeof args.since === 'string' ? args.since : null
       const minAmount = typeof args.min_amount === 'number' && Number.isFinite(args.min_amount)
-        ? args.min_amount
+        ? Math.max(0, args.min_amount)
         : 0
 
-      // PostgREST left-join filter: journal_entries left-joined to
-      // document_attachments and filtered to rows where the join produced
-      // no document. The filter syntax `document_attachments.id=is.null`
-      // applies the predicate post-join (Supabase: foreign-table is-null).
-      let query = supabase
-        .from('journal_entries')
-        .select(
-          'id, voucher_series, voucher_number, entry_date, description, source_type, document_attachments!left(id), journal_entry_lines(debit_amount)',
-          { count: 'exact' },
-        )
-        .eq('company_id', companyId)
-        .eq('status', 'posted')
-        .is('document_attachments.id', null)
-      if (since) query = query.gte('entry_date', since)
-
-      const { data, error, count } = await query
-        .order('entry_date', { ascending: false })
-        .order('voucher_number', { ascending: false })
-        .range(offset, offset + limit - 1)
+      // gross_amount is an aggregate over journal_entry_lines, which PostgREST
+      // cannot filter on — filtering it in memory after .range() made
+      // total_count ignore min_amount and consecutive pages overlap. The RPC
+      // filters, counts and paginates in SQL so the total respects the filter
+      // and next_offset advances by exactly the rows consumed.
+      const { data, error } = await supabase.rpc('verifikat_without_documents', {
+        p_company_id: companyId,
+        p_since: since,
+        p_min_amount: minAmount,
+        p_limit: limit,
+        p_offset: offset,
+      })
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const rows = ((data ?? []) as Array<{
-        id: string
-        voucher_series: string
-        voucher_number: number
-        entry_date: string
-        description: string
-        source_type: string
-        journal_entry_lines: { debit_amount: number | string }[] | null
-      }>).map((e) => {
-        const lines = e.journal_entry_lines ?? []
-        const gross = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
-        return {
-          journal_entry_id: e.id,
-          voucher_series: e.voucher_series,
-          voucher_number: e.voucher_number,
-          entry_date: e.entry_date,
-          description: e.description,
-          source_type: e.source_type,
-          gross_amount: Math.round(gross * 100) / 100,
-        }
-      })
+      const result = data as {
+        ok: boolean
+        code?: string
+        total_count?: number
+        verifikat?: unknown[]
+      } | null
+      if (!result?.ok) {
+        throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+      }
 
-      const filtered = minAmount > 0 ? rows.filter((r) => r.gross_amount >= minAmount) : rows
-
-      const total = count ?? 0
-      const hasMore = total > offset + filtered.length
+      const rows = result.verifikat ?? []
+      const total = result.total_count ?? 0
+      const hasMore = offset + rows.length < total
       return {
-        verifikat: filtered,
-        count: filtered.length,
+        verifikat: rows,
+        count: rows.length,
         total_count: total,
         has_more: hasMore,
-        ...(hasMore ? { next_offset: offset + filtered.length } : {}),
+        ...(hasMore ? { next_offset: offset + rows.length } : {}),
       }
     },
   },
@@ -2679,7 +2820,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_categorize_transaction',
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. vat_amount overrides computed moms; reverse_charge is rejected when the underlag shows the seller charged VAT.',
+    description: 'Categorize a bank transaction. Stages the journal entry; commit via gnubok_approve_pending_operation. vat_amount overrides computed moms; reverse_charge is rejected when the underlag shows the seller charged VAT. Optional dimensions tag the business lines.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2689,7 +2830,13 @@ export const tools: McpTool[] = [
         vat_treatment: { type: 'string', description: 'VAT treatment override. Defaults to standard_25 for business expenses. Set reverse_charge ONLY when the underlag confirms the seller did NOT charge VAT (omvänd skattskyldighet). An invoice with foreign VAT already debited is NOT reverse charge.', enum: [...VALID_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp — e.g. dricks carries no VAT. Requires a rate-based vat_treatment. Swedish moms only — foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
+        dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Tags the expense/business lines of the generated voucher — never the bank or VAT lines. Unknown values rejected, never auto-created.',
+        },
         allow_duplicate: { type: 'boolean', description: 'Override the duplicate-booking guard (default false). Set true ONLY after the user confirms this bank line is a genuinely separate event — the guard blocks a second verifikat for an event already booked (e.g. a paid invoice or a salary payout).' },
+        idempotency_key: { type: 'string', description: 'Optional UUID to dedupe retries — a replayed call returns the already-staged operation instead of staging twice.' },
       },
       required: ['transaction_id', 'category'],
     },
@@ -2704,6 +2851,10 @@ export const tools: McpTool[] = [
       const vatAmount = typeof args.vat_amount === 'number' && Number.isFinite(args.vat_amount)
         ? args.vat_amount
         : undefined
+
+      // MCP boundary gate — reject a malformed dims bag before the DB-heavy
+      // categorization preview runs. Resolution happens right before staging.
+      const inputDimensions = parseDimensionsArg(args.dimensions, 'dimensions')
 
       // Compute the preview (accounts, amounts, VAT lines)
       const result = await categorizeTransactionCore(
@@ -2758,6 +2909,18 @@ export const tools: McpTool[] = [
         ? `${tx.merchant_name || tx.description || 'Transaktion'} ${tx.amount} ${tx.currency}`
         : String(args.transaction_id)
 
+      // Resolve-don't-select: codes AND natural-language names resolve against
+      // the registry in one pass (zero queries when untagged; free-text
+      // passthrough while dimensions_enabled is off). The resolved bag lands on
+      // the expense/business lines only — the executor never tags bank/VAT lines.
+      const { bags: dimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [inputDimensions],
+      )
+      const resolvedDimensions = dimBags[0]
+      const hasDimensions = Boolean(resolvedDimensions && Object.keys(resolvedDimensions).length > 0)
+
       // Stage for user approval
       return stagePendingOperation(supabase, companyId, userId, 'categorize_transaction',
         `Kategorisera: ${txDesc}`,
@@ -2769,6 +2932,7 @@ export const tools: McpTool[] = [
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
             ? (args.notes as string).trim()
             : null,
+          ...(hasDimensions ? { dimensions: resolvedDimensions } : {}),
           allow_duplicate: args.allow_duplicate === true,
         },
         {
@@ -2779,13 +2943,23 @@ export const tools: McpTool[] = [
           vat_lines: result.vat_lines || [],
           category: result.category,
           underlag: result.underlag ?? null,
+          ...(hasDimensions ? { dimensions: resolvedDimensions } : {}),
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
         {
           description: 'Once approved, the journal entry is posted. Continue with gnubok_list_uncategorized_transactions to keep clearing the backlog, or lock the period once it is empty.',
           tool: 'gnubok_list_uncategorized_transactions',
         },
-        tx?.date ? { dateForPeriodCheck: tx.date } : {},
+        {
+          ...(tx?.date ? { dateForPeriodCheck: tx.date } : {}),
+          // Categorize is the tool agents blind-retry after ambiguous
+          // client-side failures (approval elicitation drops) — the key makes
+          // that retry safe instead of double-staging.
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
       )
     },
   },
@@ -3205,7 +3379,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_invoice',
     title: 'Create Customer Invoice',
-    description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Stages for user approval — invoice number assigned at approval.',
+    description: 'Stage a new invoice. Validates inputs, calculates VAT preview. Items accept dims bags. Stages for user approval — invoice number assigned at approval.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -3222,10 +3396,20 @@ export const tools: McpTool[] = [
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
               vat_rate: { type: 'number', description: 'VAT rate 0–100 (optional override)' },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
+              },
             },
             required: ['description', 'quantity', 'unit', 'unit_price'],
           },
           description: 'Invoice line items',
+        },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"1":"KS01","6":"Villa Almgren"}. Applied to every item not setting the key. Unknown values rejected — never auto-created.',
         },
         invoice_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
         due_date: { type: 'string', description: 'YYYY-MM-DD (default from payment terms)' },
@@ -3250,6 +3434,7 @@ export const tools: McpTool[] = [
         unit: string
         unit_price: number
         vat_rate?: number
+        dimensions?: unknown
       }>
 
       if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
@@ -3261,6 +3446,25 @@ export const tools: McpTool[] = [
         if (!item.unit?.trim()) throw new Error(`Item ${i + 1}: unit is required (st, tim, dag)`)
         if (item.unit_price == null) throw new Error(`Item ${i + 1}: unit_price is required`)
       }
+
+      // Resolve-don't-select: parse the invoice-level default bag + each item's
+      // own bag, then resolve codes AND natural-language names against the
+      // registry in ONE pass (zero queries when nothing is tagged; free-text
+      // passthrough while dimensions_enabled is off). The resolved default is
+      // staged top-level; each item keeps only its own resolved bag — the
+      // executor merges item-over-default at commit time.
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...items.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
+      const stagedItems = items.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
 
       const today = new Date().toISOString().split('T')[0]
       const currency = ((args.currency as string) || 'SEK') as Currency
@@ -3312,7 +3516,10 @@ export const tools: McpTool[] = [
         `Ny faktura: ${customer.name} ${Math.round(total * 100) / 100} ${currency}`,
         {
           customer_id: customerId,
-          items,
+          items: stagedItems,
+          ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
+            ? { default_dimensions: resolvedDefaultDimensions }
+            : {}),
           invoice_date: invoiceDate,
           due_date: dueDate,
           currency,
@@ -3323,7 +3530,7 @@ export const tools: McpTool[] = [
         {
           customer_name: customer.name,
           customer_type: customer.customer_type,
-          items: items.map(item => ({
+          items: stagedItems.map(item => ({
             ...item,
             line_total: item.quantity * item.unit_price,
             vat_rate: item.vat_rate ?? vatRules.rate,
@@ -3335,6 +3542,9 @@ export const tools: McpTool[] = [
           vat_treatment: vatRules.treatment,
           invoice_date: invoiceDate,
           due_date: dueDate,
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
         {
@@ -3350,12 +3560,13 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_trial_balance',
     title: 'Trial Balance (Råbalans)',
-    description: 'Trial balance (huvudbok) for a fiscal period — all account balances with debit/credit totals. Defaults to most recent period.',
+    description: 'Trial balance (huvudbok) for a fiscal period — all account balances with debit/credit totals. Defaults to most recent period. Optional dimensions filter scopes to tagged lines (kostnadsställe/projekt).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
     outputSchema: {
@@ -3370,6 +3581,7 @@ export const tools: McpTool[] = [
         period_start: { type: 'string' },
         period_end: { type: 'string' },
         account_count: { type: 'number' },
+        ...DIMENSION_FILTER_OUTPUT_PROPS,
       },
       required: ['rows', 'total_debit', 'total_credit', 'is_balanced'],
     },
@@ -3408,12 +3620,22 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found.')
 
+      // Optional dimensions filter — names resolve to registry codes first
+      // (resolve-don't-select), then flow into the generator's jsonb
+      // containment filter.
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
+
       // Delegate to the canonical, paginated trial-balance builder. The
       // previous inline query had no pagination, so PostgREST's 1000-row
       // default silently truncated any period with >1000 entry lines (wrong
       // sums, false "not balanced"), and it ignored opening balances.
       // generateTrialBalance paginates and rolls IB forward.
-      const trialBalance = await generateTrialBalance(supabase, companyId, periodId!)
+      const trialBalance = await generateTrialBalance(
+        supabase,
+        companyId,
+        periodId!,
+        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+      )
 
       const rows = trialBalance.rows
         .map((r) => {
@@ -3441,6 +3663,8 @@ export const tools: McpTool[] = [
         period_start: period.period_start,
         period_end: period.period_end,
         account_count: rows.length,
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
       }
     },
   },
@@ -3659,15 +3883,19 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_income_statement',
     title: 'Income Statement (Resultaträkning)',
-    description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category.',
+    description: 'Income statement (resultaträkning) for a fiscal period: revenue, expenses, net result by account category. Optional dimensions filter scopes to tagged lines (kostnadsställe/projekt).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
-    outputSchema: { type: 'object' },
+    outputSchema: {
+      type: 'object',
+      properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
+    },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -3701,12 +3929,21 @@ export const tools: McpTool[] = [
 
       if (!period) throw new Error('Fiscal period not found.')
 
-      const result = await generateIncomeStatement(supabase, companyId, periodId!)
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
+
+      const result = await generateIncomeStatement(
+        supabase,
+        companyId,
+        periodId!,
+        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+      )
       result.period = { start: period.period_start, end: period.period_end }
 
       return {
         period_name: period.name,
         ...result,
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
       }
     },
   },
@@ -4336,6 +4573,635 @@ export const tools: McpTool[] = [
     },
   },
 
+  // ── Dimensions (kostnadsställe/projekt) ──────────────────────
+
+  {
+    name: 'gnubok_list_dimensions',
+    title: 'List Dimensions (Kostnadsställe/Projekt)',
+    description: 'List the dimension registry with values: 1 = kostnadsställe, 6 = projekt, plus custom dims. Call before tagging voucher lines via the dimensions bag on gnubok_create_voucher. System dims are seeded on first call.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dimensions: {
+          type: 'array',
+          description: 'Registry entries keyed by sie_dim_no (the dims-bag key), each with its values. code = what goes in the bag; is_active false = archived (unusable on new lines).',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              sie_dim_no: { type: 'number' },
+              name: { type: 'string' },
+              resets_annually: { type: 'boolean' },
+              is_system: { type: 'boolean' },
+              is_active: { type: 'boolean' },
+              sort_order: { type: 'number' },
+              values: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    id: { type: 'string' },
+                    code: { type: 'string' },
+                    name: { type: 'string' },
+                    is_active: { type: 'boolean' },
+                    start_date: { type: ['string', 'null'] },
+                    end_date: { type: ['string', 'null'] },
+                  },
+                  required: ['id', 'code', 'name', 'is_active', 'start_date', 'end_date'],
+                },
+              },
+            },
+            required: ['id', 'sie_dim_no', 'name', 'resets_annually', 'is_system', 'is_active', 'sort_order', 'values'],
+          },
+        },
+      },
+      required: ['dimensions'],
+    },
+    annotations: {
+      // The lazy ensure_company_dimensions seed is an idempotent get-or-create
+      // of the two system registry rows — semantically a read (the dashboard
+      // GET /api/dimensions does the same).
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(_args, companyId, _userId, supabase) {
+      await ensureCompanyDimensions(supabase, companyId)
+      const dimensions = await fetchDimensionRegistry(supabase, companyId)
+      return { dimensions }
+    },
+  },
+
+  {
+    name: 'gnubok_list_dimension_values',
+    title: 'List Dimension Values',
+    description: 'List values (SIE #OBJEKT codes) for one dimension, optionally fuzzy-matched by query. Use to find the right kostnadsställe/projekt code before tagging lines. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sie_dim_no: { type: 'number', description: '1 = kostnadsställe, 6 = projekt, or a custom dim from gnubok_list_dimensions.' },
+        query: { type: 'string', description: 'Optional fuzzy search over code + name, ranked by confidence.' },
+        include_inactive: { type: 'boolean', description: 'Include archived values (default false).' },
+        limit: { type: 'number', description: 'Max results, 1–200 (default 50).' },
+      },
+      required: ['sie_dim_no'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dimension: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            sie_dim_no: { type: 'number' },
+            name: { type: 'string' },
+            resets_annually: { type: 'boolean' },
+            is_active: { type: 'boolean' },
+          },
+          required: ['id', 'sie_dim_no', 'name', 'resets_annually', 'is_active'],
+        },
+        values: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string' },
+              code: { type: 'string' },
+              name: { type: 'string' },
+              is_active: { type: 'boolean' },
+              start_date: { type: ['string', 'null'] },
+              end_date: { type: ['string', 'null'] },
+              confidence: { type: 'number', description: 'Fuzzy confidence 0–1; present only with query.' },
+            },
+            required: ['id', 'code', 'name', 'is_active', 'start_date', 'end_date'],
+          },
+        },
+        count: { type: 'number' },
+      },
+      required: ['dimension', 'values', 'count'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const sieDimNo = Number(args.sie_dim_no)
+      if (!Number.isInteger(sieDimNo) || sieDimNo < 1) {
+        throw new Error('sie_dim_no must be a positive integer SIE dimension number (1 = kostnadsställe, 6 = projekt).')
+      }
+      const includeInactive = args.include_inactive === true
+      const limit = Math.min(Math.max(1, Number(args.limit) || 50), 200)
+      const query = typeof args.query === 'string' ? args.query.trim() : ''
+
+      await ensureCompanyDimensions(supabase, companyId)
+
+      const { data: dimension, error: dimError } = await supabase
+        .from('dimensions')
+        .select('id, sie_dim_no, name, resets_annually, is_active')
+        .eq('company_id', companyId)
+        .eq('sie_dim_no', sieDimNo)
+        .maybeSingle()
+      if (dimError) throw new Error(`Database error: ${dimError.message}`)
+      if (!dimension) {
+        throw new Error(
+          `Dimension ${sieDimNo} finns inte i registret. Anropa gnubok_list_dimensions för att se registrerade dimensioner.`,
+        )
+      }
+
+      let valuesQuery = supabase
+        .from('dimension_values')
+        .select('id, code, name, is_active, start_date, end_date')
+        .eq('company_id', companyId)
+        .eq('dimension_id', dimension.id)
+        .order('code', { ascending: true })
+      if (!includeInactive) valuesQuery = valuesQuery.eq('is_active', true)
+
+      const { data: rows, error: valuesError } = await valuesQuery
+      if (valuesError) throw new Error(`Database error: ${valuesError.message}`)
+      const all = (rows ?? []) as Array<{
+        id: string
+        code: string
+        name: string
+        is_active: boolean
+        start_date: string | null
+        end_date: string | null
+      }>
+
+      if (!query) {
+        const values = all.slice(0, limit)
+        return { dimension, values, count: values.length }
+      }
+
+      // Fuzzy ranking — same fuse.js setup as the resolve step so what this
+      // tool shows matches what a dims bag would resolve to.
+      const fuse = new Fuse(all, { keys: ['code', 'name'], includeScore: true, threshold: 0.4 })
+      const values = fuse
+        .search(query)
+        .slice(0, limit)
+        .map((hit) => ({
+          ...hit.item,
+          confidence: roundOre(1 - (hit.score ?? 1)),
+        }))
+      return { dimension, values, count: values.length }
+    },
+  },
+
+  {
+    name: 'gnubok_create_dimension_value',
+    title: 'Create Dimension Value',
+    description: 'Stage a new dimension value (kostnadsställe/projekt object code, SIE #OBJEKT) for user approval — agents never silently mint reporting values. Use when a dims-bag value has no registry match. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sie_dim_no: { type: 'number', description: '1 = kostnadsställe, 6 = projekt, or a custom dim.' },
+        code: {
+          type: 'string',
+          maxLength: 20,
+          pattern: '^[A-Za-z0-9\\u00C5\\u00C4\\u00D6\\u00E5\\u00E4\\u00F6_+\\-]{1,20}$',
+          description: 'Object code, strict Fortnox format: letters A–Ö, digits, _, + and -. Immutable after creation.',
+        },
+        name: { type: 'string', maxLength: 120, description: 'Human-readable name shown in registers and reports.' },
+        start_date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Optional ISO start date; only on accumulating dims (projekt).' },
+        end_date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Optional ISO end date ≥ start_date; only on accumulating dims.' },
+        dry_run: {
+          type: 'boolean',
+          description: 'If true, validate inputs and return the would-be preview without staging. No DB writes, no side-effects.',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+        },
+      },
+      required: ['sie_dim_no', 'code', 'name'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      // Strip MCP control fields, then re-validate with the same Zod schema
+      // the commit executor uses (defense in depth, mirrors create_supplier).
+      const { dry_run, idempotency_key, ...valueArgs } = args
+      let params
+      try {
+        params = CreateDimensionValueParamsSchema.parse(valueArgs)
+      } catch (err) {
+        if (err instanceof z.ZodError) {
+          const issue = err.issues[0]
+          const path = issue?.path?.join('.') ?? 'params'
+          throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+        }
+        throw err
+      }
+
+      await ensureCompanyDimensions(supabase, companyId)
+
+      // Pre-flight for a tight agent feedback loop; the executor re-checks all
+      // of this at commit time (the staged row is never trusted).
+      const { data: dimension, error: dimError } = await supabase
+        .from('dimensions')
+        .select('id, sie_dim_no, name, resets_annually')
+        .eq('company_id', companyId)
+        .eq('sie_dim_no', params.sie_dim_no)
+        .maybeSingle()
+      if (dimError) throw new Error(`Database error: ${dimError.message}`)
+      if (!dimension) {
+        throw new Error(
+          `Okänd dimension ${params.sie_dim_no}. Endast registrerade dimensioner kan få nya värden — ` +
+          'anropa gnubok_list_dimensions (1 = kostnadsställe och 6 = projekt skapas automatiskt).',
+        )
+      }
+      if (dimension.resets_annually && (params.start_date || params.end_date)) {
+        throw new Error(
+          `Start-/slutdatum är inte tillåtna på dimensionen "${dimension.name}" (nollställs årligen).`,
+        )
+      }
+
+      const { data: existing, error: existingError } = await supabase
+        .from('dimension_values')
+        .select('id, code, name, is_active')
+        .eq('company_id', companyId)
+        .eq('dimension_id', dimension.id)
+        .eq('code', params.code)
+        .maybeSingle()
+      if (existingError) throw new Error(`Database error: ${existingError.message}`)
+      if (existing?.is_active) {
+        throw new Error(
+          `Värdet "${params.code}" (${existing.name}) finns redan i ${dimension.name} — använd koden direkt i dimensions-baggen.`,
+        )
+      }
+      if (existing) {
+        throw new Error(
+          `"${params.code}" är arkiverat — återaktivera värdet i registret för att använda det.`,
+        )
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_dimension_value',
+        `Nytt värde i ${dimension.name}: ${params.code} — ${params.name}`,
+        params,
+        {
+          sie_dim_no: dimension.sie_dim_no,
+          dimension_name: dimension.name,
+          code: params.code,
+          name: params.name,
+          start_date: params.start_date ?? null,
+          end_date: params.end_date ?? null,
+          will: 'create the value in the dimension registry so lines can be tagged with it',
+        },
+        actor,
+        {
+          description: 'Once approved, tag voucher lines with the new code via the dimensions bag on gnubok_create_voucher, or verify it with gnubok_list_dimension_values.',
+          tool: 'gnubok_list_dimension_values',
+          args: { sie_dim_no: dimension.sie_dim_no },
+        },
+        {
+          dryRun: Boolean(dry_run),
+          idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_tag_journal_lines',
+    title: 'Tag Journal Lines (Bulk Retag)',
+    description: "Bulk-tag POSTED journal lines with dimensions (kostnadsställe/projekt) selected by a filter block — e.g. all 4010 lines with 'Bygg AB' in 2024 → P01. Stages for approval; max 500 lines. Retags internal reporting only — the verifikat stays immutable, every change logged.",
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dimensions bag applied to every matched line, REPLACING its current bag: {"<sie_dim_no>":"<kod eller namn>"}, e.g. {"6":"P01"}. Values may be registry codes or names — resolved server-side (resolve-don\'t-select).',
+        },
+        reason: {
+          type: 'string',
+          minLength: 3,
+          maxLength: 500,
+          description: 'Why the lines are retagged — stored per line in the immutable dimension_retag_log.',
+        },
+        filters: {
+          type: 'object',
+          additionalProperties: false,
+          description: 'Line selection — at least one filter required. Preview the match set with gnubok_query_journal (same filter fields) first.',
+          properties: {
+            account_from: { type: 'string', description: 'Lowest account number (inclusive), e.g. "4010".' },
+            account_to: { type: 'string', description: 'Highest account number (inclusive).' },
+            accounts: { type: 'array', items: { type: 'string' }, description: 'Specific account numbers (overrides account_from/account_to). Up to 50.' },
+            date_from: { type: 'string', description: 'Earliest entry date (YYYY-MM-DD, inclusive).' },
+            date_to: { type: 'string', description: 'Latest entry date (YYYY-MM-DD, inclusive).' },
+            text: { type: 'string', maxLength: 200, description: 'Case-insensitive substring match on the ENTRY description (verifikattext) — line descriptions are not searched.' },
+            only_untagged: { type: 'boolean', description: 'Only lines whose dimensions bag is exactly empty ({}). Lines already carrying ANY dimension are excluded — partially tagged lines do not match.' },
+          },
+        },
+        dry_run: {
+          type: 'boolean',
+          description: 'If true, validate inputs and return the would-be preview without staging. No DB writes, no side-effects.',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+        },
+      },
+      required: ['dimensions', 'reason', 'filters'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { dry_run, idempotency_key } = args
+
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+      if (reason.length < 3 || reason.length > 500) {
+        throw new Error('reason must be 3–500 characters — it is stored in the immutable dimension_retag_log.')
+      }
+
+      const inputBag = parseDimensionsArg(args.dimensions, 'dimensions')
+      if (!inputBag) {
+        throw new Error('dimensions must contain at least one {"<sie_dim_no>":"<kod eller namn>"} pair, e.g. {"6":"P01"}.')
+      }
+
+      // ── Filters — validated before any DB work so bad input fails fast.
+      const filters = (args.filters && typeof args.filters === 'object' ? args.filters : {}) as Record<string, unknown>
+      const accounts = Array.isArray(filters.accounts) ? (filters.accounts as string[]) : undefined
+      if (accounts && accounts.length > 50) {
+        throw new Error('filters.accounts is capped at 50 — use account_from/account_to for ranges')
+      }
+      const accountFrom = typeof filters.account_from === 'string' ? filters.account_from : undefined
+      const accountTo = typeof filters.account_to === 'string' ? filters.account_to : undefined
+      const dateFrom = typeof filters.date_from === 'string' ? filters.date_from : undefined
+      const dateTo = typeof filters.date_to === 'string' ? filters.date_to : undefined
+      const text = typeof filters.text === 'string' ? filters.text.trim() : ''
+      if (text.length > 200) {
+        throw new Error('filters.text must be 200 characters or shorter')
+      }
+      const onlyUntagged = filters.only_untagged === true
+
+      const hasFilter = Boolean(
+        (accounts && accounts.length > 0) || accountFrom || accountTo || dateFrom || dateTo || text || onlyUntagged,
+      )
+      if (!hasFilter) {
+        throw new Error(
+          'Ange minst ett filter (konto, datum, text eller only_untagged) — en företagsbred omtaggning måste avgränsas. ' +
+          'Förhandsgranska träffmängden med gnubok_query_journal.',
+        )
+      }
+
+      // ── Resolve the bag (names → registry codes; resolve-don't-select).
+      //    DimensionResolutionError propagates with candidates/create-first
+      //    guidance — nothing unresolved is ever staged.
+      const { bags, resolutions } = await resolveDimensionBags(supabase, companyId, [inputBag])
+      const resolvedBag = bags[0] as Record<string, string>
+
+      // ── Match the lines. POSTED entries only — drafts are edited directly
+      //    (the retag RPC rejects them too). Fetch cap+1 to detect overflow.
+      let q = supabase
+        .from('journal_entry_lines')
+        .select('id, account_number, debit_amount, credit_amount, sort_order, journal_entries!inner(id, entry_date, voucher_number, voucher_series, status, company_id)')
+        .eq('journal_entries.company_id', companyId)
+        .eq('journal_entries.status', 'posted')
+
+      if (accounts && accounts.length > 0) {
+        q = q.in('account_number', accounts)
+      } else {
+        if (accountFrom) q = q.gte('account_number', accountFrom)
+        if (accountTo) q = q.lte('account_number', accountTo)
+      }
+      if (dateFrom) q = q.gte('journal_entries.entry_date', dateFrom)
+      if (dateTo) q = q.lte('journal_entries.entry_date', dateTo)
+      if (text) {
+        // LIKE wildcards escaped so the filter matches literal % / _ — same
+        // treatment as gnubok_query_journal's text legs. v1 searches the
+        // ENTRY description only (documented in the schema); the two-leg
+        // line+entry union query_journal runs is overkill for a write filter.
+        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+        q = q.ilike('journal_entries.description', `%${escaped}%`)
+      }
+      // Pragmatic v1 (documented in the schema): only-untagged means the bag
+      // is EXACTLY '{}' (column is NOT NULL DEFAULT '{}'). Partially tagged
+      // lines (e.g. only dim 1 set) do not match.
+      if (onlyUntagged) q = q.filter('dimensions', 'eq', '{}')
+
+      const res = await q
+        .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
+        .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
+        .order('sort_order', { ascending: true })
+        .limit(RETAG_MAX_LINES + 1)
+
+      if (res.error) {
+        log.warn('tag_journal_lines match query failed', { companyId, userId, error: res.error.message })
+        throw new Error('Database error while matching journal lines')
+      }
+
+      type MatchedRow = {
+        id: string
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        sort_order: number
+        journal_entries: { id: string; entry_date: string; voucher_number: number; voucher_series: string }
+      }
+      const rows = (res.data ?? []) as unknown as MatchedRow[]
+
+      if (rows.length === 0) {
+        throw new Error(
+          'Inga bokförda rader matchade filtret. Kontrollera konto/datum/text — förhandsgranska med gnubok_query_journal (samma filterfält).',
+        )
+      }
+      if (rows.length > RETAG_MAX_LINES) {
+        throw new Error(
+          `Filtret matchar fler än ${RETAG_MAX_LINES} rader — snäva av det (kortare datumintervall, färre konton) och kör i omgångar om högst ${RETAG_MAX_LINES}.`,
+        )
+      }
+
+      // Human description of the selection, carried on the op for the
+      // approval preview (the executor acts on line_ids verbatim).
+      const summaryParts: string[] = []
+      if (accounts && accounts.length > 0) summaryParts.push(`konto ${accounts.join(', ')}`)
+      else if (accountFrom || accountTo) summaryParts.push(`konto ${accountFrom ?? '…'}–${accountTo ?? '…'}`)
+      if (dateFrom || dateTo) summaryParts.push(`datum ${dateFrom ?? '…'}–${dateTo ?? '…'}`)
+      if (text) summaryParts.push(`text "${text}"`)
+      if (onlyUntagged) summaryParts.push('endast otaggade rader')
+      const filterSummary = summaryParts.join(', ').slice(0, 500)
+
+      const bagLabel = Object.entries(resolvedBag)
+        .map(([dim, code]) => `${dim}=${code}`)
+        .join(', ')
+
+      // Same Zod schema the commit executor re-validates with — the staged
+      // params can never drift from what commitRetagLineDimensions accepts.
+      const params = RetagLineDimensionsParamsSchema.parse({
+        line_ids: rows.map((r) => r.id),
+        dimensions: resolvedBag,
+        reason,
+        filter_summary: filterSummary,
+      })
+
+      // No dateForPeriodCheck: the matched lines span dates; the retag RPC
+      // enforces open-period + lock-date per line at commit time.
+      return stagePendingOperation(supabase, companyId, userId, 'retag_line_dimensions',
+        `Tagga om ${rows.length} verifikationsrader: ${bagLabel}`,
+        params as unknown as Record<string, unknown>,
+        {
+          matched_lines: rows.length,
+          dimensions: resolvedBag,
+          filter_summary: filterSummary,
+          sample: rows.slice(0, 10).map((r) => ({
+            account: r.account_number,
+            date: r.journal_entries.entry_date,
+            debit: r.debit_amount,
+            credit: r.credit_amount,
+          })),
+          ...(resolutions.length > 0 ? { dimension_resolutions: resolutions } : {}),
+          will: 'replace the dimensions bag on every matched POSTED line via the audited retag RPC — internal reporting only, the verifikat itself is untouched',
+        },
+        actor,
+        {
+          description: 'After approval, verify the retag with gnubok_query_journal (group_by_dimension) or gnubok_get_dimension_pnl.',
+          tool: 'gnubok_query_journal',
+          args: { group_by_dimension: Object.keys(resolvedBag)[0] },
+        },
+        {
+          dryRun: Boolean(dry_run),
+          idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_get_dimension_pnl',
+    title: 'P&L per Dimension (Resultat per projekt)',
+    description: 'Resultat per projekt/kostnadsställe: P&L matrix over one SIE dimension — each value with activity becomes a column plus an untagged bucket, and the Totalt column reconciles exactly with the resultatrapport. sie_dim_no: 1 = kostnadsställe, 6 = projekt.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        sie_dim_no: { type: 'string', description: "SIE dimension number: '1' = kostnadsställe, '6' = projekt, or a custom dim from gnubok_list_dimensions." },
+        period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        to_date: { type: 'string', description: 'Optional end date (YYYY-MM-DD); the matrix is always cumulative from period start (closing-balance semantics, reconciles with resultatrapport)' },
+      },
+      required: ['sie_dim_no'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        dimension: {
+          type: 'object',
+          properties: {
+            sie_dim_no: { type: 'string' },
+            name: { type: 'string' },
+          },
+        },
+        columns: {
+          type: 'array',
+          description: 'One per value with activity; code null = the "(Utan dimension)" residual bucket.',
+          items: {
+            type: 'object',
+            properties: {
+              code: { type: ['string', 'null'] },
+              name: { type: ['string', 'null'] },
+            },
+          },
+        },
+        groups: {
+          type: 'array',
+          description: 'BAS class groups (3–8); each row\'s values[] aligns with columns[].',
+          items: {
+            type: 'object',
+            properties: {
+              class: { type: 'number' },
+              class_label: { type: 'string' },
+              rows: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    account_number: { type: 'string' },
+                    account_name: { type: 'string' },
+                    values: { type: 'array', items: { type: 'number' } },
+                    total: { type: 'number' },
+                  },
+                },
+              },
+              subtotals: { type: 'array', items: { type: 'number' } },
+              subtotal_total: { type: 'number' },
+            },
+          },
+        },
+        net_per_column: { type: 'array', items: { type: 'number' } },
+        net_total: { type: 'number', description: 'Matches resultatrapport net result for the same window.' },
+        period: {
+          type: 'object',
+          properties: { start: { type: 'string' }, end: { type: 'string' } },
+        },
+      },
+      required: ['dimension', 'columns', 'groups', 'net_per_column', 'net_total'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const sieDimNo = String(args.sie_dim_no ?? '').trim()
+      // Positive-integer guard — the value is interpolated into a PostgREST
+      // jsonb path expression downstream, so free-form strings are rejected.
+      if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
+        throw new Error("sie_dim_no must be a positive SIE dimension number, e.g. '1' (kostnadsställe) or '6' (projekt).")
+      }
+
+      let periodId = args.period_id as string | undefined
+
+      // If no period specified, find the most recent one (same default as
+      // gnubok_get_trial_balance).
+      if (!periodId) {
+        const { data: periods } = await supabase
+          .from('fiscal_periods')
+          .select('id, name')
+          .eq('company_id', companyId)
+          .order('period_start', { ascending: false })
+          .limit(1)
+          .single()
+
+        if (!periods) {
+          throw new Error('No fiscal periods found. Categorize some transactions first to auto-create a period.')
+        }
+        periodId = periods.id
+      }
+
+      const toDate = args.to_date as string | undefined
+
+      return await generateDimensionPnl(supabase, companyId, periodId!, sieDimNo, { toDate })
+    },
+  },
+
   // ── Reports ──────────────────────────────────────────────────
 
   {
@@ -4394,7 +5260,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_general_ledger',
     title: 'General Ledger (Huvudbok)',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Optional account range filter. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Optional account range + dimensions filters. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4402,9 +5268,13 @@ export const tools: McpTool[] = [
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
         account_from: { type: 'string', description: 'Starting account number filter' },
         account_to: { type: 'string', description: 'Ending account number filter' },
+        dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
-    outputSchema: { type: 'object' },
+    outputSchema: {
+      type: 'object',
+      properties: { ...DIMENSION_FILTER_OUTPUT_PROPS },
+    },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -4430,14 +5300,28 @@ export const tools: McpTool[] = [
       const accountFrom = args.account_from as string | undefined
       const accountTo = args.account_to as string | undefined
 
-      return await generateGeneralLedger(supabase, companyId, periodId!, accountFrom, accountTo)
+      const dimFilter = await resolveReportDimensionFilter(supabase, companyId, args.dimensions)
+
+      const report = await generateGeneralLedger(
+        supabase,
+        companyId,
+        periodId!,
+        accountFrom,
+        accountTo,
+        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+      )
+      return {
+        ...report,
+        ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
+        ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+      }
     },
   },
 
   {
     name: 'gnubok_query_journal',
     title: 'Query Journal Lines',
-    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher series/number, source type, status, project, cost center, free-text. Returns lines with voucher metadata + totals.",
+    description: "Flexible journal-line query for ad-hoc questions. Filters: account, date, amount, voucher series/number, source type, status, project, cost center, free-text. Optional group_by aggregation. Returns lines + totals over the full match set (see totals_scope).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4457,7 +5341,9 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['posted', 'reversed', 'all'], description: 'Default: posted' },
         project: { type: 'string', description: 'Filter by project code' },
         cost_center: { type: 'string', description: 'Filter by cost center' },
-        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Aggregate totals are computed over the full match set even when truncated.' },
+        group_by: { type: 'string', enum: ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'], description: 'Aggregate matching lines into groups by this field. Mutually exclusive with group_by_dimension.' },
+        group_by_dimension: { type: 'string', description: 'Aggregate by SIE dimension number (e.g. "6" = projekt) from each line\'s dimensions bag; untagged → "(utan dimension)". Mutually exclusive with group_by.' },
+        limit: { type: 'number', minimum: 1, maximum: 500, description: 'Max lines returned 1–500 (default 100). Totals/groups cover the FULL match set even when truncated, except under free-text search (see totals_scope).' },
       },
     },
     outputSchema: {
@@ -4478,9 +5364,28 @@ export const tools: McpTool[] = [
             net: { type: 'number', description: 'debit minus credit (positive = net debit)' },
           },
         },
+        totals_scope: {
+          type: 'string',
+          enum: ['full_match', 'returned_slice'],
+          description: 'full_match: totals/groups aggregate ALL matching lines regardless of limit. returned_slice: free-text search aggregates only the returned window.',
+        },
+        groups: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string' },
+              debit: { type: 'number' },
+              credit: { type: 'number' },
+              net: { type: 'number' },
+              line_count: { type: 'number' },
+            },
+          },
+          description: 'Present when group_by/group_by_dimension is set; sorted by |net| desc. Scope follows totals_scope.',
+        },
         applied_filters: { type: 'object' },
       },
-      required: ['lines', 'total_lines', 'returned_lines', 'totals'],
+      required: ['lines', 'total_lines', 'returned_lines', 'totals', 'totals_scope'],
     },
     annotations: {
       readOnlyHint: true,
@@ -4508,16 +5413,44 @@ export const tools: McpTool[] = [
       const project = args.project as string | undefined
       const costCenter = args.cost_center as string | undefined
 
-      // Each text-search leg needs its own builder instance — PostgREST
-      // query builders are not reusable across awaits. The factory closes
-      // over the resolved filter values above.
-      const buildBaseQuery = () => {
+      const GROUP_BY_FIELDS = ['account_number', 'voucher_series', 'source_type', 'cost_center', 'project'] as const
+      const groupBy = args.group_by as (typeof GROUP_BY_FIELDS)[number] | undefined
+      const groupByDimension =
+        args.group_by_dimension !== undefined && args.group_by_dimension !== null
+          ? String(args.group_by_dimension).trim()
+          : undefined
+
+      if (groupBy && groupByDimension) {
+        throw new Error('Use either group_by or group_by_dimension, not both')
+      }
+      if (groupBy && !GROUP_BY_FIELDS.includes(groupBy)) {
+        throw new Error(`group_by must be one of: ${GROUP_BY_FIELDS.join(', ')}`)
+      }
+      // Positive-integer guard — the schema says string but hosts don't always
+      // validate, and the value keys into the dimensions jsonb bag.
+      if (groupByDimension && !/^[1-9]\d{0,3}$/.test(groupByDimension)) {
+        throw new Error('group_by_dimension must be a positive SIE dimension number, e.g. "6" (projekt)')
+      }
+      const wantsGroups = Boolean(groupBy || groupByDimension)
+
+      // The dimensions jsonb only rides along when a group needs it — it is
+      // the widest column on the line and the aggregate pass fetches ALL rows.
+      const dimsSelect = groupByDimension ? ', dimensions' : ''
+      const DISPLAY_SELECT = `id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center${dimsSelect}, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)`
+      // Lean projection for the full-match aggregate pass — only what totals
+      // and group buckets need. journal_entries stays embedded (!inner)
+      // because the entry-level filters bind to it.
+      const AGGREGATE_SELECT = `id, account_number, debit_amount, credit_amount, project, cost_center${dimsSelect}, journal_entries!inner(voucher_series, source_type, company_id)`
+
+      // Each query pass needs its own builder instance — PostgREST query
+      // builders are not reusable across awaits. The factory closes over the
+      // resolved filter values above and applies IDENTICAL filters for every
+      // projection, so display, text legs, and the aggregate pass always see
+      // the same match set.
+      const buildFilteredQuery = (select: string) => {
         let q = supabase
           .from('journal_entry_lines')
-          .select(
-            'id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)',
-            { count: 'exact' }
-          )
+          .select(select)
           .eq('journal_entries.company_id', companyId)
 
         if (status === 'all') {
@@ -4548,7 +5481,7 @@ export const tools: McpTool[] = [
         return q
       }
 
-      const applyOrderAndLimit = <T extends ReturnType<typeof buildBaseQuery>>(q: T): T =>
+      const applyOrderAndLimit = <T extends ReturnType<typeof buildFilteredQuery>>(q: T): T =>
         q
           .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
           .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
@@ -4564,6 +5497,7 @@ export const tools: McpTool[] = [
         line_description: string | null
         project: string | null
         cost_center: string | null
+        dimensions?: Record<string, string> | null
         sort_order: number
         journal_entries: {
           id: string
@@ -4574,6 +5508,20 @@ export const tools: McpTool[] = [
           source_type: string
           status: string
         }
+      }
+
+      // Lean row shape of the full-match aggregate pass. Field-compatible
+      // with LineRow everywhere groupKey/totals read, so both can feed the
+      // same aggregation code.
+      type AggregateRow = {
+        id: string
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        project: string | null
+        cost_center: string | null
+        dimensions?: Record<string, string> | null
+        journal_entries: { voucher_series: string; source_type: string }
       }
 
       // Free-text search runs as two parallel .ilike() queries — one against
@@ -4618,7 +5566,7 @@ export const tools: McpTool[] = [
         const legLimit = Math.min(limit * 2, 500)
 
         const buildLeg = (column: 'line_description' | 'journal_entries.description') =>
-          buildBaseQuery()
+          buildFilteredQuery(DISPLAY_SELECT)
             .ilike(column, pattern)
             .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
             .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
@@ -4664,36 +5612,73 @@ export const tools: McpTool[] = [
           (byLine.data?.length ?? 0) >= legLimit ||
           (byEntry.data?.length ?? 0) >= legLimit
       } else {
-        const res = await applyOrderAndLimit(buildBaseQuery())
+        const res = await applyOrderAndLimit(buildFilteredQuery(DISPLAY_SELECT))
         if (res.error) {
           log.warn('query_journal failed', { companyId, userId, error: res.error.message })
           throw new Error('Database error while running journal query')
         }
         data = (res.data ?? []) as unknown as LineRow[]
-        dbMatched = res.count ?? data.length
+        dbMatched = data.length
+      }
+
+      // Full-match aggregate pass (non-text path only): re-run the same
+      // filters with a lean projection over ALL matching rows so totals and
+      // groups are exact regardless of `limit`. The free-text path stays
+      // slice-scoped (its per-leg windows make a full pass unbounded) and
+      // says so via totals_scope='returned_slice'.
+      let fullRows: AggregateRow[] | null = null
+      if (!text) {
+        try {
+          fullRows = await fetchAllRows<AggregateRow>(
+            ({ from, to }) =>
+              buildFilteredQuery(AGGREGATE_SELECT)
+                // Stable total order on the line PK for correct paging.
+                .order('id', { ascending: true })
+                .range(from, to) as unknown as PromiseLike<{
+                data: AggregateRow[] | null
+                error: { message: string } | null
+              }>,
+            { dedupeBy: (r) => r.id },
+          )
+        } catch (err) {
+          log.warn('query_journal aggregate pass failed', {
+            companyId,
+            userId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          throw new Error('Database error while running journal query')
+        }
       }
 
       // Apply amount filter post-fetch — PostgREST can't OR an abs(debit) >= n
       // with abs(credit) >= n cleanly. Lines are debit XOR credit, so checking
-      // max(debit, credit) works.
+      // max(debit, credit) works. The SAME predicate runs over the display
+      // slice and the full aggregate set so both describe one match set.
       const amountMin = args.amount_min as number | undefined
       const amountMax = args.amount_max as number | undefined
       const amountFilterApplied = typeof amountMin === 'number' || typeof amountMax === 'number'
-      const filtered = data.filter((r) => {
+      const passesAmountFilter = (r: { debit_amount: number; credit_amount: number }) => {
         const lineAmount = Math.max(Number(r.debit_amount) || 0, Number(r.credit_amount) || 0)
         if (typeof amountMin === 'number' && lineAmount < amountMin) return false
         if (typeof amountMax === 'number' && lineAmount > amountMax) return false
         return true
-      })
+      }
+      const filtered = data.filter(passesAmountFilter)
+      const fullFiltered = fullRows ? fullRows.filter(passesAmountFilter) : null
 
-      // Compute totals on the fetched-and-filtered set. Note: when truncated,
-      // these are totals of the returned slice, not the full match. The
-      // truncated flag tells the agent whether to issue a narrower query.
+      // Totals aggregate over the full match set when available (non-text),
+      // else over the returned slice (free-text) — totals_scope tells the
+      // agent which one it got.
+      const totalsSource: Array<{ debit_amount: number; credit_amount: number }> =
+        fullFiltered ?? filtered
       let totalDebit = 0
       let totalCredit = 0
-      const lines = filtered.map((r) => {
+      for (const r of totalsSource) {
         totalDebit += Number(r.debit_amount) || 0
         totalCredit += Number(r.credit_amount) || 0
+      }
+
+      const lines = filtered.map((r) => {
         return {
           line_id: r.id,
           journal_entry_id: r.journal_entries.id,
@@ -4713,31 +5698,74 @@ export const tools: McpTool[] = [
         }
       })
 
-      // PostgREST's `count` is computed before the post-fetch amount filter,
-      // so when amount_min/amount_max is set it reflects the wider DB-side
-      // match — not the lines actually returned. Reporting that as
-      // `total_lines` would mislead an agent into chasing a truncated tail
-      // that has already been filtered out client-side. When the amount
-      // filter ran, anchor `total_lines` and `truncated` to the filtered
-      // result, and surface the pre-filter count + a flag separately so an
-      // agent can still tell the DB matched more (it just didn't pass the
-      // amount predicate).
-      const total_lines = amountFilterApplied ? lines.length : dbMatched
-      const truncated = amountFilterApplied
-        ? data.length >= limit && lines.length === limit
-        : dbMatched > lines.length || legCapHit
+      // Optional group_by aggregation — over the same set totals used, so
+      // group sums always reconcile with `totals`.
+      let groups:
+        | Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
+        | undefined
+      if (wantsGroups) {
+        const groupSource: Array<AggregateRow | LineRow> = fullFiltered ?? filtered
+        const keyOf = (r: AggregateRow | LineRow): string => {
+          if (groupByDimension) return r.dimensions?.[groupByDimension] ?? '(utan dimension)'
+          switch (groupBy) {
+            case 'voucher_series': return r.journal_entries.voucher_series
+            case 'source_type': return r.journal_entries.source_type
+            case 'cost_center': return r.cost_center ?? '(utan dimension)'
+            case 'project': return r.project ?? '(utan dimension)'
+            default: return r.account_number
+          }
+        }
+        const bucketMap = new Map<string, { debit: number; credit: number; count: number }>()
+        for (const r of groupSource) {
+          const key = keyOf(r)
+          const bucket = bucketMap.get(key) ?? { debit: 0, credit: 0, count: 0 }
+          bucket.debit += Number(r.debit_amount) || 0
+          bucket.credit += Number(r.credit_amount) || 0
+          bucket.count += 1
+          bucketMap.set(key, bucket)
+        }
+        groups = [...bucketMap.entries()]
+          .map(([key, bucket]) => ({
+            key,
+            debit: roundOre(bucket.debit),
+            credit: roundOre(bucket.credit),
+            net: roundOre(bucket.debit - bucket.credit),
+            line_count: bucket.count,
+          }))
+          .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
+      }
+
+      // Non-text path: the aggregate pass IS the full match set, so
+      // total_lines / truncated / pre-amount count all anchor to it. Text
+      // path: no full pass exists — total_lines stays slice-anchored exactly
+      // as before (amount filter → post-filter slice; otherwise the merged
+      // distinct count), and legCapHit keeps `truncated` honest.
+      const total_lines = fullFiltered
+        ? fullFiltered.length
+        : amountFilterApplied
+          ? lines.length
+          : dbMatched
+      const truncated = fullFiltered
+        ? fullFiltered.length > lines.length
+        : amountFilterApplied
+          ? data.length >= limit && lines.length === limit
+          : dbMatched > lines.length || legCapHit
       return {
         lines,
         truncated,
         total_lines,
         returned_lines: lines.length,
         amount_filter_applied_post_fetch: amountFilterApplied,
-        db_matched_pre_amount_filter: amountFilterApplied ? dbMatched : null,
+        db_matched_pre_amount_filter: amountFilterApplied
+          ? (fullRows ? fullRows.length : dbMatched)
+          : null,
         totals: {
           debit: Math.round(totalDebit * 100) / 100,
           credit: Math.round(totalCredit * 100) / 100,
           net: Math.round((totalDebit - totalCredit) * 100) / 100,
         },
+        totals_scope: fullFiltered ? 'full_match' : 'returned_slice',
+        ...(groups ? { groups } : {}),
         applied_filters: {
           account_from: accountFrom ?? null,
           account_to: accountTo ?? null,
@@ -4754,6 +5782,8 @@ export const tools: McpTool[] = [
           status,
           project: project ?? null,
           cost_center: costCenter ?? null,
+          group_by: groupBy ?? null,
+          group_by_dimension: groupByDimension ?? null,
         },
       }
     },
@@ -5232,7 +6262,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_bulk_book_transactions',
     title: 'Bulk-Book Transactions',
-    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Either link N txs to an existing posted verifikat, or create a new verifikat from caller lines. All txs share date + direction. Stages.',
+    description: 'Bulk-book N bank txs on the same date into 1 samlingsverifikat (BFL 5 kap 6§). Either link N txs to an existing posted verifikat, or create a new verifikat from caller lines (accept dims bags). All txs share date + direction. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5257,12 +6287,22 @@ export const tools: McpTool[] = [
                   credit_amount: { type: 'number', minimum: 0 },
                   currency: { type: 'string', minLength: 3, maxLength: 3 },
                   line_description: { type: 'string', maxLength: 200 },
+                  dimensions: {
+                    type: 'object',
+                    additionalProperties: { type: 'string' },
+                    description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
+                  },
                 },
                 required: ['account_number', 'debit_amount', 'credit_amount', 'currency'],
               },
             },
           },
           required: ['description', 'lines'],
+        },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag keyed by SIE dim no, value = code OR name. Applied to every new_entry line not setting the key. Only valid with new_entry — a posted verifikat is immutable.',
         },
       },
       required: ['tx_ids'],
@@ -5317,6 +6357,43 @@ export const tools: McpTool[] = [
             )
           }
         }
+      }
+
+      // Resolve-don't-select: merge the batch-level default_dimensions under
+      // each caller line's own bag, then resolve codes AND natural-language
+      // names against the registry in ONE pass (zero queries when nothing is
+      // tagged; free-text passthrough while dimensions_enabled is off). The
+      // resolved bags are written back onto the staged new_entry lines — the
+      // executor's RPC reads per-line dims only, so the merged default is
+      // never staged top-level.
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      let dimensionResolutions: DimensionResolution[] = []
+      let stagedNewEntry = newEntry
+      if (newEntry) {
+        const rawLines = newEntry.lines as Array<Record<string, unknown>>
+        const { bags, resolutions } = await resolveDimensionBags(
+          supabase,
+          companyId,
+          rawLines.map((l, i) =>
+            mergeLineDimensions(
+              { dimensions: parseDimensionsArg(l.dimensions, `new_entry.lines[${i}].dimensions`) },
+              defaultDimensions,
+            ),
+          ),
+        )
+        dimensionResolutions = resolutions
+        stagedNewEntry = {
+          ...newEntry,
+          lines: rawLines.map((l, i) => {
+            const { dimensions: _rawDimensions, ...rest } = l
+            const bag = bags[i]
+            return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+          }),
+        }
+      } else if (defaultDimensions) {
+        throw new Error(
+          'default_dimensions only applies when creating a new verifikat (new_entry) — a posted verifikat is immutable, so link-existing mode cannot be tagged.'
+        )
       }
 
       const { data: txs, error: txError } = await supabase
@@ -5391,7 +6468,7 @@ export const tools: McpTool[] = [
         {
           tx_ids: txIds,
           existing_journal_entry_id: existingJeId,
-          new_entry: newEntry,
+          new_entry: stagedNewEntry,
         },
         // GDPR Art.25: preview_data carries only aggregate counts + the
         // shared date/direction — no per-tx descriptions, no per-line
@@ -5405,6 +6482,9 @@ export const tools: McpTool[] = [
           tx_sum: txSum,
           direction,
           mode: existingJeId ? 'link_existing' : 'create_new',
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
         {
@@ -6142,7 +7222,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_upload_document',
     title: 'Upload Document to Inbox',
-    description: 'Upload a PDF/JPEG/PNG/HEIC/WebP (max 20 MB) to the inbox. Runs deterministic field extraction on text-based PDFs.',
+    description: 'Upload a PDF/JPEG/PNG/HEIC/WebP (max 20 MB) to the inbox. Runs AI field extraction (Bedrock OCR) — requires the AI capability.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6390,7 +7470,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_supplier_invoice_from_inbox',
     title: 'Create Supplier Invoice from Inbox',
-    description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier, builds lines from extracted_data, applies VAT + FX, attaches the document. Stages for human review; honors dry_run.",
+    description: "Atomic: turn an OCR'd inbox item into a staged supplier invoice. Resolves supplier, builds lines from extracted_data, applies VAT + FX + dimension tags, attaches the document. Stages for human review; honors dry_run. Unresolved supplier → staged:false + candidates + next.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6401,16 +7481,26 @@ export const tools: McpTool[] = [
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
         line_overrides: {
           type: 'array',
-          description: 'Per-line account overrides (1-based line_number). Wins over accountSuggestion and supplier default.',
+          description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line.',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               line_number: { type: 'number', description: '1-based index matching items_preview' },
               account_number: { type: 'string', description: 'BAS account number for this line (e.g. "6420")' },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}, for this line. Wins per key over default_dimensions.',
+              },
             },
-            required: ['line_number', 'account_number'],
+            required: ['line_number'],
           },
+        },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"1":"KS01","6":"Villa Almgren"}. Applied to every line not setting the key. Unknown values rejected — never auto-created.',
         },
         notes: { type: 'string', description: 'Optional notes appended to the supplier invoice' },
         dry_run: { type: 'boolean', description: 'If true, return the assembled payload without staging (default false)' },
@@ -6488,20 +7578,87 @@ export const tools: McpTool[] = [
       }
 
       if (!supplierId) {
-        throw new Error(
-          `Cannot resolve supplier from extracted data. Pass supplier_id_override, or create the supplier first (extracted name: ${supplierExt?.name ?? 'unknown'}, org: ${supplierExt?.organizationNumber ?? 'unknown'}).`
+        // Structured resolution failure instead of a dead end (P1-4,
+        // dev_docs/mcp_optimization_plan.md): a thrown error here stops the
+        // whole inbox pipeline for small ad hoc vendors. Return staged:false
+        // with near-miss candidates the agent can pass as supplier_id_override,
+        // or a create-supplier next hint when nothing is close. Fuzzy scores
+        // never auto-resolve — the agent/human confirms against the underlag.
+        const extractedName = (supplierExt?.name as string | undefined) ?? null
+        const extractedOrg = (supplierExt?.organizationNumber as string | undefined) ?? null
+
+        const CANDIDATE_POOL_CAP = 500
+        const { data: companySuppliers } = await supabase
+          .from('suppliers')
+          .select('id, name, org_number')
+          .eq('company_id', companyId)
+          .limit(CANDIDATE_POOL_CAP)
+
+        const candidates = findSupplierCandidates(
+          (companySuppliers ?? []) as { id: string; name: string; org_number: string | null }[],
+          extractedName,
+          extractedOrg,
         )
+        const best = candidates[0]
+        // No silent caps: past the pool cap the right supplier may exist yet
+        // be absent from candidates — say so instead of implying full coverage.
+        const poolTruncated = (companySuppliers?.length ?? 0) >= CANDIDATE_POOL_CAP
+
+        return {
+          staged: false,
+          risk_level: getRiskLevel('create_supplier_invoice_from_inbox'),
+          actor: actor ?? { type: 'user' },
+          message: (best
+            ? `Could not resolve supplier "${extractedName ?? 'unknown'}" exactly — ${candidates.length} near-miss candidate(s) in preview.candidates. Verify against the underlag, then retry with supplier_id_override; or create the supplier first.`
+            : `Could not resolve supplier "${extractedName ?? 'unknown'}" (org: ${extractedOrg ?? 'unknown'}) and no similar supplier exists. Create it with gnubok_create_supplier, then retry with supplier_id_override.`)
+            + (poolTruncated ? ` Note: candidate search covered only the first ${CANDIDATE_POOL_CAP} suppliers — the pool was truncated.` : ''),
+          preview: {
+            supplier_resolution: 'unresolved',
+            unresolved_supplier: {
+              extracted_name: extractedName,
+              extracted_org_number: extractedOrg,
+            },
+            candidates,
+            candidate_pool_truncated: poolTruncated,
+          },
+          next: best
+            ? {
+                description: `Closest existing supplier: "${best.name}" (score ${best.score}). If it matches the underlag, retry with this supplier_id_override.`,
+                tool: 'gnubok_create_supplier_invoice_from_inbox',
+                args: { inbox_item_id: inboxItemId, supplier_id_override: best.supplier_id },
+              }
+            : {
+                description:
+                  'Create the supplier, approve it, then retry this tool with supplier_id_override set to the new supplier id.',
+                tool: 'gnubok_create_supplier',
+                args: {
+                  ...(extractedName ? { name: extractedName } : {}),
+                  ...(extractedOrg ? { org_number: extractedOrg } : {}),
+                },
+              },
+        }
       }
 
       // Fetch supplier defaults so line items can inherit default_expense_account
       // when neither the extraction nor the agent provided an accountSuggestion.
+      // Doubles as existence/tenancy validation: every resolution path — and
+      // especially supplier_id_override, which the unresolved next-hint now
+      // actively promotes — must point at a supplier in THIS company, or the
+      // staged operation would fail opaquely at commit time instead.
       const { data: resolvedSupplier } = await supabase
         .from('suppliers')
-        .select('default_expense_account')
+        .select('id, default_expense_account')
         .eq('id', supplierId)
         .eq('company_id', companyId)
         .single()
-      const supplierDefaultExpenseAccount = resolvedSupplier?.default_expense_account ?? null
+      if (!resolvedSupplier) {
+        throw new Error(
+          supplierResolution === 'override'
+            ? `supplier_id_override ${supplierId} does not match any supplier in this company. Use a supplier_id from preview.candidates or gnubok_list_suppliers.`
+            : `Resolved supplier ${supplierId} no longer exists in this company — re-run extraction or pass supplier_id_override.`,
+        )
+      }
+      const supplierDefaultExpenseAccount = resolvedSupplier.default_expense_account ?? null
 
       // Assemble core invoice fields
       const currency = (invoiceExt?.currency as string) || 'SEK'
@@ -6531,14 +7688,34 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Build a lookup for per-line account overrides keyed by 1-based line number.
-      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number: string }> | undefined) ?? []
-      const lineOverrideMap = new Map(rawLineOverrides.map((o) => [o.line_number, o.account_number]))
+      // Build lookups for per-line overrides keyed by 1-based line number.
+      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number?: string; dimensions?: unknown }> | undefined) ?? []
+      const lineOverrideMap = new Map(
+        rawLineOverrides.filter((o) => o.account_number).map((o) => [o.line_number, o.account_number as string]),
+      )
+      const lineDimensionsMap = new Map(
+        rawLineOverrides.map((o, i) => [o.line_number, parseDimensionsArg(o.dimensions, `line_overrides[${i}].dimensions`)]),
+      )
+
+      // Resolve-don't-select: parse the invoice-level default bag + each line's
+      // own bag, then resolve codes AND natural-language names against the
+      // registry in ONE pass (zero queries when nothing is tagged; free-text
+      // passthrough while dimensions_enabled is off). The resolved default is
+      // staged top-level; each item keeps only its own resolved bag — the
+      // executor merges item-over-default at commit time.
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...lineItemsExt.map((_li, idx) => lineDimensionsMap.get(idx + 1))],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
 
       // Translate extracted line items into the supplier_invoice_items shape.
       // Priority: line_overrides → per-line accountSuggestion → supplier.default_expense_account → 4000.
       const lineItems = lineItemsExt.map((li, idx) => {
         const lineNumber = idx + 1
+        const dimensions = resolvedDimBags[idx + 1]
         return {
           line_number: lineNumber,
           description: (li.description as string) ?? `Position ${lineNumber}`,
@@ -6549,6 +7726,7 @@ export const tools: McpTool[] = [
           account_number: lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
           vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
           vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
+          ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }
       })
 
@@ -6567,6 +7745,9 @@ export const tools: McpTool[] = [
         total: Math.round(total * 100) / 100,
         notes: (args.notes as string | undefined) ?? null,
         items: lineItems,
+        ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
+          ? { default_dimensions: resolvedDefaultDimensions }
+          : {}),
       }
 
       const previewData = {
@@ -6587,6 +7768,9 @@ export const tools: McpTool[] = [
         total: params.total,
         line_count: lineItems.length,
         items_preview: lineItems.slice(0, 5),
+        // Echoed for every non-exact dimension resolution (resolve-don't-
+        // select) so the agent can verify what a name attached to.
+        ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         will: 'register supplier invoice (status=registered), attach the inbox document, post a registration journal entry on confirm — leverantörsskuld (2440) credited and the cost/VAT split debited per the per-line VAT rules',
       }
 
@@ -7075,7 +8259,7 @@ export const tools: McpTool[] = [
       const activeOnly = args.active_only !== false
       let query = supabase
         .from('employees')
-        .select('id, first_name, last_name, personnummer, personnummer_last4, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, is_active')
+        .select('id, first_name, last_name, personnummer, personnummer_last4, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, default_dimensions, is_active')
         .eq('company_id', companyId)
       if (activeOnly) query = query.eq('is_active', true)
       const { data, error } = await query.order('last_name')
@@ -8938,6 +10122,11 @@ export const tools: McpTool[] = [
         fiscal_period_id: { type: 'string', description: 'UUID of fiscal period. If omitted, resolved from entry_date.' },
         voucher_series: { type: 'string', description: 'Single letter A–Z. Defaults to A.' },
         notes: { type: 'string', description: 'Internal notes (max 2000 chars) — visible on the verifikation but not on reports.' },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dimension tags {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}, applied to every line not setting the key itself. Unknown values are rejected — never auto-created.',
+        },
         is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Marks the entry source_type=opening_balance so bank reconciliation excludes it from period movement. Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
         inbox_item_id: { type: 'string', description: 'Optional inbox item UUID to book directly. On confirm, the inbox item is linked to the new verifikat and its OCR document is attached to the journal entry. Fails if the inbox item is already booked (as voucher) or converted (to supplier invoice).' },
         lines: {
@@ -8954,8 +10143,13 @@ export const tools: McpTool[] = [
               amount_in_currency: { type: 'number', description: 'Original amount if currency is not SEK' },
               exchange_rate: { type: 'number' },
               tax_code: { type: 'string', description: 'Free-text tag — does NOT drive momsdeklaration ruta mapping. The BAS account number is what determines which ruta the line lands in (e.g. 2641 → ruta 48, 2614 → ruta 30). Pick the correct account first.' },
-              cost_center: { type: 'string' },
-              project: { type: 'string' },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dimension tags {sie_dim_no: kod eller namn}, e.g. {"1":"KS01","6":"P001"}. Names resolve against the registry (high-confidence only, echoed). Wins per key over default_dimensions and cost_center/project.',
+              },
+              cost_center: { type: 'string', description: 'DEPRECATED alias for dimensions["1"].' },
+              project: { type: 'string', description: 'DEPRECATED alias for dimensions["6"].' },
             },
             required: ['account_number'],
           },
@@ -8978,7 +10172,7 @@ export const tools: McpTool[] = [
       }
 
       // Normalize so validateBalance + preview see consistent numeric types.
-      const lines = rawLines.map((l) => ({
+      const lines = rawLines.map((l, i) => ({
         account_number: String(l.account_number ?? ''),
         debit_amount: Number(l.debit_amount) || 0,
         credit_amount: Number(l.credit_amount) || 0,
@@ -8987,6 +10181,7 @@ export const tools: McpTool[] = [
         amount_in_currency: l.amount_in_currency !== undefined ? Number(l.amount_in_currency) : undefined,
         exchange_rate: l.exchange_rate !== undefined ? Number(l.exchange_rate) : undefined,
         tax_code: l.tax_code ? String(l.tax_code) : undefined,
+        dimensions: parseDimensionsArg(l.dimensions, `lines[${i}].dimensions`),
         cost_center: l.cost_center ? String(l.cost_center) : undefined,
         project: l.project ? String(l.project) : undefined,
       }))
@@ -8999,6 +10194,22 @@ export const tools: McpTool[] = [
           `Lines are not balanced: debits ${balance.totalDebit} SEK, credits ${balance.totalCredit} SEK. ` +
           'Both must be positive and equal.'
         )
+      }
+
+      // Resolve-don't-select: merge voucher-level default_dimensions under each
+      // line's own bag/aliases, then resolve codes AND natural-language names
+      // against the registry in ONE pass (zero queries when nothing is tagged;
+      // free-text passthrough while dimensions_enabled is off). Non-exact
+      // resolutions are echoed in the preview so the approver and the agent
+      // both see what "Villa Almgren tak" actually attached to.
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        lines.map((l) => mergeLineDimensions(l, defaultDimensions)),
+      )
+      for (const [i, line] of lines.entries()) {
+        line.dimensions = resolvedBags[i]
       }
 
       // Resolve fiscal period. Two paths:
@@ -9083,6 +10294,7 @@ export const tools: McpTool[] = [
         debit_amount: l.debit_amount,
         credit_amount: l.credit_amount,
         line_description: l.line_description ?? null,
+        dimensions: l.dimensions ?? null,
       }))
 
       // Optional inbox-direct booking. Validate at staging so the agent gets a
@@ -9148,6 +10360,9 @@ export const tools: McpTool[] = [
           total_credit: balance.totalCredit,
           line_count: lines.length,
           lines: previewLines,
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
           inbox_item_id: inboxItemId,
           document_attached: Boolean(inboxDocumentId),
           will: inboxItemId
@@ -9173,6 +10388,11 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dimension tags {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}, applied to every replacement line not setting the key itself. Unknown values are rejected — never auto-created.',
+        },
         lines: {
           type: 'array',
           description: 'Replacement lines (≥ 2, balanced). Use the same accounts as the original where unchanged.',
@@ -9187,8 +10407,13 @@ export const tools: McpTool[] = [
               amount_in_currency: { type: 'number' },
               exchange_rate: { type: 'number' },
               tax_code: { type: 'string', description: 'Free-text tag — does NOT drive momsdeklaration ruta. Pick the correct BAS account first.' },
-              cost_center: { type: 'string' },
-              project: { type: 'string' },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dimension tags {sie_dim_no: kod eller namn}. Names resolve against the registry (high-confidence only, echoed). Wins per key over default_dimensions and cost_center/project.',
+              },
+              cost_center: { type: 'string', description: 'DEPRECATED alias for dimensions["1"].' },
+              project: { type: 'string', description: 'DEPRECATED alias for dimensions["6"].' },
             },
             required: ['account_number'],
           },
@@ -9206,7 +10431,7 @@ export const tools: McpTool[] = [
         throw new Error('entry_id and at least two lines are required')
       }
 
-      const lines = rawLines.map((l) => ({
+      const lines = rawLines.map((l, i) => ({
         account_number: String(l.account_number ?? ''),
         debit_amount: Number(l.debit_amount) || 0,
         credit_amount: Number(l.credit_amount) || 0,
@@ -9215,6 +10440,7 @@ export const tools: McpTool[] = [
         amount_in_currency: l.amount_in_currency !== undefined ? Number(l.amount_in_currency) : undefined,
         exchange_rate: l.exchange_rate !== undefined ? Number(l.exchange_rate) : undefined,
         tax_code: l.tax_code ? String(l.tax_code) : undefined,
+        dimensions: parseDimensionsArg(l.dimensions, `lines[${i}].dimensions`),
         cost_center: l.cost_center ? String(l.cost_center) : undefined,
         project: l.project ? String(l.project) : undefined,
       }))
@@ -9225,6 +10451,19 @@ export const tools: McpTool[] = [
           `Correction lines not balanced: debits ${balance.totalDebit}, credits ${balance.totalCredit}. ` +
           'Both must be positive and equal.'
         )
+      }
+
+      // Resolve-don't-select — same one-pass registry resolution as
+      // gnubok_create_voucher (codes AND names; unknown/archived/ambiguous
+      // values reject with candidates; nothing is ever auto-created).
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        lines.map((l) => mergeLineDimensions(l, defaultDimensions)),
+      )
+      for (const [i, line] of lines.entries()) {
+        line.dimensions = resolvedBags[i]
       }
 
       const entryId = await resolveJournalEntryRef(supabase, companyId, entryRef)
@@ -9312,8 +10551,10 @@ export const tools: McpTool[] = [
               debit_amount: l.debit_amount,
               credit_amount: l.credit_amount,
               line_description: l.line_description ?? null,
+              dimensions: l.dimensions ?? null,
             })),
           },
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
           will: 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
         },
         actor,

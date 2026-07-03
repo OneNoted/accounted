@@ -14,6 +14,10 @@ import {
   JournalEntryNotFoundError,
 } from '@/lib/bookkeeping/errors'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import {
+  normalizeLineDimensions,
+  validateEntryDimensions,
+} from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
@@ -178,28 +182,33 @@ export async function findFiscalPeriod(
 
 /**
  * Build line insert objects from input lines, resolving account IDs and
- * including tax_code, cost_center, project dimensions
+ * including tax_code and the dimensions bag
  */
 function buildLineInserts(
   entryId: string,
   lines: CreateJournalEntryLineInput[],
   accountIdMap: Map<string, string>
 ) {
-  return lines.map((line, index) => ({
-    journal_entry_id: entryId,
-    account_number: line.account_number,
-    account_id: accountIdMap.get(line.account_number) || null,
-    debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-    credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-    currency: line.currency || 'SEK',
-    amount_in_currency: line.amount_in_currency ? Math.round(line.amount_in_currency * 100) / 100 : null,
-    exchange_rate: line.exchange_rate || null,
-    line_description: line.line_description || null,
-    tax_code: line.tax_code || null,
-    cost_center: line.cost_center || null,
-    project: line.project || null,
-    sort_order: index,
-  }))
+  return lines.map((line, index) => {
+    // dimensions JSONB is the single source of truth; cost_center/project
+    // are GENERATED columns derived from keys '1'/'6' since the PR9 cutover
+    // (20260702230000) — writing them explicitly would error.
+    const dimensions = normalizeLineDimensions(line)
+    return {
+      journal_entry_id: entryId,
+      account_number: line.account_number,
+      account_id: accountIdMap.get(line.account_number) || null,
+      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
+      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
+      currency: line.currency || 'SEK',
+      amount_in_currency: line.amount_in_currency ? Math.round(line.amount_in_currency * 100) / 100 : null,
+      exchange_rate: line.exchange_rate || null,
+      line_description: line.line_description || null,
+      tax_code: line.tax_code || null,
+      dimensions,
+      sort_order: index,
+    }
+  })
 }
 
 /**
@@ -217,6 +226,13 @@ export async function createDraftEntry(
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
   }
+
+  // Soft dimension validation (dimensions plan PR3): free for untagged
+  // entries; free-text passthrough unless company_settings.dimensions_enabled;
+  // enabled companies get registry validation with a typed Swedish rejection.
+  // Runs before any insert so a rejection leaves no orphan rows. Reversal/
+  // storno/correction paths bypass this — they copy posted data verbatim.
+  await validateEntryDimensions(supabase, companyId, input.lines)
 
   // Validate that entry_date falls within the selected fiscal period
   const { data: period, error: periodError } = await supabase
@@ -390,6 +406,10 @@ export async function updateDraftEntry(
   if (!balance.valid) {
     throw new JournalEntryNotBalancedError(balance.totalDebit, balance.totalCredit, 'draft')
   }
+
+  // Same soft dimension validation as createDraftEntry — before any write, so
+  // a rejection leaves both the header and the existing lines untouched.
+  await validateEntryDimensions(supabase, companyId, input.lines)
 
   // Entry date must fall within the selected fiscal period.
   const { data: period, error: periodError } = await supabase
@@ -662,6 +682,7 @@ export async function reverseEntry(
       : undefined,
     exchange_rate: line.exchange_rate || undefined,
     tax_code: line.tax_code || undefined,
+    dimensions: line.dimensions || undefined,
     cost_center: line.cost_center || undefined,
     project: line.project || undefined,
   }))

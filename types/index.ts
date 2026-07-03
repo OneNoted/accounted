@@ -325,6 +325,10 @@ export interface CompanySettings {
   // Sector
   sector_slug: string | null
 
+  // Dimensions (kostnadsställe/projekt) — UI-visibility toggle only, never
+  // load-bearing for correctness. Free tier (founder decision 2026-07-02).
+  dimensions_enabled: boolean
+
   // Sandbox
   is_sandbox: boolean
 
@@ -716,6 +720,12 @@ export interface SupplierInvoice {
 
   notes: string | null
 
+  // Default dimensions bag ({sie_dim_no: code}, e.g. {"1":"KS01","6":"P001"})
+  // applied to every generated journal line; item-level `dimensions` merge on
+  // top of it for the expense lines (dimensions PR7). Stored as jsonb
+  // DEFAULT '{}'. Optional in TS for pre-migration fixtures.
+  default_dimensions?: Record<string, string>
+
   created_at: string
   updated_at: string
 
@@ -753,6 +763,10 @@ export interface SupplierInvoiceItem {
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
+
+  // Per-item dimensions bag, merged over the invoice's default_dimensions on
+  // the expense line this item books to (dimensions PR7). jsonb DEFAULT '{}'.
+  dimensions?: Record<string, string>
 
   created_at: string
 }
@@ -887,6 +901,12 @@ export interface Invoice {
   deduction_personnummer_encrypted?: string | null
   deduction_personnummer_last4?: string | null
 
+  // Default dimensions bag ({sie_dim_no: code}) applied to every journal line
+  // generated from this invoice (issuance, payment, credit); item-level
+  // `dimensions` merge on top for the revenue lines (dimensions PR7).
+  // jsonb DEFAULT '{}'. Optional in TS for pre-migration fixtures.
+  default_dimensions?: Record<string, string>
+
   created_at: string
   updated_at: string
 
@@ -967,6 +987,10 @@ export interface InvoiceItem {
   /** Bostadsrättsföreningens orgnr. ROT i bostadsrätt reports lägenhetsnummer
    *  + BRF orgnr instead of fastighetsbeteckning (Begaran.xsd: BrfOrgNr). */
   brf_org_number?: string | null
+
+  // Per-item dimensions bag, merged over the invoice's default_dimensions on
+  // the revenue line this item books to (dimensions PR7). jsonb DEFAULT '{}'.
+  dimensions?: Record<string, string>
 
   created_at: string
 }
@@ -1433,6 +1457,10 @@ export interface JournalEntryLine {
   exchange_rate: number | null
   line_description: string | null
   tax_code: string | null
+  // SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}.
+  // Source of truth; cost_center/project mirror keys '1'/'6'. Optional so
+  // pre-migration fixtures and partial selects stay type-valid.
+  dimensions?: Record<string, string>
   cost_center: string | null
   project: string | null
   sort_order: number
@@ -1544,6 +1572,10 @@ export interface MappingResult {
   vat_lines: VatJournalLine[]
   all_lines_complete?: boolean  // when true, vat_lines contains ALL non-settlement lines
   description: string
+  // Dimensions bag applied to the business (expense/revenue) lines of the
+  // generated entry — from a counterparty template's line pattern or an
+  // explicit categorize param (dimensions PR7). Bank/VAT lines stay untagged.
+  dimensions?: Record<string, string>
 }
 
 // VAT journal line (auto-generated)
@@ -1552,6 +1584,9 @@ export interface VatJournalLine {
   debit_amount: number
   credit_amount: number
   description: string
+  // Set on business-type lines materialized from a LinePatternEntry that
+  // carries dimensions (dimensions PR7); VAT/tax lines stay untagged.
+  dimensions?: Record<string, string>
 }
 
 // Categorization template source
@@ -1564,6 +1599,10 @@ export interface LinePatternEntry {
   side: 'debit' | 'credit'
   ratio?: number      // proportion of NON-VAT amount (business + tax ratios sum to ~1.0)
   vat_rate?: number   // applied to FULL amount via rate/(1+rate) (vat type only)
+  // Dimensions bag ({sie_dim_no: code}) learned from the source vouchers'
+  // lines; applied to the materialized line on booking (dimensions PR7).
+  // Only preserved by learning when every occurrence agrees.
+  dimensions?: Record<string, string>
 }
 
 // Per-tenant counterparty-based categorization template
@@ -1712,6 +1751,39 @@ export interface ResultatrapportReport {
   prior_period: { start: string; end: string } | null
 }
 
+// Resultat per projekt/kostnadsställe — value-as-column P&L matrix over one
+// SIE dimension. `code: null` marks the "(Utan dimension)" residual bucket,
+// which is computed as Totalt − tagged columns so every row sums exactly to
+// its resultatrapport counterpart.
+export interface DimensionPnlColumn {
+  code: string | null
+  name: string | null
+}
+
+export interface DimensionPnlRow {
+  account_number: string
+  account_name: string
+  values: number[]
+  total: number
+}
+
+export interface DimensionPnlGroup {
+  class: number
+  class_label: string
+  rows: DimensionPnlRow[]
+  subtotals: number[]
+  subtotal_total: number
+}
+
+export interface DimensionPnlReport {
+  dimension: { sie_dim_no: string; name: string }
+  columns: DimensionPnlColumn[]
+  groups: DimensionPnlGroup[]
+  net_per_column: number[]
+  net_total: number
+  period: { start: string; end: string }
+}
+
 export interface BalansrapportRow {
   account_number: string
   account_name: string
@@ -1774,7 +1846,12 @@ export interface CreateJournalEntryLineInput {
   amount_in_currency?: number
   exchange_rate?: number
   tax_code?: string
+  // SIE dimension map {sie_dim_no: object_code}. Wins per key over the
+  // deprecated cost_center/project aliases (normalizeLineDimensions).
+  dimensions?: Record<string, string>
+  /** @deprecated alias for dimensions['1'] — kept for API/MCP compatibility */
   cost_center?: string
+  /** @deprecated alias for dimensions['6'] — kept for API/MCP compatibility */
   project?: string
 }
 
@@ -1856,6 +1933,12 @@ export type PendingOperationType =
   // (returns a signing link); the user's signature in the browser files it.
   | 'submit_vat_declaration'
   | 'submit_agi'
+  // Dimensions PR3: stage a new dimension value (kostnadsställe/projekt object
+  // code, SIE #OBJEKT) — agents never silently mint reporting values.
+  | 'create_dimension_value'
+  // Dimensions PR6: bulk retag of posted-line dimensions via the audited
+  // retag_line_dimensions RPC (gnubok_tag_journal_lines).
+  | 'retag_line_dimensions'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
@@ -3315,6 +3398,10 @@ export interface Employee {
   vaxa_stod_eligible: boolean
   vaxa_stod_start: string | null
   vaxa_stod_end: string | null
+  // Dimensions PR8: bag ({sie_dim_no: code}) applied to this employee's P&L
+  // cost lines when a salary run is booked. jsonb DEFAULT '{}'. Optional in
+  // TS for pre-migration fixtures.
+  default_dimensions?: Record<string, string>
   is_active: boolean
   created_at: string
   updated_at: string

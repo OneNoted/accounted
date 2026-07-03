@@ -64,9 +64,30 @@ describe('tools/list payload size guard', () => {
     //     plus per-line supplier-invoice overrides). Each new tool carries its
     //     inputSchema + staging _meta; the growth is genuine wire data, not prose,
     //     so descriptions are already at their trimmed floor (~180–220 chars).
+    //   * 40K → 42K with dimensions PR3: gnubok_list_dimensions +
+    //     gnubok_list_dimension_values (nested registry output schemas) + staged
+    //     gnubok_create_dimension_value (STAGED_OPERATION_SCHEMA + _meta), the
+    //     dims bag + default_dimensions on create_voucher/correct_entry, and the
+    //     agent-briefing dimensions block. Descriptions were trimmed first
+    //     (~200 tokens recovered); the remainder is schema structure agents
+    //     depend on for resolve-don't-select, not trimmable prose.
+    //   * 42K → 43K with dimensions PR4 reports: gnubok_get_dimension_pnl (the
+    //     value-as-column matrix outputSchema is the wire contract agents read
+    //     the report through), the shared `dimensions` filter arg + echo props
+    //     on trial balance / income statement / general ledger, and
+    //     group_by/group_by_dimension + totals_scope + groups on
+    //     gnubok_query_journal. Descriptions trimmed first (~100 tokens
+    //     recovered); the ~55-token remainder is schema structure.
+    //   * 43K → 44K with dimensions PR7 producers: default_dimensions + per-item/
+    //     per-line dims bags on gnubok_create_invoice, gnubok_create_supplier_
+    //     invoice_from_inbox, gnubok_categorize_transaction and
+    //     gnubok_bulk_book_transactions (8 new object properties). Descriptions
+    //     already use the compact "Dims bag" form (~90 tokens trimmed first);
+    //     the remainder is schema structure the resolve-don't-select contract
+    //     depends on, not trimmable prose.
     // Long-term answer to growth is leaning harder on gnubok_search_tools — if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(40_000)
+    expect(approxTokens).toBeLessThan(44_000)
   })
 })

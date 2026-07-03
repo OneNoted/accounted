@@ -26,6 +26,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -73,6 +74,8 @@ import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
+import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
+import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
@@ -219,6 +222,8 @@ async function commitCategorizeTransaction(
     vatAmount,
     notes,
     allowDuplicate: params.allow_duplicate === true,
+    // Dimensions PR7: resolved at staging; coerce is the drift/tamper gate.
+    dimensions: coerceDimensionsBag(params.dimensions),
   })
 }
 
@@ -432,6 +437,206 @@ async function commitCreateSupplier(
   return { data: { supplier_id: data.id } }
 }
 
+/**
+ * Executor for the staged create_dimension_value operation
+ * (gnubok_create_dimension_value — dimensions PR3). Inserts a dimension value
+ * (SIE #OBJEKT) into the registry. Agents never silently mint reporting
+ * values: this always arrives via a human-approved pending_operation.
+ *
+ * Idempotent on duplicate code: a 23505 on (company_id, dimension_id, code)
+ * re-reads the existing row and reports success with already_existed=true, so
+ * a raced or re-committed approval never fails on "already there".
+ */
+async function commitCreateDimensionValue(
+  supabase: SupabaseClient,
+  _userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so
+  // a tampered pending_operations row cannot inject a non-portable code or
+  // malformed dates into the registry (ASVS V4.5) — mirrors commitCreateSupplier.
+  let validated
+  try {
+    validated = CreateDimensionValueParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      const path = issue?.path?.join('.') ?? 'params'
+      return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  // Get-or-create the system dims (1 = kostnadsställe, 6 = projekt) —
+  // idempotent lazy seeding. Custom dims must already exist in the registry:
+  // agents may stage new VALUES, never new dimensions.
+  if (validated.sie_dim_no === 1 || validated.sie_dim_no === 6) {
+    const { error: ensureError } = await supabase.rpc('ensure_company_dimensions', {
+      p_company_id: companyId,
+    })
+    if (ensureError) {
+      return { error: `Kunde inte skapa systemdimensionerna: ${ensureError.message}`, status: 500 }
+    }
+  }
+
+  const { data: dimension, error: dimError } = await supabase
+    .from('dimensions')
+    .select('id, sie_dim_no, name, resets_annually')
+    .eq('company_id', companyId)
+    .eq('sie_dim_no', validated.sie_dim_no)
+    .maybeSingle()
+
+  if (dimError) return { error: dimError.message, status: 500 }
+  if (!dimension) {
+    return {
+      error:
+        `Okänd dimension ${validated.sie_dim_no}. Endast registrerade dimensioner kan få nya värden ` +
+        '(1 = kostnadsställe och 6 = projekt skapas automatiskt; övriga skapas i registret).',
+      status: 400,
+    }
+  }
+
+  // Value dates only make sense on accumulating dimensions (projekt-style
+  // ranges) — mirrors POST /api/dimensions/[id]/values.
+  if (dimension.resets_annually && (validated.start_date || validated.end_date)) {
+    return {
+      error: `Start-/slutdatum är inte tillåtna på dimensionen "${dimension.name}" (nollställs årligen).`,
+      status: 400,
+    }
+  }
+
+  const { data: created, error: insertError } = await supabase
+    .from('dimension_values')
+    .insert({
+      company_id: companyId,
+      dimension_id: dimension.id,
+      code: validated.code,
+      name: validated.name,
+      start_date: validated.start_date ?? null,
+      end_date: validated.end_date ?? null,
+    })
+    .select('id, code, name, is_active')
+    .single()
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      // Duplicate code — treat the existing value as success (idempotency).
+      const { data: existing, error: existingError } = await supabase
+        .from('dimension_values')
+        .select('id, code, name, is_active')
+        .eq('company_id', companyId)
+        .eq('dimension_id', dimension.id)
+        .eq('code', validated.code)
+        .maybeSingle()
+      if (existingError || !existing) {
+        return { error: insertError.message, status: 500 }
+      }
+      return {
+        data: {
+          dimension_value_id: existing.id,
+          sie_dim_no: dimension.sie_dim_no,
+          dimension_name: dimension.name,
+          code: existing.code,
+          name: existing.name,
+          is_active: existing.is_active,
+          already_existed: true,
+        },
+      }
+    }
+    return { error: insertError.message, status: 500 }
+  }
+
+  return {
+    data: {
+      dimension_value_id: created.id,
+      sie_dim_no: dimension.sie_dim_no,
+      dimension_name: dimension.name,
+      code: created.code,
+      name: created.name,
+      is_active: created.is_active,
+      already_existed: false,
+    },
+  }
+}
+
+/**
+ * Executor for the staged retag_line_dimensions operation
+ * (gnubok_tag_journal_lines — dimensions PR6). Loops the staged line_ids
+ * through the retag_line_dimensions RPC — the ONE audited write path for
+ * changing dimension tags on posted lines. The RPC enforces everything per
+ * line at commit time (open period, company lock date, active registry
+ * values, writer role, posted status) and writes an immutable
+ * dimension_retag_log row before touching the line.
+ *
+ * Partial-success semantics: one line failing (e.g. its period was locked
+ * between staging and approval) must not roll back the lines already
+ * retagged — each RPC call is its own transaction. Failures are collected
+ * and echoed (capped at 20) so the caller can re-stage just the failed set.
+ * Only when EVERY line fails does the operation as a whole fail.
+ */
+async function commitRetagLineDimensions(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so
+  // a tampered pending_operations row cannot inject arbitrary ids or a
+  // malformed bag (ASVS V4.5) — mirrors commitCreateDimensionValue.
+  let validated
+  try {
+    validated = RetagLineDimensionsParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      const path = issue?.path?.join('.') ?? 'params'
+      return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  let retagged = 0
+  let unchanged = 0
+  const failed: Array<{ line_id: string; error: string }> = []
+
+  for (const lineId of validated.line_ids) {
+    const { data, error } = await supabase.rpc('retag_line_dimensions', {
+      p_company_id: companyId,
+      p_line_id: lineId,
+      p_dimensions: validated.dimensions,
+      p_reason: validated.reason,
+      p_user_id: userId,
+    })
+    if (error) {
+      failed.push({ line_id: lineId, error: error.message })
+      continue
+    }
+    if ((data as { changed?: boolean } | null)?.changed) retagged++
+    else unchanged++
+  }
+
+  if (failed.length > 0 && retagged === 0 && unchanged === 0) {
+    return {
+      error: `Ingen rad kunde taggas om (${failed.length} rader misslyckades). Första felet: ${failed[0].error}`,
+      status: 400,
+    }
+  }
+
+  return {
+    data: {
+      retagged,
+      unchanged,
+      failed_count: failed.length,
+      // Echo at most 20 failures — enough to act on without bloating
+      // result_data on a pathological 500-line all-but-one failure.
+      failed: failed.slice(0, 20),
+      dimensions: validated.dimensions,
+      ...(validated.filter_summary ? { filter_summary: validated.filter_summary } : {}),
+    },
+  }
+}
+
 async function commitCreateTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -489,7 +694,11 @@ async function commitCreateInvoice(
     description: string; quantity: number; unit: string; unit_price: number; vat_rate?: number
     article_id?: string | null; revenue_account?: string | null
     line_type?: 'product' | 'text'
+    dimensions?: Record<string, string>
   }>
+  // Dimensions PR7: bags were resolved against the registry at staging time
+  // (resolveDimensionBags in the MCP tool); coerce is the drift/tamper gate.
+  const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
 
   // Free-text rows carry no amounts and never book. The MCP staging tool does
   // not accept line_type today, but the totals math must stay identical to
@@ -591,6 +800,7 @@ async function commitCreateInvoice(
       our_reference: (params.our_reference as string) || null,
       your_reference: (params.your_reference as string) || null,
       notes: (params.notes as string) || null,
+      default_dimensions: defaultDimensions ?? {},
     })
     .select()
     .single()
@@ -615,6 +825,7 @@ async function commitCreateInvoice(
         vat_amount: 0,
         article_id: null,
         revenue_account: null,
+        dimensions: {},
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
@@ -635,6 +846,7 @@ async function commitCreateInvoice(
       // account; null falls back to the VAT-treatment-derived account.
       article_id: item.article_id ?? null,
       revenue_account: item.revenue_account ?? null,
+      dimensions: coerceDimensionsBag(item.dimensions) ?? {},
     }
   })
 
@@ -1864,6 +2076,8 @@ async function commitCreateSupplierInvoiceFromInbox(
   const vatTreatment = (params.vat_treatment as string) || 'standard_25'
   const notes = (params.notes as string | null) ?? null
   const rawItems = (params.items as Array<Record<string, unknown>> | undefined) ?? []
+  // Dimensions PR7: resolved at staging time; coerce is the drift/tamper gate.
+  const defaultDimensions = coerceDimensionsBag(params.default_dimensions)
 
   if (!inboxItemId || !supplierId || !supplierInvoiceNumber || !invoiceDate || rawItems.length === 0) {
     return {
@@ -1968,6 +2182,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       remaining_amount: totalRounded,
       document_id: documentId,
       notes,
+      default_dimensions: defaultDimensions ?? {},
     })
     .select()
     .single()
@@ -2024,6 +2239,7 @@ async function commitCreateSupplierInvoiceFromInbox(
       reverse_charge_rate: reverseCharge
         ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
         : null,
+      dimensions: coerceDimensionsBag(item.dimensions) ?? {},
     }
   })
 
@@ -2231,6 +2447,8 @@ async function commitCreditSupplierInvoice(
       remaining_amount: 0,
       is_credit_note: true,
       credited_invoice_id: id,
+      // Dimensions PR7: copy so the reversal nets against the same cells.
+      default_dimensions: original.default_dimensions ?? {},
     })
     .select()
     .single()
@@ -2249,6 +2467,7 @@ async function commitCreditSupplierInvoice(
     vat_code: item.vat_code,
     vat_rate: item.vat_rate,
     vat_amount: item.vat_amount,
+    dimensions: item.dimensions ?? {},
   }))
   await supabase.from('supplier_invoice_items').insert(creditItems)
 
@@ -2356,6 +2575,8 @@ async function commitCreditInvoice(
       our_reference: original.our_reference,
       notes: reason || `Krediterar faktura ${original.invoice_number}`,
       credited_invoice_id: id,
+      // Dimensions PR7: copy so the reversal nets against the same cells.
+      default_dimensions: original.default_dimensions ?? {},
       status: 'sent',
     })
     .select()
@@ -2377,6 +2598,7 @@ async function commitCreditInvoice(
     vat_amount?: number
     revenue_account?: string | null
     article_id?: string | null
+    dimensions?: Record<string, string>
   }) => ({
     invoice_id: creditNote.id,
     sort_order: item.sort_order,
@@ -2392,6 +2614,8 @@ async function commitCreditInvoice(
     // VAT-derived 3001) so the override account doesn't keep a dangling balance.
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    // Same reasoning for the per-item bag (dimensions PR7).
+    dimensions: item.dimensions ?? {},
   }))
 
   const { error: itemsError } = await supabase
@@ -2519,6 +2743,8 @@ async function commitConvertInvoice(
       notes: proforma.notes,
       document_type: 'invoice',
       converted_from_id: id,
+      // Dimensions PR7: the converted invoice books with the proforma's bag.
+      default_dimensions: proforma.default_dimensions ?? {},
     })
     .select()
     .single()
@@ -2548,6 +2774,7 @@ async function commitConvertInvoice(
     vat_amount: item.vat_amount ?? 0,
     revenue_account: item.revenue_account ?? null,
     article_id: item.article_id ?? null,
+    dimensions: item.dimensions ?? {},
   }))
 
   if (items.length > 0) {
@@ -2667,6 +2894,9 @@ function normalizeVoucherLines(raw: unknown): CreateJournalEntryLineInput[] {
       amount_in_currency: line.amount_in_currency !== undefined ? Number(line.amount_in_currency) : undefined,
       exchange_rate: line.exchange_rate !== undefined ? Number(line.exchange_rate) : undefined,
       tax_code: line.tax_code ? String(line.tax_code) : undefined,
+      // Boundary-validated with the same constraints as the Zod line schema —
+      // staged payloads must not bypass API-layer validation (SOC 2 PI1.1).
+      dimensions: coerceDimensionsBag(line.dimensions),
       cost_center: line.cost_center ? String(line.cost_center) : undefined,
       project: line.project ? String(line.project) : undefined,
     }
@@ -3522,6 +3752,12 @@ async function commitPendingOperationInner(
         break
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_dimension_value':
+        result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'retag_line_dimensions':
+        result = await commitRetagLineDimensions(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_invoice':
         result = await commitCreateInvoice(supabase, userId, companyId, pendingOp.params)

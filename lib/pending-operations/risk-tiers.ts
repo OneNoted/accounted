@@ -27,6 +27,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // update sit at the lowest tier next to create_customer.
   create_article: 'low',
   update_article: 'low',
+  // Dimension values (kostnadsställe/projekt object codes, SIE #OBJEKT) are
+  // reporting master data — no journal impact, no external side-effect, no
+  // payment-routing surface. Staged (agents never silently mint reporting
+  // values) but at the lowest tier next to create_customer/create_article.
+  create_dimension_value: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',
@@ -58,6 +63,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (BFL 5 kap 6 §) and becomes immutable once the JE is posted. Medium so a
   // human confirms the doc-to-verifikat pairing before it locks.
   link_document_to_voucher: 'medium',
+  // Dimension-only diff on posted lines (verifikat stays immutable), fully
+  // audited via dimension_retag_log — but it rewrites reporting history, so
+  // it crosses a human at medium.
+  retag_line_dimensions: 'medium',
 
   // ── High: irreversible, compliance-critical, or external side-effects
   send_invoice: 'high',          // emails the customer

@@ -3,6 +3,7 @@ import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 
 // ============================================================
 // Shared primitives
@@ -292,6 +293,9 @@ export const CreateInvoiceItemSchema = z
     accrual_period_start: isoDate.nullable().optional(),
     accrual_period_end: isoDate.nullable().optional(),
     accrual_balance_account: deferredRevenueAccount.nullable().optional(),
+    // Dimensions PR7: per-item bag merged over the invoice's
+    // default_dimensions on the revenue line this item books to.
+    dimensions: DimensionsBagSchema.optional(),
   })
   .superRefine((item, ctx) => {
     validateAccrualPeriod(item, ctx)
@@ -365,6 +369,9 @@ export const CreateInvoiceSchema = z.object({
   // Per-invoice öresavrundning toggle (display-only). Omitted → stored as null,
   // which inherits company_settings.ore_rounding when rendering totals.
   ore_rounding: z.boolean().optional(),
+  // Dimensions PR7: invoice-level bag applied to every generated journal line;
+  // items[].dimensions merge over it per revenue line.
+  default_dimensions: DimensionsBagSchema.optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
@@ -521,6 +528,9 @@ export const MarkInvoicePaidSchema = z.object({
     debit_amount: nonNegativeAmount.default(0),
     credit_amount: nonNegativeAmount.default(0),
     line_description: z.string().optional(),
+    // Dimensions PR7: user-edited payment lines keep their tags (the
+    // no-override path re-propagates the invoice's default_dimensions).
+    dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
   // Bypass the duplicate-payment guard. Set after the user reviews the
   // candidate list returned by INVOICE_PAID_LIKELY_DUPLICATE and confirms
@@ -621,6 +631,9 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   accrual_period_start: isoDate.nullable().optional(),
   accrual_period_end: isoDate.nullable().optional(),
   accrual_balance_account: prepaidExpenseAccount.nullable().optional(),
+  // Dimensions PR7: per-item bag merged over the invoice's
+  // default_dimensions on the expense line this item books to.
+  dimensions: DimensionsBagSchema.optional(),
 }).refine(
   (item) => {
     if (item.vat_amount == null) return true
@@ -671,6 +684,9 @@ export const CreateSupplierInvoiceSchema = z.object({
   // For paid_with_private_funds: the date the owner paid out-of-pocket.
   // Defaults to invoice_date (common for kvitto where the two coincide).
   payment_date: isoDate.optional(),
+  // Dimensions PR7: invoice-level bag applied to every generated journal line;
+  // items[].dimensions merge over it per expense line.
+  default_dimensions: DimensionsBagSchema.optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
@@ -692,6 +708,9 @@ export const MarkSupplierInvoicePaidSchema = z.object({
     debit_amount: nonNegativeAmount.default(0),
     credit_amount: nonNegativeAmount.default(0),
     line_description: z.string().optional(),
+    // Dimensions PR7: user-edited payment lines keep their tags (the
+    // no-override path re-propagates the invoice's default_dimensions).
+    dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
 })
 
@@ -717,6 +736,13 @@ export const CreateJournalEntryLineSchema = z.object({
   amount_in_currency: z.number().optional(),
   exchange_rate: z.number().positive().optional(),
   tax_code: z.string().optional(),
+  // SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}.
+  // Single source of truth for the constraints lives in dimension-resolver so
+  // the staged pending-operations path validates identically. Wins per key
+  // over the cost_center/project aliases.
+  dimensions: DimensionsBagSchema.optional(),
+  // Deprecated aliases for dimensions['1'] / dimensions['6'] — kept forever
+  // for API/MCP compatibility.
   cost_center: z.string().optional(),
   project: z.string().optional(),
 })
@@ -735,6 +761,84 @@ export const CreateJournalEntrySchema = z.object({
 export const CorrectJournalEntrySchema = z.object({
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
 })
+
+// ============================================================
+// Dimension registry schemas (kostnadsställe/projekt)
+// ============================================================
+// dev_docs/dimensions_implementation_plan.md §6. The registry tables
+// (dimensions/dimension_values) shipped in 20260702084500_dimensions_substrate.
+
+/**
+ * Object code for USER-CREATED dimension values: strict Fortnox format.
+ * Deliberately tighter than both the DB CHECK (1..40 chars, no `"{}`') and
+ * DimensionsBagSchema (line-level values) — legacy free-text codes from the
+ * backfill/SIE import must survive on lines, but new registry codes minted
+ * through the API stay portable to Fortnox/Visma.
+ */
+const dimensionValueCode = z
+  .string()
+  .regex(
+    /^[A-Za-z0-9ÅÄÖåäö_+\-]{1,20}$/,
+    'Koden får bara innehålla bokstäver (A–Ö), siffror, _, + och - (max 20 tecken)',
+  )
+
+const dimensionValueDates = {
+  start_date: isoDate.nullable().optional(),
+  end_date: isoDate.nullable().optional(),
+}
+
+/** PATCH /api/dimensions/[id] — name is rejected route-side for is_system dims. */
+export const UpdateDimensionSchema = z
+  .object({
+    name: z.string().min(1).max(80).optional(),
+    is_active: z.boolean().optional(),
+    sort_order: z.number().int().min(0).optional(),
+  })
+  .refine((body) => Object.values(body).some((v) => v !== undefined), {
+    message: 'Minst ett fält måste anges',
+  })
+
+/** POST /api/dimensions/[id]/values — code is immutable after creation (v1: no rename). */
+export const CreateDimensionValueSchema = z
+  .object({
+    code: dimensionValueCode,
+    name: z.string().min(1).max(120),
+    /** Omitted → true. Lets "create as archived" be a single atomic POST. */
+    is_active: z.boolean().optional(),
+    ...dimensionValueDates,
+  })
+  .refine(
+    (body) => !body.start_date || !body.end_date || body.end_date >= body.start_date,
+    { message: 'Slutdatum får inte vara före startdatum', path: ['end_date'] },
+  )
+
+/**
+ * POST /api/bookkeeping/journal-entry-lines/[lineId]/retag — Tier-2 retro-
+ * tagging (dimensions plan PR6). The RPC enforces every rule (posted only,
+ * open period, lock date, active registry values); this schema only shapes
+ * the request. An empty bag {} untags the line.
+ */
+export const RetagLineDimensionsSchema = z.object({
+  // {} passes (no entries to validate) = UNTAG. Intentional divergence from
+  // the MCP staged path (RetagLineDimensionsParamsSchema), which rejects an
+  // empty bag: a human clearing phantom tags via the dialog/workbench is a
+  // deliberate act with a logged reason; an agent bulk-clearing history is
+  // not something we allow to be staged. The retag log records {} as the
+  // new value either way (#867 review).
+  dimensions: DimensionsBagSchema,
+  reason: z.string().min(3).max(500),
+})
+
+/** PATCH /api/dimensions/[id]/values/[valueId] — no `code` field by design. */
+export const UpdateDimensionValueSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    is_active: z.boolean().optional(),
+    ...dimensionValueDates,
+  })
+  .refine((body) => Object.values(body).some((v) => v !== undefined), {
+    message: 'Minst ett fält måste anges',
+  })
 
 /**
  * Move a posted verifikation to a different date (and thereby fiscal period)
@@ -960,11 +1064,17 @@ export const BulkBookSchema = z
           credit_amount: nonNegativeAmount.max(99_999_999, 'Line amount exceeds maximum'),
           currency: z.string().min(3).max(3).default('SEK'),
           line_description: z.string().max(200).optional(),
+          // Dimensions PR7: per-line bag, wins over default_dimensions.
+          dimensions: DimensionsBagSchema.optional(),
         })
       )
       .min(2, 'A verifikat needs at least two lines')
       .max(200)
       .optional(),
+    // Dimensions PR7: header-level bag applied to every generated line in
+    // BOTH the template and manual paths (per-line bags win per key). The
+    // route merges before calling the RPC.
+    default_dimensions: DimensionsBagSchema.optional(),
   })
   .superRefine((data, ctx) => {
     const hasExisting = !!data.existing_journal_entry_id
@@ -1217,6 +1327,9 @@ export const UpdateSettingsSchema = z.object({
     .optional(),
   // AI agent flow
   ai_flow_enabled: z.boolean().optional(),
+  // Dimensions (kostnadsställe/projekt) — UI-visibility toggle only, never
+  // load-bearing for correctness (dev_docs/dimensions_implementation_plan.md §2).
+  dimensions_enabled: z.boolean().optional(),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
 }).refine(
@@ -1622,6 +1735,9 @@ const EmployeeSchemaBase = z.object({
   vaxa_stod_eligible: z.boolean().default(false),
   vaxa_stod_start: isoDate.optional(),
   vaxa_stod_end: isoDate.optional(),
+  // Dimensions PR8: bag applied to the employee's P&L cost lines when a
+  // salary run is booked. {} clears (the UI always sends the field).
+  default_dimensions: DimensionsBagSchema.optional(),
 })
 
 export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) => {
@@ -2119,3 +2235,49 @@ export const SalaryEmployeeOverrideSchema = z
     },
   )
 
+
+// ============================================================
+// Dimensions PR6 — bulk retro-tagging workbench (appended at end
+// of file by PR6 to avoid conflicts; keep new schemas below).
+// ============================================================
+
+/**
+ * Query filters for GET /api/dimensions/tagging/lines (the BulkTagWorkbench
+ * line browser). All filters optional; `limit` is a hard cap (default 200,
+ * max 500) — the route fetches limit+1 and reports `total_capped` instead of
+ * paginating (dimensions plan §3, v1 scope).
+ */
+export const DimensionTaggingLinesQuerySchema = z.object({
+  period_id: uuid.optional(),
+  date_from: saneIsoDate.optional(),
+  date_to: saneIsoDate.optional(),
+  account_from: accountNumber.optional(),
+  account_to: accountNumber.optional(),
+  /** Free-text ilike filter on journal_entries.description. */
+  text: z.string().trim().max(200).optional(),
+  /** '1' → only vouchers with at least one untagged line ({} dimensions). */
+  only_untagged: z.enum(['0', '1']).optional(),
+  /**
+   * '1' → include reversal pairs (annulled entries + their stornos). Excluded
+   * by default: a pair nets to zero in every dimension bucket when both sides
+   * carry the same tag, so retro-tagging it is a no-op — and showing it
+   * invites tagging one side only, which skews project P&L.
+   */
+  include_annulled: z.enum(['0', '1']).optional(),
+  /** Cap counts VOUCHERS since the voucher-level rework. */
+  limit: z.coerce.number().int().min(1).max(300).default(150),
+})
+
+/**
+ * Body for POST /api/dimensions/tagging/apply. One dimensions object applied
+ * to every listed line via the retag_line_dimensions RPC (the UI groups
+ * selected lines by their computed resulting map and issues one POST per
+ * distinct map). `dimensions` reuses THE bag schema so validation cannot
+ * drift from the engine/API layers; an empty bag is allowed — replace mode
+ * uses it to clear phantom tags. `reason` mirrors the RPC's >= 3 chars CHECK.
+ */
+export const DimensionTaggingApplySchema = z.object({
+  line_ids: z.array(uuid).min(1).max(500),
+  dimensions: DimensionsBagSchema,
+  reason: z.string().trim().min(3).max(500),
+})

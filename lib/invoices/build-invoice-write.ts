@@ -55,6 +55,8 @@ export interface InvoiceWriteItemInput {
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
+  /** Dimensions PR7: per-item bag merged over the invoice default at booking. */
+  dimensions?: Record<string, string>
 }
 
 export interface InvoiceWriteInput {
@@ -73,6 +75,8 @@ export interface InvoiceWriteInput {
   /** ROT i bostadsrätt: lägenhetsnummer + föreningens orgnr instead of fastighetsbeteckning. */
   deduction_apartment_number?: string
   deduction_brf_org_number?: string
+  /** Dimensions PR7: invoice-level bag applied to every generated journal line. */
+  default_dimensions?: Record<string, string>
   items: InvoiceWriteItemInput[]
 }
 
@@ -106,6 +110,7 @@ export type InvoiceWriteFields = {
   deduction_total: number
   deduction_personnummer_encrypted: string | null
   deduction_personnummer_last4: string | null
+  default_dimensions: Record<string, string>
 }
 
 export type InvoiceWriteItemRow = {
@@ -130,6 +135,7 @@ export type InvoiceWriteItemRow = {
   accrual_period_start: string | null
   accrual_period_end: string | null
   accrual_balance_account: string | null
+  dimensions: Record<string, string>
 }
 
 export type BuildInvoiceWriteResult =
@@ -365,6 +371,8 @@ export async function buildInvoiceWriteData(params: {
     deduction_total: deductionTotal,
     deduction_personnummer_encrypted: deductionPersonnummerEncrypted,
     deduction_personnummer_last4: deductionPersonnummerLast4,
+    // Dimensions PR7: stored as-is; the generators coerce + merge at booking.
+    default_dimensions: input.default_dimensions ?? {},
   }
 
   const itemRows: InvoiceWriteItemRow[] = items.map((item, index) => {
@@ -394,6 +402,7 @@ export async function buildInvoiceWriteData(params: {
         accrual_period_start: null,
         accrual_period_end: null,
         accrual_balance_account: null,
+        dimensions: {},
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
@@ -461,6 +470,7 @@ export async function buildInvoiceWriteData(params: {
         documentType === 'invoice' && !deductionType && item.accrual_period_start && item.accrual_period_end
           ? (item.accrual_balance_account ?? DEFAULT_DEFERRED_REVENUE_ACCOUNT)
           : null,
+      dimensions: item.dimensions ?? {},
     }
   })
 
