@@ -86,6 +86,7 @@ export type RotRutBlockerCode =
   | 'PROPERTY_TOO_LONG'
   | 'PRICE_BELOW_MINIMUM'
   | 'DEDUCTION_EXCEEDS_PAYMENT'
+  | 'ZERO_DEDUCTION'
 
 export interface RotRutBlocker {
   invoice_id: string
@@ -140,7 +141,9 @@ function isDeductionLine(item: InvoiceItem, type: DeductionType): boolean {
  */
 export function normalizeBrfOrgNr(raw: string): string | null {
   const digits = raw.replace(/\D/g, '')
-  if (digits.length === 12) return digits
+  // 12-digit orgnr must carry sekelsiffra 16 (juridisk person) — anything
+  // else is not a valid Swedish orgnr and fails SKV's schema at upload.
+  if (digits.length === 12) return digits.startsWith('16') ? digits : null
   if (digits.length === 10) return `16${digits}`
   return null
 }
@@ -277,6 +280,11 @@ export function evaluateInvoiceForFile(
   const betaltBelopp = prisForArbete - begartBelopp
   if (prisForArbete < 2) {
     return block('PRICE_BELOW_MINIMUM', 'Arbetskostnaden måste vara minst 2 kr (Skatteverkets filformat).')
+  }
+  // A zero-kronor ärende is rejected (or silently ignored) by Skatteverket —
+  // an invoice whose deduction rounds to 0 has nothing to request.
+  if (begartBelopp < 1) {
+    return block('ZERO_DEDUCTION', 'Fakturans ROT/RUT-avdrag är 0 kr — det finns inget belopp att begära.')
   }
   // The buyer must have paid at least as much as is being requested
   // (skattereduktionen är max 50 % av arbetskostnaden). Independent rounding

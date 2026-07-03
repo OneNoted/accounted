@@ -440,7 +440,8 @@ describe('CreateInvoiceItemSchema', () => {
   })
 
   it('rejects malformed brf_org_number values', () => {
-    for (const value of ['---', '123', '76-96000000', 'ABC600-0000']) {
+    // incl. a 12-digit value without the mandatory sekelsiffra 16 prefix
+    for (const value of ['---', '123', '76-96000000', 'ABC600-0000', '123456789012']) {
       const result = CreateInvoiceItemSchema.safeParse(validInvoiceItem({ brf_org_number: value }))
       expect(result.success).toBe(false)
     }

@@ -319,6 +319,17 @@ describe('eligibility blockers', () => {
     if (!result.ok) expect(result.blocker.code).toBe('PRICE_BELOW_MINIMUM')
   })
 
+  it('ZERO_DEDUCTION when the deduction rounds to 0 kr', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({}, [
+        makeItem({ line_total: 100, vat_amount: 25, deduction_amount: 0, labor_hours: 1 }),
+      ]),
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('ZERO_DEDUCTION')
+  })
+
   it('DEDUCTION_EXCEEDS_PAYMENT when begärt belopp exceeds what the buyer paid', () => {
     // 100 kr work, 60 kr deduction → buyer paid 40 kr < 60 kr requested.
     const result = evaluateInvoiceForFile(
@@ -392,6 +403,8 @@ describe('deadline + helpers', () => {
     expect(normalizeBrfOrgNr('769600-0000')).toBe('167696000000')
     expect(normalizeBrfOrgNr('167696000000')).toBe('167696000000')
     expect(normalizeBrfOrgNr('76960')).toBeNull()
+    // 12 digits without the sekelsiffra 16 prefix is not a valid orgnr.
+    expect(normalizeBrfOrgNr('123456789012')).toBeNull()
   })
 
   it('matches the shape of Skatteverkets official rot example', () => {

@@ -291,7 +291,7 @@ export const CreateInvoiceItemSchema = z
     // the whole file at upload time. Empty string = cleared field → null.
     brf_org_number: z
       .union([
-        z.string().regex(/^(\d{6}-?\d{4}|\d{12})$/, 'Ogiltigt organisationsnummer (10 siffror, ev. med bindestreck)'),
+        z.string().regex(/^(\d{6}-?\d{4}|16\d{10})$/, 'Ogiltigt organisationsnummer (10 siffror, ev. med bindestreck)'),
         z.literal(''),
       ])
       .transform((v) => v || null)
@@ -373,7 +373,7 @@ export const CreateInvoiceSchema = z.object({
   // Same orgnr shape rule as items[].brf_org_number; empty string = not set.
   deduction_brf_org_number: z
     .union([
-      z.string().regex(/^(\d{6}-?\d{4}|\d{12})$/, 'Ogiltigt organisationsnummer (10 siffror, ev. med bindestreck)'),
+      z.string().regex(/^(\d{6}-?\d{4}|16\d{10})$/, 'Ogiltigt organisationsnummer (10 siffror, ev. med bindestreck)'),
       z.literal(''),
     ])
     .transform((v) => v || undefined)

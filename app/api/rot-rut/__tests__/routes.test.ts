@@ -443,9 +443,9 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
     expect(response.status).toBe(400)
   })
 
-  it('books a partial payout as partially_paid', async () => {
+  it('books a partial payout as partially_paid once the beslut is recorded', async () => {
     mockCreatePayoutEntry.mockResolvedValue({ id: 'je-2' })
-    enqueue({ data: makePayoutRequestRow({ status: 'submitted' }) })
+    enqueue({ data: makePayoutRequestRow({ status: 'submitted', decided_total: 2000 }) })
     enqueue({
       data: makePayoutRequestRow({ status: 'partially_paid', decided_total: 2000 }),
     })
@@ -461,6 +461,23 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
 
     expect(status).toBe(200)
     expect(body.data.request.status).toBe('partially_paid')
+  })
+
+  it('refuses a partial settlement before the beslut is recorded', async () => {
+    enqueue({ data: makePayoutRequestRow({ status: 'submitted', decided_total: null }) })
+
+    const response = await settlePOST(
+      createMockRequest(`/api/rot-rut/payout-requests/${REQUEST_ID}/settle`, {
+        method: 'POST',
+        body: { payment_date: '2026-07-10', amount: 2000 },
+      }),
+      routeParams,
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).not.toBe(200)
+    expect(body.error.code).toBe('ROT_RUT_SETTLE_INVALID_STATE')
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
   })
 
   it('returns 500 and does not update the request when the engine fails', async () => {

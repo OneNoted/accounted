@@ -98,16 +98,27 @@ $function$;
 -- schema — the table on staging is drift. That policy is intentionally NOT
 -- recreated here; a from-scratch migration chain would fail on it.
 
-DROP POLICY IF EXISTS automation_webhooks_insert ON public.automation_webhooks;
-CREATE POLICY automation_webhooks_insert ON public.automation_webhooks FOR INSERT TO public
+-- automation_webhooks was renamed to public.webhooks by
+-- 20260515170000_webhooks_v2 — the staging catalog still carried the
+-- pre-rename table name (drift). Gate the canonical table, dropping both the
+-- staging-era policy names and the legacy schema-sync names defensively
+-- (policies follow a table rename but keep their original names).
+DROP POLICY IF EXISTS automation_webhooks_insert ON public.webhooks;
+DROP POLICY IF EXISTS "Members can insert company webhooks" ON public.webhooks;
+DROP POLICY IF EXISTS webhooks_insert ON public.webhooks;
+CREATE POLICY webhooks_insert ON public.webhooks FOR INSERT TO public
   WITH CHECK (((company_id = current_active_company_id()) AND current_user_can_write()));
 
-DROP POLICY IF EXISTS automation_webhooks_update ON public.automation_webhooks;
-CREATE POLICY automation_webhooks_update ON public.automation_webhooks FOR UPDATE TO public
+DROP POLICY IF EXISTS automation_webhooks_update ON public.webhooks;
+DROP POLICY IF EXISTS "Members can update company webhooks" ON public.webhooks;
+DROP POLICY IF EXISTS webhooks_update ON public.webhooks;
+CREATE POLICY webhooks_update ON public.webhooks FOR UPDATE TO public
   USING (((company_id = current_active_company_id()) AND current_user_can_write()));
 
-DROP POLICY IF EXISTS automation_webhooks_delete ON public.automation_webhooks;
-CREATE POLICY automation_webhooks_delete ON public.automation_webhooks FOR DELETE TO public
+DROP POLICY IF EXISTS automation_webhooks_delete ON public.webhooks;
+DROP POLICY IF EXISTS "Members can delete company webhooks" ON public.webhooks;
+DROP POLICY IF EXISTS webhooks_delete ON public.webhooks;
+CREATE POLICY webhooks_delete ON public.webhooks FOR DELETE TO public
   USING (((company_id = current_active_company_id()) AND current_user_can_write()));
 
 DROP POLICY IF EXISTS bank_connections_insert ON public.bank_connections;
@@ -666,6 +677,7 @@ SET search_path = public
 AS $function$
 DECLARE
   v_next integer;
+  v_user_id uuid;
   v_jwt_role text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
 BEGIN
   IF v_jwt_role IN ('anon', 'authenticated')
@@ -674,8 +686,22 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
+  -- Preserved from 20260623130000: under a service-role client auth.uid() is
+  -- NULL and the INSERT would fail user_id NOT NULL before ON CONFLICT
+  -- arbitration — fall back to the company owner.
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    SELECT created_by INTO v_user_id
+    FROM public.companies
+    WHERE id = p_company_id;
+  END IF;
+
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'next_voucher_number: no attributable user for company %', p_company_id;
+  END IF;
+
   INSERT INTO public.voucher_sequences (company_id, user_id, fiscal_period_id, voucher_series, last_number)
-  VALUES (p_company_id, auth.uid(), p_fiscal_period_id, p_series, 1)
+  VALUES (p_company_id, v_user_id, p_fiscal_period_id, p_series, 1)
   ON CONFLICT (company_id, fiscal_period_id, voucher_series)
   DO UPDATE SET
     last_number = public.voucher_sequences.last_number + 1,

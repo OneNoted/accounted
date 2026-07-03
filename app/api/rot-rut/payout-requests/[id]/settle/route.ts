@@ -60,6 +60,22 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const amount =
       input.amount ?? Number(payoutRequest.decided_total ?? payoutRequest.requested_total)
 
+    // A partial settlement must follow a recorded beslut: without this guard a
+    // settle with amount < requested_total on an undecided request would flip
+    // it to partially_paid while bypassing the PATCH lifecycle rule that
+    // partially_paid requires decided_total — the beslut would never be
+    // recorded and later PATCH calls would be blocked by ALLOWED_TRANSITIONS.
+    if (amount < Number(payoutRequest.requested_total) && payoutRequest.decided_total == null) {
+      return errorResponseFromCode('ROT_RUT_SETTLE_INVALID_STATE', log, {
+        requestId,
+        details: {
+          status: payoutRequest.status,
+          reason:
+            'Delutbetalning kräver att Skatteverkets beslut registreras först (decided_total via PATCH).',
+        },
+      })
+    }
+
     // The voucher is the accounting record — engine failure must block.
     let journalEntryId: string
     try {
