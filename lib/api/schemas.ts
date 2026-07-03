@@ -4,6 +4,7 @@ import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import type { AuditAction } from '@/types'
 
 // ============================================================
 // Shared primitives
@@ -1585,6 +1586,28 @@ export const PendingOperationsQuerySchema = z.object({
 
 export const PendingOperationsBulkSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
+})
+
+// ============================================================
+// Audit trail schemas
+// ============================================================
+
+// `satisfies` keeps every filter value a member of the AuditAction union —
+// adding a bogus value here fails the typecheck.
+const auditActions = [
+  'INSERT', 'UPDATE', 'DELETE', 'COMMIT', 'REVERSE', 'CORRECT',
+  'LOCK_PERIOD', 'CLOSE_PERIOD', 'DOCUMENT_DELETE_BLOCKED',
+  'RETENTION_BLOCK', 'SECURITY_EVENT', 'INTEGRITY_FAILURE',
+] as const satisfies readonly AuditAction[]
+
+export const AuditTrailQuerySchema = z.object({
+  action: z.enum(auditActions).optional(),
+  table_name: z.string().min(1).optional(),
+  record_id: z.string().min(1).optional(),
+  from_date: isoDate.optional(),
+  to_date: isoDate.optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  page_size: z.coerce.number().int().min(1).max(200).default(50),
 })
 
 // ============================================================
