@@ -237,6 +237,9 @@ export async function createDraftEntry(
   // every company by default — returns the input untouched; a failed rule
   // fetch fails open like the soft validation below.
   const rules = await fetchActiveDimensionRules(supabase, companyId)
+  if (rules === null) {
+    log.warn('dimension rule fetch failed — defaults/fixed skipped (fail-open)', { companyId })
+  }
   const lines = rules ? applyDimensionRules(input.lines, rules) : input.lines
 
   // Soft dimension validation (dimensions plan PR3): free for untagged
@@ -423,6 +426,9 @@ export async function updateDraftEntry(
   // a rejection leaves both the header and the existing lines untouched.
   // Account dimension rules (PR10) apply first — same as create.
   const rules = await fetchActiveDimensionRules(supabase, companyId)
+  if (rules === null) {
+    log.warn('dimension rule fetch failed — defaults/fixed skipped (fail-open)', { companyId })
+  }
   const lines = rules ? applyDimensionRules(input.lines, rules) : input.lines
   await validateEntryDimensions(supabase, companyId, lines)
 
@@ -550,12 +556,25 @@ export async function commitEntry(
   // block bookkeeping). Reversal/correction paths never pass through
   // commitEntry, so history always reverses regardless of policy.
   const rules = await fetchActiveDimensionRules(supabase, companyId)
-  if (rules && rules.some((r) => r.rule_type === 'required')) {
-    const { data: ruleLines } = await supabase
+  if (rules === null) {
+    // Deliberate fail-open, but LOUD: a transient policy-table error must not
+    // block month-end bookings company-wide, yet a silently skipped control
+    // is invisible — the warning makes the degradation observable.
+    log.warn('dimension rule fetch failed — mandatory enforcement skipped (fail-open)', {
+      companyId,
+      entityId: entryId,
+    })
+  } else if (rules.some((r) => r.rule_type === 'required')) {
+    const { data: ruleLines, error: ruleLinesError } = await supabase
       .from('journal_entry_lines')
       .select('account_number, dimensions')
       .eq('journal_entry_id', entryId)
-    if (ruleLines) {
+    if (ruleLinesError || !ruleLines) {
+      log.warn('line fetch for mandatory dimension check failed — enforcement skipped (fail-open)', {
+        companyId,
+        entityId: entryId,
+      })
+    } else {
       assertMandatoryDimensions(
         ruleLines as Array<{ account_number: string; dimensions: Record<string, string> }>,
         rules

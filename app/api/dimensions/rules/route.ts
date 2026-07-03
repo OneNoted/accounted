@@ -14,8 +14,8 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { validateBody } from '@/lib/api/validate'
-import { CreateAccountDimensionRuleSchema } from '@/lib/api/schemas'
+import { validateBody, validateQuery } from '@/lib/api/validate'
+import { CreateAccountDimensionRuleSchema, ListDimensionRulesQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { RULE_SELECT, toRuleDto, type RawRule } from './dto'
 
@@ -26,7 +26,13 @@ export const GET = withRouteContext(
   'dimension.rules.list',
   async (request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
-    const accountNumber = new URL(request.url).searchParams.get('account_number')
+
+    const queryValidation = validateQuery(request, ListDimensionRulesQuerySchema, {
+      log,
+      operation: 'dimension.rules.list',
+    })
+    if (!queryValidation.success) return queryValidation.response
+    const { account_number: accountNumber } = queryValidation.data
 
     let query = supabase
       .from('account_dimension_rules')
@@ -35,12 +41,6 @@ export const GET = withRouteContext(
       .order('account_number', { ascending: true })
 
     if (accountNumber) {
-      if (!/^\d{4}$/.test(accountNumber)) {
-        return NextResponse.json(
-          { error: { code: 'VALIDATION_FAILED', message: 'account_number måste vara 4 siffror.' } },
-          { status: 400 },
-        )
-      }
       query = query.eq('account_number', accountNumber)
     }
 

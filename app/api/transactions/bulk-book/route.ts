@@ -255,6 +255,9 @@ export const POST = withRouteContext(
     // the engine).
     if (newEntryPayload) {
       const rules = await fetchActiveDimensionRules(supabase, companyId!)
+      if (rules === null) {
+        opLog.warn('dimension rule fetch failed — policy skipped (fail-open)')
+      }
       if (rules && rules.length > 0) {
         newEntryPayload.lines = applyDimensionRules(newEntryPayload.lines, rules)
         try {

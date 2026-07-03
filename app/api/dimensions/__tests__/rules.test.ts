@@ -139,10 +139,11 @@ describe('GET /api/dimensions/rules', () => {
       createMockRequest('/api/dimensions/rules', { searchParams: { account_number: '40' } }),
       noParams,
     )
-    const { status, body } = await parseJsonResponse<ErrorBody>(response)
+    const { status, body } = await parseJsonResponse<{ type: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error.code).toBe('VALIDATION_FAILED')
+    // validateQuery's canonical envelope (review fix: inline regex → schema).
+    expect(body.type).toBe('validation_error')
   })
 })
 

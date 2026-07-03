@@ -191,22 +191,36 @@ export const POST = withRouteContext(
       }
     }
 
-    const { data: dimension, error: insertError } = await supabase
-      .from('dimensions')
-      .insert({
-        company_id: companyId,
-        sie_dim_no: sieDimNo,
-        name: body.name,
-        parent_sie_dim_no: body.parent_sie_dim_no ?? null,
-        resets_annually: body.resets_annually ?? true,
-        is_system: false,
-        is_active: true,
-        // System dims 1/6 sit at sort_order 10/20 (substrate seeding); custom
-        // dims trail them by default.
-        sort_order: 100,
-      })
-      .select('id, sie_dim_no, name, parent_sie_dim_no, resets_annually, is_system, is_active, sort_order')
-      .single()
+    const autoPicked = body.sie_dim_no === undefined
+    const insertDimension = (dimNo: number) =>
+      supabase
+        .from('dimensions')
+        .insert({
+          company_id: companyId,
+          sie_dim_no: dimNo,
+          name: body.name,
+          parent_sie_dim_no: body.parent_sie_dim_no ?? null,
+          resets_annually: body.resets_annually ?? true,
+          is_system: false,
+          is_active: true,
+          // System dims 1/6 sit at sort_order 10/20 (substrate seeding); custom
+          // dims trail them by default.
+          sort_order: 100,
+        })
+        .select('id, sie_dim_no, name, parent_sie_dim_no, resets_annually, is_system, is_active, sort_order')
+        .single()
+
+    let { data: dimension, error: insertError } = await insertDimension(sieDimNo)
+
+    // Auto-picked numbers can race a concurrent create/SIE import between the
+    // read and the insert — the UNIQUE is the arbiter; retry once past the
+    // loser instead of surfacing a spurious "finns redan" for a number the
+    // user never chose. Explicitly chosen numbers still 409.
+    if (insertError?.code === '23505' && autoPicked) {
+      sieDimNo++
+      while (taken.has(sieDimNo)) sieDimNo++
+      ;({ data: dimension, error: insertError } = await insertDimension(sieDimNo))
+    }
 
     if (insertError) {
       if (insertError.code === '23505') {

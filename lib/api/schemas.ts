@@ -855,6 +855,11 @@ export const CreateDimensionSchema = z.object({
 
 const AccountDimensionRuleTypeSchema = z.enum(['required', 'default', 'fixed'])
 
+/** GET /api/dimensions/rules query — optional exact-account filter. */
+export const ListDimensionRulesQuerySchema = z.object({
+  account_number: accountNumber.optional(),
+})
+
 /**
  * POST /api/dimensions/rules — per-account dimension policy (dimensions
  * PR10). 'required' carries no value; 'default'/'fixed' must carry the value
