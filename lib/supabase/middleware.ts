@@ -222,12 +222,13 @@ export async function updateSession(request: NextRequest) {
       return supabaseResponse
     }
 
+    // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
+    // 20260506160000) — it cannot live in extension_data, which is
+    // company-scoped, and the user has no company yet on this path.
     const { data: enrichmentRow } = await supabase
-      .from('extension_data')
-      .select('id')
+      .from('bankid_enrichment')
+      .select('user_id')
       .eq('user_id', user.id)
-      .eq('extension_id', 'tic')
-      .eq('key', 'bankid_enrichment')
       .maybeSingle()
 
     const destination = enrichmentRow ? '/select-company' : '/onboarding'
