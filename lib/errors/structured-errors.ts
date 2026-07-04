@@ -1308,6 +1308,17 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsperioden är låst.',
     message_en: 'Fiscal period is locked.',
   },
+  OB_COMPANY_LOCK_DATE: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringen är låst t.o.m. ett låsdatum som täcker periodens start — ingående balanser kan inte korrigeras. Ta bort eller flytta låsdatumet under Inställningar → Bokföring och försök igen.',
+    message_en:
+      'The company-wide bookkeeping lock date covers the period start — opening balances cannot be corrected. Remove or move the lock date under Settings → Bookkeeping and try again.',
+    remediation: {
+      description:
+        'Clear or move the bookkeeping lock date (company_settings.bookkeeping_locked_through) to a date before the period start, then retry the correction.',
+    },
+  },
   OB_PERIOD_ALREADY_HAS_BALANCES: {
     httpStatus: 409,
     message_sv: 'Räkenskapsperioden har redan ingående balanser.',
