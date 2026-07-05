@@ -1,6 +1,7 @@
 import type { BookingTemplateCategory, BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { roundOre } from '@/lib/money'
 
 /**
  * Prefix for library template ids when they are mapped into the
@@ -236,7 +237,7 @@ export function deriveTemplateLinesFromBooking(
 
   const sumDebit = parsed.reduce((s, r) => (r.side === 'debit' ? s + r.amount : s), 0)
   const sumCredit = parsed.reduce((s, r) => (r.side === 'credit' ? s + r.amount : s), 0)
-  const total = Math.round(Math.max(sumDebit, sumCredit) * 100) / 100
+  const total = roundOre(Math.max(sumDebit, sumCredit))
   if (total <= 0) return []
 
   const isVat = (account: string) => account.startsWith('26')
