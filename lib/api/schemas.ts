@@ -1458,6 +1458,19 @@ export const UpdateAccountSchema = z.object({
   sru_code: z.string().nullable().optional(),
 })
 
+// Looser account-number shape than the 4-digit primitive on purpose: imported
+// charts can carry non-standard numbers (sub-accounts like '19301'), and those
+// are exactly the rows the prune flow exists to remove.
+export const PruneAccountsSchema = z
+  .object({
+    dry_run: z.boolean(),
+    account_numbers: z.array(z.string().min(1).max(10)).max(2000).optional(),
+  })
+  .refine((v) => v.dry_run || (v.account_numbers?.length ?? 0) > 0, {
+    message: 'account_numbers is required when dry_run is false',
+    path: ['account_numbers'],
+  })
+
 // ============================================================
 // Bank reconciliation schemas
 // ============================================================
