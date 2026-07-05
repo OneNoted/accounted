@@ -15,6 +15,70 @@
 -- auth.uid() (p_user_id must match the JWT subject, no spoofing); service_role
 -- and direct/no-claims callers (MCP / API-key / migrations / pg-harness) trust
 -- p_user_id, which is still membership-checked below.
+--
+-- Also fixes a durability regression in 20260704103000: that migration guarded
+-- journal_entry_id at the entry-level trigger but delegated journal_entry_line_id
+-- to the metadata trigger, which exempts draft-linked documents. That let a set
+-- journal_entry_line_id be cleared to NULL on a draft-linked doc, breaking the
+-- "link durable from first set" invariant (document-immutability.pg). Restore
+-- line-id durability in the entry-level trigger (status-independent), exempting
+-- only the correction-relink path, which legitimately clears line_id when it
+-- moves the underlag from the reversed original to its posted correction.
+
+-- Entry-level link trigger: journal_entry_id AND journal_entry_line_id are both
+-- durable once set. uuid -> uuid moves and the line-id clear happen only under
+-- the correction-relink GUC.
+CREATE OR REPLACE FUNCTION public.enforce_document_journal_entry_immutability()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF current_setting('gnubok.allow_delete', true) = 'true' THEN
+    RETURN NEW;
+  END IF;
+
+  -- Correction relink: set ONLY by relink_documents_to_correction() after it
+  -- has validated the correction chain. It moves journal_entry_id uuid -> uuid
+  -- and clears journal_entry_line_id to NULL. Both are allowed only here, and
+  -- only as long as journal_entry_id is not itself cleared (a NULL there would
+  -- be a soft-delete bypass of BFL 7 kap 2 §).
+  IF current_setting('gnubok.allow_correction_relink', true) = 'true'
+     AND NEW.journal_entry_id IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- journal_entry_id: once set, cannot be cleared or re-pointed.
+  IF OLD.journal_entry_id IS NOT NULL
+     AND NEW.journal_entry_id IS DISTINCT FROM OLD.journal_entry_id THEN
+    RAISE EXCEPTION
+      'BFL_DOCUMENT_IMMUTABILITY: cannot clear or change journal_entry_id on document % once set (BFL 5 kap 6 §). Reverse the journal entry first.',
+      OLD.id;
+  END IF;
+
+  -- journal_entry_line_id: same durability. Setting it from NULL -> uuid (a
+  -- later, more precise link) stays allowed; clearing or re-pointing a set
+  -- value is blocked, status-independent.
+  IF OLD.journal_entry_line_id IS NOT NULL
+     AND NEW.journal_entry_line_id IS DISTINCT FROM OLD.journal_entry_line_id THEN
+    RAISE EXCEPTION
+      'BFL_DOCUMENT_IMMUTABILITY: cannot clear or change journal_entry_line_id on document % once set (BFL 5 kap 6 §).',
+      OLD.id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- The trigger fired only on `UPDATE OF journal_entry_id`, so a line-id-only
+-- UPDATE (SET journal_entry_line_id = NULL) never invoked the function at all,
+-- which is why the durability guard above needs a wider column list to bite.
+DROP TRIGGER IF EXISTS enforce_document_journal_entry_immutability
+  ON public.document_attachments;
+CREATE TRIGGER enforce_document_journal_entry_immutability
+  BEFORE UPDATE OF journal_entry_id, journal_entry_line_id
+  ON public.document_attachments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.enforce_document_journal_entry_immutability();
 
 CREATE OR REPLACE FUNCTION public.relink_documents_to_correction(
   p_user_id uuid,
