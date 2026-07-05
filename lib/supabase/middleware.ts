@@ -45,6 +45,22 @@ export async function updateSession(request: NextRequest) {
   // Get the pathname
   const pathname = request.nextUrl.pathname
 
+  // If the refresh token is stale/invalid, clear the session cookies so the
+  // browser stops sending them on every request — INCLUDING /api requests,
+  // which previously returned before this cleanup and replayed the dead
+  // token forever. Skip on auth routes — the callback needs PKCE cookies
+  // intact. scope: 'local' only clears cookies: the refresh token is already
+  // dead server-side, and the default global-revoke round-trip re-triggers
+  // the failed refresh — the exact AuthApiError this cleans up after.
+  if (authError && !user && !pathname.startsWith('/auth')) {
+    try {
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch (signOutError) {
+      // Expected session expiry, not a runtime error.
+      console.warn('[middleware] session cleanup after stale refresh token failed', signOutError)
+    }
+  }
+
   // ── API routes ──────────────────────────────────────────────────────────
   // API routes authenticate themselves (requireAuth, API-key Bearer, cron
   // secret, webhook signatures). Middleware runs on them for ONE reason: to
@@ -71,13 +87,6 @@ export async function updateSession(request: NextRequest) {
       }
     }
     return supabaseResponse
-  }
-
-  // If the refresh token is stale/invalid, clear the session cookies
-  // so the browser stops sending them on every request.
-  // Skip on auth routes — the callback needs PKCE cookies intact.
-  if (authError && !user && !pathname.startsWith('/auth')) {
-    await supabase.auth.signOut()
   }
 
   // Invite pages — accessible to everyone, signed in or not. A user who
