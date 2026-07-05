@@ -132,7 +132,7 @@ export const POST = withRouteContext(
     }
 
     // Send email. email_sent is surfaced in the response so the UI can tell
-    // the user when the invitation exists but the mail never went out —
+    // the user when the invitation exists but the mail never went out:
     // previously a send failure was invisible (invite looked sent).
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
     const emailService = getEmailService()
@@ -160,7 +160,7 @@ export const POST = withRouteContext(
         log.error('invite email send failed', new Error(result.error ?? 'unknown'), { to: email })
       }
     } else {
-      log.warn('email service not configured — invite email skipped', { to: email })
+      log.warn('email service not configured: invite email skipped', { to: email })
     }
 
     // In development, return the invite URL directly (no email service)

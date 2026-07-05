@@ -68,7 +68,7 @@ export default function SalaryRunEmployeeDetailPage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [calculating, setCalculating] = useState(false)
-  // Live counts pushed from the calendar — overrides the stale snapshot from
+  // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
 
@@ -217,7 +217,7 @@ export default function SalaryRunEmployeeDetailPage({
         />
       </div>
 
-      {/* Advanced mode — per-employee override of tax / arbetsgivaravgift */}
+      {/* Advanced mode: per-employee override of tax / arbetsgivaravgift */}
       {run.status === 'review' && (
         <SalaryOverridePanel
           runId={runId}
@@ -234,7 +234,7 @@ export default function SalaryRunEmployeeDetailPage({
         />
       )}
 
-      {/* Unified calendar — worked time (for hourly) + absence on the same grid */}
+      {/* Unified calendar: worked time (for hourly) + absence on the same grid */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">{t('time_absence_title')}</CardTitle>
@@ -288,7 +288,7 @@ export default function SalaryRunEmployeeDetailPage({
                   <tr key={li.id} className="border-b last:border-0">
                     <td className="px-4 py-2 text-xs text-muted-foreground">{LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}</td>
                     <td className="px-4 py-2 text-sm">{li.description}</td>
-                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '—'}</td>
+                    <td className="px-4 py-2 text-sm text-right tabular-nums">{li.quantity ?? '-'}</td>
                     <td className="px-4 py-2 text-sm text-right tabular-nums">{formatCurrency(li.amount)}</td>
                   </tr>
                 ))}

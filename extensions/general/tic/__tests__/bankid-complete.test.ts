@@ -101,7 +101,7 @@ afterEach(() => {
 })
 
 describe('POST /bankid/complete', () => {
-  describe('signup mode — account_exists regression (CWE-287)', () => {
+  describe('signup mode: account_exists regression (CWE-287)', () => {
     it('returns 409 account_exists and performs NO side effects when email is already registered', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin, client } = mockServiceClient([
@@ -133,7 +133,7 @@ describe('POST /bankid/complete', () => {
     })
   })
 
-  describe('signup mode — happy path', () => {
+  describe('signup mode: happy path', () => {
     it('creates a new user, marks bankid_linked, and returns the magic link tokenHash', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin } = mockServiceClient([
@@ -167,7 +167,7 @@ describe('POST /bankid/complete', () => {
     })
   })
 
-  describe('signup mode — pnr already linked', () => {
+  describe('signup mode: pnr already linked', () => {
     it('returns 409 already_linked before email lookup', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       const { admin, client } = mockServiceClient([
@@ -185,7 +185,7 @@ describe('POST /bankid/complete', () => {
       expect(status).toBe(409)
       expect(body.error).toBe('already_linked')
       expect(admin.createUser).not.toHaveBeenCalled()
-      // Only the pnr lookup ran — no profiles query.
+      // Only the pnr lookup ran: no profiles query.
       expect(vi.mocked(client.from).mock.calls.map((c) => c[0])).toEqual(['bankid_identities'])
     })
   })
@@ -309,7 +309,7 @@ describe('POST /bankid/complete', () => {
     })
   })
 
-  describe('enrichment — SPAR + CompanyRoles', () => {
+  describe('enrichment: SPAR + CompanyRoles', () => {
     it('requests both SPAR and CompanyRoles, fetches data, and persists only companyRoles (no PII) to bankid_enrichment', async () => {
       vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
       vi.mocked(requestEnrichment).mockResolvedValueOnce({
@@ -389,7 +389,7 @@ describe('POST /bankid/complete', () => {
 
       // Persisted row must contain company_roles + enriched_at_utc only.
       // SPAR (personnummer / name / address / birth date) must NOT be stored,
-      // even when TIC returns it — those fields live in bankid_identities (encrypted).
+      // even when TIC returns it: those fields live in bankid_identities (encrypted).
       expect(upsertSpy).toHaveBeenCalledTimes(1)
       const [persistedRow] = upsertSpy.mock.calls[0] as [Record<string, unknown>]
       expect(persistedRow).toEqual({
@@ -432,7 +432,7 @@ describe('POST /bankid/complete', () => {
       const { status } = await parseJsonResponse(await findCompleteHandler()(req))
 
       expect(status).toBe(400)
-      // collectBankIdResult should never be called — validation happens first.
+      // collectBankIdResult should never be called: validation happens first.
       expect(collectBankIdResult).not.toHaveBeenCalled()
     })
   })

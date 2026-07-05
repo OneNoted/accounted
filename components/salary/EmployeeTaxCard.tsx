@@ -19,7 +19,7 @@ export interface EmployeeTaxValue {
 }
 
 interface EmployeeTaxCardProps {
-  /** Live personnummer (full or masked) — drives the column suggestion. */
+  /** Live personnummer (full or masked): drives the column suggestion. */
   personnummer: string
   initial?: Partial<EmployeeTaxValue>
   /** Income year the table/column applies to. Defaults to the current year. */
@@ -69,7 +69,7 @@ export default function EmployeeTaxCard({
 
   // The effective column is the user's explicit choice once they've made one,
   // otherwise the value suggested from the personnummer (falling back to 1).
-  // Derived in render — no setState-in-effect needed.
+  // Derived in render: no setState-in-effect needed.
   const effectiveColumn = columnTouched ? column : (derivedColumn ?? 1)
 
   // Report the current value up. onChange via ref so an unstable parent callback
@@ -145,7 +145,7 @@ export default function EmployeeTaxCard({
                 disabled={disabled}
                 onChange={(value) => {
                   setMunicipality(value)
-                  // Clearing the field must clear the derived table/rate too —
+                  // Clearing the field must clear the derived table/rate too:
                   // otherwise we'd report an empty kommun alongside a stale
                   // table number (an inconsistent pair). Manual entry keeps its
                   // own value.

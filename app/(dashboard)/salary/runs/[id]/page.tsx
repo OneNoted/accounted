@@ -42,12 +42,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
-  // Non-null while the "Godkänn ändå?" dialog is open — holds the missing
+  // Non-null while the "Godkänn ändå?" dialog is open: holds the missing
   // bank-detail reasons returned by the approve route (overridable block).
   const [approveOverride, setApproveOverride] = useState<string[] | null>(null)
   const [preferredPaymentFormat, setPreferredPaymentFormat] = useState<'bg_lb' | 'pain001'>('pain001')
   const [defaultBank, setDefaultBank] = useState<string | null>(null)
-  // Gates the default-dimensions chips on the employee rows — same
+  // Gates the default-dimensions chips on the employee rows: same
   // company_settings.dimensions_enabled UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [taxPayment, setTaxPayment] = useState<{
@@ -73,7 +73,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   useEffect(() => {
     async function load() {
-      // Employees and settings don't depend on the run — load all three in
+      // Employees and settings don't depend on the run - load all three in
       // parallel instead of serially.
       const [, empRes, settingsRes] = await Promise.all([
         loadRun(),
@@ -98,9 +98,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  // Refetch when the tab regains focus. AGI can be generated out-of-band — via
-  // the MCP server, the public API, or another browser tab — and this page
-  // would otherwise keep showing stale agi_generated_at until a full reload.
+  // Refetch when the tab regains focus. AGI can be generated out-of-band (via
+  // the MCP server, the public API, or another browser tab) and this page
+  // would otherwise keep showing a stale "AGI-fil har inte genererats ännu"
+  // (and a stale "AGI-XML saknas" error in the panel below) until a full
+  // reload. Reconciling agi_generated_at on visibilitychange picks up that
+  // generation without the user hard-refreshing.
   useEffect(() => {
     function onVisible() {
       if (document.visibilityState === 'visible') loadRun()
@@ -147,7 +150,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       }
       setActionLoading(null)
       toast({ title: t('toast_status_updated') })
-      loadRun() // background reconcile — not awaited
+      loadRun() // background reconcile - not awaited
       return
     }
     const result = await res.json()
@@ -160,7 +163,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   }
 
   // Approval is an authorization step. Missing bank details are an *overridable*
-  // block (SALARY_APPROVE_BANK_DETAILS_MISSING) — rather than dead-ending on a
+  // block (SALARY_APPROVE_BANK_DETAILS_MISSING) - rather than dead-ending on a
   // 400 toast, we surface a confirm dialog and re-approve with ?force=true when
   // the user chooses "Godkänn ändå". The payment-file step still hard-blocks.
   async function doApprove(force: boolean) {
@@ -176,7 +179,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       }
       setActionLoading(null)
       toast({ title: t('toast_status_updated') })
-      loadRun() // background reconcile — not awaited
+      loadRun() // background reconcile - not awaited
       return
     }
     const result = await res.json().catch(() => ({}))
@@ -219,7 +222,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     setActionLoading(null)
   }
 
-  // Storno-based correction (BFL 5 kap. 5 §) — the confirm dialog lives in
+  // Storno-based correction (BFL 5 kap. 5 §) - the confirm dialog lives in
   // RunHeader; this fires only after the user has confirmed there.
   async function handleCorrect() {
     setActionLoading('correct')
@@ -473,10 +476,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // A run that pays out nothing (a nollkörning, or one fully consumed by a
   // nettolöneavdrag) has no payment-file line and no payout to perform. The
   // pay step collapses to a plain "continue" and the payment-file panel is
-  // hidden — mirrors the pain.001 / BG-LB generators, which emit no rows here.
+  // hidden - mirrors the pain.001 / BG-LB generators, which emit no rows here.
   const noPayout = isCalculated && Math.round((run.total_net ?? 0) * 100) === 0
 
-  // Advancing a draft to review. For a nollkörning confirm first — an empty
+  // Advancing a draft to review. For a nollkörning confirm first: an empty
   // declaration is filed to Skatteverket, which should be deliberate.
   function handleToReview() {
     if (isNollkorning && !confirm(t('confirm_nollkorning'))) {
@@ -486,7 +489,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   }
 
   // The one next step for the current status, mirrored as a prominent header
-  // button — the rail alone buried it (nobody found Godkänn).
+  // button - the rail alone buried it (nobody found Godkänn).
   const primaryAction = !canWrite
     ? null
     : run.status === 'draft'
@@ -567,7 +570,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         )}
       </div>
 
-      {/* Payment file — available once the run is approved, but only when there
+      {/* Payment file: available once the run is approved, but only when there
           is something to pay out. A zero-payout run generates no file rows. */}
       {['approved', 'paid', 'booked'].includes(run.status) && !noPayout && (
         <PaymentFilePanel
@@ -582,7 +585,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         />
       )}
 
-      {/* Tax payment (skatt + arbetsgivaravgifter) — once AGI is generated */}
+      {/* Tax payment (skatt + arbetsgivaravgifter): once AGI has been generated */}
       {run.status === 'booked' && run.agi_generated_at && (
         <TaxPaymentPanel
           period={periodLabel}
@@ -595,7 +598,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         />
       )}
 
-      {/* AGI (Arbetsgivardeklaration) — available once the run is booked */}
+      {/* AGI (Arbetsgivardeklaration): available once the run is booked */}
       {run.status === 'booked' && (
         <div className="space-y-3">
           <AGIPanel
@@ -627,7 +630,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         </div>
       )}
 
-      {/* Overridable approval guard: missing bank details don't dead-end —
+      {/* Overridable approval guard: missing bank details don't dead-end -
           the user can approve now and complete details before the payment file. */}
       <Dialog open={approveOverride !== null} onOpenChange={(open) => { if (!open) setApproveOverride(null) }}>
         <DialogContent>

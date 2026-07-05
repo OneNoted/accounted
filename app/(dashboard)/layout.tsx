@@ -31,7 +31,7 @@ export default async function DashboardLayout({
   settingsModal,
 }: {
   children: React.ReactNode
-  // `@settingsModal` parallel slot — renders the routed settings modal over the
+  // `@settingsModal` parallel slot: renders the routed settings modal over the
   // current page on in-app navigation to /settings/*; null otherwise.
   settingsModal: React.ReactNode
 }) {
@@ -44,12 +44,12 @@ export default async function DashboardLayout({
   }
 
   // Resolve active company from user_preferences (authoritative). The
-  // `gnubok-company-id` cookie is intentionally no longer consulted here —
+  // `gnubok-company-id` cookie is intentionally no longer consulted here:
   // `getActiveCompanyId` reads from user_preferences, matching what RLS
   // sees via `current_active_company_id()`. Keeping both sides on the same
   // source avoids cross-tab / cookie divergence.
   // Team membership (with the team row embedded) only depends on user.id,
-  // so it resolves in parallel — this layout is on the critical path of
+  // so it resolves in parallel, this layout is on the critical path of
   // every dashboard page, so sequential round-trips are wall-clock time.
   const [companyId, headerStore, { data: teamMembership }] = await Promise.all([
     getActiveCompanyId(supabase, user.id),
@@ -72,7 +72,7 @@ export default async function DashboardLayout({
     (teamMembership?.teams as unknown as Team | null) ?? null
   const isTeamMember = !!teamMembership
 
-  // No companies — redirect to onboarding, except for allowed escape-hatch
+  // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
   // account after archiving their last company).
   if (!companyId) {
@@ -121,7 +121,7 @@ export default async function DashboardLayout({
   }
 
   // Fetch company + membership for context provider, together with the
-  // nav/badge data — none of these depend on each other, only on
+  // nav/badge data, none of these depend on each other, only on
   // companyId/user.id, so one round-trip batch instead of two. The rare
   // stale-cookie early return below wastes the extra reads; that's cheaper
   // than serializing two batches on every dashboard render.
@@ -144,19 +144,19 @@ export default async function DashboardLayout({
       .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled')
       .eq('company_id', companyId)
       .single(),
-    // Shared worklist predicates (lib/worklist) — the badge must show the
+    // Shared worklist predicates (lib/worklist), the badge must show the
     // same number as every other "att göra" surface. Notably this excludes
     // is_ignored rows, which the old inline query here did not.
     countUnbookedTransactions(supabase, companyId),
     countPendingOperations(supabase, companyId),
-    // Agent identity — name + avatar — surfaced on the FAB and chat
+    // Agent identity, name + avatar, surfaced on the FAB and chat
     // surfaces. Null when no agent_profile exists yet (banner CTA path).
     supabase
       .from('agent_profiles')
       .select('display_name, avatar_id, verified_at')
       .eq('company_id', companyId)
       .maybeSingle(),
-    // The signed-in user's profile — shown in the bottom-left account
+    // The signed-in user's profile, shown in the bottom-left account
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
@@ -205,7 +205,7 @@ export default async function DashboardLayout({
     )
   }
 
-  // If onboarding incomplete, still render the dashboard — the page component
+  // If onboarding incomplete, still render the dashboard: the page component
   // will show the inline onboarding card instead of the normal dashboard content.
 
   // Use company_name from settings as the display name (companies.name may be stale)

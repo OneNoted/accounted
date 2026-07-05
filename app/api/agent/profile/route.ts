@@ -11,8 +11,8 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 //
 // PATCH updates field_overrides (timestamped, merged with existing) and
 // optionally rewrites the atom arrays from the review UI. Does not touch
-// verified_at — that flows through /verify. Requires a non-viewer role in
-// the target company (same rule as /verify — it mutates the profile).
+// verified_at: that flows through /verify. Requires a non-viewer role in
+// the target company (same rule as /verify: it mutates the profile).
 
 const AtomArrays = z.object({
   horizontal_atoms: z.array(z.string()).optional(),
@@ -25,7 +25,7 @@ const PatchBody = z.object({
   field_overrides: z.record(z.string(), z.unknown()).optional(),
   atoms: AtomArrays.optional(),
   profile_summary: z.string().min(1).max(2000).optional(),
-  // Agent personalization — name shown on the FAB and chat headers, and
+  // Agent personalization: name shown on the FAB and chat headers, and
   // avatar key into the static AVATAR_OPTIONS registry. Both nullable so
   // the user can clear them back to defaults.
   display_name: z.string().min(1).max(60).nullable().optional(),
@@ -65,7 +65,7 @@ export const GET = withRouteContext('agent.profile.get', async (request, ctx) =>
   if (!validated.success) return validated.response
   const companyId = validated.data.company_id ?? activeCompanyId
 
-  // Defense in depth alongside RLS — confirm membership before reading.
+  // Defense in depth alongside RLS: confirm membership before reading.
   const { data: membership } = await supabase
     .from('company_members')
     .select('role')
@@ -99,7 +99,7 @@ export const PATCH = withRouteContext('agent.profile.update', async (request, ct
 
   const companyId = body.company_id ?? activeCompanyId
 
-  // RLS guards reads/updates by company_id; defense in depth — confirm
+  // RLS guards reads/updates by company_id; defense in depth: confirm
   // membership AND a non-viewer role (this mutates the company's profile;
   // same rule /verify already enforces).
   const { data: membership } = await supabase

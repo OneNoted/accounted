@@ -18,7 +18,7 @@ export default async function SelectCompanyPage() {
     redirect('/login')
   }
 
-  // All four lookups key only on user.id — one parallel batch instead of
+  // All four lookups key only on user.id, one parallel batch instead of
   // four serial round-trips on the post-BankID-login landing page.
   const [
     // Existing Accounted memberships.
@@ -28,7 +28,7 @@ export default async function SelectCompanyPage() {
     { data: profile },
     // BankID enrichment (CompanyRoles from Bolagsverket via TIC). Stored
     // user-keyed in `bankid_enrichment` because it lands before company
-    // selection — see fetchAndStoreEnrichment in the tic extension.
+    // selection, see fetchAndStoreEnrichment in the tic extension.
     { data: enrichmentRow },
   ] = await Promise.all([
     supabase
@@ -118,7 +118,7 @@ export default async function SelectCompanyPage() {
   //   1. BankIdCompanyPicker calls TIC /lookup before provisioning and
   //      short-circuits with a toast when isCeased=true.
   //   2. createCompanyFromTicRole refuses to provision when lookup.isCeased.
-  // Both guards are required — don't remove one without removing both.
+  // Both guards are required: don't remove one without removing both.
   //
   // Loose `== null` on purpose: TIC payloads have been observed returning
   // `undefined` for open-ended positions, which `=== null` would miss.
@@ -126,7 +126,7 @@ export default async function SelectCompanyPage() {
     (r) => r.positionEnd == null,
   )
 
-  // Drop TIC roles that already appear in the user's Accounted memberships —
+  // Drop TIC roles that already appear in the user's Accounted memberships:
   // those render via the "Your Accounted companies" section above instead.
   const rolesNotAlreadyMine = activeRoles.filter(
     (r) => !memberOrgNumbers.has(r.companyRegistrationNumber.replace(/[\s-]/g, '')),
@@ -134,7 +134,7 @@ export default async function SelectCompanyPage() {
 
   // Cross-reference remaining TIC org numbers against the global companies
   // table to detect "exists in Accounted, user not a member" cases. Use the
-  // service client — RLS filters out companies the user isn't a member of,
+  // service client: RLS filters out companies the user isn't a member of,
   // which is exactly the data we need. Scoped to the specific org numbers.
   let externallyOwnedOrgs = new Set<string>()
   if (rolesNotAlreadyMine.length > 0) {

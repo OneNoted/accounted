@@ -56,7 +56,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
       // Bank details are only required when there's an actual payout. A zero
       // net (nollkörning, or fully net-deducted) produces no payment-file line,
-      // so no destination account is needed — mirrors the pain.001 / BG-LB
+      // so no destination account is needed: mirrors the pain.001 / BG-LB
       // generators, which only include employees with effectiveNet > 0.
       if (effectiveNetPayout(sre) > 0 && (!emp.clearing_number || !emp.bank_account_number)) {
         bankDetailErrors.push(`${name}: Bankuppgifter saknas (clearingnummer och/eller kontonummer)`)
@@ -64,18 +64,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
       // Must have been calculated (calculation_breakdown exists)
       if (!sre.calculation_breakdown) {
-        blockingErrors.push(`${name}: Beräkning saknas — kör beräkning först`)
+        blockingErrors.push(`${name}: Beräkning saknas, kör beräkning först`)
       }
 
       // Warning: no email means pay slip cannot be sent
       if (!emp.email) {
-        warnings.push(`${name}: E-post saknas — lönebesked kan inte skickas`)
+        warnings.push(`${name}: E-post saknas, lönebesked kan inte skickas`)
       }
     }
 
     if (blockingErrors.length > 0) {
       return NextResponse.json({
-        error: 'Valideringsfel — korrigera innan godkännande',
+        error: 'Valideringsfel: korrigera innan godkännande',
         details: blockingErrors,
         warnings,
         code: 'SALARY_APPROVE_BLOCKED',
@@ -99,7 +99,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // response so the caller can still surface the reminder to complete them.
     const approveWarnings = force ? [...bankDetailErrors, ...warnings] : warnings
 
-    // All validation passed (or was explicitly overridden) — approve
+    // All validation passed (or was explicitly overridden): approve
     const { data: updatedRun, error } = await supabase
       .from('salary_runs')
       .update({

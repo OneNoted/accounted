@@ -44,7 +44,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [tax, setTax] = useState<EmployeeTaxValue | null>(null)
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
-  // company_settings.dimensions_enabled — same UI gate as the voucher form.
+  // company_settings.dimensions_enabled: same UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [dimensions, setDimensions] = useState<Record<string, string>>({})
 
@@ -108,7 +108,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       bank_account_number: form.get('bank_account_number') as string || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
-      // Always sent — {} clears the employee's default dimensions.
+      // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
     }
 
@@ -189,7 +189,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       </div>
 
       <form onSubmit={handleSave} className="space-y-4">
-        {/* Person & kontakt — name, contact, and address in one dense card */}
+        {/* Person & kontakt - name, contact, and address in one dense card */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">{t('form_personal_info')}</CardTitle>
@@ -229,7 +229,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           </CardContent>
         </Card>
 
-        {/* Anställning & lön — employment terms, salary, and vacation together */}
+        {/* Anställning & lön - employment terms, salary, and vacation together */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">{t('form_employment_salary')}</CardTitle>

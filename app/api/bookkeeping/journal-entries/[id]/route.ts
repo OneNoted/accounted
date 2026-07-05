@@ -89,7 +89,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 )
 
 /**
- * PATCH — edit a DRAFT verifikat in place (header + lines). Only drafts are
+ * PATCH: edit a DRAFT verifikat in place (header + lines). Only drafts are
  * editable; updateDraftEntry rejects committed entries with a 409, and the DB
  * immutability trigger is the backstop.
  */

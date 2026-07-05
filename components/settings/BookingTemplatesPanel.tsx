@@ -119,7 +119,7 @@ export function BookingTemplatesPanel() {
   const teamTemplates = templates.filter((tt) => tt.team_id && !tt.is_system)
   const companyTemplates = templates.filter((tt) => tt.company_id && !tt.is_system)
 
-  // Names of existing company templates — used for a soft "name already exists"
+  // Names of existing company templates: used for a soft "name already exists"
   // hint when creating or customizing (never blocks save).
   const companyTemplateNames = companyTemplates.map((tt) => tt.name)
 

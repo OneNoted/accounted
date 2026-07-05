@@ -51,7 +51,7 @@ export const GET = withRouteContext(
     if (convErr) throw convErr
     if (!conv) return notFound()
 
-    // Defense in depth alongside RLS — the caller must still be a member of
+    // Defense in depth alongside RLS: the caller must still be a member of
     // the conversation's company (they may have been removed since).
     const { data: membership } = await supabase
       .from('company_members')
@@ -102,7 +102,7 @@ export const PATCH = withRouteContext(
       )
     }
 
-    // Defense in depth — verify ownership before update so a 404 is returned
+    // Defense in depth: verify ownership before update so a 404 is returned
     // (instead of relying solely on RLS, which would silently 0-row).
     const { data: existing } = await supabase
       .from('agent_conversations')

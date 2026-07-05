@@ -59,7 +59,7 @@ export const POST = withRouteContext('agent.composer.run', async (request, ctx) 
 
   const companyId = body.company_id ?? activeCompanyId
 
-  // Defense in depth alongside RLS — confirm membership before composing, and
+  // Defense in depth alongside RLS: confirm membership before composing, and
   // require a non-viewer role: the composer rewrites agent_profiles.
   const { data: membership } = await supabase
     .from('company_members')

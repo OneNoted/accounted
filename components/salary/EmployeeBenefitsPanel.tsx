@@ -26,7 +26,7 @@ interface EmployeeBenefit {
   is_active: boolean
 }
 
-// Swedish defaults written to the DB when the description is left empty —
+// Swedish defaults written to the DB when the description is left empty:
 // stored data stays Swedish regardless of the viewer's UI locale.
 const BENEFIT_LABELS: Record<BenefitType, string> = {
   bike: 'Cykelförmån',
@@ -165,7 +165,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
                     <TableCell className="text-right tabular-nums">{formatCurrency(b.monthly_value)}</TableCell>
                     <TableCell className="text-muted-foreground tabular-nums text-xs">
                       {formatDate(b.valid_from)}
-                      {b.valid_to ? ` – ${formatDate(b.valid_to)}` : ` – ${t('benefits_ongoing')}`}
+                      {b.valid_to ? ` ${formatDate(b.valid_to)}` : ` ${t('benefits_ongoing')}`}
                     </TableCell>
                     <TableCell className="text-right">
                       {canWrite && (

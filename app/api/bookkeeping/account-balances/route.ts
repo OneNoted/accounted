@@ -30,7 +30,7 @@ export const GET = withRouteContext('bookkeeping.account_balances', async (reque
   if (!params.success) return params.response
   const { accounts, as_of } = params.data
 
-  // Find the fiscal period containing as_of (any state — we want a reference
+  // Find the fiscal period containing as_of (any state: we want a reference
   // saldo even for closed/locked periods).
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')

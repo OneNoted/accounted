@@ -18,7 +18,7 @@ interface PaymentFilePanelProps {
   paymentFileFormat: string | null
   paymentFileGeneratedAt: string | null
   defaultFormat: PaymentFormat
-  /** company_settings.salary_default_bank — sorts and auto-expands the matching bank's instructions. */
+  /** company_settings.salary_default_bank: sorts and auto-expands the matching bank's instructions. */
   defaultBank?: string | null
   readOnly?: boolean
   onDownloaded?: () => void
@@ -181,7 +181,7 @@ export function PaymentFilePanel({
                   <div key={bank}>
                     <strong className="text-foreground">
                       {BANK_NAME[bank]}
-                      {bank === matchedBank ? ` — ${t('your_bank')}` : ''}.
+                      {bank === matchedBank ? ` (${t('your_bank')})` : ''}.
                     </strong>{' '}
                     <span className="text-muted-foreground">
                       {t(`steps_${format}_${bank}`)}

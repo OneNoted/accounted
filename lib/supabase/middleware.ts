@@ -46,12 +46,12 @@ export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
   // If the refresh token is stale/invalid, clear the session cookies so the
-  // browser stops sending them on every request — INCLUDING /api requests,
+  // browser stops sending them on every request, INCLUDING /api requests,
   // which previously returned before this cleanup and replayed the dead
-  // token forever. Skip on auth routes — the callback needs PKCE cookies
+  // token forever. Skip on auth routes, the callback needs PKCE cookies
   // intact. scope: 'local' only clears cookies: the refresh token is already
   // dead server-side, and the default global-revoke round-trip re-triggers
-  // the failed refresh — the exact AuthApiError this cleans up after.
+  // the failed refresh, the exact AuthApiError this cleans up after.
   if (authError && !user && !pathname.startsWith('/auth')) {
     try {
       await supabase.auth.signOut({ scope: 'local' })
@@ -69,7 +69,7 @@ export async function updateSession(request: NextRequest) {
   // verified (AAL1) cookie session could reach them on the hosted product.
   // Gate ONLY cookie sessions. Bearer-auth SURFACES (/api/v1, the MCP
   // endpoint) and the AAL1 escape-hatch / OAuth routes pass straight through
-  // (see apiPathSkipsMfaGate) — header presence alone never skips the gate,
+  // (see apiPathSkipsMfaGate): header presence alone never skips the gate,
   // since the header is attacker-controlled and cookie-authenticated routes
   // ignore it. Pure Bearer callers (cron, webhooks) carry no cookie session,
   // so the `user` guard below already excludes them. Everything else about
@@ -89,7 +89,7 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Invite pages — accessible to everyone, signed in or not. A user who
+  // Invite pages: accessible to everyone, signed in or not. A user who
   // already has an account and is signed in should still be able to land on
   // /invite/[token] to accept the invite with one click (see
   // app/invite/[token]/page.tsx). If we bounce them to '/', they never see
@@ -98,7 +98,7 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Public payslip pages — the token in the URL is the authentication
+  // Public payslip pages, the token in the URL is the authentication
   // (resolved server-side against salary_payslip_links). Employees have no
   // account; bouncing them to /login would make every emailed payslip link
   // dead. See app/payslip/[token]/page.tsx.
@@ -111,12 +111,12 @@ export async function updateSession(request: NextRequest) {
   // precisely so the user can call supabase.auth.updateUser({ password }). If
   // we bounce authenticated users to '/', the recovery email link silently
   // fails. An already-logged-in user typing /reset-password directly just gets
-  // the same "change password" experience as in settings — no security loss.
+  // the same "change password" experience as in settings: no security loss.
   if (pathname.startsWith('/reset-password')) {
     return supabaseResponse
   }
 
-  // Public auth routes — allow access
+  // Public auth routes: allow access
   if (
     pathname.startsWith('/login') ||
     pathname.startsWith('/register') ||
@@ -138,7 +138,7 @@ export async function updateSession(request: NextRequest) {
   }
 
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
-  // page can lock themselves out — Supabase requires AAL2 to change password
+  // page can lock themselves out: Supabase requires AAL2 to change password
   // or unenroll MFA, and AAL2 needs a prior password sign-in. Force them to
   // set a password first. The /account/set-password page does that and routes
   // back here via ?returnTo. Thread the inner returnTo through so the user
@@ -159,7 +159,7 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
-  // Other MFA pages — accessible to authenticated users (AAL1+), skip MFA enforcement
+  // Other MFA pages: accessible to authenticated users (AAL1+), skip MFA enforcement
   if (pathname.startsWith('/mfa/')) {
     return supabaseResponse
   }
@@ -231,7 +231,7 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith('/api/account/') ||
     pathname.startsWith('/api/company')
 
-  // No companies — redirect to the picker if we have BankID enrichment for
+  // No companies: redirect to the picker if we have BankID enrichment for
   // this user, otherwise the manual wizard. Either way, allow the escape-hatch
   // routes to pass through.
   if (!companyId) {
@@ -240,7 +240,7 @@ export async function updateSession(request: NextRequest) {
     }
 
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
-    // 20260506160000) — it cannot live in extension_data, which is
+    // 20260506160000), it cannot live in extension_data, which is
     // company-scoped, and the user has no company yet on this path.
     const { data: enrichmentRow } = await supabase
       .from('bankid_enrichment')
@@ -278,7 +278,7 @@ export async function updateSession(request: NextRequest) {
  * the active company on both the Next.js and Postgres RLS side. The
  * `gnubok-company-id` cookie is still refreshed for legacy read paths
  * but it is no longer READ here, because RLS (via
- * `current_active_company_id()`) cannot see cookies — so letting the
+ * `current_active_company_id()`) cannot see cookies: so letting the
  * cookie override the database would re-introduce the divergence this
  * entire migration exists to fix.
  *
@@ -329,7 +329,7 @@ async function resolveCompanyForMiddleware(
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
   // Non-fatal on failure: resolution for this request already succeeded,
-  // the write-back is an optimization — but log it so silent persistence
+  // the write-back is an optimization, but log it so silent persistence
   // failures (#701) are observable.
   const { error: writeBackError } = await supabase
     .from('user_preferences')

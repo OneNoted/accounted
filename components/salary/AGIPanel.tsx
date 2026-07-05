@@ -23,7 +23,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 
 interface AGIPanelProps {
   salaryRunId: string
-  /** Skatteverket arbetsgivare ID (12-digit) — formatted by parent. */
+  /** Skatteverket arbetsgivare ID (12-digit): formatted by parent. */
   arbetsgivare: string
   /** YYYYMM */
   period: string
@@ -146,7 +146,7 @@ export function AGIPanel(props: AGIPanelProps) {
         // round-trip, leaving the old "Sessionen har gått ut" message in
         // place even though the token is now fresh. This wipes the error
         // only when (a) there's currently an error and (b) the new status
-        // says we're healthy — never silently swallowing unrelated errors.
+        // says we're healthy: never silently swallowing unrelated errors.
         const isHealthy = next.connected && !next.expired && next.canRefresh !== false
         if (isHealthy) {
           setError(prev =>
@@ -157,7 +157,7 @@ export function AGIPanel(props: AGIPanelProps) {
         }
       }
     } catch {
-      // ignore — UI shows the not-connected state
+      // ignore: UI shows the not-connected state
     } finally {
       setLoading(false)
     }
@@ -208,7 +208,7 @@ export function AGIPanel(props: AGIPanelProps) {
   // That error is set when "Skicka in underlag" runs before the XML exists; if
   // the file is then generated out-of-band (MCP, the download button, another
   // tab) the parent refreshes `agiGeneratedAt` and this clears the now-wrong
-  // message without forcing a full reload — mirroring the session-expired
+  // message without forcing a full reload, mirroring the session-expired
   // self-heal in fetchStatus above.
   useEffect(() => {
     if (!agiGeneratedAt) return
@@ -232,7 +232,7 @@ export function AGIPanel(props: AGIPanelProps) {
    * Silently ask Skatteverket whether this period's granskningsunderlag has
    * been signed. The kvittenser handler stamps salary_runs.agi_submitted_at
    * and flips the local submission state to 'signed' the instant it sees a
-   * uuidKvittens — so a positive result transitions the panel out of
+   * uuidKvittens, so a positive result transitions the panel out of
    * awaiting_signing on its own (the action buttons then disappear via the
    * isSigned gate). Returns true iff a signed kvittens was observed. No-ops
    * (returns false) until we have the arbetsgivare id.
@@ -265,7 +265,7 @@ export function AGIPanel(props: AGIPanelProps) {
 
   /**
    * Background-poll /agi/kvittenser at 30s, 2 min, and 5 min after the user
-   * receives a signing link — a timer-based fallback to the focus-driven
+   * receives a signing link: a timer-based fallback to the focus-driven
    * auto-detect below. The kvittenser handler stamps salary_runs.agi_submitted_at
    * when it observes a uuidKvittens, critical for the audit trail (BFL 5 kap /
    * BFNAR 2013:2): a NULL agi_submitted_at after a real filing would
@@ -276,11 +276,11 @@ export function AGIPanel(props: AGIPanelProps) {
     kvittensTimers.current = []
 
     const poll = async () => {
-      // checkKvittens is silent on failure — the "Hämta kvittens" button
+      // checkKvittens is silent on failure: the "Hämta kvittens" button
       // remains the explicit recovery path.
       const signed = await checkKvittens()
       if (signed) {
-        // Cancel any remaining timers — the kvittens has been recorded
+        // Cancel any remaining timers: the kvittens has been recorded
         // server-side and further polls are wasted requests.
         for (const t of kvittensTimers.current) clearTimeout(t)
         kvittensTimers.current = []
@@ -296,9 +296,9 @@ export function AGIPanel(props: AGIPanelProps) {
   // without the user having to click "Hämta kvittens". While we sit in
   // awaiting_signing the user has typically opened the signing link (which
   // opens a new tab), signed on Skatteverket's site, and come back. We re-check
-  // the kvittens (a) once on entering awaiting_signing — covering a reload
-  // after signing — and (b) whenever the tab regains focus — covering the
-  // sign-in-the-other-tab-then-return flow. A found kvittens flips the local
+  // the kvittens (a) once on entering awaiting_signing (covering a reload
+  // after signing) and (b) whenever the tab regains focus (covering the
+  // sign-in-the-other-tab-then-return flow). A found kvittens flips the local
   // state to 'signed', hiding the signing actions. The ref makes the on-enter
   // check fire once per episode even if checkKvittens's identity churns (its
   // onChange dep is an unmemoized parent callback).
@@ -345,7 +345,7 @@ export function AGIPanel(props: AGIPanelProps) {
   const handleConnect = () => {
     // Open the BankID OAuth flow in a centered popup. The callback page
     // detects `window.opener` and posts back a `skatteverket-oauth-success`
-    // (or `-error`) message, then closes itself — see the postMessage
+    // (or `-error`) message, then closes itself: see the postMessage
     // listener below. `return_to` is still passed so the popup-less fallback
     // path (e.g. popup blockers) lands on the salary run page rather than
     // the default /reports tab.
@@ -365,7 +365,7 @@ export function AGIPanel(props: AGIPanelProps) {
       `width=${w},height=${h},left=${left},top=${top}`,
     )
     if (!popup) {
-      // Popup blocked — fall back to a full-page navigation.
+      // Popup blocked: fall back to a full-page navigation.
       window.location.href = url
     }
   }
@@ -407,7 +407,7 @@ export function AGIPanel(props: AGIPanelProps) {
    * status flips out of PROCESSING. Skatteverket's spec says polling is
    * usually instantaneous, but we cap at 8 attempts × 1s to be safe.
    *
-   * On DONE_SUCCESS the underlag is auto-persisted by SKV — no /spara call.
+   * On DONE_SUCCESS the underlag is auto-persisted by SKV: no /spara call.
    * Calling /spara when there are no errors returns 400 felkod 20
    * ("Inlämningen är redan sparad/borttagen eller innehöll inga felaktiga
    * underlag") because /spara is specifically for re-persisting rejected
@@ -419,7 +419,7 @@ export function AGIPanel(props: AGIPanelProps) {
    */
   // Always-free: generate + download the AGI XML so the user can file manually
   // in Skatteverket's e-service. AGI is a mandatory statutory filing, so this
-  // path must never be paywalled — only the direct API submission below is paid.
+  // path must never be paywalled: only the direct API submission below is paid.
   const handleDownloadXml = async () => {
     setActionLoading('download')
     setError(null)
@@ -509,7 +509,7 @@ export function AGIPanel(props: AGIPanelProps) {
   }
 
   /**
-   * Step 2: skapaGranskningsunderlag — returns the Mina Sidor deep-link the
+   * Step 2: skapaGranskningsunderlag: returns the Mina Sidor deep-link the
    * user opens to sign with BankID. Defaults to `lasPeriod=true` so the
    * period is locked while the signing window is open.
    */
@@ -666,7 +666,7 @@ export function AGIPanel(props: AGIPanelProps) {
   // The submission state is keyed by PERIOD; AGI generation is keyed by RUN.
   // If the run's AGI was (re)generated AFTER this signing draft was created,
   // the locked underlag at Skatteverket reflects superseded figures and must
-  // not be signed — surface a warning and steer the user to unlock + resubmit
+  // not be signed: surface a warning and steer the user to unlock + resubmit
   // rather than presenting it as ready to sign (avoids filing stale amounts).
   const draftUpdatedAt = submission?.updatedAt ? new Date(submission.updatedAt) : null
   const draftIsStale =
@@ -676,7 +676,7 @@ export function AGIPanel(props: AGIPanelProps) {
     !Number.isNaN(draftUpdatedAt.getTime()) &&
     new Date(agiGeneratedAt).getTime() > draftUpdatedAt.getTime()
   // Tokens issued before the agd scope was added to DEFAULT_SCOPES will
-  // 403 with invalid_scope at submission time — surface that proactively
+  // 403 with invalid_scope at submission time: surface that proactively
   // so the user reconnects before hitting the deadline rather than at it.
   const missingAgdScope =
     typeof status?.scope === 'string' &&
@@ -712,7 +712,7 @@ export function AGIPanel(props: AGIPanelProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Expired-session banner — the token row exists (so status.connected
+        {/* Expired-session banner: the token row exists (so status.connected
             is true) but the access token is past expiry and either has no
             refresh token or has burned through its 10-refresh budget. The
             only fix is a fresh BankID round-trip. */}
@@ -729,7 +729,7 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
-        {/* Missing-scope banner — proactive nudge before the user hits a
+        {/* Missing-scope banner: proactive nudge before the user hits a
             403 invalid_scope at submission time. The agd scope was added
             after some users had already connected, so their stored token
             grants moms/skattekonto but not AGI. */}
@@ -778,7 +778,7 @@ export function AGIPanel(props: AGIPanelProps) {
           />
         </div>
 
-        {/* Signing link — only shown for the happy path. The link in
+        {/* Signing link: only shown for the happy path. The link in
             `signeringslank` is also reused by the INCORRECT_DATA branch
             below to surface a felrapport URL, which deserves a distinct
             treatment so the user understands they must fix errors before
@@ -800,7 +800,7 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
-        {/* Stale-draft guard — the signing draft at Skatteverket predates the
+        {/* Stale-draft guard: the signing draft at Skatteverket predates the
             current run's AGI generation, so it carries superseded figures.
             We deliberately do NOT surface "Öppna signeringslänk" here: signing
             it would file the old amounts. The "Lås upp" button below releases
@@ -824,7 +824,7 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
-        {/* INCORRECT_DATA branch — skapaGranskningsunderlag returned 409 with
+        {/* INCORRECT_DATA branch: skapaGranskningsunderlag returned 409 with
             a felrapport link. The user must open the link in Mina Sidor to
             see what's wrong, fix it, and then re-submit. Without this UI the
             link would be permanently unreachable even though the extension

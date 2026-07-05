@@ -23,7 +23,7 @@ import type { StoredAccount } from '../types'
 
 const mockedSync = vi.mocked(syncAccountTransactions)
 
-// Locate the PATCH /accounts handler once — schema doesn't change at runtime.
+// Locate the PATCH /accounts handler once: schema doesn't change at runtime.
 const accountsRoute = enableBankingExtension.apiRoutes?.find(
   r => r.method === 'PATCH' && r.path === '/accounts'
 )
@@ -58,7 +58,7 @@ interface SupabaseStub {
   }>
   /** Last update payload (may be overwritten by a follow-up metadata update). */
   capturedUpdate?: Record<string, unknown>
-  /** All update payloads in order — first is the status flip, second the initial-sync metadata. */
+  /** All update payloads in order: first is the status flip, second the initial-sync metadata. */
   capturedUpdates?: Record<string, unknown>[]
 }
 
@@ -357,7 +357,7 @@ describe('PATCH /accounts (enable-banking)', () => {
     )
 
     expect(res.status).toBe(200)
-    // Status field is NOT present in the update — already-active connections
+    // Status field is NOT present in the update: already-active connections
     // don't re-assert the transition, which keeps the state machine explicit.
     expect(stub.capturedUpdate).toBeDefined()
     expect('status' in (stub.capturedUpdate ?? {})).toBe(false)
@@ -366,7 +366,7 @@ describe('PATCH /accounts (enable-banking)', () => {
   it('returns 400 when ctx.companyId is absent (no user.id fallback)', async () => {
     const supabase = buildSupabase({ authUser: { id: 'user-1' }, connectionRow: null })
     const ctx = makeContext(supabase)
-    // Simulate a missing company context — should not fall back to user.id.
+    // Simulate a missing company context: should not fall back to user.id.
     const ctxWithoutCompany = { ...ctx, companyId: undefined as unknown as string }
 
     const res = await accountsRoute.handler(
@@ -540,7 +540,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(body.initial_sync_error).toBeUndefined()
 
       expect(mockedSync).not.toHaveBeenCalled()
-      // Only one update — the original selection edit, no metadata follow-up.
+      // Only one update: the original selection edit, no metadata follow-up.
       expect(stub.capturedUpdates).toHaveLength(1)
     })
 
@@ -567,7 +567,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         ctx
       )
 
-      // PATCH still succeeds — the cron will retry the backfill on its next run.
+      // PATCH still succeeds: the cron will retry the backfill on its next run.
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.success).toBe(true)
@@ -652,7 +652,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       // The error code surfaces the metadata-update failure mode so the UI
       // and audit log can distinguish it from an ingest-side failure.
       expect(body.initial_sync_error).toMatch(/^metadata_update_failed:/)
-      // Status flip still happened — connection is active, cron will retry backfill.
+      // Status flip still happened: connection is active, cron will retry backfill.
       expect(stub.capturedUpdates?.[0]?.status).toBe('active')
       expect(stub.capturedUpdates).toHaveLength(2)
     })
@@ -800,7 +800,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       const ctx = makeContext(supabase)
 
       const res = await accountsRoute.handler(
-        // No account_mappings — pure selection edit (disable acc-2)
+        // No account_mappings: pure selection edit (disable acc-2)
         makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
         ctx
       )

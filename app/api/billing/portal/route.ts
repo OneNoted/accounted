@@ -6,9 +6,9 @@ import { getStripe } from '@/lib/stripe/client'
 /**
  * Create a Stripe Billing Customer Portal session so the user can manage,
  * upgrade/downgrade, or cancel their subscription. Stripe handles all the
- * compliance/PCI surface — we never build those flows ourselves.
+ * compliance/PCI surface: we never build those flows ourselves.
  *
- * company_subscriptions is read via the service client on purpose — the row
+ * company_subscriptions is read via the service client on purpose: the row
  * is webhook-owned and not member-readable under RLS; the query still filters
  * by the membership-validated companyId.
  */

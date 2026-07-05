@@ -16,7 +16,7 @@ interface MunicipalityComboboxProps {
   onSelect: (kommun: string, tableNumber: number, totalRate: number) => void
   /** Fired on free-text edits that don't match a known municipality. */
   onChange?: (kommun: string) => void
-  /** Income year — drives which year's municipal rates are fetched. */
+  /** Income year: drives which year's municipal rates are fetched. */
   year: number
   disabled?: boolean
   id?: string

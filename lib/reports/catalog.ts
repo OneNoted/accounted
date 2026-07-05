@@ -26,7 +26,7 @@ export type ReportCategory =
  * How the report is parameterised:
  * - `fiscal-range`: fiscal period + an optional date sub-range (ReportDateRange)
  * - `fiscal`: fiscal period only
- * - `calendar`: calendar year + monthly/quarterly/yearly period (VAT family) —
+ * - `calendar`: calendar year + monthly/quarterly/yearly period (VAT family):
  *   the deliberate exception to "pick the fiscal year once"
  * - `none`: no period parameter
  */
@@ -61,7 +61,7 @@ export interface ReportDescriptor {
   libraryOnly?: boolean
   /**
    * Accepts the per-dimension value filter (?dim_no/&dim_code → jsonb @>).
-   * P&L-safe reports ONLY — statutory outputs (balance sheet, balansrapport,
+   * P&L-safe reports ONLY: statutory outputs (balance sheet, balansrapport,
    * kassaflöde, årsredovisning, INK2, NE, VAT, SIE) must never carry this
    * flag; a filtered filing is a wrong filing. The whitelist is pinned by
    * lib/reports/__tests__/dimension-statutory-guard.test.ts.
@@ -69,6 +69,12 @@ export interface ReportDescriptor {
   dimensions?: boolean
   /** Only shown when company_settings.dimensions_enabled is true. */
   needsDimensions?: boolean
+  /**
+   * Nav-promoted page that happens to render in the focused-report shell.
+   * Hides the report-library back link and the shell's fiscal-year selector —
+   * the view owns all of its period controls.
+   */
+  standalone?: boolean
 }
 
 /** Categories shown in the legacy desktop rail, in order. */
@@ -114,7 +120,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     dimensions: true,
   },
   {
-    // Resultat per projekt/kostnadsställe — value-as-column P&L matrix over
+    // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over
     // one SIE dimension (Fortnox "Resultatrapport projekt").
     slug: 'dimension-pnl',
     labelKey: 'name_dimension_pnl',
@@ -206,6 +212,9 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'tax_vat',
     params: 'calendar',
     exports: ['xlsx'],
+    // Promoted to the Skatt & bokslut nav group — reached directly, not via
+    // the report library, and it manages its own period selection.
+    standalone: true,
   },
   {
     slug: 'periodisk-sammanstallning',
@@ -275,12 +284,12 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     // Period-scoped like the ledgers: the report page's räkenskapsår selector
     // drives the reconciliation window (issue #751). Was 'none' (periodless),
     // which left the view to host its OWN fiscal-year selector inside a
-    // loading-gated action bar — a render deadlock that hung the page on a
+    // loading-gated action bar: a render deadlock that hung the page on a
     // permanent skeleton (#771).
     params: 'fiscal',
   },
 
-  // --- Export & arkiv — library-only ---
+  // --- Export & arkiv: library-only ---
   {
     slug: 'sie-export',
     labelKey: 'name_sie_export',

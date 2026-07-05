@@ -25,7 +25,7 @@ const K3_LATENT_TAX_ACCOUNTS = ['2240', '8940'] as const
  * when a tab was hidden/backgrounded during a switch in another tab) and
  * force a hard reload on mismatch.
  *
- * Never cached — the whole point is that the response reflects the current
+ * Never cached: the whole point is that the response reflects the current
  * authoritative value in user_preferences.
  *
  * Uses requireAuth() directly (not withRouteContext): a null companyId is a
@@ -65,7 +65,7 @@ const PatchBodySchema = z.object({
  * company. Separate from /api/settings (which writes to `company_settings`)
  * because the columns live on different tables.
  *
- * Currently scoped to `accounting_framework` (K2 / K3) — only meaningful for
+ * Currently scoped to `accounting_framework` (K2 / K3), only meaningful for
  * entity_type='aktiebolag'. The handler rejects K3 for non-AB to prevent
  * impossible chart-of-accounts states downstream.
  */
@@ -80,7 +80,7 @@ export const PATCH = withRouteContext(
   const updates: Record<string, unknown> = {}
 
   if (validation.data.accounting_framework !== undefined) {
-    // Only AB can opt in to K3 — EF stays on the simpler EF rules and never
+    // Only AB can opt in to K3; EF stays on the simpler EF rules and never
     // touches K2/K3. Fetch the entity_type before applying.
     const { data: company } = await supabase
       .from('companies')
@@ -106,7 +106,7 @@ export const PATCH = withRouteContext(
   }
 
   if (Object.keys(updates).length === 0) {
-    // Nothing to write — surface the current row so the client can refresh
+    // Nothing to write: surface the current row so the client can refresh
     // its local state without a no-op write.
     const { data } = await supabase
       .from('companies')
@@ -132,7 +132,7 @@ export const PATCH = withRouteContext(
   // them for K2 companies via k2_excluded=true, so without this backfill
   // the engine cannot resolve account_id for the first latent-tax post.
   // Wrapped in try/catch so a CoA insert failure does not block the
-  // framework update — the user can still re-trigger the seed later.
+  // framework update: the user can still re-trigger the seed later.
   // The reverse switch (K3 → K2) intentionally keeps the rows for audit
   // history; the legal record of past K3 postings must remain intact.
   if (data.accounting_framework === 'k3') {

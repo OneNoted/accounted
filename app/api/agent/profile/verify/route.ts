@@ -5,7 +5,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 // POST /api/agent/profile/verify
 //
 // Stamps verified_at + verified_by_user_id on agent_profiles when the user
-// clicks "Det här ser rätt ut — kör" in Phase B. Idempotent: re-verifying
+// clicks "Det här ser rätt ut, kör" in Phase B. Idempotent: re-verifying
 // updates the timestamp; this is desirable for "Bygg om" rebuild flows.
 
 const BodySchema = z.object({
@@ -36,7 +36,7 @@ export const POST = withRouteContext('agent.profile.verify', async (request, ctx
 
   const companyId = parsed.data.company_id ?? activeCompanyId
 
-  // Defense in depth alongside RLS — confirm membership for the target
+  // Defense in depth alongside RLS: confirm membership for the target
   // company; a non-viewer role is required to stamp verified_at.
   const { data: membership } = await supabase
     .from('company_members')

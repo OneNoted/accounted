@@ -1,11 +1,11 @@
 /**
- * DimensionValidationError — the typed rejection of validateEntryDimensions()
+ * DimensionValidationError: the typed rejection of validateEntryDimensions()
  * (lib/bookkeeping/dimension-resolver.ts).
  *
  * Lives in its own module instead of ./errors.ts for one reason only:
  * dimension-resolver.ts is reachable from client bundles (lib/api/schemas.ts
  * imports DimensionsBagSchema and is itself imported by "use client"
- * components such as InvoiceEditor), while ./errors.ts imports next/server —
+ * components such as InvoiceEditor), while ./errors.ts imports next/server:
  * a server-only module graph (AsyncLocalStorage internals) that must never
  * enter a client bundle. This module stays dependency-free.
  *
@@ -47,7 +47,7 @@ export function formatDimensionValidationIssue(issue: DimensionValidationIssue):
     case 'unknown_dimension':
       return `Okänd dimension ${issue.sie_dim_no}. Skapa dimensionen i registret först.`
     case 'archived_value':
-      return `"${issue.code}" är arkiverat — återaktivera värdet för att använda det.`
+      return `"${issue.code}" är arkiverat: återaktivera värdet för att använda det.`
     case 'unknown_value':
       return `Okänt kostnadsställe/projekt: "${issue.code}" (dimension ${issue.sie_dim_no}). Skapa värdet i registret först.`
   }
@@ -66,7 +66,7 @@ function isDimensionValidationIssue(value: unknown): value is DimensionValidatio
 /**
  * Format an untyped issues array (e.g. `details.issues` from a serialized API
  * error envelope) into the Swedish message. Returns null unless `raw` is a
- * non-empty array of well-formed issues — callers fall back to their generic
+ * non-empty array of well-formed issues: callers fall back to their generic
  * message. Used by lib/errors/get-error-message.ts so the toast reconstructs
  * the exact per-code sentences instead of the static registry fallback.
  */
@@ -96,4 +96,45 @@ export class DimensionValidationError extends Error {
 
 export function isDimensionValidationError(err: unknown): err is DimensionValidationError {
   return err instanceof DimensionValidationError
+}
+
+// ============================================================================
+// Mandatory dimension enforcement (dimensions PR10)
+// ============================================================================
+
+export const MANDATORY_DIMENSION_MISSING = 'MANDATORY_DIMENSION_MISSING' as const
+
+export interface MandatoryDimensionViolation {
+  account_number: string
+  /** SIE dimension number the rule requires, e.g. '6'. */
+  sie_dim_no: string
+  /** Registry display name for the dimension, e.g. 'Projekt'. */
+  dimension_name: string
+}
+
+/** Swedish user-facing sentence for a single missing-dimension violation. */
+export function formatMandatoryDimensionViolation(v: MandatoryDimensionViolation): string {
+  return `Konto ${v.account_number} kräver ${v.dimension_name} — välj ett värde innan bokföring.`
+}
+
+/**
+ * Raised at COMMIT time (commitEntry / the bulk-book pre-check) when an
+ * active 'required' rule in account_dimension_rules is unsatisfied by a
+ * line's dimensions bag. Drafts may be incomplete by design — the rule bites
+ * when the verifikat is about to become immutable. Companies without rules
+ * (every company by default) never reach this error.
+ */
+export class MandatoryDimensionMissingError extends Error {
+  readonly code = MANDATORY_DIMENSION_MISSING
+
+  constructor(public readonly violations: MandatoryDimensionViolation[]) {
+    super(violations.map(formatMandatoryDimensionViolation).join(' '))
+    this.name = 'MandatoryDimensionMissingError'
+  }
+}
+
+export function isMandatoryDimensionMissingError(
+  err: unknown,
+): err is MandatoryDimensionMissingError {
+  return err instanceof MandatoryDimensionMissingError
 }

@@ -185,7 +185,7 @@ export function SalaryCalendar({
     return m
   }, [absences])
 
-  // Live counts within the pay period — unique dates per category. Emit so
+  // Live counts within the pay period: unique dates per category. Emit so
   // the parent can render day badges without waiting for a recalculation.
   // Parental groups parental + pregnancy + care_relative to match how the
   // existing snapshot column lumps them.
@@ -251,7 +251,7 @@ export function SalaryCalendar({
   const handleCellDblClick = (date: Date) => {
     if (readOnly) return
     const key = format(date, 'yyyy-MM-dd')
-    // Only open the inspector if there's something to inspect — otherwise
+    // Only open the inspector if there's something to inspect: otherwise
     // it would just be an empty dialog.
     if (workedMap.has(key) || (absenceMap.get(key)?.length ?? 0) > 0) {
       setInspecting(key)
@@ -747,7 +747,7 @@ function BulkAbsenceDialog({
       if (!isFinite(hoursNum) || hoursNum <= 0 || hoursNum > 24) {
         throw new Error(t('error_hours_range'))
       }
-      // No batch endpoint for absence — call POST per date so we can isolate
+      // No batch endpoint for absence: call POST per date so we can isolate
       // 24h-cap conflicts. Pay-period sized loops are fine.
       const localConflicts: BulkConflict[] = []
       for (const date of dates) {

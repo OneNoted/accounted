@@ -50,11 +50,11 @@ export async function buildArsredovisningData(
   overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
 ): Promise<ArsredovisningData> {
   // The RR/BR are rendered at ÅRL post level from the same K2 risbs mapping
-  // that drives the iXBRL filing — never from per-account report rows.
+  // that drives the iXBRL filing, never from per-account report rows.
   // Bolagsverket rejects balans-/resultaträkningar med kontonummer, so the
   // statement data must not carry account-level granularity at all. Two TB
   // variants per year (see TrialBalancePair): the FULL trial balance drives
-  // the BR (2099 booked), the PRE-CLOSING one drives the RR (class 3–8
+  // the BR (2099 booked), the PRE-CLOSING one drives the RR (class 3-8
   // still open).
   const [periodResult, settingsResult, companyResult, periodList, tbFull, tbPreClosing, narrative] = await Promise.all([
     supabase
@@ -86,7 +86,7 @@ export async function buildArsredovisningData(
     ),
     generateTrialBalance(supabase, companyId, fiscalPeriodId),
     generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
-    // Load persisted narrative overrides — replaces the URL-query-param
+    // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
     // top of the saved baseline if needed.
@@ -103,8 +103,7 @@ export async function buildArsredovisningData(
     | null
   const companyName = settings?.company_name ?? 'Bolaget'
   const orgNumber = settings?.org_number ?? ''
-  // Default to 'unknown' (not 'aktiebolag') when entity_type isn't set —
-  // otherwise the K2 guard in buildK2Noter would claim K2 for every
+  // Default to 'unknown' (not 'aktiebolag') when entity_type isn't set:   // otherwise the K2 guard in buildK2Noter would claim K2 for every
   // unconfigured company, which is exactly the false-assertion the guard
   // was added to prevent. Prefer the companies row over company_settings
   // since the multi-tenant refactor made companies the source of truth.
@@ -117,7 +116,7 @@ export async function buildArsredovisningData(
     companyRow?.accounting_framework === 'k3' ? 'k3' : 'k2'
 
   // company_settings stores the address as flat columns (address_line1,
-  // postal_code, city) — there is no `address` json column. Selecting one
+  // postal_code, city): there is no `address` json column. Selecting one
   // made the whole settings query fail, so every ÅR fell back to "Bolaget"
   // with an empty org number.
   const city = (settings as { city?: string | null } | null)?.city ?? null
@@ -142,7 +141,7 @@ export async function buildArsredovisningData(
       previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
     } catch {
       statementWarnings.push(
-        'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår — balans- och resultaträkningen visas utan jämförelseår. Kontrollera det föregående årets bokföring.',
+        'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår, balans- och resultaträkningen visas utan jämförelseår. Kontrollera det föregående årets bokföring.',
       )
     }
   }
@@ -177,7 +176,7 @@ export async function buildArsredovisningData(
 
   // Duplicate-value consistency with the RR (mirrors build-input.ts): the
   // flerårsöversikt is computed from the income statement (ALL class-3
-  // revenue), but nettoomsättning per ÅRL is strictly 3000–3799. Override
+  // revenue), but nettoomsättning per ÅRL is strictly 3000-3799. Override
   // the current + previous year so the FB table ties to the RR two pages
   // later. Older years have no RR in the document and keep the IS values.
   if (flerarsoversikt.length > 0) {
@@ -219,7 +218,7 @@ export async function buildArsredovisningData(
           narrative,
         )
 
-  // Kassaflödesanalys + separate equity-changes statement — K3 only. K2
+  // Kassaflödesanalys + separate equity-changes statement, K3 only. K2
   // mindre företag is exempt from kassaflödesanalys (BFNAR 2016:10 punkt
   // 5.2) and keeps equity changes inside förvaltningsberättelsen.
   let kassaflodesanalys: KassaflodesAnalysisSummary | undefined
@@ -233,7 +232,7 @@ export async function buildArsredovisningData(
         companyId,
         fiscalPeriodId,
       )
-      // Strip fiscal_period_id from the embedded report — period info is
+      // Strip fiscal_period_id from the embedded report: period info is
       // already on ArsredovisningData.fiscal_period; carrying it twice in
       // the payload would be redundant.
       kassaflodesanalys = {
@@ -246,14 +245,14 @@ export async function buildArsredovisningData(
         reconciliation: cashFlow.reconciliation,
       }
     } catch {
-      // A partial SIE import can leave 1xxx without an IB row — the report
+      // A partial SIE import can leave 1xxx without an IB row: the report
       // throws. Surface as a warning instead of blocking the whole ÅR.
       noterWarnings.push(
         'Kassaflödesanalysen kunde inte genereras automatiskt. Kontrollera att ingående och utgående saldo på 19xx finns och kör om bokslutet.',
       )
     }
 
-    // Equity-changes statement — derived from the post-level mapping. We
+    // Equity-changes statement: derived from the post-level mapping. We
     // reuse buildEquityChangesNote's roll-forward to keep one source of
     // truth for the closing total.
     equity_changes_statement = buildK3EquityChangesStatement(mapping)
@@ -272,7 +271,7 @@ export async function buildArsredovisningData(
 
   // mapping.warnings carry the compliance-critical signals (unmapped
   // accounts whose balances are MISSING from the document, RR ≠ 2099,
-  // obalans, reclass review nudges) — surfacing them pre-download is what
+  // obalans, reclass review nudges), surfacing them pre-download is what
   // keeps a non-fileable PDF from reaching Bolagsverket.
   const warnings: string[] = [...statementWarnings, ...mapping.warnings, ...noterWarnings]
   if (entityType !== 'aktiebolag' && entityType !== 'unknown') {
@@ -288,12 +287,12 @@ export async function buildArsredovisningData(
     // verify the document against their specific obligations before sending
     // to Bolagsverket.
     warnings.push(
-      'Bolaget redovisar enligt K3 (BFNAR 2012:1). Soliditeten är beräknad med 79,4 % av obeskattade reserver inräknat i eget kapital. PDF:en innehåller kassaflödesanalys, förändring av eget kapital och utökade noter — granska innehållet mot er specifika redovisning innan inlämning.',
+      'Bolaget redovisar enligt K3 (BFNAR 2012:1). Soliditeten är beräknad med 79,4 % av obeskattade reserver inräknat i eget kapital. PDF:en innehåller kassaflödesanalys, förändring av eget kapital och utökade noter: granska innehållet mot er specifika redovisning innan inlämning.',
     )
   }
   if (entityType === 'unknown') {
     warnings.push(
-      'Företagsform saknas i inställningarna — fyll i Inställningar → Företag för att få rätt redovisningsprinciper i not 1.',
+      'Företagsform saknas i inställningarna: fyll i Inställningar → Företag för att få rätt redovisningsprinciper i not 1.',
     )
   }
   if (!persistedAgmDate) {
@@ -307,7 +306,7 @@ export async function buildArsredovisningData(
     // defective fastställelseintyg.
     if (persistedAgmDate <= period.period_end) {
       warnings.push(
-        `Datum för årsstämma (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}) — fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
+        `Datum för årsstämma (${persistedAgmDate}) ligger på eller före räkenskapsårets slut (${period.period_end}): fastställelseintyget blir juridiskt felaktigt. Kontrollera datumet.`,
       )
     } else {
       const periodEndDate = new Date(`${period.period_end}T00:00:00Z`)
@@ -410,7 +409,7 @@ async function buildFlerarsoversikt(
         .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
       // Soliditet differs by framework:
       //   K2 (ÅRL / BFNAR 2016:10): 20xx only. 21xx (periodiseringsfonder,
-      //   överavskrivningar) are obeskattade reserver — partially deferred
+      //   överavskrivningar) are obeskattade reserver: partially deferred
       //   tax, not equity. Including 21xx would inflate soliditet for any AB
       //   that posts dispositions.
       //
@@ -418,7 +417,7 @@ async function buildFlerarsoversikt(
       //   skatteskuld. Account 2240 holds the latent tax liability and is
       //   already classified as a liability via class 2 / account_group 22,
       //   so the soliditet add-on is just the equity portion of 21xx. (We
-      //   do NOT double-count 2240 here — the trial balance row for 2240
+      //   do NOT double-count 2240 here: the trial balance row for 2240
       //   already lives in eqLiab as a liability.)
       const baseEquity = tb.rows
         .filter((r) => r.account_number.startsWith('20'))
@@ -456,7 +455,7 @@ async function buildFlerarsoversikt(
 }
 
 /**
- * Förvaltningsberättelsens "Förändring av eget kapital" table — post-level
+ * Förvaltningsberättelsens "Förändring av eget kapital" table, post-level
  * labels only (no kontonummer). Only genuine equity posts (20xx) appear;
  * obeskattade reserver are NOT eget kapital and were dropped from the table
  * when the account-row version was replaced by the mapping-driven one.
@@ -493,7 +492,7 @@ async function buildK2Noter(
   const notes: NoteEntry[] = []
   const warnings: string[] = []
   // Note 1: framework. Only claim K2 explicitly when we know the company is
-  // an AB and using K2 — otherwise emit a generic principles note so the
+  // an AB and using K2: otherwise emit a generic principles note so the
   // ÅR doesn't falsely assert a framework the company isn't on.
   // K3 election isn't yet tracked separately; we treat any non-AB as not-K2.
   const isAbK2 = entityType === 'aktiebolag'
@@ -509,7 +508,7 @@ async function buildK2Noter(
   // structure. Read from company_settings when present; surface a warning
   // when missing so the user knows to fill it in. We also surface the
   // warning when entityType is 'unknown' since the company may in fact be
-  // an AB the user just hasn't configured yet — staying silent would let
+  // an AB the user just hasn't configured yet: staying silent would let
   // them download an incomplete K2 ÅR without realising.
   const maybeAb = isAbK2 || entityType === 'unknown'
   if (maybeAb) {
@@ -534,8 +533,7 @@ async function buildK2Noter(
         body: parts.join(' '),
       })
     } else {
-      // Don't write a "saknas — komplettera" placeholder into the PDF body —
-      // that text would land in the Bolagsverket-filed document as a user-
+      // Don't write a "saknas: komplettera" placeholder into the PDF body:       // that text would land in the Bolagsverket-filed document as a user-
       // facing error string and the filing would be K2-non-compliant
       // (BFNAR 2016:10 punkt 5.4 / ÅRL 5 kap 14 § require the actual
       // registered amount). Omit the note entirely and surface a warning so
@@ -546,7 +544,7 @@ async function buildK2Noter(
     }
   }
 
-  // Avskrivningstider — derive from asset register (supplementary
+  // Avskrivningstider: derive from asset register (supplementary
   // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
   const assets = await listAssets(supabase, companyId)
   if (assets.length > 0) {
@@ -571,7 +569,7 @@ async function buildK2Noter(
       }
       for (const [cat, yearsSet] of byCategory.entries()) {
         const yrs = Array.from(yearsSet).sort((a, b) => a - b)
-        const yrsLabel = yrs.length === 1 ? `${yrs[0]} år` : `${yrs[0]}–${yrs[yrs.length - 1]} år`
+        const yrsLabel = yrs.length === 1 ? `${yrs[0]} år` : `${yrs[0]}-${yrs[yrs.length - 1]} år`
         lines.push(`• ${categoryLabels[cat] ?? cat}: ${yrsLabel}`)
       }
       notes.push({
@@ -601,10 +599,10 @@ async function buildK2Noter(
   })
   if (rollforwardNote) notes.push(rollforwardNote)
 
-  // Medelantal anställda — FTE-weighted average per ÅRL 5:20 §. We fetch the
+  // Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. We fetch the
   // full employment-window data because the column 'is_active' doesn't exist
   // on the employees table; a count() filtered by it would always return 0.
-  // ÅRL 5:20 § requires the note for AB regardless of value — "0" must be
+  // ÅRL 5:20 § requires the note for AB regardless of value: "0" must be
   // disclosed as "Inga anställda". For enskild firma the disclosure is
   // discretionary, so we still skip when medelantal === 0 there.
   const { data: employeeRows } = await supabase
@@ -645,7 +643,7 @@ async function buildK2Noter(
         : 'Inga skulder förfaller till betalning senare än fem år efter balansdagen.',
   })
 
-  // Ställda säkerheter (ÅRL 5:14 §) — separate disclosure from
+  // Ställda säkerheter (ÅRL 5:14 §): separate disclosure from
   // eventualförpliktelser. Manual override on arsredovisning_narratives,
   // defaulting to "Inga.".
   notes.push({
@@ -662,7 +660,7 @@ async function buildK2Noter(
   })
 
   // Koncernförhållanden (BFNAR 2016:10 kap. 19). Emitted only when a parent
-  // company is configured — companies without a parent skip this note.
+  // company is configured: companies without a parent skip this note.
   const parentName = narrative?.parent_company_name?.trim()
   if (parentName) {
     const parts: string[] = [`Moderföretag: ${parentName}.`]
@@ -689,7 +687,7 @@ async function buildK2Noter(
  *   - Standard K3 placeholders for händelser efter balansdagen +
  *     eventualförpliktelser
  *
- * The aktiekapital note is shared with K2 logic — K3 punkt 18.x also
+ * The aktiekapital note is shared with K2 logic: K3 punkt 18.x also
  * mandates the share-capital disclosure for AB.
  */
 async function buildK3Noter(
@@ -761,7 +759,7 @@ async function buildK3Noter(
   const hasComponents = anyAssetHasComponents(adaptedAssets)
   notes.push(buildK3RedovisningsPrinciper(hasComponents))
 
-  // 2. Aktiekapital (shared with K2 logic — K3 punkt 18.x mandates the same
+  // 2. Aktiekapital (shared with K2 logic: K3 punkt 18.x mandates the same
   // disclosure for AB).
   const isAb = entityType === 'aktiebolag'
   const maybeAb = isAb || entityType === 'unknown'
@@ -797,7 +795,7 @@ async function buildK3Noter(
     }
   }
 
-  // 3. Materiella anläggningstillgångar — with optional per-component
+  // 3. Materiella anläggningstillgångar: with optional per-component
   // breakdown. The note is omitted when no tangible assets exist. Uses the
   // adapted asset list computed above so the K3-component shape matches what
   // the builder's type guard expects.
@@ -808,7 +806,7 @@ async function buildK3Noter(
   if (materialiNote) notes.push(materialiNote)
 
   // 3b. Anläggningstillgångar roll-forward (ÅRL 5:8 §). Required even under
-  // K3 — K3 ch.17 layers component depreciation on top, but the basic
+  // K3: K3 ch.17 layers component depreciation on top, but the basic
   // per-category roll-forward of anskaffningsvärde + ackumulerade
   // avskrivningar is the statutory baseline.
   const rollforwardNote = buildAnlaggningstillgangarNote({
@@ -865,7 +863,7 @@ async function buildK3Noter(
     )
   }
 
-  // 5. Medelantal anställda — FTE-weighted average per ÅRL 5:20 §. The note is
+  // 5. Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. The note is
   // statutory for AB regardless of value (disclose "0" explicitly); for non-AB
   // entities we still skip when there are no employees.
   const { data: employeeRows } = await supabase
@@ -903,7 +901,7 @@ async function buildK3Noter(
         : 'Inga skulder förfaller till betalning senare än fem år efter balansdagen.',
   })
 
-  // 7. Eventualförpliktelser (K3 punkt 21 — separate disclosure).
+  // 7. Eventualförpliktelser (K3 punkt 21: separate disclosure).
   notes.push({
     number: notes.length + 1,
     title: 'Eventualförpliktelser',
@@ -917,7 +915,7 @@ async function buildK3Noter(
     body: narrative?.securities_pledged?.trim() || 'Inga.',
   })
 
-  // 9. Koncernförhållanden (BFNAR 2012:1 kap. 8 — moderföretagets namn,
+  // 9. Koncernförhållanden (BFNAR 2012:1 kap. 8: moderföretagets namn,
   // organisationsnummer och säte). Emitted only when configured.
   const parentName = narrative?.parent_company_name?.trim()
   if (parentName) {
@@ -950,9 +948,9 @@ async function buildK3Noter(
  * movements are derived so the roll-forward ties exactly to the booked UB:
  * bundet-EK growth is presented as nyemission, a fritt-EK shortfall beyond
  * årets resultat as utdelning (the overwhelmingly common cases; a positive
- * fritt residual — e.g. aktieägartillskott — is folded into nyemission
+ * fritt residual, e.g. aktieägartillskott, is folded into nyemission
  * rather than invent an unbookable row). First fiscal year falls back to
- * opening = closing − årets resultat.
+ * opening = closing - årets resultat.
  */
 function buildK3EquityChangesStatement(
   mapping: K2MappingResult,

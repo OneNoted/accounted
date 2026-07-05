@@ -1,5 +1,5 @@
 /**
- * Tests for gnubok_get_agent_briefing — session-bootstrap context for the
+ * Tests for gnubok_get_agent_briefing: session-bootstrap context for the
  * specialized accountant agent over MCP.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -53,6 +53,7 @@ function mockSupabase(opts: {
   // Dimension registry (dimensions PR3). Default: empty → block omitted.
   dimensionRows?: Array<{ id: string; sie_dim_no: number; name: string }>
   dimensionValueRows?: Array<{ dimension_id: string; code: string; name: string }>
+  dimensionRuleRows?: Array<{ account_number: string; rule_type: string; dimension_id: string }>
   dimensionsEnabled?: boolean
   errors?: { profile?: string; memory?: string; atoms?: string }
 }) {
@@ -164,6 +165,10 @@ function mockSupabase(opts: {
       if (table === 'dimension_values') {
         return chainResolving(opts.dimensionValueRows ?? [])
       }
+      if (table === 'account_dimension_rules') {
+        // PR10: the briefing surfaces active rules; default none.
+        return chainResolving(opts.dimensionRuleRows ?? [])
+      }
       throw new Error(`Unexpected table in test mock: ${table}`)
     }),
   }
@@ -260,7 +265,7 @@ describe('gnubok_get_agent_briefing tool', () => {
     expect(result.company.accounting_method).toBeNull()
   })
 
-  it('returns only the first name (tilltalsnamn) — data minimisation, not the full legal name', async () => {
+  it('returns only the first name (tilltalsnamn): data minimisation, not the full legal name', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
     const supabase = mockSupabase({ profile: null, userFullName: 'Peter Bennet' })
     const result = (await tool.execute(
