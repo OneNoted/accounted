@@ -189,8 +189,10 @@ describe('correction-document-relink.pg — relink_documents_to_correction RPC',
         [seed.userId, originalId, correctionId],
       )
       expect(result.rows[0]!.moved).toBe(1)
-      await client.query('ROLLBACK')
     } finally {
+      // Always roll back, even if the RPC or an assertion threw: releasing a
+      // connection mid-transaction poisons it for the next test that reuses it.
+      await client.query('ROLLBACK').catch(() => {})
       client.release()
     }
   })

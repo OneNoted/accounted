@@ -153,7 +153,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       loadRun() // background reconcile - not awaited
       return
     }
-    const result = await res.json()
+    const result = await res.json().catch(() => ({}))
     toast({
       title: t('toast_status_failed'),
       description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
@@ -213,7 +213,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       router.push('/salary')
       return
     }
-    const result = await res.json()
+    const result = await res.json().catch(() => ({}))
     toast({
       title: t('toast_delete_failed'),
       description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
@@ -233,7 +233,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       router.push(`/salary/runs/${data.id}`)
       return
     }
-    const result = await res.json()
+    const result = await res.json().catch(() => ({}))
     toast({
       title: t('toast_correction_failed'),
       description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
@@ -253,7 +253,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       await loadRun()
       toast({ title: t('toast_employee_added') })
     } else {
-      const result = await res.json()
+      const result = await res.json().catch(() => ({}))
       toast({
         title: t('toast_add_employee_failed'),
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
