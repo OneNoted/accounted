@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +20,7 @@ function RequiredMark() {
 }
 
 export default function NewEmployeePage() {
+  const t = useTranslations('salary_employee')
   const router = useRouter()
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -97,12 +99,12 @@ export default function NewEmployeePage() {
     })
 
     if (res.ok) {
-      toast({ title: 'Anställd skapad' })
+      toast({ title: t('new_created') })
       router.push('/salary/employees')
     } else {
       const result = await res.json()
       toast({
-        title: 'Kunde inte skapa anställd',
+        title: t('new_create_failed'),
         description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
         variant: 'destructive',
       })
@@ -115,50 +117,50 @@ export default function NewEmployeePage() {
     <div className="space-y-8">
       <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon" asChild>
-          <Link href="/salary/employees" aria-label="Tillbaka till anställda"><ArrowLeft className="h-4 w-4" /></Link>
+          <Link href="/salary/employees" aria-label={t('form_back_to_employees')}><ArrowLeft className="h-4 w-4" /></Link>
         </Button>
-        <h1 className="font-display text-2xl md:text-3xl tracking-tight">Ny anställd</h1>
+        <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('new_title')}</h1>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Personal info */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Personuppgifter</CardTitle>
+            <CardTitle className="text-base">{t('form_personal_info')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="first_name">Förnamn<RequiredMark /></Label>
+                <Label htmlFor="first_name">{t('form_first_name')}<RequiredMark /></Label>
                 <Input id="first_name" name="first_name" required />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="last_name">Efternamn<RequiredMark /></Label>
+                <Label htmlFor="last_name">{t('form_last_name')}<RequiredMark /></Label>
                 <Input id="last_name" name="last_name" required />
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="personnummer">Personnummer (12 siffror)<RequiredMark /></Label>
+                <Label htmlFor="personnummer">{t('new_personnummer_label')}<RequiredMark /></Label>
                 <Input
                   id="personnummer"
                   name="personnummer"
-                  placeholder="ÅÅÅÅMMDDNNNN"
+                  placeholder={t('new_personnummer_placeholder')}
                   required
                   maxLength={13}
                   value={personnummer}
                   onChange={(e) => setPersonnummer(e.target.value)}
                 />
-                <p className="text-xs text-muted-foreground">Krypteras vid lagring</p>
+                <p className="text-xs text-muted-foreground">{t('new_personnummer_hint')}</p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">E-post</Label>
+                <Label htmlFor="email">{t('form_email')}</Label>
                 <Input id="email" name="email" type="email" />
-                <p className="text-xs text-muted-foreground">Krävs för att skicka lönebesked</p>
+                <p className="text-xs text-muted-foreground">{t('form_email_hint')}</p>
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="phone">Telefon</Label>
+              <Label htmlFor="phone">{t('form_phone')}</Label>
               <Input id="phone" name="phone" className="max-w-xs" />
             </div>
           </CardContent>
@@ -167,20 +169,20 @@ export default function NewEmployeePage() {
         {/* Address */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Adress</CardTitle>
+            <CardTitle className="text-base">{t('form_address')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="address_line1">Gatuadress</Label>
+              <Label htmlFor="address_line1">{t('form_street_address')}</Label>
               <Input id="address_line1" name="address_line1" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="postal_code">Postnummer</Label>
+                <Label htmlFor="postal_code">{t('form_postal_code')}</Label>
                 <Input id="postal_code" name="postal_code" className="max-w-[160px]" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="city">Ort</Label>
+                <Label htmlFor="city">{t('form_city')}</Label>
                 <Input id="city" name="city" />
               </div>
             </div>
@@ -190,33 +192,33 @@ export default function NewEmployeePage() {
         {/* Employment */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Anställning</CardTitle>
+            <CardTitle className="text-base">{t('form_employment')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="employment_type">Typ</Label>
+                <Label htmlFor="employment_type">{t('form_employment_type')}</Label>
                 <Select value={employmentType} onValueChange={setEmploymentType}>
                   <SelectTrigger id="employment_type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="employee">Anställd</SelectItem>
-                    <SelectItem value="company_owner">Företagsledare</SelectItem>
-                    <SelectItem value="board_member">Styrelseledamot</SelectItem>
+                    <SelectItem value="employee">{t('form_employment_type_employee')}</SelectItem>
+                    <SelectItem value="company_owner">{t('form_employment_type_company_owner')}</SelectItem>
+                    <SelectItem value="board_member">{t('form_employment_type_board_member')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="employment_start">Anställningsdatum<RequiredMark /></Label>
+                <Label htmlFor="employment_start">{t('form_employment_start')}<RequiredMark /></Label>
                 <Input id="employment_start" name="employment_start" type="date" required />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="employment_end">Slutdatum</Label>
+                <Label htmlFor="employment_end">{t('form_employment_end')}</Label>
                 <Input id="employment_end" name="employment_end" type="date" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="employment_degree">Sysselsättningsgrad (%)</Label>
+                <Label htmlFor="employment_degree">{t('form_employment_degree')}</Label>
                 <Input id="employment_degree" name="employment_degree" type="number" defaultValue="100" min="1" max="100" />
               </div>
             </div>
@@ -226,30 +228,30 @@ export default function NewEmployeePage() {
         {/* Salary */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Lön</CardTitle>
+            <CardTitle className="text-base">{t('form_salary')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="salary_type">Löneform<RequiredMark /></Label>
+                <Label htmlFor="salary_type">{t('form_salary_type')}<RequiredMark /></Label>
                 <Select value={salaryType} onValueChange={setSalaryType}>
                   <SelectTrigger id="salary_type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="monthly">Månadslön</SelectItem>
-                    <SelectItem value="hourly">Timlön</SelectItem>
+                    <SelectItem value="monthly">{t('form_salary_type_monthly')}</SelectItem>
+                    <SelectItem value="hourly">{t('form_salary_type_hourly')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               {salaryType === 'monthly' ? (
                 <div className="space-y-2">
-                  <Label htmlFor="monthly_salary">Månadslön (brutto, SEK)<RequiredMark /></Label>
+                  <Label htmlFor="monthly_salary">{t('form_monthly_salary')}<RequiredMark /></Label>
                   <Input id="monthly_salary" name="monthly_salary" type="number" step="1" min="1" required />
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <Label htmlFor="hourly_rate">Timlön (SEK)<RequiredMark /></Label>
+                  <Label htmlFor="hourly_rate">{t('form_hourly_rate')}<RequiredMark /></Label>
                   <Input id="hourly_rate" name="hourly_rate" type="number" step="0.01" min="0.01" required />
                 </div>
               )}
@@ -261,12 +263,12 @@ export default function NewEmployeePage() {
         {dimensionsEnabled && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Kostnadsställe / Projekt (standard)</CardTitle>
+              <CardTitle className="text-base">{t('form_dimensions_title')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               <LineDimensionFields dimensions={dimensions} onChange={setDimension} />
               <p className="text-xs text-muted-foreground">
-                Föreslås på lönekostnadsrader vid bokföring av lönekörningar.
+                {t('form_dimensions_hint')}
               </p>
             </CardContent>
           </Card>
@@ -278,38 +280,38 @@ export default function NewEmployeePage() {
         {/* Vacation */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Semester</CardTitle>
+            <CardTitle className="text-base">{t('form_vacation')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="vacation_rule">Semesterregel</Label>
+                <Label htmlFor="vacation_rule">{t('form_vacation_rule')}</Label>
                 <Select value={vacationRule} onValueChange={setVacationRule}>
                   <SelectTrigger id="vacation_rule">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="procentregeln">Procentregeln (12 %)</SelectItem>
-                    <SelectItem value="sammaloneregeln">Sammalöneregeln</SelectItem>
-                    <SelectItem value="semesterersattning">Semesterersättning (betalas ut direkt)</SelectItem>
-                    <SelectItem value="none">Ingen semesteravsättning</SelectItem>
+                    <SelectItem value="procentregeln">{t('form_vacation_rule_procentregeln')}</SelectItem>
+                    <SelectItem value="sammaloneregeln">{t('form_vacation_rule_sammaloneregeln')}</SelectItem>
+                    <SelectItem value="semesterersattning">{t('form_vacation_rule_semesterersattning')}</SelectItem>
+                    <SelectItem value="none">{t('form_vacation_rule_none')}</SelectItem>
                   </SelectContent>
                 </Select>
                 {vacationRule === 'none' && (
                   <p className="text-xs text-muted-foreground">
-                    Ingen avsättning till 2920 bokas. Vanligt för ägare som är enda anställd.
+                    {t('new_vacation_none_hint')}
                   </p>
                 )}
                 {vacationRule === 'semesterersattning' && (
                   <p className="text-xs text-muted-foreground">
-                    12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp — vanligt för tim- och visstidsanställda.
+                    {t('form_vacation_semesterersattning_hint')}
                   </p>
                 )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="vacation_days_per_year">Semesterdagar per år</Label>
+                <Label htmlFor="vacation_days_per_year">{t('form_vacation_days')}</Label>
                 <Input id="vacation_days_per_year" name="vacation_days_per_year" type="number" min="25" max="40" defaultValue="25" />
-                <p className="text-xs text-muted-foreground">Lagstadgat minimum: 25 dagar</p>
+                <p className="text-xs text-muted-foreground">{t('form_vacation_days_hint')}</p>
               </div>
             </div>
           </CardContent>
@@ -318,31 +320,31 @@ export default function NewEmployeePage() {
         {/* Bank */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Bankkonto</CardTitle>
+            <CardTitle className="text-base">{t('form_bank_account')}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="clearing_number">Clearingnummer</Label>
+                <Label htmlFor="clearing_number">{t('form_clearing_number')}</Label>
                 <Input id="clearing_number" name="clearing_number" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="bank_account_number">Kontonummer</Label>
+                <Label htmlFor="bank_account_number">{t('form_account_number')}</Label>
                 <Input id="bank_account_number" name="bank_account_number" />
               </div>
             </div>
-            <p className="text-xs text-muted-foreground mt-2">Krävs innan lönekörning kan godkännas</p>
+            <p className="text-xs text-muted-foreground mt-2">{t('form_bank_hint')}</p>
           </CardContent>
         </Card>
 
         {/* Actions */}
         <div className="flex justify-end gap-3">
           <Button variant="outline" asChild>
-            <Link href="/salary/employees">Avbryt</Link>
+            <Link href="/salary/employees">{t('form_cancel')}</Link>
           </Button>
           <Button type="submit" disabled={saving}>
             <Save className="mr-2 h-4 w-4" />
-            {saving ? 'Sparar...' : 'Spara'}
+            {saving ? t('form_saving') : t('form_save')}
           </Button>
         </div>
       </form>

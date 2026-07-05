@@ -98,6 +98,14 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
+  // Public payslip pages — the token in the URL is the authentication
+  // (resolved server-side against salary_payslip_links). Employees have no
+  // account; bouncing them to /login would make every emailed payslip link
+  // dead. See app/payslip/[token]/page.tsx.
+  if (pathname.startsWith('/payslip')) {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

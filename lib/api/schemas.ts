@@ -1356,6 +1356,14 @@ export const UpdateSettingsSchema = z.object({
   dimensions_enabled: z.boolean().optional(),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
+  // Salary settings (migration 20260703190000). Day of month salaries are
+  // paid (1–28 so it exists in every month) and the default bank whose
+  // upload instructions the payment-file panel pre-selects.
+  salary_pay_day: z.number().int().min(1).max(28).optional(),
+  salary_default_bank: z
+    .enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other'])
+    .nullable()
+    .optional(),
 }).refine(
   (data) => {
     // BFL 3 kap.: Enskild firma must have fiscal year starting January
@@ -1988,6 +1996,20 @@ export const CreateSalaryRunSchema = z.object({
   period_month: z.number().int().min(1).max(12),
   payment_date: isoDate,
   voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').default('A'),
+  notes: z.string().max(2000).optional(),
+})
+
+// One-click variant for the dashboard route: all fields optional — the route
+// resolves defaults server-side (period = month after the latest
+// non-corrected run, payment date from company_settings.salary_pay_day,
+// series from the per-source-type map), so "Starta lönekörning" can POST {}.
+// The v1 REST surface keeps the strict CreateSalaryRunSchema above (it
+// inserts the fields verbatim and must 400 on omissions, not 500).
+export const CreateSalaryRunWithDefaultsSchema = z.object({
+  period_year: z.number().int().min(2020).max(2100).optional(),
+  period_month: z.number().int().min(1).max(12).optional(),
+  payment_date: isoDate.optional(),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
   notes: z.string().max(2000).optional(),
 })
 

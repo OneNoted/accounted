@@ -1881,6 +1881,16 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen måste vara markerad som betald för bokföring.',
     message_en: 'Salary run must be marked paid before booking.',
   },
+  SALARY_PAYSLIPS_SEND_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Lönespecifikationer kan bara skickas efter godkännande.',
+    message_en: 'Payslips can only be sent after the salary run is approved.',
+  },
+  SALARY_PAYSLIPS_NO_EMPLOYEES: {
+    httpStatus: 400,
+    message_sv: 'Inga anställda i lönekörningen.',
+    message_en: 'No employees in the salary run.',
+  },
   AGI_GENERATE_NOT_BOOKABLE: {
     httpStatus: 400,
     message_sv: 'AGI kan endast genereras för lönekörningar i status review, approved, paid, booked eller corrected.',

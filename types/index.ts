@@ -329,6 +329,13 @@ export interface CompanySettings {
   // load-bearing for correctness. Free tier (founder decision 2026-07-02).
   dimensions_enabled: boolean
 
+  // Salary payments (migration 20260508120000 + 20260703190000).
+  // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
+  // retired by the banks during 2026.
+  preferred_payment_format: 'bg_lb' | 'pain001'
+  salary_pay_day: number
+  salary_default_bank: 'swedbank' | 'seb' | 'handelsbanken' | 'nordea' | 'other' | null
+
   // Sandbox
   is_sandbox: boolean
 
