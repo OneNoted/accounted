@@ -2702,11 +2702,22 @@
     "schedule_update_failed_title": "Could not update schedule",
     "schedule_deleted_title": "Schedule removed",
     "schedule_delete_failed_title": "Could not remove schedule",
-    "delete_confirm": "Remove schedule \"{name}\"? Already created invoices are not affected."
+    "delete_confirm": "Remove schedule \"{name}\"? Already created invoices are not affected.",
+    "run_now": "Create invoice now",
+    "run_now_confirm": "Create an invoice for \"{name}\" now? If the schedule has automatic sending, it is emailed to the customer immediately. The next scheduled run is not affected.",
+    "run_now_success_title": "Invoice created",
+    "run_now_failed_title": "Could not create invoice",
+    "resume_autosend_confirm": "Reactivate \"{name}\"? This resumes automatic monthly emails to the customer.",
+    "send_time": "at {time}"
   },
   "invoice_recurring_new": {
     "back": "Back",
     "title": "New recurring schedule",
+    "edit_title": "Edit schedule",
+    "save_changes": "Save changes",
+    "saving": "Saving...",
+    "updated_title": "Schedule updated",
+    "update_failed_title": "Could not update schedule",
     "schedule_card_title": "Schedule",
     "name_label": "Name",
     "name_placeholder": "e.g. Monthly retainer Acme AB",
@@ -2740,7 +2751,10 @@
     "validation_unit_required": "Unit required",
     "validation_customer_required": "Select a customer",
     "validation_name_required": "Name required",
-    "validation_min_one_row": "At least one row required"
+    "validation_min_one_row": "At least one row required",
+    "send_hour_label": "Send at",
+    "send_hour_hint": "Swedish time",
+    "auto_send_missing_email": "The customer has no email address. Add one to the customer to enable automatic sending."
   },
   "invoice_send_dialog": {
     "title_email": "Send invoice",

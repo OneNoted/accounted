@@ -25,6 +25,7 @@ import {
   UpdateInvoiceSchema,
   CreateCreditNoteSchema,
   MarkInvoicePaidSchema,
+  CreateRecurringScheduleSchema,
   // Customer schemas
   CreateCustomerSchema,
   // Supplier schemas
@@ -2371,5 +2372,31 @@ describe('CreateEmployeeSchema bank details', () => {
     if (!result.success) {
       expect(result.error.issues.some((i) => i.path.includes('bank_account_number'))).toBe(true)
     }
+  })
+})
+
+describe('CreateRecurringScheduleSchema send_hour', () => {
+  const base = {
+    customer_id: '550e8400-e29b-41d4-a716-446655440000',
+    name: 'Retainer',
+    day_of_month: 15,
+    items: [{ description: 'Service', quantity: 1, unit_price: 1000 }],
+  }
+
+  it('defaults send_hour to 8 when omitted', () => {
+    const result = CreateRecurringScheduleSchema.safeParse(base)
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.send_hour).toBe(8)
+  })
+
+  it('accepts a valid send_hour', () => {
+    const result = CreateRecurringScheduleSchema.safeParse({ ...base, send_hour: 14 })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.send_hour).toBe(14)
+  })
+
+  it('rejects an out-of-range send_hour', () => {
+    expect(CreateRecurringScheduleSchema.safeParse({ ...base, send_hour: 24 }).success).toBe(false)
+    expect(CreateRecurringScheduleSchema.safeParse({ ...base, send_hour: -1 }).success).toBe(false)
   })
 })

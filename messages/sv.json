@@ -2702,11 +2702,22 @@
     "schedule_update_failed_title": "Kunde inte uppdatera schema",
     "schedule_deleted_title": "Schema borttaget",
     "schedule_delete_failed_title": "Kunde inte ta bort schema",
-    "delete_confirm": "Ta bort schemat \"{name}\"? Redan skapade fakturor påverkas inte."
+    "delete_confirm": "Ta bort schemat \"{name}\"? Redan skapade fakturor påverkas inte.",
+    "run_now": "Skapa faktura nu",
+    "run_now_confirm": "Skapa en faktura för \"{name}\" nu? Om schemat har automatiskt utskick skickas den direkt till kunden. Nästa schemalagda körning påverkas inte.",
+    "run_now_success_title": "Faktura skapad",
+    "run_now_failed_title": "Kunde inte skapa faktura",
+    "resume_autosend_confirm": "Aktivera \"{name}\" igen? Detta återupptar automatiska månatliga utskick till kunden.",
+    "send_time": "kl {time}"
   },
   "invoice_recurring_new": {
     "back": "Tillbaka",
     "title": "Nytt återkommande schema",
+    "edit_title": "Redigera schema",
+    "save_changes": "Spara ändringar",
+    "saving": "Sparar...",
+    "updated_title": "Schema uppdaterat",
+    "update_failed_title": "Kunde inte uppdatera schema",
     "schedule_card_title": "Schema",
     "name_label": "Namn",
     "name_placeholder": "t.ex. Månadsretainer Acme AB",
@@ -2740,7 +2751,10 @@
     "validation_unit_required": "Enhet krävs",
     "validation_customer_required": "Välj en kund",
     "validation_name_required": "Namn krävs",
-    "validation_min_one_row": "Minst en rad krävs"
+    "validation_min_one_row": "Minst en rad krävs",
+    "send_hour_label": "Skicka klockan",
+    "send_hour_hint": "Svensk tid",
+    "auto_send_missing_email": "Kunden saknar e-postadress. Lägg till en e-postadress på kundkortet för att kunna skicka automatiskt."
   },
   "invoice_send_dialog": {
     "title_email": "Skicka faktura",
