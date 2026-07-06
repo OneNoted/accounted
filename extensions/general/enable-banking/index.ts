@@ -530,9 +530,10 @@ export const enableBankingExtension: Extension = {
                 // never commit low-confidence (fuzzy / date-range) matches.
                 confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
               })
-              if (reconResult.applied > 0) {
+              if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
                 log.info('Post-sync batch reconciliation matched additional transactions', {
                   applied: reconResult.applied,
+                  skippedBelowThreshold: reconResult.skippedBelowThreshold,
                   total: reconResult.matches.length,
                 })
               }
