@@ -10,7 +10,10 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
-import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
+import {
+  runReconciliation,
+  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+} from '@/lib/reconciliation/bank-reconciliation'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
@@ -523,6 +526,9 @@ export const enableBankingExtension: Extension = {
               const reconResult = await runReconciliation(supabase, companyId, user.id, {
                 dateFrom: fromDate,
                 dateTo: toDate,
+                // This sweep applies without a human reviewing a dry-run, so
+                // never commit low-confidence (fuzzy / date-range) matches.
+                confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
               })
               if (reconResult.applied > 0) {
                 log.info('Post-sync batch reconciliation matched additional transactions', {

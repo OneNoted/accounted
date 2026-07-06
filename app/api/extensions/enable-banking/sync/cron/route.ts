@@ -1,7 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { syncAccountTransactions } from '@/extensions/general/enable-banking/lib/sync'
-import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
+import {
+  runReconciliation,
+  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+} from '@/lib/reconciliation/bank-reconciliation'
 import { isConsentExpiringSoon, getDaysUntilExpiry, SessionExpiredError } from '@/extensions/general/enable-banking/lib/api-client'
 import { getEmailService } from '@/lib/email/service'
 import {
@@ -220,6 +223,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           await runReconciliation(supabase, connection.company_id, connection.user_id, {
             dateFrom: fromDate,
             dateTo: toDate,
+            // Unattended run: nobody reviews a dry-run first, so never commit
+            // low-confidence (fuzzy / date-range) matches automatically.
+            confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
           })
         } catch {
           // Non-critical
