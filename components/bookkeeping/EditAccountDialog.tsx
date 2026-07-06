@@ -257,14 +257,22 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
       })
 
       if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Kunde inte uppdatera kontot')
+        const data = await response.json().catch(() => null)
+        throw new Error(
+          typeof data?.error === 'string' && data.error
+            ? data.error
+            : 'Kunde inte uppdatera kontot',
+        )
       }
 
       onSaved()
       onOpenChange(false)
-    } catch {
-      // Error handled silently: toast is in parent
+    } catch (err) {
+      // Keep the dialog open so the user can correct and retry.
+      toast({
+        title: err instanceof Error && err.message ? err.message : 'Kunde inte uppdatera kontot',
+        variant: 'destructive',
+      })
     } finally {
       setIsSaving(false)
     }
