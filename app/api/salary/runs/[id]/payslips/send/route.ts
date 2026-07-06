@@ -7,6 +7,8 @@ import { getBranding } from '@/lib/branding/service'
 import { rotateLinkForEmployee } from '@/lib/salary/payslips/links'
 import { buildPayslipLinkEmail } from '@/lib/salary/payslips/email-template'
 import { getCompanyDisplayName } from '@/lib/company/context'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 ensureInitialized()
 
@@ -23,6 +25,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary_run.payslips_send',
   async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
+
+    const blocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
+    if (blocked) return blocked
+
     const emailService = getEmailService()
 
     const { data: run } = await supabase

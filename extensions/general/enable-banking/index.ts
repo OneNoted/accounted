@@ -10,8 +10,13 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
-import { runReconciliation } from '@/lib/reconciliation/bank-reconciliation'
+import {
+  runReconciliation,
+  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+} from '@/lib/reconciliation/bank-reconciliation'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { StoredAccount } from './types'
 import type { Transaction } from '@/types'
 
@@ -103,6 +108,9 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Company context required' }, { status: 400 })
         }
         const companyId = ctx.companyId
+
+        const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
+        if (blocked) return blocked
 
         const { aspsp_name, aspsp_country, psu_type: explicitPsuType, connection_id: reconnectId } = await request.json()
 
@@ -407,6 +415,9 @@ export const enableBankingExtension: Extension = {
         }
         const companyId = ctx.companyId
 
+        const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
+        if (blocked) return blocked
+
         const rl = await checkRateLimit({
           prefix: 'enable-banking:sync',
           identifier: user.id,
@@ -523,10 +534,14 @@ export const enableBankingExtension: Extension = {
               const reconResult = await runReconciliation(supabase, companyId, user.id, {
                 dateFrom: fromDate,
                 dateTo: toDate,
+                // This sweep applies without a human reviewing a dry-run, so
+                // never commit low-confidence (fuzzy / date-range) matches.
+                confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
               })
-              if (reconResult.applied > 0) {
+              if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
                 log.info('Post-sync batch reconciliation matched additional transactions', {
                   applied: reconResult.applied,
+                  skippedBelowThreshold: reconResult.skippedBelowThreshold,
                   total: reconResult.matches.length,
                 })
               }
