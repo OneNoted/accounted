@@ -23,10 +23,31 @@
  * a separate, non-blocking "soft warning" follow-up once the data is vetted.
  */
 
+import { validateSwedishAccountChecksum, type AccountChecksumResult } from '@/lib/bankgiro/account-number'
+
+export type { AccountChecksumResult }
+
 /** Strip spaces and hyphens so "8327-9" / "1234 5678" become plain digits. */
 export function normalizeBankNumber(input: string | null | undefined): string {
   return (input ?? '').replace(/[\s-]/g, '')
 }
+
+/**
+ * Non-blocking check-digit ("kontrollsiffra") result for an employee's
+ * clearing/account pair. 'invalid' surfaces an advisory warning in the form,
+ * but never blocks saving: the check digit catches typos, it does not prove
+ * the account exists. Unrecognised clearings return 'unknown' (no warning).
+ */
+export function checkEmployeeAccountChecksum(
+  clearing: string | null | undefined,
+  account: string | null | undefined,
+): AccountChecksumResult {
+  return validateSwedishAccountChecksum(clearing, account)
+}
+
+/** Advisory (non-blocking) message shown when the check digit looks wrong. */
+export const BANK_CHECKSUM_WARNING_SV =
+  'Kontrollsiffran verkar inte stämma. Dubbelkolla numret, du kan spara ändå.'
 
 /** 4-digit clearing, or a 5-digit Swedbank/Sparbanken clearing starting with 8. */
 export function isValidClearing(clearing: string): boolean {

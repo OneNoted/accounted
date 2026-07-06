@@ -20,6 +20,7 @@ import {
   isValidAccount,
   normalizeBankNumber,
   lookupBankByClearing,
+  checkEmployeeAccountChecksum,
 } from '@/lib/salary/payment/bank-account'
 import type { Employee } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
@@ -50,6 +51,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [vacationRule, setVacationRule] = useState('procentregeln')
   const [clearing, setClearing] = useState('')
   const [account, setAccount] = useState('')
+  // Suppress the soft check-digit warning while the bank fields are focused.
+  const [bankFocused, setBankFocused] = useState(false)
   const [tax, setTax] = useState<EmployeeTaxValue | null>(null)
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
@@ -194,6 +197,10 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   }
 
   const bankName = lookupBankByClearing(clearing)
+  const showChecksumWarning =
+    !bankFocused &&
+    validateEmployeeBankAccount(clearing, account).length === 0 &&
+    checkEmployeeAccountChecksum(clearing, account) === 'invalid'
 
   return (
     <div className="space-y-8">
@@ -407,6 +414,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                   inputMode="numeric"
                   value={clearing}
                   onChange={(e) => setClearing(e.target.value)}
+                  onFocus={() => setBankFocused(true)}
+                  onBlur={() => setBankFocused(false)}
                   disabled={!canWrite}
                   aria-invalid={clearing !== '' && !isValidClearing(normalizeBankNumber(clearing))}
                 />
@@ -424,6 +433,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                   inputMode="numeric"
                   value={account}
                   onChange={(e) => setAccount(e.target.value)}
+                  onFocus={() => setBankFocused(true)}
+                  onBlur={() => setBankFocused(false)}
                   disabled={!canWrite}
                   aria-invalid={account !== '' && !isValidAccount(normalizeBankNumber(account))}
                 />
@@ -432,6 +443,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                 )}
               </div>
             </div>
+            {showChecksumWarning && (
+              <p className="mt-2 text-xs text-warning-foreground">{t('bank_warn_checksum')}</p>
+            )}
             <p className="text-xs text-muted-foreground mt-2">{t('form_bank_hint')}</p>
           </CardContent>
         </Card>
