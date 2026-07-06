@@ -15,6 +15,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Save } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  validateEmployeeBankAccount,
+  isValidClearing,
+  isValidAccount,
+  normalizeBankNumber,
+  lookupBankByClearing,
+  BANK_ISSUE_MESSAGES_SV,
+} from '@/lib/salary/payment/bank-account'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
@@ -65,6 +73,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   const [salaryType, setSalaryType] = useState('monthly')
   const [personnummer, setPersonnummer] = useState('')
   const [vacationRule, setVacationRule] = useState('procentregeln')
+  const [clearing, setClearing] = useState('')
+  const [account, setAccount] = useState('')
   // Default dimensions bag ({sie_dim_no: object_code}) proposed on the
   // employee's salary-cost lines at booking. The fields render only when
   // company_settings.dimensions_enabled: same UI gate as the voucher form.
@@ -97,6 +107,18 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+
+    // Block on structurally invalid bank details before hitting the server.
+    const bankIssues = validateEmployeeBankAccount(clearing, account)
+    if (bankIssues.length > 0) {
+      toast({
+        title: 'Kontrollera bankuppgifterna',
+        description: bankIssues.map((i) => i.message).join('. '),
+        variant: 'destructive',
+      })
+      return
+    }
+
     setSaving(true)
 
     const form = new FormData(e.currentTarget)
@@ -121,8 +143,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       address_line1: form.get('address_line1') as string || undefined,
       postal_code: form.get('postal_code') as string || undefined,
       city: form.get('city') as string || undefined,
-      clearing_number: form.get('clearing_number') as string || undefined,
-      bank_account_number: form.get('bank_account_number') as string || undefined,
+      clearing_number: normalizeBankNumber(clearing) || undefined,
+      bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
       vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
       // Always sent: {} means no default dimensions.
@@ -149,6 +171,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
     setSaving(false)
   }
+
+  const bankName = lookupBankByClearing(clearing)
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -355,11 +379,33 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="clearing_number">Clearingnummer</Label>
-              <Input id="clearing_number" name="clearing_number" />
+              <Input
+                id="clearing_number"
+                name="clearing_number"
+                inputMode="numeric"
+                value={clearing}
+                onChange={(e) => setClearing(e.target.value)}
+                aria-invalid={clearing !== '' && !isValidClearing(normalizeBankNumber(clearing))}
+              />
+              {clearing !== '' && !isValidClearing(normalizeBankNumber(clearing)) ? (
+                <p className="text-xs text-destructive">{BANK_ISSUE_MESSAGES_SV.clearing_format}</p>
+              ) : bankName ? (
+                <p className="text-xs text-muted-foreground">{bankName}</p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="bank_account_number">Kontonummer</Label>
-              <Input id="bank_account_number" name="bank_account_number" />
+              <Input
+                id="bank_account_number"
+                name="bank_account_number"
+                inputMode="numeric"
+                value={account}
+                onChange={(e) => setAccount(e.target.value)}
+                aria-invalid={account !== '' && !isValidAccount(normalizeBankNumber(account))}
+              />
+              {account !== '' && !isValidAccount(normalizeBankNumber(account)) && (
+                <p className="text-xs text-destructive">{BANK_ISSUE_MESSAGES_SV.account_format}</p>
+              )}
             </div>
           </div>
           <p className="text-xs text-muted-foreground mt-2">Krävs innan lönekörning kan godkännas</p>

@@ -4,6 +4,7 @@ import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import type { AuditAction } from '@/types'
 
 // ============================================================
@@ -1933,6 +1934,19 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
       code: z.ZodIssueCode.custom,
       message: 'Växa-stödets slutdatum måste vara efter startdatumet',
       path: ['vaxa_stod_end'],
+    })
+  }
+
+  // Bank details: validate clearing/kontonummer structure at entry so a typo is
+  // caught here rather than at Bankgirot LB generation. Both empty is allowed.
+  // Update path is validated in the PATCH route (only when the fields actually
+  // change) so legacy employees with incomplete free-text bank data can still
+  // be edited in unrelated ways.
+  for (const bankIssue of validateEmployeeBankAccount(data.clearing_number, data.bank_account_number)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: bankIssue.message,
+      path: [bankIssue.field],
     })
   }
 })
