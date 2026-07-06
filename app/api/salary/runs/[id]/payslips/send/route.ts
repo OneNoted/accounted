@@ -6,6 +6,7 @@ import { getEmailService } from '@/lib/email/service'
 import { getBranding } from '@/lib/branding/service'
 import { rotateLinkForEmployee } from '@/lib/salary/payslips/links'
 import { buildPayslipLinkEmail } from '@/lib/salary/payslips/email-template'
+import { getCompanyDisplayName } from '@/lib/company/context'
 
 ensureInitialized()
 
@@ -47,6 +48,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!company) {
       return errorResponseFromCode('COMPANY_NOT_FOUND', log, { requestId })
     }
+
+    // Email employer name follows the current company name
+    // (company_settings.company_name), not the frozen onboarding companies.name.
+    const displayName = await getCompanyDisplayName(supabase, companyId)
 
     const { data: runEmployees } = await supabase
       .from('salary_run_employees')
@@ -96,7 +101,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
         const email = buildPayslipLinkEmail({
           employeeFirstName: emp.first_name,
-          companyName: company.name,
+          companyName: displayName ?? company.name,
           periodYear: run.period_year,
           periodMonth: run.period_month,
           paymentDate: run.payment_date,
