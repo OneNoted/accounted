@@ -1407,6 +1407,35 @@ describe('UpdateSettingsSchema', () => {
       expect(result.success).toBe(false)
     })
   })
+
+  describe('default_voucher_series_per_source_type', () => {
+    it('accepts a partial map that omits source types (regression: Zod 4 enum-keyed z.record is exhaustive)', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        default_voucher_series_per_source_type: { manual: 'A', bank_transaction: 'C' },
+      })
+      expect(result.success).toBe(true)
+    })
+
+    it('accepts an empty map', () => {
+      expect(
+        UpdateSettingsSchema.safeParse({ default_voucher_series_per_source_type: {} }).success,
+      ).toBe(true)
+    })
+
+    it('rejects a series value that is not a single A-Z letter', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        default_voucher_series_per_source_type: { manual: 'ab' },
+      })
+      expect(result.success).toBe(false)
+    })
+
+    it('rejects an unknown source_type key', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        default_voucher_series_per_source_type: { not_a_source_type: 'A' },
+      })
+      expect(result.success).toBe(false)
+    })
+  })
 })
 
 // ============================================================

@@ -1371,8 +1371,14 @@ export const UpdateSettingsSchema = z.object({
   // values; values are single uppercase letters A-Z. Read by the engine
   // (`createDraftEntry`) when no explicit voucher_series is passed, with a
   // fallback to 'A' for unknown keys.
+  // partialRecord, not record: in Zod 4 an enum-keyed z.record is exhaustive
+  // (every source_type required), so saving a map that omits a source type
+  // (e.g. the newly added 'result_appropriation') fails with "expected string,
+  // received undefined". The map is intentionally sparse: the settings form
+  // sends only the source types the user configured, and the engine falls back
+  // to 'A' for any unmapped key.
   default_voucher_series_per_source_type: z
-    .record(
+    .partialRecord(
       JournalEntrySourceTypeSchema,
       z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z'),
     )
