@@ -91,7 +91,8 @@ const styles = StyleSheet.create({
 })
 
 // Hela kronor: the momsdeklaration is filed in whole kronor, and the rows are
-// already rounded (see buildManualFilingRows), so format with no decimals.
+// already truncated to whole kronor (öretal faller bort, see
+// buildManualFilingRows), so format with no decimals.
 function formatKr(amount: number): string {
   return new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 0 }).format(amount)
 }

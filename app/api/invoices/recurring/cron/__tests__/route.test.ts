@@ -63,6 +63,8 @@ describe('GET /api/invoices/recurring/cron', () => {
     // 08:30 UTC = 10:30 Stockholm (CEST) -> hour 10 >= send_hour 8
     vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
     enqueue({ data: [makeSchedule({ send_hour: 8 })], error: null })
+    // Atomic claim wins (returns the row it flipped).
+    enqueue({ data: [{ id: 's-1' }], error: null })
     executeRecurringSchedule.mockResolvedValue({
       invoiceId: 'inv-1',
       invoiceNumber: 'F-1',
@@ -75,6 +77,17 @@ describe('GET /api/invoices/recurring/cron', () => {
     expect(executeRecurringSchedule).toHaveBeenCalledTimes(1)
     expect(body.succeeded).toBe(1)
     expect(body.results[0].invoiceId).toBe('inv-1')
+  })
+
+  it('skips when a concurrent cron run already claimed the schedule', async () => {
+    vi.setSystemTime(new Date('2026-07-06T08:30:00Z'))
+    enqueue({ data: [makeSchedule({ send_hour: 8 })], error: null })
+    // Atomic claim loses the race: the compare-and-set matched zero rows.
+    enqueue({ data: [], error: null })
+
+    const { body } = await parseJsonResponse<CronBody>(await GET(req()))
+    expect(executeRecurringSchedule).not.toHaveBeenCalled()
+    expect(body.results[0].skipReason).toBe('claimed_by_concurrent_run')
   })
 
   it('does not send before the chosen Stockholm hour', async () => {

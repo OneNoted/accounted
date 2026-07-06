@@ -120,9 +120,8 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       return
     }
 
-    // 3. Idempotency: skip if already ran today (cron retries within the same
-    //    Stockholm day). Cheaper than a Postgres advisory lock and the window
-    //    we're protecting (one row, ~seconds) is tiny.
+    // 3. Idempotency fast-path: skip if the row we loaded already shows a run
+    //    today (cheap check against the batch, no write).
     if (schedule.last_run_at) {
       const lastRunDay = getStockholmDateHour(new Date(schedule.last_run_at)).date
       if (lastRunDay >= todayStockholm) {
@@ -136,7 +135,53 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       }
     }
 
-    const result = await executeRecurringSchedule(supabase, schedule, now)
+    // 4. Atomic claim. Two hourly cron invocations can overlap (an hour-boundary
+    //    retry, or a manual re-trigger) and both read the same stale
+    //    last_run_at from the batch above, so the read-only check in step 3
+    //    can't by itself stop a double-send. Compare-and-set last_run_at from
+    //    the exact value we read to `now`: Postgres row-locking serialises the
+    //    two writers, so only the one whose WHERE still matches the old value
+    //    flips the row and gets it back; the loser matches zero rows and skips.
+    //    Cheaper than a Postgres advisory lock, and it closes the window for the
+    //    whole batch execution, not just a single row.
+    const claimTs = now.toISOString()
+    const claimBase = supabase
+      .from('recurring_invoice_schedules')
+      .update({ last_run_at: claimTs })
+      .eq('id', schedule.id)
+      .eq('company_id', schedule.company_id)
+    const claimGated = schedule.last_run_at
+      ? claimBase.eq('last_run_at', schedule.last_run_at)
+      : claimBase.is('last_run_at', null)
+    const { data: claimed, error: claimError } = await claimGated.select('id')
+    if (claimError) {
+      throw new Error(`failed to claim schedule for today: ${claimError.message}`)
+    }
+    if (!claimed || (claimed as unknown[]).length === 0) {
+      itemCtx.log.info('schedule claimed by a concurrent cron run; skipping')
+      results.push({
+        scheduleId: schedule.id,
+        skipped: true,
+        skipReason: 'claimed_by_concurrent_run',
+      })
+      return
+    }
+
+    // 5. Spawn the invoice. If it throws after we claimed, release the claim
+    //    (restore the prior last_run_at) so a later cron retries today rather
+    //    than treating the row as already run.
+    let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
+    try {
+      result = await executeRecurringSchedule(supabase, schedule, now)
+    } catch (err) {
+      await supabase
+        .from('recurring_invoice_schedules')
+        .update({ last_run_at: schedule.last_run_at })
+        .eq('id', schedule.id)
+        .eq('company_id', schedule.company_id)
+        .eq('last_run_at', claimTs)
+      throw err
+    }
 
     const nextRunDate = computeNextRunDate(stockholmToday, schedule.day_of_month)
     const { error: updateError } = await supabase

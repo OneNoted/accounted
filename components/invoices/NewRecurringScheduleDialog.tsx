@@ -215,6 +215,15 @@ function NewRecurringScheduleForm({
   const watchCustomerId = watch('customer_id')
   const selectedCustomer = customers.find((c) => c.id === watchCustomerId)
   const customerMissingEmail = !!selectedCustomer && !selectedCustomer.email
+
+  // The onValueChange guard on the customer select only fires on a manual
+  // change. In edit mode a schedule can load with auto_send=true against a
+  // customer who has since lost their email (customers load async, after the
+  // form's defaultValues). Force auto_send off whenever the effective customer
+  // has no email so a disabled-but-checked box can't PATCH auto_send=true.
+  useEffect(() => {
+    if (customerMissingEmail) setValue('auto_send', false)
+  }, [customerMissingEmail, setValue])
   const subtotalRaw = items.reduce(
     (sum, it) => sum + (it.quantity || 0) * (it.unit_price || 0),
     0,

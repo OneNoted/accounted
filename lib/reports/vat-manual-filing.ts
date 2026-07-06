@@ -25,13 +25,15 @@ const OUTPUT_VAT_RUTOR: (keyof VatDeclarationRutor)[] = [
  * Builds the momsdeklaration rows for manual filing at skatteverket.se, in
  * hela kronor.
  *
- * Skatteverket files whole kronor with no öre, so each ruta is rounded to a
- * whole krona and ruta 49 (the net) is recomputed from the rounded output/input
- * rutor, not by rounding the pre-computed öre value, so the document's
+ * Skatteverket files whole kronor with no öre, so each ruta is truncated to a
+ * whole krona (öretal faller bort per SFL 22 kap 1 §: the öre are dropped, not
+ * rounded to nearest) and ruta 49 (the net) is recomputed from the truncated
+ * output/input rutor, not from the pre-computed öre value, so the document's
  * arithmetic ties out exactly to what the user types into the form. This
- * whole-krona rounding is intentional and specific to the filing document; it
+ * whole-krona truncation is intentional and specific to the filing document; it
  * is NOT bookkeeping math (nothing here is posted), so the usual öre-precision
- * money rule (Math.round(x*100)/100) does not apply.
+ * money rule (Math.round(x*100)/100) does not apply. It also matches the SRU
+ * income-tax filing path, which drops öre under the same statute.
  *
  * Only populated rutor are included, plus ruta 48 and the ruta 49 net (always),
  * so a manual filer sees every box that needs a value and nothing that doesn't.
@@ -41,7 +43,8 @@ const OUTPUT_VAT_RUTOR: (keyof VatDeclarationRutor)[] = [
  * which stay Swedish in both locales.
  */
 export function buildManualFilingRows(rutor: VatDeclarationRutor): ManualFilingRow[] {
-  const kr = (key: keyof VatDeclarationRutor): number => Math.round(rutor[key] ?? 0)
+  // Truncate toward zero: öretal faller bort (SFL 22 kap 1 §), never round up.
+  const kr = (key: keyof VatDeclarationRutor): number => Math.trunc(rutor[key] ?? 0)
 
   const outputVat = OUTPUT_VAT_RUTOR.reduce((sum, key) => sum + kr(key), 0)
   const net = outputVat - kr('ruta48')
