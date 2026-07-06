@@ -24,13 +24,59 @@ import {
 } from '@/lib/api/v1/pagination'
 import { parseExpand } from '@/lib/api/v1/expand'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
-import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { withApiV1, type ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { getAvailableVatRates, getVatRules } from '@/lib/invoices/vat-rules'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import {
+  resolveSelfBilledSaleDraft,
+  createSelfBilledSaleInvoice,
+  type SelfBilledSaleInput,
+  type SelfBilledSaleFailure,
+} from '@/lib/invoices/self-billed-sale'
 import { eventBus } from '@/lib/events'
 import type { Invoice, InvoiceDocumentType } from '@/types'
+
+// Map a self-billed-sale service failure onto the v1 invoice error envelope.
+function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Context) {
+  const base = { requestId: ctx.requestId }
+  switch (failure.code) {
+    case 'customer_not_found':
+      return v1ErrorResponseFromCode('INVOICE_CUSTOMER_NOT_FOUND', ctx.log, { ...base, details: { resource: 'customer' } })
+    case 'vat_rule_violation':
+      return v1ErrorResponseFromCode('INVOICE_CREATE_VAT_RULE_VIOLATION', ctx.log, {
+        ...base,
+        details: {
+          attempted_rate: failure.attemptedRate,
+          allowed_rates: failure.allowedRates,
+          customer_type: failure.customerType,
+        },
+      })
+    case 'fx_rate_unavailable':
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        ...base,
+        details: {
+          field: 'currency',
+          currency: failure.currency,
+          invoice_date: failure.invoiceDate,
+          message: `Ingen växelkurs för ${failure.currency} på fakturadatumet (${failure.invoiceDate}). Försök igen senare.`,
+        },
+      })
+    case 'no_fiscal_period':
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        ...base,
+        details: { field: 'invoice_date', message: 'Ingen öppen bokföringsperiod för fakturadatumet.' },
+      })
+    case 'insert_failed':
+      return v1ErrorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', ctx.log, {
+        ...base,
+        details: { stage: failure.stage, pg_code: failure.pgCode },
+      })
+    case 'items_failed':
+      return v1ErrorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctx.log, { ...base, details: { pg_code: failure.pgCode } })
+  }
+}
 
 const InvoiceStatus = z.enum([
   'draft',
@@ -327,7 +373,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices',
   summary: 'Create a draft invoice, proforma, or delivery note.',
   description:
-    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send).',
+    'Creates an invoice in draft status. The F-series invoice_number is allocated atomically on the first send action (PR-B-2b). Per-item VAT rates are validated against the customer\'s allowed rates (mixed-rate invoices supported). Non-SEK invoices are converted to SEK at the Riksbanken exchange rate fetched at create time. Idempotent (mandatory Idempotency-Key). Dry-runnable: the preview returns the validated would-be invoice + items with computed totals; no journal entry is involved at draft stage (posting happens on :send). Set is_self_billed=true (with external_invoice_number + received_date) to instead register a received self-billing invoice (mottagen självfaktura, ML 17 kap 15§): a sale booked immediately with the counterparty\'s number, not a draft.',
   useWhen:
     'You need to issue a new invoice, proforma, or delivery note. Use dry-run first to confirm VAT calculations and currency conversion before committing.',
   doNotUseFor:
@@ -338,6 +384,7 @@ registerEndpoint({
     'Non-SEK currencies require an active Riksbanken exchange-rate fetch. Failure is non-fatal: the invoice is created with null SEK fields and the agent can recompute later.',
     'invoice_number is null on creation. The number is allocated atomically when the invoice transitions out of draft. Counting on a specific number at create time is a bug.',
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
+    'is_self_billed=true registers a self-billing invoice your CUSTOMER issued on your behalf (a sale for you). It is booked immediately (not a draft, no F-number), so external_invoice_number and received_date are required and it is NOT dry-run-free of side effects on the live call. Do NOT set it for a normal invoice you issue yourself.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
   ],
   example: {
@@ -412,6 +459,91 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const input = parsed.data
+
+    // Self-billing (mottagen självfaktura, ML 17 kap 15§): the customer issued
+    // the invoice on our behalf, so for our books it is a SALE booked
+    // immediately (never a draft). Optional flag; delegated to the shared
+    // self-billed-sale service so this and the internal dashboard route agree.
+    if (input.is_self_billed) {
+      if (!input.external_invoice_number || !input.received_date) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            issues: [
+              ...(!input.external_invoice_number
+                ? [{ field: 'external_invoice_number', message: 'external_invoice_number is required when is_self_billed is true.' }]
+                : []),
+              ...(!input.received_date
+                ? [{ field: 'received_date', message: 'received_date is required when is_self_billed is true.' }]
+                : []),
+            ],
+          },
+        })
+      }
+
+      const selfBilledInput: SelfBilledSaleInput = {
+        customer_id: input.customer_id,
+        external_invoice_number: input.external_invoice_number,
+        self_billing_agreement_ref: input.self_billing_agreement_ref ?? null,
+        invoice_date: input.invoice_date,
+        received_date: input.received_date,
+        due_date: input.due_date,
+        currency: input.currency,
+        notes: input.notes ?? null,
+        items: input.items.map((it) => ({
+          description: it.description,
+          quantity: it.quantity,
+          unit: it.unit ?? 'st',
+          unit_price: it.unit_price,
+          vat_rate: it.vat_rate,
+        })),
+      }
+
+      if (ctx.dryRun) {
+        const resolved = await resolveSelfBilledSaleDraft(ctx.supabase, ctx.companyId!, selfBilledInput)
+        if (!resolved.ok) return selfBilledFailureResponse(resolved.failure, ctx)
+        const { draft } = resolved
+        return dryRunPreview(
+          {
+            invoice_number: null,
+            customer_id: selfBilledInput.customer_id,
+            customer_name: draft.customer.name,
+            is_self_billed: true,
+            external_invoice_number: selfBilledInput.external_invoice_number,
+            self_billing_agreement_ref: selfBilledInput.self_billing_agreement_ref,
+            invoice_date: selfBilledInput.invoice_date,
+            received_date: selfBilledInput.received_date,
+            due_date: selfBilledInput.due_date,
+            status: 'sent' as const,
+            currency: draft.currency,
+            exchange_rate: draft.exchangeRate,
+            subtotal: draft.subtotal,
+            subtotal_sek: draft.subtotalSek,
+            vat_amount: draft.vatAmount,
+            vat_amount_sek: draft.vatAmountSek,
+            total: draft.total,
+            total_sek: draft.totalSek,
+            remaining_amount: draft.total,
+            vat_treatment: draft.vatTreatment,
+            vat_rate: draft.vatRate,
+            moms_ruta: draft.momsRuta,
+            document_type: 'invoice' as const,
+            items: draft.items,
+            would_book_journal_entry: true,
+          },
+          { requestId: ctx.requestId, log: ctx.log },
+        )
+      }
+
+      try {
+        const result = await createSelfBilledSaleInvoice(ctx.supabase, ctx.companyId!, ctx.userId, selfBilledInput)
+        if (!result.ok) return selfBilledFailureResponse(result.failure, ctx)
+        return created(result.invoice as unknown as Record<string, unknown>, { requestId: ctx.requestId })
+      } catch (err) {
+        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+      }
+    }
+
     const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
     // Customer fetch (scoped to company). Determines VAT rules and the set

@@ -391,6 +391,19 @@ export const CreateInvoiceSchema = z.object({
   // Dimensions PR7: invoice-level bag applied to every generated journal line;
   // items[].dimensions merge over it per revenue line.
   default_dimensions: DimensionsBagSchema.optional(),
+  // Self-billing (mottagen självfaktura, ML 17 kap 15§): optional. Set
+  // is_self_billed=true to register an invoice the CUSTOMER issued on your
+  // behalf. For your books it is a sale, booked immediately (Debit 1510, Credit
+  // 30xx + 26xx) with the counterparty's number in external_invoice_number: no
+  // number from your own series is consumed (BFL 5 kap 6§), and there is no
+  // draft/send step. When is_self_billed is true, external_invoice_number and
+  // received_date are required (enforced in the route). Leave off for a normal
+  // invoice. A plain optional flag (no schema refine) so UpdateInvoiceSchema's
+  // .omit() keeps working on this object.
+  is_self_billed: z.boolean().optional(),
+  external_invoice_number: z.string().min(1).max(64).optional(),
+  self_billing_agreement_ref: z.string().max(128).optional(),
+  received_date: isoDate.optional(),
   items: z.array(CreateInvoiceItemSchema).min(1, 'At least one item is required'),
 })
 
