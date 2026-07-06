@@ -4812,6 +4812,7 @@
     "bank_error_account_format": "Kontonummer måste vara 5-11 siffror",
     "bank_error_account_required": "Kontonummer krävs när clearingnummer har angetts",
     "bank_error_clearing_required": "Clearingnummer krävs när kontonummer har angetts",
+    "bank_warn_checksum": "Kontrollsiffran verkar inte stämma. Dubbelkolla numret, du kan spara ändå.",
     "form_cancel": "Avbryt",
     "form_save": "Spara",
     "form_saving": "Sparar...",

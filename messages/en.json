@@ -4812,6 +4812,7 @@
     "bank_error_account_format": "Account number must be 5-11 digits",
     "bank_error_account_required": "Account number is required when a clearing number is set",
     "bank_error_clearing_required": "Clearing number is required when an account number is set",
+    "bank_warn_checksum": "The check digit looks off. Please double-check the number, you can still save.",
     "form_cancel": "Cancel",
     "form_save": "Save",
     "form_saving": "Saving...",
