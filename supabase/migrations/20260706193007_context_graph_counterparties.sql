@@ -17,8 +17,7 @@
 -- Edges live in their own table (not a column on transactions) so the whole
 -- projection stays separable and truncatable.
 --
--- pg-test: tests/pg/graph-counterparties.pg.test.ts (RLS isolation, UNIQUEs,
--- cascade behavior).
+-- pg-test: skip (adopted reconciliation migration; this SQL is already applied to prod, feature code + the intended tests/pg/graph-counterparties.pg.test.ts were never merged to main, tracked separately)
 
 CREATE TABLE public.graph_counterparties (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
