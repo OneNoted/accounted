@@ -44,10 +44,11 @@ export default function OpeningBalancePeriodStep({
     totalDebit = Math.round((totalDebit + row.debit_amount) * 100) / 100
     totalCredit = Math.round((totalCredit + row.credit_amount) * 100) / 100
   }
-  // Totals are already rounded to 2 decimals, so anything >= 1 öre is a real
-  // imbalance that the bookkeeping engine would reject at commit time.
-  const isBalanced = Math.abs(totalDebit - totalCredit) < 0.01
+  // Compare in whole öre, mirroring the engine's validateBalance: a float
+  // epsilon like (< 0.01) would misclassify exact 1-öre imbalances as
+  // balanced, since e.g. 0.03 - 0.02 evaluates to just under 0.01.
   const balanceDiff = Math.round((totalDebit - totalCredit) * 100) / 100
+  const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0
 
   useEffect(() => {
     async function fetchPeriods() {

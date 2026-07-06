@@ -258,19 +258,21 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
       if (!response.ok) {
         const data = await response.json().catch(() => null)
-        throw new Error(
-          typeof data?.error === 'string' && data.error
-            ? data.error
-            : 'Kunde inte uppdatera kontot',
-        )
+        // Keep the dialog open so the user can correct and retry; map the
+        // server error to Swedish like the dimension-rule handlers above.
+        toast({
+          title: 'Kunde inte uppdatera kontot',
+          description: getErrorMessage(data, { locale: 'sv' }),
+          variant: 'destructive',
+        })
+        return
       }
 
       onSaved()
       onOpenChange(false)
-    } catch (err) {
-      // Keep the dialog open so the user can correct and retry.
+    } catch {
       toast({
-        title: err instanceof Error && err.message ? err.message : 'Kunde inte uppdatera kontot',
+        title: 'Kunde inte uppdatera kontot',
         variant: 'destructive',
       })
     } finally {
