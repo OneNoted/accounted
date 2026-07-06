@@ -9,6 +9,10 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { AccountNumber } from '@/components/ui/account-number'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { AddAccountDialog } from './AddAccountDialog'
 import { EditAccountDialog } from './EditAccountDialog'
 import { PruneAccountsDialog } from './PruneAccountsDialog'
@@ -43,6 +47,8 @@ interface ReferenceAccount extends BASReferenceAccount {
 export default function ChartOfAccountsManager() {
   const { toast } = useToast()
   const t = useTranslations('chart_of_accounts')
+  const tCommon = useTranslations('common')
+  const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
 
   const classLabel = (cls: number): string => {
     if (cls < 1 || cls > 8) return ''
@@ -166,7 +172,12 @@ export default function ChartOfAccountsManager() {
   }
 
   async function deleteAccount(account: BASAccount) {
-    const confirmed = window.confirm(t('delete_confirm', { number: account.account_number, name: account.account_name }))
+    const confirmed = await confirm({
+      title: t('delete_confirm_title'),
+      description: t('delete_confirm', { number: account.account_number, name: account.account_name }),
+      confirmLabel: t('delete_confirm_action'),
+      cancelLabel: tCommon('cancel'),
+    })
     if (!confirmed) return
     setDeletingAccount(account.account_number)
     try {
@@ -611,6 +622,8 @@ export default function ChartOfAccountsManager() {
       )}
 
       {/* Dialogs */}
+      <DestructiveConfirmDialog {...confirmDialogProps} />
+
       <AddAccountDialog
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
