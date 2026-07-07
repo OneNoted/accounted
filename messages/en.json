@@ -4384,6 +4384,7 @@
     "download_pdf": "Download PDF",
     "download_excel": "Download Excel",
     "download_csv": "Download CSV",
+    "download_xml": "Download XML file",
     "export": "Export",
     "recent_heading": "Recently opened",
     "back_to_library": "Reports",
