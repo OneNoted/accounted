@@ -244,12 +244,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         raw,
       )
 
-      // Mark the bank_file_imports row complete. Scope by all three
-      // identifying fields: `(user_id, file_hash)` is the unique
-      // constraint today but adding `company_id` is defense in depth:
-      // even if a concurrent same-user same-hash import in a different
-      // company slipped past the pre-check, this update can never
-      // overwrite the wrong company's status row.
+      // Mark the bank_file_imports row complete. The unique constraint is
+      // `(company_id, file_hash)` since 20260707130000; scoping the update by
+      // user_id as well is defense in depth so a concurrent same-hash import
+      // can never overwrite the wrong company's status row.
       await ctx.supabase
         .from('bank_file_imports')
         .update({
