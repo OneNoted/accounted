@@ -135,14 +135,15 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
         </DialogHeader>
 
         {/* Search + category filter */}
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        <div className="flex flex-col gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Sök mall..."
               className="pl-9"
+              autoFocus
             />
           </div>
           <div className="flex gap-1 flex-wrap">
