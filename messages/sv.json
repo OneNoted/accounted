@@ -3336,7 +3336,8 @@
     "source_label_supplier_invoice_paid": "Leverantörsbetalning",
     "source_label_supplier_invoice_cash_payment": "Kontantbetalning",
     "source_label_currency_revaluation": "Valutaomvärdering",
-    "source_label_reminder_fee": "Påminnelseavgift"
+    "source_label_reminder_fee": "Påminnelseavgift",
+    "source_label_vat_settlement": "Momsredovisning"
   },
   "journal_correction": {
     "title": "Ändringskedja",

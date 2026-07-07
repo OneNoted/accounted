@@ -21,6 +21,7 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
+import { sourceTypeForTemplateCategory } from '@/lib/bookkeeping/template-source-type'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
@@ -37,7 +38,7 @@ import { formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import type { CreateJournalEntryLineInput, FiscalPeriod, BASAccount, JournalEntrySourceType, Currency, BookingTemplateLibrary } from '@/types'
+import type { CreateJournalEntryLineInput, FiscalPeriod, BASAccount, JournalEntrySourceType, Currency, BookingTemplateLibrary, BookingTemplateCategory } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 const CURRENCIES: { value: Currency; label: string }[] = [
@@ -134,6 +135,18 @@ export default function JournalEntryForm({
     initialLines ?? [{ ...BLANK_LINE }, { ...BLANK_LINE }]
   )
   const [voucherSeries, setVoucherSeries] = useState(initialVoucherSeries ?? 'A')
+  // The source_type the entry will be committed with. Seeded from the prop
+  // (undefined -> 'manual' for the standalone form). Applying a booking template
+  // whose category maps to a dedicated source type (e.g. VAT -> vat_settlement)
+  // flips this so the entry lands in that type's configured voucher series.
+  const [effectiveSourceType, setEffectiveSourceType] = useState<JournalEntrySourceType>(
+    sourceType ?? 'manual',
+  )
+  // Cache of the company's series config so template routing can re-resolve the
+  // default series without re-fetching /api/settings. Populated by the settings
+  // effect below.
+  const seriesMapRef = useRef<Record<string, string> | null>(null)
+  const defaultSeriesRef = useRef<string>('A')
   const [nextVoucherNumber, setNextVoucherNumber] = useState<number | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): the
@@ -222,6 +235,15 @@ export default function JournalEntryForm({
     setAccounts(data || [])
   }
 
+  // Resolve + set the default voucher series for a source type from the cached
+  // company config: prefer the per-source-type mapping, fall back to the legacy
+  // default_voucher_series, then to 'A'. Reads refs (stable), so it can run both
+  // on load and when template application changes the source type.
+  const applySeriesForSourceType = useCallback((st: JournalEntrySourceType) => {
+    const perSource = resolveDefaultSeriesForSource(seriesMapRef.current, st)
+    setVoucherSeries(perSource !== 'A' ? perSource : defaultSeriesRef.current || 'A')
+  }, [])
+
   useEffect(() => {
     fetchPeriods()
     fetchAccounts()
@@ -235,17 +257,14 @@ export default function JournalEntryForm({
     fetch('/api/settings').then(r => r.json()).then(({ data }) => {
       if (!data) return
       setDimensionsEnabled(data.dimensions_enabled === true)
+      seriesMapRef.current =
+        (data.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
+      defaultSeriesRef.current = data.default_voucher_series || 'A'
       if (!embedded && !editEntryId) {
-        const effectiveSourceType = sourceType ?? 'manual'
-        const perSource = resolveDefaultSeriesForSource(
-          data as { default_voucher_series_per_source_type?: Record<string, string> | null } | null,
-          effectiveSourceType,
-        )
-        const fallback = data.default_voucher_series || 'A'
-        setVoucherSeries(perSource !== 'A' ? perSource : fallback)
+        applySeriesForSourceType(sourceType ?? 'manual')
       }
     }).catch(() => {/* keep 'A' + hidden dimension affordances */})
-  }, [embedded, sourceType, editEntryId])
+  }, [embedded, sourceType, editEntryId, applySeriesForSourceType])
 
   // Auto-select period when entry date changes
   useEffect(() => {
@@ -650,9 +669,26 @@ export default function JournalEntryForm({
   const selectedPeriodObj = periods.find((p) => p.id === selectedPeriod)
   const selectedPeriodLocked = !!(selectedPeriodObj?.locked_at || selectedPeriodObj?.is_closed)
 
-  const handleTemplateApply = (templateLines: FormLine[], templateDescription: string) => {
+  const handleTemplateApply = (
+    templateLines: FormLine[],
+    templateDescription: string,
+    category?: BookingTemplateCategory,
+  ) => {
     setLines(templateLines)
     if (!description) setDescription(templateDescription)
+    // Route templates whose category maps to a dedicated source type (VAT ->
+    // vat_settlement) so the entry books into that type's configured series.
+    // Create mode only: embedded/edit keep their caller-provided source type.
+    // Non-mapped categories fall back to the form's base source type, which
+    // also reverts a prior VAT routing if the user swaps templates.
+    if (!embedded && !editEntryId) {
+      const base = sourceType ?? 'manual'
+      const routed = sourceTypeForTemplateCategory(category) ?? base
+      if (routed !== effectiveSourceType) {
+        setEffectiveSourceType(routed)
+        applySeriesForSourceType(routed)
+      }
+    }
   }
 
   // Wipe the form back to a blank entry. Mirrors the post-submit reset: it
@@ -810,7 +846,7 @@ export default function JournalEntryForm({
         fiscal_period_id: selectedPeriod,
         entry_date: entryDate,
         description,
-        source_type: sourceType ?? 'manual',
+        source_type: effectiveSourceType,
         source_id: sourceId,
         voucher_series: voucherSeries || 'A',
         notes: notes || undefined,
@@ -822,7 +858,7 @@ export default function JournalEntryForm({
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, isForeign, rate, entryCurrency, computedForeignAmount, submitUrl, editEntryId, selectedPeriod, entryDate, description, sourceType, sourceId, voucherSeries, notes])
+  }, [lines, isForeign, rate, entryCurrency, computedForeignAmount, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)

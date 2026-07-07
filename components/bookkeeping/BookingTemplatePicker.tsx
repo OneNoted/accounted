@@ -17,7 +17,7 @@ import type { BookingTemplateLibrary, BookingTemplateCategory, EntityType } from
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 interface Props {
-  onApply: (lines: FormLine[], description: string) => void
+  onApply: (lines: FormLine[], description: string, category?: BookingTemplateCategory) => void
   entityType?: EntityType
   /** Prefill the "total amount" field when the caller already knows it (e.g.
    *  booking from an underlag with a known total). The user can still edit it. */
@@ -114,7 +114,7 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
     const lines = applyTemplate(selected.lines, totalAmount)
     // Fire-and-forget MRU bump so this template surfaces at the top next time.
     fetch(`/api/settings/booking-templates/${selected.id}/touch`, { method: 'POST' }).catch(() => {})
-    onApply(lines, selected.name)
+    onApply(lines, selected.name, selected.category)
     setOpen(false)
     setSelectedId(null)
     setAmount('')
