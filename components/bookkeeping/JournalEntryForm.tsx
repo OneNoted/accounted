@@ -147,6 +147,11 @@ export default function JournalEntryForm({
   // effect below.
   const seriesMapRef = useRef<Record<string, string> | null>(null)
   const defaultSeriesRef = useRef<string>('A')
+  // Mirror of effectiveSourceType for the settings-fetch callback: if a template
+  // routed the source type before /api/settings resolved, the late callback must
+  // re-apply the series for the ROUTED type, not the mount-time base (otherwise
+  // the entry submits as vat_settlement in the manual series).
+  const effectiveSourceTypeRef = useRef<JournalEntrySourceType>(sourceType ?? 'manual')
   const [nextVoucherNumber, setNextVoucherNumber] = useState<number | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): the
@@ -261,7 +266,7 @@ export default function JournalEntryForm({
         (data.default_voucher_series_per_source_type as Record<string, string> | null) ?? null
       defaultSeriesRef.current = data.default_voucher_series || 'A'
       if (!embedded && !editEntryId) {
-        applySeriesForSourceType(sourceType ?? 'manual')
+        applySeriesForSourceType(effectiveSourceTypeRef.current)
       }
     }).catch(() => {/* keep 'A' + hidden dimension affordances */})
   }, [embedded, sourceType, editEntryId, applySeriesForSourceType])
@@ -686,6 +691,7 @@ export default function JournalEntryForm({
       const routed = sourceTypeForTemplateCategory(category) ?? base
       if (routed !== effectiveSourceType) {
         setEffectiveSourceType(routed)
+        effectiveSourceTypeRef.current = routed
         applySeriesForSourceType(routed)
       }
     }
@@ -693,8 +699,11 @@ export default function JournalEntryForm({
 
   // Wipe the form back to a blank entry. Mirrors the post-submit reset: it
   // clears the data the user typed (lines, description, note, attachments,
-  // currency) but keeps the contextual defaults (period, date, series) so the
-  // form is immediately ready for the next entry.
+  // currency) but keeps the contextual defaults (period, date) so the form is
+  // immediately ready for the next entry. Template-routed source type does NOT
+  // survive a clear: the next entry is hand-typed, and a sticky vat_settlement
+  // would tag it into the moms series and skip the manual-entry underlag
+  // tracking. Posted entries are immutable, so that mistag is storno-only.
   const handleClearAll = () => {
     setDescription('')
     setNotes('')
@@ -704,6 +713,14 @@ export default function JournalEntryForm({
     setEntryCurrency('SEK')
     setExchangeRate('')
     setForeignAmount('')
+    if (!embedded && !editEntryId) {
+      const base = sourceType ?? 'manual'
+      if (base !== effectiveSourceType) {
+        setEffectiveSourceType(base)
+        effectiveSourceTypeRef.current = base
+        applySeriesForSourceType(base)
+      }
+    }
   }
 
   const handleOpenCreateAccount = (lineIndex: number, prefill: string) => {

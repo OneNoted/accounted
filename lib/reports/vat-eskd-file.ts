@@ -41,13 +41,14 @@ const RUTA_TO_ESKD_TAG: Record<keyof VatDeclarationRutor, string> = {
   ruta49: 'MomsBetala',
 }
 
-// Emission order: ascending ruta number for everything except ruta49, which is
-// the summering and must come last. Frozen so the file layout is deterministic.
+// Emission order: the RUTA_TO_ESKD_TAG key order, which encodes the SKV file
+// spec's radnummer sequence. Notably the import block (ruta 50/60/61/62,
+// rad 29-32) comes BEFORE MomsIngAvdr (ruta 48, rad 33); a numeric ruta sort
+// would invert that and produce a file SKV rejects (avvisande fel). ruta49
+// (MomsBetala) is the mandatory summering and is emitted last by the builder.
 const EMIT_ORDER: (keyof VatDeclarationRutor)[] = (
   Object.keys(RUTA_TO_ESKD_TAG) as (keyof VatDeclarationRutor)[]
-)
-  .filter((key) => key !== 'ruta49')
-  .sort((a, b) => Number(a.slice(4)) - Number(b.slice(4)))
+).filter((key) => key !== 'ruta49')
 
 export interface ESkdFileInput {
   /** Company org/person number, any format; digits are extracted and re-formatted. */
@@ -64,12 +65,15 @@ export interface ESkdFileInput {
 
 /**
  * Formats a Swedish org/person number as `xxxxxx-xxxx` (10 digits with hyphen),
- * as required by the eSKD header. Throws if the input does not contain exactly
- * 10 digits, since an out-of-format OrgNr is an "avvisande fel" that Skatteverket
- * rejects outright.
+ * as required by the eSKD header. Accepts 12-digit century-prefixed values
+ * (16xxxxxxxxxx org numbers, 19/20-prefixed personnummer) by stripping the
+ * prefix, mirroring formatRedovisare/formatOrgNumber12; settings rows predating
+ * org-number normalization legitimately hold 12 digits. Throws otherwise, since
+ * an out-of-format OrgNr is an "avvisande fel" that Skatteverket rejects outright.
  */
 function formatESkdOrgNumber(orgNumber: string): string {
-  const digits = orgNumber.replace(/\D/g, '')
+  let digits = orgNumber.replace(/\D/g, '')
+  if (digits.length === 12) digits = digits.slice(2)
   if (digits.length !== 10) {
     throw new Error(
       `Ogiltigt organisationsnummer för momsdeklaration (kräver 10 siffror): ${orgNumber}`,

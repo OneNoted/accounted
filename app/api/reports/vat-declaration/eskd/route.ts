@@ -49,8 +49,12 @@ export const GET = withRouteContext(
 
     // The eSKD header requires a valid 10-digit OrgNr; without it the file is an
     // "avvisande fel" Skatteverket rejects, so fail honestly up front instead of
-    // handing the user a file that bounces at upload.
-    if (!companyRow.org_number || companyRow.org_number.replace(/\D/g, '').length !== 10) {
+    // handing the user a file that bounces at upload. 12-digit century-prefixed
+    // values are fine: the builder strips the prefix (settings rows predating
+    // org-number normalization hold them, and settings PUT can no longer fix
+    // org_number after onboarding, so rejecting 12 digits would be a dead end).
+    const orgDigits = (companyRow.org_number ?? '').replace(/\D/g, '')
+    if (orgDigits.length !== 10 && orgDigits.length !== 12) {
       return NextResponse.json(
         {
           error:

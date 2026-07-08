@@ -97,6 +97,22 @@ describe('buildESkdFile', () => {
     expect(xml).toContain('<OrgNr>556000-0175</OrgNr>')
   })
 
+  it('strips the century prefix from a 12-digit org number', () => {
+    const xml = buildESkdFile(makeRutor(), { orgNumber: '165560000175', periodEnd: PERIOD_END })
+    expect(xml).toContain('<OrgNr>556000-0175</OrgNr>')
+  })
+
+  it('emits the import block (rutor 50/60/61/62) BEFORE MomsIngAvdr per the SKV radnummer order', () => {
+    const xml = buildESkdFile(
+      makeRutor({ ruta48: 3250, ruta50: 10000, ruta60: 2000, ruta61: 120, ruta62: 60 }),
+      { orgNumber: ORG, periodEnd: PERIOD_END },
+    )
+    const order = ['MomsUlagImport', 'MomsImportUtgHog', 'MomsImportUtgMedel', 'MomsImportUtgLag', 'MomsIngAvdr']
+      .map((tag) => xml.indexOf(`<${tag}>`))
+    expect(order.every((idx) => idx >= 0)).toBe(true)
+    expect([...order].sort((a, b) => a - b)).toEqual(order)
+  })
+
   it('throws on an org number without exactly 10 digits', () => {
     expect(() => buildESkdFile(makeRutor(), { orgNumber: '12345', periodEnd: PERIOD_END })).toThrow()
   })
