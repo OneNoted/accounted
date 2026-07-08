@@ -37,6 +37,7 @@ import {
   Landmark,
   CalendarClock,
   FileCheck,
+  Brain,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -93,6 +94,7 @@ type NavLabelKey =
   | 'dashboard'
   | 'home'
   | 'assistant'
+  | 'agent_knowledge'
   | 'kpi'
   | 'invoice_inbox'
   | 'invoices'
@@ -179,6 +181,9 @@ const navItems: NavItem[] = [
   // Rapporter surface (nav_ia_redesign §F) is built.
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
+  // "Vad din agent vet": read-only profile of how this company books, the
+  // human render of the agent's ledger-context (dev_docs/ledger_context_resource.md).
+  { href: '/agent-knowledge', labelKey: 'agent_knowledge', icon: Brain, group: 'analys' },
   // Data: master-data registers + data plumbing. Anställda is a register
   // (you edit an employee rarely, you run payroll monthly), so it lives here
   // while the Löner flow stays in Arbeta.
