@@ -18,25 +18,13 @@ import {
 } from '@/components/ui/table'
 import { AccountNumber } from '@/components/ui/account-number'
 import { EmptyState } from '@/components/ui/empty-state'
-import { formatDateLong, formatCurrency } from '@/lib/utils'
+import { formatDateLong } from '@/lib/utils'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
 import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
 import { LedgerGraph } from './LedgerGraph'
-import { AgentCompetenceSections } from './AgentCompetenceSections'
-
-/** Recurring = a steady cadence (roughly weekly to quarterly) over >= 3 bookings. */
-function isRecurring(cadence: number | null, occurrences: number): boolean {
-  return cadence !== null && cadence >= 4 && cadence <= 120 && occurrences >= 3
-}
-
-/**
- * "Vad din agent vet": the human-readable render of the exact ledger-context
- * payload the AI agent reads. The hero is a radial map of how the company's
- * counterparties and suppliers flow into BAS accounts; the rest is compact
- * supporting context. Everything is derived by code from the company's own
- * bookings; the agent never invents it.
- */
+import { CompetenceCard, FactsCard } from './AgentCompetenceSections'
+import { KnowledgeTabs } from './KnowledgeTabs'
 
 // Swedish VAT (moms) treatment codes stay Swedish in both locales, like BAS
 // account names and momsdeklaration labels (.claude/rules/i18n.md).
@@ -77,17 +65,8 @@ export async function AgentKnowledgeView({
   const { meta, explicit_rules, vat_profile, conventions } = context
 
   const entities = [...deep.counterparty_entities, ...deep.supplier_entities]
-  const recurringCount = entities.filter((e) => isRecurring(e.cadence_days, e.occurrences)).length
-  const trackedSpend = entities.reduce((s, e) => s + e.total_amount, 0)
 
-  // Empty only when there is nothing to show at all: no bookings, no derived
-  // entities, AND no user-configured rules (rules are independent of posted
-  // transactions, so a rules-only company must still render, not hit the
-  // "hasn't learned anything" state).
-  const isEmpty =
-    meta.coverage.posted_entries_window === 0 &&
-    entities.length === 0 &&
-    explicit_rules.length === 0
+  const isEmpty = meta.coverage.posted_entries_window === 0 && entities.length === 0 && explicit_rules.length === 0
 
   if (isEmpty) {
     // No bookings yet, but the agent still ships with competence and may
@@ -105,7 +84,10 @@ export async function AgentKnowledgeView({
             />
           </CardContent>
         </Card>
-        <AgentCompetenceSections competence={competence} />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <CompetenceCard competence={competence} />
+          <FactsCard competence={competence} />
+        </div>
       </>
     )
   }
@@ -126,36 +108,9 @@ export async function AgentKnowledgeView({
           ? t('period_yearly')
           : (vat_profile.moms_period ?? t('unknown'))
 
-  return (
+  // "Regler & profil" tab: user-authored rules + observed VAT + conventions.
+  const configContent = (
     <>
-      {/* Coverage / freshness strip */}
-      <Card>
-        <CardContent className="flex flex-wrap gap-x-10 gap-y-4 p-4">
-          <Stat label={t('meta_entities')} value={<span className="tabular-nums">{entities.length}</span>} />
-          <Stat label={t('meta_recurring')} value={<span className="tabular-nums">{recurringCount}</span>} />
-          <Stat label={t('meta_tracked_spend')} value={<span className="tabular-nums">{formatCurrency(trackedSpend)}</span>} />
-          {conventions.typical_booking_lag_days !== null && (
-            <Stat label={t('meta_lag')} value={t('meta_lag_value', { days: conventions.typical_booking_lag_days })} />
-          )}
-          <Stat label={t('meta_computed')} value={formatDateLong(meta.computed_at)} />
-        </CardContent>
-      </Card>
-
-      {/* The radial map: the hero */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('graph_title')}</CardTitle>
-          <CardDescription>{t('graph_description')}</CardDescription>
-        </CardHeader>
-        <CardContent className="p-4 md:p-6">
-          <LedgerGraph deep={deep} companyName={companyName} />
-        </CardContent>
-      </Card>
-
-      {/* Competence (shipped knowledge) + learned facts */}
-      <AgentCompetenceSections competence={competence} />
-
-      {/* Explicit rules: instructions, authoritative, distinct from patterns */}
       {explicit_rules.length > 0 && (
         <Card>
           <CardHeader>
@@ -196,7 +151,6 @@ export async function AgentKnowledgeView({
         </Card>
       )}
 
-      {/* VAT profile + conventions */}
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -261,14 +215,33 @@ export async function AgentKnowledgeView({
       </div>
     </>
   )
-}
 
-function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+  const tabs = [
+    { value: 'competence', label: t('tab_competence'), content: <CompetenceCard competence={competence} /> },
+    { value: 'memory', label: t('tab_memory'), content: <FactsCard competence={competence} /> },
+    { value: 'config', label: t('tab_config'), content: configContent },
+  ]
+
   return (
-    <div>
-      <div className="text-xs uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm">{value}</div>
-    </div>
+    <>
+      {/* The radial map: the hero */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('graph_title')}</CardTitle>
+          <CardDescription>{t('graph_description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="p-4 md:p-6">
+          <LedgerGraph deep={deep} companyName={companyName} />
+        </CardContent>
+      </Card>
+
+      {/* Supporting detail, tabbed so it doesn't stack into a long scroll */}
+      <KnowledgeTabs tabs={tabs} />
+
+      <p className="text-right text-xs text-muted-foreground">
+        {t('footer_basis', { entries: meta.coverage.posted_entries_window, date: formatDateLong(meta.computed_at) })}
+      </p>
+    </>
   )
 }
 
