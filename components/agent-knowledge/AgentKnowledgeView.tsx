@@ -18,15 +18,22 @@ import {
 } from '@/components/ui/table'
 import { AccountNumber } from '@/components/ui/account-number'
 import { EmptyState } from '@/components/ui/empty-state'
-import { formatDate, formatDateLong } from '@/lib/utils'
+import { formatDateLong, formatCurrency } from '@/lib/utils'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
+import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
+import { LedgerGraph } from './LedgerGraph'
+
+/** Recurring = a steady cadence (roughly weekly to quarterly) over >= 3 bookings. */
+function isRecurring(cadence: number | null, occurrences: number): boolean {
+  return cadence !== null && cadence >= 4 && cadence <= 120 && occurrences >= 3
+}
 
 /**
  * "Vad din agent vet": the human-readable render of the exact ledger-context
- * payload the AI agent reads (Accounted://ledger/context + the briefing
- * digest). One payload, two renderers; this is the trust/legibility surface.
- * Everything shown is derived by code from the company's own bookings; the
- * agent never invents it.
+ * payload the AI agent reads. The hero is a radial map of how the company's
+ * counterparties and suppliers flow into BAS accounts; the rest is compact
+ * supporting context. Everything is derived by code from the company's own
+ * bookings; the agent never invents it.
  */
 
 // Swedish VAT (moms) treatment codes stay Swedish in both locales, like BAS
@@ -52,41 +59,25 @@ function vatLabel(code: string | null): string | null {
   return VAT_LABELS[code] ?? code
 }
 
-/** Monochrome share meter (0..1). On-brand: muted track, achromatic fill. */
-function ShareBar({ value }: { value: number }) {
-  const pct = Math.max(0, Math.min(100, Math.round(value * 100)))
-  return (
-    <div className="flex items-center gap-2">
-      <div
-        className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted"
-        role="img"
-        aria-label={`${pct}%`}
-      >
-        <div className="h-full rounded-full bg-primary/70" style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs tabular-nums text-muted-foreground">{pct}%</span>
-    </div>
-  )
-}
-
-export async function AgentKnowledgeView({ context }: { context: LedgerContext }) {
+export async function AgentKnowledgeView({
+  context,
+  deep,
+  companyName,
+}: {
+  context: LedgerContext
+  deep: DeepLedgerContext
+  companyName: string
+}) {
   const t = await getTranslations('agentKnowledge')
 
-  const {
-    meta,
-    account_usage,
-    counterparty_patterns,
-    supplier_patterns,
-    explicit_rules,
-    vat_profile,
-    conventions,
-  } = context
+  const { meta, explicit_rules, vat_profile, conventions } = context
+
+  const entities = [...deep.counterparty_entities, ...deep.supplier_entities]
+  const recurringCount = entities.filter((e) => isRecurring(e.cadence_days, e.occurrences)).length
+  const trackedSpend = entities.reduce((s, e) => s + e.total_amount, 0)
 
   const isEmpty =
-    meta.coverage.posted_entries_window === 0 &&
-    counterparty_patterns.length === 0 &&
-    supplier_patterns.length === 0 &&
-    account_usage.length === 0
+    meta.coverage.posted_entries_window === 0 && entities.length === 0
 
   if (isEmpty) {
     return (
@@ -125,8 +116,9 @@ export async function AgentKnowledgeView({ context }: { context: LedgerContext }
       {/* Coverage / freshness strip */}
       <Card>
         <CardContent className="flex flex-wrap gap-x-10 gap-y-4 p-4">
-          <Stat label={t('meta_window')} value={`${formatDate(meta.window.from)} – ${formatDate(meta.window.to)}`} />
-          <Stat label={t('meta_posted_entries')} value={<span className="tabular-nums">{meta.coverage.posted_entries_window}</span>} />
+          <Stat label={t('meta_entities')} value={<span className="tabular-nums">{entities.length}</span>} />
+          <Stat label={t('meta_recurring')} value={<span className="tabular-nums">{recurringCount}</span>} />
+          <Stat label={t('meta_tracked_spend')} value={<span className="tabular-nums">{formatCurrency(trackedSpend)}</span>} />
           {conventions.typical_booking_lag_days !== null && (
             <Stat label={t('meta_lag')} value={t('meta_lag_value', { days: conventions.typical_booking_lag_days })} />
           )}
@@ -134,106 +126,16 @@ export async function AgentKnowledgeView({ context }: { context: LedgerContext }
         </CardContent>
       </Card>
 
-      {/* Counterparty booking patterns: the crown jewel */}
+      {/* The radial map: the hero */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">{t('cp_title')}</CardTitle>
-          <CardDescription>{t('cp_description')}</CardDescription>
+          <CardTitle className="text-base">{t('graph_title')}</CardTitle>
+          <CardDescription>{t('graph_description')}</CardDescription>
         </CardHeader>
-        <CardContent className="p-0">
-          {counterparty_patterns.length === 0 ? (
-            <EmptyRow text={t('none_cp')} />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('col_counterparty')}</TableHead>
-                  <TableHead>{t('col_account')}</TableHead>
-                  <TableHead>{t('col_vat')}</TableHead>
-                  <TableHead>{t('col_evidence')}</TableHead>
-                  <TableHead className="text-right">{t('col_last')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {counterparty_patterns.map((p) => (
-                  <TableRow key={p.counterparty + p.dominant.account_number}>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">{p.counterparty}</span>
-                        <Badge variant={p.source === 'template' ? 'secondary' : 'outline'}>
-                          {p.source === 'template' ? t('src_template') : t('src_observed')}
-                        </Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {p.dominant.account_number
-                        ? <AccountNumber number={p.dominant.account_number} showName size="sm" />
-                        : <span className="text-muted-foreground">–</span>}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{vatLabel(p.dominant.vat_treatment) ?? '–'}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <ShareBar value={p.evidence.share} />
-                        <span className="text-xs text-muted-foreground">
-                          {t('ev_counts', { agree: p.evidence.agree, seen: p.evidence.seen_12m })}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {formatDate(p.evidence.last_booked)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+        <CardContent className="p-4 md:p-6">
+          <LedgerGraph deep={deep} companyName={companyName} />
         </CardContent>
       </Card>
-
-      {/* Supplier booking patterns (AP side) */}
-      {supplier_patterns.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('sup_title')}</CardTitle>
-            <CardDescription>{t('sup_description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('col_supplier')}</TableHead>
-                  <TableHead>{t('col_account')}</TableHead>
-                  <TableHead>{t('col_vat')}</TableHead>
-                  <TableHead>{t('col_evidence')}</TableHead>
-                  <TableHead className="text-right">{t('col_last')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {supplier_patterns.map((s) => (
-                  <TableRow key={s.supplier + s.dominant.account_number}>
-                    <TableCell className="font-medium">{s.supplier}</TableCell>
-                    <TableCell>
-                      <AccountNumber number={s.dominant.account_number} showName size="sm" />
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{vatLabel(s.dominant.vat_treatment) ?? '–'}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <ShareBar value={s.evidence.share} />
-                        <span className="text-xs text-muted-foreground">
-                          {t('ev_counts', { agree: s.evidence.agree, seen: s.evidence.seen_12m })}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {formatDate(s.evidence.last_booked)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Explicit rules: instructions, authoritative, distinct from patterns */}
       {explicit_rules.length > 0 && (
@@ -276,39 +178,7 @@ export async function AgentKnowledgeView({ context }: { context: LedgerContext }
         </Card>
       )}
 
-      {/* Account usage */}
-      {account_usage.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('acc_title')}</CardTitle>
-            <CardDescription>{t('acc_description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('col_account')}</TableHead>
-                  <TableHead className="text-right">{t('col_postings')}</TableHead>
-                  <TableHead className="text-right">{t('col_last_used')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {account_usage.map((a) => (
-                  <TableRow key={a.account_number}>
-                    <TableCell>
-                      <AccountNumber number={a.account_number} name={a.account_name ?? undefined} showName size="sm" />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{a.postings_12m}</TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">{formatDate(a.last_used)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* VAT profile + conventions, side by side */}
+      {/* VAT profile + conventions */}
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -328,7 +198,7 @@ export async function AgentKnowledgeView({ context }: { context: LedgerContext }
               {vat_profile.treatments_used_12m.length === 0 ? (
                 <span className="text-sm text-muted-foreground">{t('vat_no_treatments')}</span>
               ) : (
-                <div className="flex flex-wrap justify-end gap-1.5">
+                <div className="flex flex-wrap justify-end gap-2">
                   {vat_profile.treatments_used_12m.map((code) => (
                     <Badge key={code} variant="outline">{vatLabel(code)}</Badge>
                   ))}
@@ -351,7 +221,7 @@ export async function AgentKnowledgeView({ context }: { context: LedgerContext }
               {conventions.voucher_series_in_use.length === 0 ? (
                 <span className="text-sm text-muted-foreground">–</span>
               ) : (
-                <div className="flex flex-wrap justify-end gap-1.5">
+                <div className="flex flex-wrap justify-end gap-2">
                   {conventions.voucher_series_in_use.map((s) => (
                     <Badge key={s} variant="secondary" className="font-mono">{s}</Badge>
                   ))}
@@ -391,8 +261,4 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <div>{children}</div>
     </div>
   )
-}
-
-function EmptyRow({ text }: { text: string }) {
-  return <p className="px-6 py-8 text-center text-sm text-muted-foreground">{text}</p>
 }

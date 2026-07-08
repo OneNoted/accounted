@@ -1,8 +1,9 @@
 import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { createClient } from '@/lib/supabase/server'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { getActiveCompanyId, getCompanyDisplayName } from '@/lib/company/context'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
+import { buildDeepEntities } from '@/lib/agent-context/ledger-deep'
 import { PageHeader } from '@/components/ui/page-header'
 import { AgentKnowledgeView } from '@/components/agent-knowledge/AgentKnowledgeView'
 
@@ -26,15 +27,17 @@ export default async function AgentKnowledgePage() {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
-  const [t, context] = await Promise.all([
+  const [t, context, deep, companyName] = await Promise.all([
     getTranslations('agentKnowledge'),
     buildLedgerContext(supabase, companyId),
+    buildDeepEntities(supabase, companyId),
+    getCompanyDisplayName(supabase, companyId),
   ])
 
   return (
     <div className="space-y-8">
       <PageHeader title={t('title')} description={t('description')} />
-      <AgentKnowledgeView context={context} />
+      <AgentKnowledgeView context={context} deep={deep} companyName={companyName ?? ''} />
     </div>
   )
 }
