@@ -76,8 +76,14 @@ export async function AgentKnowledgeView({
   const recurringCount = entities.filter((e) => isRecurring(e.cadence_days, e.occurrences)).length
   const trackedSpend = entities.reduce((s, e) => s + e.total_amount, 0)
 
+  // Empty only when there is nothing to show at all: no bookings, no derived
+  // entities, AND no user-configured rules (rules are independent of posted
+  // transactions, so a rules-only company must still render, not hit the
+  // "hasn't learned anything" state).
   const isEmpty =
-    meta.coverage.posted_entries_window === 0 && entities.length === 0
+    meta.coverage.posted_entries_window === 0 &&
+    entities.length === 0 &&
+    explicit_rules.length === 0
 
   if (isEmpty) {
     return (
