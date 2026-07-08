@@ -1,9 +1,9 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useTranslations } from 'next-intl'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import type { DeepEntity, DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 
 /**
@@ -152,6 +152,15 @@ function cadenceKey(cadence: number | null, occurrences: number): 'cadence_weekl
 export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; companyName: string }) {
   const t = useTranslations('agentKnowledge')
   const [hover, setHover] = useState<string | null>(null)
+  // Gentle one-shot fade-in of the whole map on mount. The svg root has no
+  // opacity attribute of its own (only the inner node groups do, for hover
+  // dimming), so this never fights the interaction state. Reduced-motion users
+  // get it instantly.
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setShown(true))
+    return () => cancelAnimationFrame(id)
+  }, [])
   const model = useMemo(() => buildModel(deep), [deep])
 
   const payeeById = useMemo(() => new Map(model.payees.map((p) => [p.id, p])), [model])
@@ -217,7 +226,10 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
       <div className="w-full overflow-hidden">
         <svg
           viewBox={`0 0 ${W} ${H}`}
-          className="mx-auto block h-auto w-full max-w-[640px]"
+          className={cn(
+            'mx-auto block h-auto w-full max-w-[640px] transition-opacity duration-700 ease-out motion-reduce:transition-none',
+            shown ? 'opacity-100' : 'opacity-0',
+          )}
           role="img"
           aria-label={t('graph_aria', { payees: model.payees.length, accounts: model.accounts.length })}
         >
