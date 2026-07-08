@@ -21,7 +21,9 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { formatDateLong, formatCurrency } from '@/lib/utils'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
 import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
+import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
 import { LedgerGraph } from './LedgerGraph'
+import { AgentCompetenceSections } from './AgentCompetenceSections'
 
 /** Recurring = a steady cadence (roughly weekly to quarterly) over >= 3 bookings. */
 function isRecurring(cadence: number | null, occurrences: number): boolean {
@@ -62,10 +64,12 @@ function vatLabel(code: string | null): string | null {
 export async function AgentKnowledgeView({
   context,
   deep,
+  competence,
   companyName,
 }: {
   context: LedgerContext
   deep: DeepLedgerContext
+  competence: AgentCompetence
   companyName: string
 }) {
   const t = await getTranslations('agentKnowledge')
@@ -86,18 +90,23 @@ export async function AgentKnowledgeView({
     explicit_rules.length === 0
 
   if (isEmpty) {
+    // No bookings yet, but the agent still ships with competence and may
+    // already remember facts: show those rather than a dead end.
     return (
-      <Card>
-        <CardContent className="p-0">
-          <EmptyState
-            icon={Brain}
-            title={t('empty_title')}
-            description={t('empty_description')}
-            actionLabel={t('empty_action')}
-            actionHref="/transactions"
-          />
-        </CardContent>
-      </Card>
+      <>
+        <Card>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={Brain}
+              title={t('empty_title')}
+              description={t('empty_description')}
+              actionLabel={t('empty_action')}
+              actionHref="/transactions"
+            />
+          </CardContent>
+        </Card>
+        <AgentCompetenceSections competence={competence} />
+      </>
     )
   }
 
@@ -142,6 +151,9 @@ export async function AgentKnowledgeView({
           <LedgerGraph deep={deep} companyName={companyName} />
         </CardContent>
       </Card>
+
+      {/* Competence (shipped knowledge) + learned facts */}
+      <AgentCompetenceSections competence={competence} />
 
       {/* Explicit rules: instructions, authoritative, distinct from patterns */}
       {explicit_rules.length > 0 && (
