@@ -9,7 +9,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { getAmountToPay } from '@/lib/invoices/rounding'
 
 type PdfLang = 'sv' | 'en'
 
@@ -915,14 +915,10 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               )
             )}
             {(() => {
-              const rounding = getDisplayTotal(invoice, company)
-              // ROT/RUT-avdrag reduces "Att betala": the customer only owes
-              // (total - deduction); the rest is reclaimed from Skatteverket
-              // via fakturamodellen. The rule does not apply to credit notes.
-              const showDeduction = !isCreditNote && (invoice.deduction_total ?? 0) > 0
-              const grandTotal = showDeduction
-                ? Math.round((rounding.displayed - (invoice.deduction_total ?? 0)) * 100) / 100
-                : rounding.displayed
+              // Shared with the invoice email (lib/email/invoice-templates.ts)
+              // so the mail and the PDF always state the same "Att betala".
+              const { rounding, deductionApplies: showDeduction, toPay: grandTotal } =
+                getAmountToPay(invoice, company)
               return (
                 <>
                   {rounding.applies && (

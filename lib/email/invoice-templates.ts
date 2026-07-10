@@ -1,5 +1,6 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
+import { getAmountToPay } from '@/lib/invoices/rounding'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
@@ -152,7 +153,7 @@ function buildPlaceholderValues(data: InvoiceEmailData, lang: EmailLang): Record
     förnamn: fullName ? fullName.split(' ')[0] : '',
     företag: getCompanyPrimaryName(company),
     förfallodatum: formatDate(invoice.due_date),
-    belopp: formatCurrencyForCustomer(invoice.total, invoice.currency, lang),
+    belopp: formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang),
   }
 }
 
@@ -269,7 +270,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
         <tr>
           <td style="padding: 8px 0; font-size: 18px; font-weight: 600;">${L.toPay}</td>
           <td style="padding: 8px 0; text-align: right; font-size: 18px; font-weight: 600; color: ${isCreditNote ? '#059669' : primaryColor};">
-            ${formatCurrencyForCustomer(invoice.total, invoice.currency, lang)}
+            ${formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang)}
           </td>
         </tr>
       </table>
@@ -377,7 +378,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   text += `${L.documentNumber(documentType)} ${invoice.invoice_number}\n`
   text += `${L.documentDate(documentType)} ${formatDate(invoice.invoice_date)}\n`
   text += `${L.dueDate} ${formatDate(invoice.due_date)}\n`
-  text += `${L.toPay} ${formatCurrencyForCustomer(invoice.total, invoice.currency, lang)}\n`
+  text += `${L.toPay} ${formatCurrencyForCustomer(getAmountToPay(invoice, company).toPay, invoice.currency, lang)}\n`
   text += `---\n\n`
 
   if (!hidePayment) {

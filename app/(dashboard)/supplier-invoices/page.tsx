@@ -17,6 +17,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatDate } from '@/lib/utils'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice } from '@/types'
 
 function formatAmount(amount: number): string {
@@ -217,7 +218,15 @@ export default function SupplierInvoicesPage() {
                       </TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(inv.total)}</TableCell>
+                      {/* Belopp rounds like the detail page when the invoice's
+                          öresavrundning flag is on; "kvar att betala" stays
+                          öre-exact (it is the actual outstanding debt). */}
+                      <TableCell className="text-right tabular-nums">
+                        {formatAmount(getDisplayTotal(
+                          { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
+                          { ore_rounding: false },
+                        ).displayed)}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
                       <TableCell>
                         {activeTab === 'to_pay' && inv.status === 'registered' ? (

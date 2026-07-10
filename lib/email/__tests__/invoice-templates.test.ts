@@ -405,4 +405,48 @@ describe('invoice email templates', () => {
       expect(html).toContain('&quot;onmouseover=alert(1)')
     })
   })
+
+  describe('öresavrundning: "Att betala" matches the PDF', () => {
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+
+    it('rounds the SEK total to whole kronor when rounding is on (company default)', () => {
+      const oreInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56 })
+      const html = generateInvoiceEmailHtml({ invoice: oreInvoice, customer: svCustomer, company })
+      expect(html).toMatch(/1[\s ]235,00 SEK/)
+      expect(html).not.toContain('234,56')
+      const text = generateInvoiceEmailText({ invoice: oreInvoice, customer: svCustomer, company })
+      expect(text).toMatch(/Att betala: 1[\s ]235,00 SEK/)
+    })
+
+    it('keeps the exact öre when the per-invoice flag turns rounding off', () => {
+      const exactInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56, ore_rounding: false })
+      const html = generateInvoiceEmailHtml({ invoice: exactInvoice, customer: svCustomer, company })
+      expect(html).toMatch(/1[\s ]234,56 SEK/)
+      expect(html).not.toMatch(/1[\s ]235,00 SEK/)
+    })
+
+    it('does not round non-SEK invoices', () => {
+      const eurInvoice = makeInvoice({ invoice_number: '1042', currency: 'EUR', total: 1234.56 })
+      const text = generateInvoiceEmailText({ invoice: eurInvoice, customer: svCustomer, company })
+      expect(text).toMatch(/1[\s ]234,56 EUR/)
+    })
+
+    it('subtracts the ROT/RUT deduction so the email states what the customer owes', () => {
+      const rotInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56, deduction_total: 500 })
+      const html = generateInvoiceEmailHtml({ invoice: rotInvoice, customer: svCustomer, company })
+      expect(html).toContain('735,00 SEK')
+      const text = generateInvoiceEmailText({ invoice: rotInvoice, customer: svCustomer, company })
+      expect(text).toContain('Att betala: 735,00 SEK')
+    })
+
+    it('uses the rounded amount for the {belopp} placeholder', () => {
+      const withBelopp = makeCompanySettings({
+        company_name: 'Acme AB',
+        invoice_email_texts: { sv: { body: 'Summa: {belopp}' } },
+      })
+      const oreInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56 })
+      const text = generateInvoiceEmailText({ invoice: oreInvoice, customer: svCustomer, company: withBelopp })
+      expect(text).toMatch(/Summa: 1[\s ]235,00 SEK/)
+    })
+  })
 })

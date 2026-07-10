@@ -23,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags } from 'lucide-react'
 import {
@@ -733,7 +734,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
   const hasAnyDeduction = deductionTotal > 0
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
-  const toPay = Math.round((total - deductionTotal) * 100) / 100
+
+  // Öresavrundning live preview: same helper as the PDF/email, so the summary
+  // shows exactly what the customer will see. Display-only; the saved invoice
+  // keeps the exact öre.
+  const { rounding: displayRounding, toPay: displayedToPay } = getAmountToPay(
+    { total, currency: watchCurrency, ore_rounding: oreRounding, deduction_total: deductionTotal },
+    null,
+  )
 
   // Periodisering per rad: kräver faktureringsmetoden och en riktig faktura.
   // EU-/exportkunder bokas på 3308/3305 (omvänd skattskyldighet/export) och
@@ -2184,6 +2192,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <span>{formatCurrency(0, watchCurrency)}</span>
                 </div>
               )}
+              {displayRounding.applies && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
+                  <span className="tabular-nums">{formatCurrency(displayRounding.roundingDelta, watchCurrency)}</span>
+                </div>
+              )}
               {hasAnyDeduction && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">{t('deduction_summary_label')}</span>
@@ -2193,7 +2207,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               <Separator />
               <div className="flex justify-between font-bold text-lg">
                 <span>{hasAnyDeduction ? t('to_pay_label') : t('total_label')}</span>
-                <span>{formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}</span>
+                <span>{formatCurrency(displayedToPay, watchCurrency)}</span>
               </div>
               {hasAnyDeduction && (
                 <div className="flex justify-between text-xs text-muted-foreground">
@@ -2267,7 +2281,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 {hasAnyDeduction ? t('to_pay_label') : t('total_label')}
               </p>
               <p className="text-lg font-bold tabular-nums">
-                {formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}
+                {formatCurrency(displayedToPay, watchCurrency)}
               </p>
             </div>
             <div className="flex items-center gap-2">
