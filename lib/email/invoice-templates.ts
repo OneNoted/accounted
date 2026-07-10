@@ -1,6 +1,6 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
-import { applyPlaceholders, sanitizeSubjectLine, userTextToHtml } from './user-text'
+import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
 
@@ -23,6 +23,7 @@ const LABELS = {
     bodyCreditNote: 'Bifogat hittar du en kreditfaktura som korrigerar en tidigare faktura.',
     bodyInvoice: 'Tack för ditt förtroende! Bifogat hittar du din faktura.',
     toPay: 'Att betala:',
+    payOnline: 'Betala online',
     paymentHeading: 'Betalningsinformation',
     bank: 'Bank:',
     account: 'Kontonummer:',
@@ -51,6 +52,7 @@ const LABELS = {
     bodyCreditNote: 'Attached you will find a credit note that corrects an earlier invoice.',
     bodyInvoice: 'Thank you for your business. Attached you will find your invoice.',
     toPay: 'Total due:',
+    payOnline: 'Pay online',
     paymentHeading: 'Payment information',
     bank: 'Bank:',
     account: 'Account number:',
@@ -273,6 +275,17 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
       </table>
     </div>
 
+    <!-- Pay-online button: only when the user pasted a payment link on this
+         invoice. The URL is schema-validated (https-only) but still escaped
+         for the attribute context: a URL may legally contain quotes. -->
+    ${!hidePayment && invoice.payment_link_url ? `
+    <div style="margin-bottom: 30px; text-align: center;">
+      <a href="${escapeHtml(invoice.payment_link_url)}" style="display: inline-block; background: ${primaryColor}; color: #ffffff; text-decoration: none; padding: 12px 32px; border-radius: 6px; font-size: 16px; font-weight: 600;">
+        ${L.payOnline}
+      </a>
+    </div>
+    ` : ''}
+
     <!-- Payment Details -->
     ${!hidePayment ? `
     <div style="margin-bottom: 30px;">
@@ -369,6 +382,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
 
   if (!hidePayment) {
     text += `${L.paymentHeading}:\n`
+    if (invoice.payment_link_url) text += `${L.payOnline}: ${invoice.payment_link_url}\n`
     if (company.bank_name) text += `${L.bank} ${company.bank_name}\n`
     if (company.clearing_number && company.account_number) {
       text += `${L.account} ${company.clearing_number}-${company.account_number}\n`

@@ -357,4 +357,52 @@ describe('invoice email templates', () => {
         .toBe('F\u00f6ljesedel 1045 fr\u00e5n Acme AB')
     })
   })
+
+  describe('payment link (payment_link_url)', () => {
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', email: 'erik@example.se', language: 'sv' })
+    const linkUrl = 'https://buy.stripe.com/test_abc123'
+
+    it('renders a pay-online button in HTML and the URL in plain text when set', () => {
+      const linked = makeInvoice({ invoice_number: '1042', payment_link_url: linkUrl })
+      const html = generateInvoiceEmailHtml({ invoice: linked, customer: svCustomer, company })
+      expect(html).toContain(`href="${linkUrl}"`)
+      expect(html).toContain('Betala online')
+      const text = generateInvoiceEmailText({ invoice: linked, customer: svCustomer, company })
+      expect(text).toContain(`Betala online: ${linkUrl}`)
+    })
+
+    it('uses the English label for English customers', () => {
+      const enCustomer = makeCustomer({ name: 'Jane Doe', email: 'jane@example.com', language: 'en' })
+      const linked = makeInvoice({ invoice_number: '1042', payment_link_url: linkUrl })
+      const html = generateInvoiceEmailHtml({ invoice: linked, customer: enCustomer, company })
+      expect(html).toContain('Pay online')
+      expect(html).not.toContain('Betala online')
+    })
+
+    it('omits the button when no link is set', () => {
+      const html = generateInvoiceEmailHtml({ invoice, customer: svCustomer, company })
+      expect(html).not.toContain('Betala online')
+      const text = generateInvoiceEmailText({ invoice, customer: svCustomer, company })
+      expect(text).not.toContain('Betala online')
+    })
+
+    it('hides the button on credit notes even if a link is present on the row', () => {
+      const creditNote = makeInvoice({
+        invoice_number: '1043',
+        credited_invoice_id: 'inv-orig',
+        total: -5000,
+        payment_link_url: linkUrl,
+      })
+      const html = generateInvoiceEmailHtml({ invoice: creditNote, customer: svCustomer, company })
+      expect(html).not.toContain('Betala online')
+    })
+
+    it('escapes quote characters in the URL for the href attribute', () => {
+      const sneaky = 'https://pay.example.se/x?a="onmouseover=alert(1)'
+      const linked = makeInvoice({ invoice_number: '1042', payment_link_url: sneaky })
+      const html = generateInvoiceEmailHtml({ invoice: linked, customer: svCustomer, company })
+      expect(html).not.toContain('a="onmouseover')
+      expect(html).toContain('&quot;onmouseover=alert(1)')
+    })
+  })
 })

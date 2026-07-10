@@ -196,6 +196,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       notes: z.string().optional(),
+      // Optional online payment link (pasted from e.g. the Stripe dashboard).
+      // https-only: mirrors the server-side CreateInvoiceSchema gate.
+      payment_link_url: z
+        .string()
+        .optional()
+        .refine(
+          (v) => {
+            if (!v || !v.trim()) return true
+            try {
+              return new URL(v).protocol === 'https:'
+            } catch {
+              return false
+            }
+          },
+          { message: t('validation_payment_link_https') },
+        ),
       // Self-billing received (mottagen självfaktura). Present in the form for
       // both modes; required only in self_billed mode: enforced in onSubmit.
       external_invoice_number: z.string().optional(),
@@ -297,6 +313,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
           notes: initial.notes ?? '',
+          payment_link_url: initial.payment_link_url ?? '',
           external_invoice_number: '',
           self_billing_agreement_ref: '',
           received_date: '',
@@ -329,6 +346,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           due_date: '',
           currency: 'SEK',
           document_type: 'invoice' as InvoiceDocumentType,
+          payment_link_url: '',
           external_invoice_number: '',
           self_billing_agreement_ref: '',
           received_date: '',
@@ -1184,6 +1202,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           your_reference: pendingData.your_reference,
           our_reference: pendingData.our_reference,
           notes: pendingData.notes,
+          payment_link_url: pendingData.payment_link_url,
           invoice_number: numberPreview,
         }),
       })
@@ -2083,6 +2102,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       )}
                     />
                   </div>
+
+                  {/* Online payment link (manual MVP): pasted per invoice from
+                      the user's PSP dashboard. Only real invoices: proformas
+                      and delivery notes carry no payment request. */}
+                  {watchDocumentType === 'invoice' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_link_url">{t('payment_link_label')}</Label>
+                      <Input
+                        id="payment_link_url"
+                        type="url"
+                        inputMode="url"
+                        placeholder={t('payment_link_placeholder')}
+                        {...register('payment_link_url')}
+                      />
+                      {errors.payment_link_url ? (
+                        <p className="text-sm text-destructive">{errors.payment_link_url.message}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">{t('payment_link_hint')}</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Invoice-level default dims (kostnadsställe/projekt):
                       written to every generated journal line; per-item bags
