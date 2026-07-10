@@ -6,7 +6,8 @@ import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { DataList, DataListEmpty } from '@/components/ui/data-list'
+import { Card, CardContent } from '@/components/ui/card'
+import { DataListEmpty } from '@/components/ui/data-list'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Plus, FileInput, Lock } from 'lucide-react'
@@ -16,13 +17,9 @@ import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplier
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice } from '@/types'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   registered: 'secondary',
@@ -155,7 +152,8 @@ export default function SupplierInvoicesPage() {
         </TabsList>
 
         <TabsContent value={activeTab}>
-          <DataList>
+          <Card>
+            <CardContent className="p-0">
             {isLoading ? (
               <div>
                 <div className="p-3 border-b border-border">
@@ -205,7 +203,7 @@ export default function SupplierInvoicesPage() {
                 <TableBody>
                   {filteredInvoices.map((inv) => (
                     <TableRow key={inv.id}>
-                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
+                      <TableCell className="tabular-nums">{inv.arrival_number}</TableCell>
                       <TableCell>
                         <Link href={`/suppliers/${inv.supplier_id}`} className="hover:underline">
                           {inv.supplier?.name || '-'}
@@ -222,12 +220,12 @@ export default function SupplierInvoicesPage() {
                           öresavrundning flag is on; "kvar att betala" stays
                           öre-exact (it is the actual outstanding debt). */}
                       <TableCell className="text-right tabular-nums">
-                        {formatAmount(getDisplayTotal(
+                        {formatCurrency(getDisplayTotal(
                           { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
                           { ore_rounding: false },
-                        ).displayed)}
+                        ).displayed, inv.currency)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(inv.remaining_amount, inv.currency)}</TableCell>
                       <TableCell>
                         {activeTab === 'to_pay' && inv.status === 'registered' ? (
                           <div className="flex items-center gap-2">
@@ -255,7 +253,8 @@ export default function SupplierInvoicesPage() {
                 </TableBody>
               </Table>
             )}
-          </DataList>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

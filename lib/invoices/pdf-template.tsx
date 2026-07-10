@@ -43,6 +43,7 @@ const LABELS = {
     yourReference: 'Er referens:',
     ourReference: 'Vår referens:',
     // Customer box
+    custNo: 'Kundnr:',
     orgNo: 'Org.nr:',
     vat: 'VAT:',
     // Table columns
@@ -114,6 +115,7 @@ const LABELS = {
     deliveryDate: 'Delivery date:',
     yourReference: 'Your reference:',
     ourReference: 'Our reference:',
+    custNo: 'Customer no.:',
     orgNo: 'Reg. no.:',
     vat: 'VAT:',
     colDescription: 'Description',
@@ -806,6 +808,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               )}
               {customer.country && customer.country !== 'SE' && (
                 <Text>{customer.country}</Text>
+              )}
+              {/* Seller-assigned kundnummer: no per-customer-type guard needed,
+                  it identifies the customer in the seller's own register and
+                  carries no personal data of its own. */}
+              {customer.customer_number && (
+                <Text style={{ marginTop: 6 }}>{L.custNo} {customer.customer_number}</Text>
               )}
               {/* Suppress the identifier row for private customers: their
                   personnummer is not required on a B2C invoice (ML 17 kap 24§
