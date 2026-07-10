@@ -328,15 +328,25 @@ describe('generateGeneralLedger', () => {
           error: null,
         },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-03-15', voucher_number: 1, voucher_series: 'A', description: 'Pre-range', source_type: 'manual' },
+            { id: 'e2', entry_date: '2026-06-10', voucher_number: 2, voucher_series: 'A', description: 'In range', source_type: 'manual' },
+            { id: 'e3', entry_date: '2026-09-01', voucher_number: 3, voucher_series: 'A', description: 'Post-range', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
             // Before the range: rolls into opening
-            { account_number: '1930', debit_amount: 0, credit_amount: 2000, journal_entries: { entry_date: '2026-03-15', voucher_number: 1, voucher_series: 'A', description: 'Pre-range', source_type: 'manual' } },
+            { account_number: '1930', debit_amount: 0, credit_amount: 2000, journal_entry_id: 'e1' },
             // Inside the range: shown
-            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entries: { entry_date: '2026-06-10', voucher_number: 2, voucher_series: 'A', description: 'In range', source_type: 'manual' } },
+            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e2' },
             // After the range: dropped entirely
-            { account_number: '1930', debit_amount: 0, credit_amount: 300, journal_entries: { entry_date: '2026-09-01', voucher_number: 3, voucher_series: 'A', description: 'Post-range', source_type: 'manual' } },
+            { account_number: '1930', debit_amount: 0, credit_amount: 300, journal_entry_id: 'e3' },
           ],
           error: null,
         },
@@ -367,10 +377,18 @@ describe('generateGeneralLedger', () => {
       fiscal_periods: [
         { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-02-01', voucher_number: 1, voucher_series: 'A', description: 'Hyra feb', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
-            { account_number: '5010', debit_amount: 4000, credit_amount: 0, journal_entries: { entry_date: '2026-02-01', voucher_number: 1, voucher_series: 'A', description: 'Hyra feb', source_type: 'manual' } },
+            { account_number: '5010', debit_amount: 4000, credit_amount: 0, journal_entry_id: 'e1' },
           ],
           error: null,
         },
