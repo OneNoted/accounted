@@ -160,6 +160,7 @@
     "legend_focus": "Skärpa = säkerhet",
     "card_variants": "Namnvarianter",
     "card_confidence": "{share}% säkerhet",
+    "card_evidence": "Bokförd hit i {k} av {n} fall",
     "comp_title": "Kompetens",
     "comp_desc": "Kunskapsområden om svensk bokföring och skatt som assistenten bygger på. Kärnkompetensen gäller alla; bransch- och bolagsanpassningen väljs utifrån ditt företag.",
     "comp_empty": "Inga kunskapsområden ännu.",

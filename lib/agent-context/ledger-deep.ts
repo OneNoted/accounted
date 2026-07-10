@@ -23,8 +23,15 @@ export interface DeepEntity {
   /** Median gap between distinct booking dates, days. null if < 2 dates. */
   cadence_days: number | null
   dominant_account_number: string | null
-  /** Fraction of the entity's contra lines on the dominant account (0..1). */
+  /**
+   * Laplace-smoothed consistency (cnt+1)/(total+2), 0..1: sample-size-honest,
+   * so a single booking reads 0.67, never 1.0 (migration 20260710090000).
+   */
   dominant_account_share: number | null
+  /** Raw evidence: bookings on the dominant account. */
+  dominant_account_count: number | null
+  /** Raw evidence: all counted contra lines for the entity. */
+  dominant_account_total: number | null
   dominant_vat?: string | null
   kind: 'counterparty' | 'supplier'
 }

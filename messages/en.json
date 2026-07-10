@@ -160,6 +160,7 @@
     "legend_focus": "Sharpness = confidence",
     "card_variants": "Name variants",
     "card_confidence": "{share}% confidence",
+    "card_evidence": "Booked here in {k} of {n} cases",
     "comp_title": "Competence",
     "comp_desc": "Knowledge areas of Swedish bookkeeping and tax the assistant builds on. Core competence applies to everyone; industry and company adaptation is chosen for your company.",
     "comp_empty": "No knowledge areas yet.",
