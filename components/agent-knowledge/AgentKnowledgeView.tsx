@@ -224,16 +224,8 @@ export async function AgentKnowledgeView({
 
   return (
     <>
-      {/* The radial map: the hero */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('graph_title')}</CardTitle>
-          <CardDescription>{t('graph_description')}</CardDescription>
-        </CardHeader>
-        <CardContent className="p-4 md:p-6">
-          <LedgerGraph deep={deep} companyName={companyName} />
-        </CardContent>
-      </Card>
+      {/* The cinematic hero: a self-contained dark panel with its own header */}
+      <LedgerGraph deep={deep} companyName={companyName} />
 
       {/* Supporting detail, tabbed so it doesn't stack into a long scroll */}
       <KnowledgeTabs tabs={tabs} />
