@@ -1994,7 +1994,11 @@ interface GeneralLedgerData {
   period: { start: string; end: string }
 }
 
-export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null }) {
+// Stable default: an inline `= {}` would change identity every render and
+// re-trigger the fetch effect for callers that omit the prop.
+const EMPTY_DATE_RANGE: DateRangeValue = {}
+
+export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFilter = null, dateRange = EMPTY_DATE_RANGE }: { periodId: string; initialAccountFilter: string | null; dimensionFilter?: DimensionFilterValue | null; dateRange?: DateRangeValue }) {
   const [data, setData] = useState<GeneralLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -2010,6 +2014,8 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
       const params = new URLSearchParams({ period_id: periodId })
       if (from) params.set('account_from', from)
       if (to) params.set('account_to', to)
+      if (dateRange.fromDate) params.set('from_date', dateRange.fromDate)
+      if (dateRange.toDate) params.set('to_date', dateRange.toDate)
       if (dimensionFilter) {
         params.set('dim_no', dimensionFilter.dimNo)
         params.set('dim_code', dimensionFilter.code)
@@ -2026,7 +2032,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
     } finally {
       setLoading(false)
     }
-  }, [periodId, accountFrom, accountTo, dimensionFilter])
+  }, [periodId, accountFrom, accountTo, dimensionFilter, dateRange])
 
   // When initialAccountFilter changes (drill-down from another report), apply it
   useEffect(() => {
@@ -2037,7 +2043,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
     } else {
       fetchData()
     }
-  }, [periodId, initialAccountFilter, dimensionFilter])
+  }, [periodId, initialAccountFilter, dimensionFilter, dateRange])
 
   if (loading) {
     return (
@@ -2072,7 +2078,7 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, undefined, dimensionFilter)}` }]} />
+      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/general-ledger/xlsx?${reportQuery(periodId, dateRange, dimensionFilter)}` }]} />
       {/* Account range filter */}
       <Card>
         <CardContent className="pt-6">
