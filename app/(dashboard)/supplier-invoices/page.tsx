@@ -108,15 +108,24 @@ export default function SupplierInvoicesPage() {
 
   async function handleApprove(id: string) {
     setApprovingId(id)
-    const res = await fetch(`/api/supplier-invoices/${id}/approve`, { method: 'POST' })
-    const result = await res.json()
-    if (!res.ok) {
-      toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
-    } else {
-      toast({ title: t('approved_title'), description: t('approved_description') })
-      setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, status: 'approved' as const } : inv)))
+    try {
+      const res = await fetch(`/api/supplier-invoices/${id}/approve`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        // Re-sync from the server: an operator about to pay must see the
+        // invoice's true approval state, not an optimistic guess.
+        fetchInvoices()
+      } else {
+        toast({ title: t('approved_title'), description: t('approved_description') })
+        setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, status: 'approved' as const } : inv)))
+      }
+    } catch {
+      toast({ title: t('approve_failed_title'), description: getErrorMessage(null, { context: 'supplier_invoice' }), variant: 'destructive' })
+      fetchInvoices()
+    } finally {
+      setApprovingId(null)
     }
-    setApprovingId(null)
   }
 
   return (
