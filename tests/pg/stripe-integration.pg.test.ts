@@ -163,6 +163,9 @@ describe('stripe event/payout ledgers: member-read, service-write', () => {
       expect(payouts.rows).toEqual([{ payout_id: 'po_pg_1' }])
 
       // Writes are service-role only: no INSERT policy for authenticated.
+      // One expected failure per context: an RLS rejection aborts the whole
+      // transaction, so a second statement would only see "current
+      // transaction is aborted" instead of the RLS error.
       await expect(
         client.query(
           `INSERT INTO public.stripe_payment_events
@@ -171,6 +174,9 @@ describe('stripe event/payout ledgers: member-read, service-write', () => {
           [companyId, connectionId],
         ),
       ).rejects.toThrow(/row-level security/i)
+    })
+
+    await withUserContext(userId, async (client) => {
       await expect(
         client.query(
           `INSERT INTO public.stripe_payouts (company_id, connection_id, payout_id, status)

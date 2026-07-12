@@ -18,7 +18,7 @@ export const maxDuration = 300
 /**
  * GET /api/extensions/stripe/sync/cron
  * Polls each active Stripe connection's event stream every 15 minutes and
- * applies checkout payments to invoices (deterministic match, 1580 clearing).
+ * applies checkout payments to invoices (deterministic match, 1686 clearing).
  *
  * Processes up to 50 connections per run, oldest-synced first. Idempotent:
  * event claims are unique per (connection, event), so overlapping windows and

@@ -280,7 +280,8 @@ async function processCheckoutSessionEvent(
   // is the invoice id we stamped into the link metadata. Both are exact keys,
   // both scoped to the connection's company.
   const paymentLinkId = idOf(session.payment_link)
-  let invoice: (Invoice & { customer?: { name?: string | null } | null }) | null = null
+  type InvoiceRow = Invoice & { customer?: { name?: string | null } | null }
+  let invoice: InvoiceRow | null = null
 
   if (paymentLinkId) {
     const { data } = await supabase
@@ -289,7 +290,7 @@ async function processCheckoutSessionEvent(
       .eq('company_id', connection.company_id)
       .eq('stripe_payment_link_id', paymentLinkId)
       .maybeSingle()
-    invoice = data as typeof invoice
+    invoice = data as InvoiceRow | null
   }
   if (!invoice && session.metadata?.invoice_id) {
     const { data } = await supabase
@@ -298,7 +299,7 @@ async function processCheckoutSessionEvent(
       .eq('company_id', connection.company_id)
       .eq('id', session.metadata.invoice_id)
       .maybeSingle()
-    invoice = data as typeof invoice
+    invoice = data as InvoiceRow | null
   }
 
   if (!invoice) {
