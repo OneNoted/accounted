@@ -488,6 +488,34 @@ export const RotRutSettleSchema = z.object({
     .optional(),
 })
 
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
+// (dev_docs/skatteverket/husavdrag/exempel_beslut.json + ht.raml).
+export const RotRutBeslutFileSchema = z.object({
+  version: z.string(),
+  // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
+  utforare: z.string().regex(/^\d{10,12}$/),
+  beslut: z
+    .array(
+      z.object({
+        // NamnPaBegaran as submitted (1-16 chars); the primary match key
+        // against rot_rut_payout_requests.name.
+        namn: z.string().min(1),
+        referensnummer: z.string().regex(/^\d{11}(-\d+)?$/),
+        arenden: z
+          .array(
+            z.object({
+              personnummer: z.string().regex(/^\d{12}$/),
+              fakturanummer: z.string().max(20).optional(),
+              // Whole kronor; 0 = avslag for the ärende.
+              godkantBelopp: z.number().int().min(0),
+            }),
+          )
+          .min(1),
+      }),
+    )
+    .min(1),
+})
+
 // ============================================================
 // Articles (artikelregister)
 // ============================================================
