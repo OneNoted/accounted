@@ -5,7 +5,7 @@ import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
-import { SkatteverketAuthError } from './api-client'
+import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import type {
   SkatteverketBookedTransaction,
   SkatteverketUpcomingTransaction,
@@ -130,6 +130,10 @@ function upcomingToRow(
  */
 export async function syncSkattekonto(
   ctx: ExtensionContext,
+  // Defaults to the ctx user's personal token: the interactive manual-sync
+  // route keeps its exact pre-hybrid behavior. The cron passes system auth
+  // for companies with a verified lasombud grant.
+  auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId },
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
 
@@ -137,8 +141,8 @@ export async function syncSkattekonto(
   let transaktioner: Awaited<ReturnType<typeof getTransaktioner>>
   try {
     ;[saldo, transaktioner] = await Promise.all([
-      getSaldo(ctx.supabase, ctx.userId, omfragad),
-      getTransaktioner(ctx.supabase, ctx.userId, omfragad),
+      getSaldo(auth, omfragad),
+      getTransaktioner(auth, omfragad),
     ])
   } catch (err) {
     if (err instanceof SkatteverketAuthError) {

@@ -1782,6 +1782,21 @@
   },
   "settings_skatteverket_connect": {
     "title": "Skatteverket",
+    "system_title": "Automatisk anslutning (ombud)",
+    "system_intro": "Ge Accounted behörighet som ombud hos Skatteverket så fungerar den automatiska synkroniseringen (skattekonto, kvittenser) utan att du behöver logga in med BankID på nytt. Behörigheten ges en gång i Skatteverkets e-tjänst Ombud och behörigheter och kan när som helst återkallas där.",
+    "system_org_label": "Ge behörigheten till organisationsnummer",
+    "system_open_ombud": "Öppna Ombud och behörigheter",
+    "system_verify": "Verifiera anslutningen",
+    "system_verifying": "Verifierar...",
+    "system_status_granted": "Beviljad",
+    "system_status_denied": "Saknas",
+    "system_status_error": "Kunde inte kontrolleras",
+    "system_status_unknown": "Inte verifierad",
+    "system_behorighet_lasombud": "Juridiskt läsombud",
+    "system_behorighet_moms": "Momsdeklaration, ombud",
+    "system_cert_expires_soon": "Accounteds certifikat mot Skatteverket går ut om {days} dagar.",
+    "system_verify_failed": "Verifieringen misslyckades",
+    "system_verify_rate_limited": "Vänta en minut mellan verifieringar.",
     "needs_reconsent_message": "Anslutningen till Skatteverket behöver förnyas. Den automatiska synkroniseringen är pausad tills du ansluter igen med BankID.",
     "scope_momsdeklaration": "Momsdeklaration",
     "scope_inkforetag": "Företagsinformation",
@@ -4394,6 +4409,10 @@
     "due_days_left": "{days} dagar kvar"
   },
   "dashboard": {
+    "skv_promo_title": "Koppla Skatteverket",
+    "skv_promo_description": "Se skattekontot och lämna moms- och arbetsgivardeklarationer direkt härifrån. Anslut med BankID på ett par minuter.",
+    "skv_promo_cta": "Anslut",
+    "skv_promo_dismiss": "Dölj förslaget",
     "result": "Resultat",
     "this_year_short": "i år",
     "this_month": "denna månad",
@@ -4747,7 +4766,6 @@
     "xml_generate_failed": "Kunde inte generera AGI-filen",
     "xml_download_failed": "Kunde inte ladda ner AGI-filen",
     "submit_button": "Skicka in underlag",
-    "submit_upgrade_title": "Inlämning av AGI till Skatteverket ingår i en uppgraderad plan.",
     "submit_failed": "Kunde inte skicka AGI",
     "submit_failed_status": "Inlämning misslyckades ({status})",
     "submit_missing_id": "Inlämningssvar saknar inlamningId",
@@ -4769,9 +4787,8 @@
     "kvittens_fetch_failed": "Kunde inte hämta kvittenser",
     "no_kvittens_yet": "Ingen signerad kvittens hittades än för perioden.",
     "check_status_failed": "Kunde inte kontrollera status",
-    "upgrade_hint_before": "Ladda ner AGI-filen ovan och lämna in den manuellt i Skatteverkets e-tjänst — eller",
-    "upgrade_hint_link": "uppgradera",
-    "upgrade_hint_after": "för att skicka in direkt härifrån."
+    "upgrade_note": "Direktinlämning till Skatteverket kräver ett abonnemang. Du kan alltid ladda ner AGI-filen ovan och lämna in den manuellt i Skatteverkets e-tjänst.",
+    "granskningsunderlag_gloss": "Granskningsunderlaget är den version av deklarationen som Skatteverket låser för granskning. Du signerar det med BankID på Skatteverkets Mina sidor innan deklarationen räknas som inlämnad."
   },
   "salary_calendar": {
     "type_sick": "Sjukfrånvaro",

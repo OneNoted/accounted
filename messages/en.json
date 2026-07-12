@@ -1782,6 +1782,21 @@
   },
   "settings_skatteverket_connect": {
     "title": "Skatteverket",
+    "system_title": "Automatic connection (ombud)",
+    "system_intro": "Grant Accounted an ombud authorization at Skatteverket and the automatic syncing (tax account, receipts) keeps working without you signing in with BankID again. The authorization is granted once in Skatteverket's Ombud och behörigheter e-service and can be withdrawn there at any time.",
+    "system_org_label": "Grant the authorization to organisation number",
+    "system_open_ombud": "Open Ombud och behörigheter",
+    "system_verify": "Verify the connection",
+    "system_verifying": "Verifying...",
+    "system_status_granted": "Granted",
+    "system_status_denied": "Missing",
+    "system_status_error": "Could not be checked",
+    "system_status_unknown": "Not verified",
+    "system_behorighet_lasombud": "Juridiskt läsombud",
+    "system_behorighet_moms": "Momsdeklaration, ombud",
+    "system_cert_expires_soon": "Accounted's certificate with Skatteverket expires in {days} days.",
+    "system_verify_failed": "Verification failed",
+    "system_verify_rate_limited": "Wait a minute between verifications.",
     "needs_reconsent_message": "The Skatteverket connection needs to be renewed. Automatic syncing is paused until you reconnect with BankID.",
     "scope_momsdeklaration": "VAT declaration",
     "scope_inkforetag": "Company information",
@@ -4394,6 +4409,10 @@
     "due_days_left": "{days} days left"
   },
   "dashboard": {
+    "skv_promo_title": "Connect Skatteverket",
+    "skv_promo_description": "See your tax account and file VAT and employer declarations directly from here. Connect with BankID in a couple of minutes.",
+    "skv_promo_cta": "Connect",
+    "skv_promo_dismiss": "Dismiss suggestion",
     "result": "Net result",
     "this_year_short": "this year",
     "this_month": "this month",
@@ -4747,7 +4766,6 @@
     "xml_generate_failed": "Could not generate the AGI file",
     "xml_download_failed": "Could not download the AGI file",
     "submit_button": "Submit underlag",
-    "submit_upgrade_title": "Submitting AGI to Skatteverket is included in an upgraded plan.",
     "submit_failed": "Could not submit AGI",
     "submit_failed_status": "Submission failed ({status})",
     "submit_missing_id": "The submission response is missing inlamningId",
@@ -4769,9 +4787,8 @@
     "kvittens_fetch_failed": "Could not fetch kvittenser",
     "no_kvittens_yet": "No signed kvittens found for the period yet.",
     "check_status_failed": "Could not check status",
-    "upgrade_hint_before": "Download the AGI file above and file it manually in Skatteverket's e-service — or",
-    "upgrade_hint_link": "upgrade",
-    "upgrade_hint_after": "to submit directly from here."
+    "upgrade_note": "Direct submission to Skatteverket requires a subscription. You can always download the AGI file above and file it manually in Skatteverket's e-service.",
+    "granskningsunderlag_gloss": "The granskningsunderlag is the version of the declaration that Skatteverket locks for review. You sign it with BankID on Skatteverket's Mina sidor before the declaration counts as filed."
   },
   "salary_calendar": {
     "type_sick": "Sick leave",
