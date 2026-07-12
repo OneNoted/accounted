@@ -275,3 +275,167 @@ describe('settleAgiTaxPayments', () => {
     expect(settled).toBe(0)
   })
 })
+
+// ──────────────────────────────────────────────────────────────────────
+// Production format: the draw books as two rows with Swedish month names
+// ("Avdragen skatt maj 2026" = total_tax, "Arbetsgivaravgift maj 2026" =
+// total_avgifter) instead of the test environment's single combined
+// "Arbetsgivardeklaration YYYYMM" row.
+// ──────────────────────────────────────────────────────────────────────
+
+function taxDrawRow(overrides: Record<string, unknown> = {}) {
+  return {
+    transaktionsdatum: '2026-06-12',
+    transaktionstext: 'Avdragen skatt maj 2026',
+    belopp_skatteverket: -3391,
+    ...overrides,
+  }
+}
+
+function avgiftDrawRow(overrides: Record<string, unknown> = {}) {
+  return {
+    transaktionsdatum: '2026-06-12',
+    transaktionstext: 'Arbetsgivaravgift maj 2026',
+    belopp_skatteverket: -6284,
+    ...overrides,
+  }
+}
+
+describe('settleAgiTaxPayments: production two-row format', () => {
+  it('settles when the tax + avgift pair matches the declared amounts exactly', async () => {
+    const { supabase, updates } = createSettlementMock({
+      declarations: [declaration()],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [taxDrawRow(), avgiftDrawRow()],
+      2538,
+    )
+
+    expect(settled).toBe(1)
+    expect(updates).toHaveLength(1)
+    expect(updates[0].payload).toEqual({ tax_paid_at: '2026-06-12T00:00:00Z' })
+    expect(updates[0].filters).toMatchObject({
+      id: 'agi-may',
+      company_id: COMPANY,
+      tax_paid_at: null,
+    })
+  })
+
+  it('settles on the later date when the pair books on different days', async () => {
+    const { supabase, updates } = createSettlementMock({
+      declarations: [declaration()],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [
+        taxDrawRow({ transaktionsdatum: '2026-06-12' }),
+        avgiftDrawRow({ transaktionsdatum: '2026-06-13' }),
+      ],
+      0,
+    )
+
+    expect(settled).toBe(1)
+    expect(updates[0].payload).toEqual({ tax_paid_at: '2026-06-13T00:00:00Z' })
+  })
+
+  it('does not settle from a lone tax row', async () => {
+    const { supabase, updates } = createSettlementMock({
+      declarations: [declaration()],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [taxDrawRow()],
+      0,
+    )
+
+    expect(settled).toBe(0)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('does not settle when one side of the pair mismatches', async () => {
+    const { supabase, updates } = createSettlementMock({
+      declarations: [declaration()],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [taxDrawRow(), avgiftDrawRow({ belopp_skatteverket: -6283 })],
+      0,
+    )
+
+    expect(settled).toBe(0)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('skips the period when duplicate rows of one kind make it ambiguous', async () => {
+    const { supabase, updates } = createSettlementMock({
+      declarations: [declaration()],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [taxDrawRow(), taxDrawRow(), avgiftDrawRow()],
+      0,
+    )
+
+    expect(settled).toBe(0)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('never classifies beslut correction rows as draws', async () => {
+    const { supabase, updates, selects } = createSettlementMock({
+      declarations: [declaration({ period_month: 3 })],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [
+        {
+          transaktionsdatum: '2026-08-12',
+          transaktionstext: 'Beslut 260703 arbetsgivaravgift mars 2026',
+          belopp_skatteverket: -2524,
+        },
+      ],
+      0,
+    )
+
+    expect(settled).toBe(0)
+    expect(updates).toHaveLength(0)
+    // The beslut row is not a draw candidate at all: no lookup happens.
+    expect(selects).toHaveLength(0)
+  })
+
+  it('a beslut row for the same period does not block the pair from settling', async () => {
+    const { supabase, updates } = createSettlementMock({
+      declarations: [declaration()],
+    })
+
+    const settled = await settleAgiTaxPayments(
+      supabase as never,
+      COMPANY,
+      [
+        taxDrawRow(),
+        avgiftDrawRow(),
+        {
+          transaktionsdatum: '2026-08-12',
+          transaktionstext: 'Beslut 260703 arbetsgivaravgift maj 2026',
+          belopp_skatteverket: -2524,
+        },
+      ],
+      0,
+    )
+
+    expect(settled).toBe(1)
+    expect(updates).toHaveLength(1)
+  })
+})
