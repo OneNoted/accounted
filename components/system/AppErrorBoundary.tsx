@@ -53,10 +53,16 @@ function decideInitialPhase(): 'reloading' | 'fallback' {
   try {
     // Already auto-reloaded this path in this tab session: don't loop, show the
     // manual fallback.
-    return window.sessionStorage.getItem(reloadKey()) ? 'fallback' : 'reloading'
+    if (window.sessionStorage.getItem(reloadKey())) return 'fallback'
+    // Claim the one-shot and reload only if the flag actually persisted:
+    // writing here (not in the effect) keeps "mark reloaded" and "decide to
+    // reload" atomic, so a failed write (quota full / blocked) falls through to
+    // 'fallback' instead of reloading forever without ever recording it.
+    window.sessionStorage.setItem(reloadKey(), '1')
+    return 'reloading'
   } catch {
-    // sessionStorage blocked (private mode etc.): don't risk a reload loop,
-    // show the fallback so the user always has an explicit way forward.
+    // sessionStorage blocked or full: don't risk a reload loop, show the
+    // fallback so the user always has an explicit way forward.
     return 'fallback'
   }
 }
@@ -75,13 +81,9 @@ export function AppErrorBoundary({
       `[${scope}] Unhandled error${error.digest ? ` (digest ${error.digest})` : ''}:`,
       error,
     )
-    if (phase !== 'reloading') return
-    try {
-      window.sessionStorage.setItem(reloadKey(), '1')
-    } catch {
-      // Worst case: no flag written, and a later error reloads again.
-    }
-    window.location.reload()
+    // The one-shot flag is already claimed in decideInitialPhase, so reaching
+    // 'reloading' guarantees it persisted: reload exactly once.
+    if (phase === 'reloading') window.location.reload()
   }, [phase, error, scope])
 
   // During the single automatic reload, render nothing so a transient error
