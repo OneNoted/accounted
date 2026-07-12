@@ -44,6 +44,7 @@ import {
   agiKontrolleraIU,
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
 import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import {
@@ -262,14 +263,17 @@ export const skatteverketExtension: Extension = {
         // Build an HTML response that detects whether we're running inside an
         // OAuth popup. If `window.opener` exists, post a message back to the
         // parent and close the popup. Otherwise fall back to a plain redirect
-        // (preserves the legacy non-popup connect flow).
+        // (preserves the legacy non-popup connect flow). The fallback uses
+        // location.replace so this callback URL (whose code and state are
+        // consumed) drops out of history: navigating Back from the landing
+        // page must not re-run the callback into a guaranteed CSRF error.
         const respondWithSuccess = (fallbackPath: string) => {
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
               window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(appUrl)});
               window.close();
             } else {
-              window.location.href = ${jsLiteral(`${appUrl}${fallbackPath}`)};
+              window.location.replace(${jsLiteral(`${appUrl}${fallbackPath}`)});
             }
           </script><p>Anslutningen lyckades. Du kan stänga denna flik.</p></body></html>`
           return new Response(html, {
@@ -288,7 +292,7 @@ export const skatteverketExtension: Extension = {
               window.opener.postMessage({ type: 'skatteverket-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
               window.close();
             } else {
-              window.location.href = ${jsLiteral(`${appUrl}${fallbackPath}`)};
+              window.location.replace(${jsLiteral(`${appUrl}${fallbackPath}`)});
             }
           </script><p>Anslutningen misslyckades: ${escapedReason}</p></body></html>`
           return new Response(html, {
@@ -410,6 +414,20 @@ export const skatteverketExtension: Extension = {
             .eq('company_id', companyId)
             .eq('extension_id', 'skatteverket')
             .in('key', ['oauth_state', 'oauth_return_to', 'oauth_code_verifier'])
+
+          // Refresh Skatteverket-derived data NOW, while the fresh token is
+          // guaranteed alive: SKV per-flow tokens live ~65 minutes, so the
+          // nightly crons usually find them dead and right-after-consent is
+          // the one reliable window for a personal-token fetch. Awaited on
+          // purpose: when the popup closes, the salary/skattekonto pages can
+          // refetch and see synced + auto-settled data instead of racing a
+          // background job. Best-effort: a refresh failure must never fail
+          // the connect that just succeeded.
+          try {
+            await runPostConnectRefresh(supabase, user.id, companyId)
+          } catch (refreshErr) {
+            console.error('[skatteverket] post-connect refresh failed', refreshErr)
+          }
 
           return respondWithSuccess(successPath)
         } catch (err) {
