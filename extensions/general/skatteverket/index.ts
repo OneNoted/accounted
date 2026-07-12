@@ -56,6 +56,9 @@ import {
 import { splitTransactions } from './lib/skattekonto-buckets'
 import type { SkattekontoBalanceSnapshot } from './types'
 import type { VatPeriodType } from '@/types'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('skatteverket')
 
 /**
  * Skatteverket integration extension.
@@ -255,10 +258,23 @@ export const skatteverketExtension: Extension = {
         const state = url.searchParams.get('state')
         const error = url.searchParams.get('error')
 
-        // JSON-encode for safe embedding inside <script>. Escapes quotes and `</`
-        // so the value can't break out of the script tag.
+        // Injection-safety invariants: appUrl comes from NEXT_PUBLIC_APP_URL
+        // (deployment configuration, never user input), and jsLiteral
+        // JSON-encodes and escapes `<` so embedded values cannot break out of
+        // the script context. The per-response CSP nonce below is defense in
+        // depth on top of that: even injected markup could never execute.
         const jsLiteral = (value: unknown) =>
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
+
+        // CSP allows only the nonce-carrying inline script; everything else
+        // is blocked. Cache-Control: no-store because the callback URL
+        // carries a one-shot authorization code and must never be cached.
+        const responseHeaders = (nonce: string) => ({
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Security-Policy':
+            `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'`,
+          'Cache-Control': 'no-store',
+        })
 
         // Build an HTML response that detects whether we're running inside an
         // OAuth popup. If `window.opener` exists, post a message back to the
@@ -268,7 +284,8 @@ export const skatteverketExtension: Extension = {
         // consumed) drops out of history: navigating Back from the landing
         // page must not re-run the callback into a guaranteed CSRF error.
         const respondWithSuccess = (fallbackPath: string) => {
-          const html = `<!DOCTYPE html><html><body><script>
+          const nonce = crypto.randomUUID()
+          const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'skatteverket-oauth-success' }, ${jsLiteral(appUrl)});
               window.close();
@@ -278,16 +295,17 @@ export const skatteverketExtension: Extension = {
           </script><p>Anslutningen lyckades. Du kan stänga denna flik.</p></body></html>`
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: responseHeaders(nonce),
           })
         }
 
         const respondWithError = (reason: string, fallbackPath: string) => {
+          const nonce = crypto.randomUUID()
           const escapedReason = reason
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
-          const html = `<!DOCTYPE html><html><body><script>
+          const html = `<!DOCTYPE html><html><body><script nonce="${nonce}">
             if (window.opener) {
               window.opener.postMessage({ type: 'skatteverket-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(appUrl)});
               window.close();
@@ -297,7 +315,7 @@ export const skatteverketExtension: Extension = {
           </script><p>Anslutningen misslyckades: ${escapedReason}</p></body></html>`
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            headers: responseHeaders(nonce),
           })
         }
 
@@ -423,10 +441,27 @@ export const skatteverketExtension: Extension = {
           // refetch and see synced + auto-settled data instead of racing a
           // background job. Best-effort: a refresh failure must never fail
           // the connect that just succeeded.
+          // 30-second deadline: a hung SKV call must not hold the OAuth
+          // callback open. On timeout the refresh keeps running best-effort
+          // (no cancellation); the user still gets the success response.
+          const refreshTimeoutMs = 30000
           try {
-            await runPostConnectRefresh(supabase, user.id, companyId)
+            let timer: ReturnType<typeof setTimeout> | undefined
+            const timedOut = await Promise.race([
+              runPostConnectRefresh(supabase, user.id, companyId).then(() => false),
+              new Promise<true>((resolve) => {
+                timer = setTimeout(() => resolve(true), refreshTimeoutMs)
+              }),
+            ]).finally(() => clearTimeout(timer))
+            if (timedOut) {
+              log.warn('post-connect refresh timed out', {
+                companyId,
+                userId: user.id,
+                timeoutMs: refreshTimeoutMs,
+              })
+            }
           } catch (refreshErr) {
-            console.error('[skatteverket] post-connect refresh failed', refreshErr)
+            log.error('post-connect refresh failed', refreshErr, { companyId, userId: user.id })
           }
 
           return respondWithSuccess(successPath)
