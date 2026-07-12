@@ -7,6 +7,8 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
@@ -292,7 +294,7 @@ function BankFileImportWizard() {
       {/* Overlap warning: active PSD2 means file import will likely create
           duplicates of transactions the nightly sync already covers. */}
       {activePsd2Banks.length > 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-4">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
           <div className="flex-1 text-sm">
             <p className="font-medium">
@@ -814,10 +816,12 @@ const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
 function OpeningBalanceFlow() {
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
+  const router = useRouter()
 
   const [obStep, setObStep] = useState<OpeningBalanceStep>('upload')
   const [obIsLoading, setObIsLoading] = useState(false)
   const [obError, setObError] = useState<string | null>(null)
+  const [obBankFormatHint, setObBankFormatHint] = useState<string | null>(null)
   const [obFile, setObFile] = useState<File | null>(null)
   const [parseResult, setParseResult] = useState<OpeningBalanceParseResult | null>(null)
   const [editedRows, setEditedRows] = useState<{
@@ -836,6 +840,7 @@ function OpeningBalanceFlow() {
 
   const handleFileSelect = useCallback(async (file: File) => {
     setObError(null)
+    setObBankFormatHint(null)
     setObIsLoading(true)
     setObFile(file)
 
@@ -859,7 +864,13 @@ function OpeningBalanceFlow() {
       setParseResult(result)
 
       if (result.rows.length === 0) {
-        setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+        if (result.detected_bank_format) {
+          // The file is a bank statement uploaded to the wrong importer (#918)
+          setObBankFormatHint(result.detected_bank_format)
+          setObError(`Filen ser ut som ett kontoutdrag från ${result.detected_bank_format}, inte ingående balanser. Kontoutdrag importeras under "Banktransaktioner".`)
+        } else {
+          setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+        }
         return
       }
 
@@ -981,6 +992,7 @@ function OpeningBalanceFlow() {
     setEditedRows([])
     setExecuteResult(null)
     setObError(null)
+    setObBankFormatHint(null)
   }
 
   return (
@@ -1016,6 +1028,11 @@ function OpeningBalanceFlow() {
           onFileSelect={handleFileSelect}
           isLoading={obIsLoading}
           error={obError}
+          errorAction={
+            obBankFormatHint
+              ? { label: 'Importera banktransaktioner', onClick: () => router.push('/import?mode=bank') }
+              : undefined
+          }
         />
       )}
 
@@ -1996,16 +2013,11 @@ export default function ImportPage() {
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="font-display text-2xl md:text-3xl tracking-tight">
-          {view === 'export' ? t('export_title') : t('title')}
-        </h1>
-        <p className="text-muted-foreground">
-          {view === 'export' ? t('export_subtitle') : t('subtitle')}
-        </p>
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title={view === 'export' ? t('export_title') : t('title')}
+        description={view === 'export' ? t('export_subtitle') : undefined}
+      />
 
       {mode === null && (
         <>
@@ -2033,7 +2045,7 @@ export default function ImportPage() {
                 tabIndex={isSandbox ? -1 : 0}
                 aria-disabled={isSandbox}
                 className={cn(
-                  'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-colors',
+                  'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
                   isSandbox
                     ? 'opacity-50 cursor-not-allowed'
                     : 'cursor-pointer hover:border-foreground/15'
@@ -2045,23 +2057,21 @@ export default function ImportPage() {
                   <Landmark className="h-[18px] w-[18px] text-foreground/60" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-2">
                     <h3 className="text-[15px] font-semibold leading-tight">{t('psd2_title')}</h3>
                     {hasBankSync ? (
-                      <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-full leading-none">
-                        {t('psd2_recommended')}
-                      </span>
+                      <Badge variant="success">{t('psd2_recommended')}</Badge>
                     ) : (
                       <span className="text-[11px] font-medium text-muted-foreground bg-secondary px-2 py-0.5 rounded-full leading-none">
                         {t('psd2_requires_subscription')}
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                  <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                     {t('psd2_description')}
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+                <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
               </div>
             )}
 
@@ -2072,7 +2082,7 @@ export default function ImportPage() {
                 tabIndex={isSandbox ? -1 : 0}
                 aria-disabled={isSandbox}
                 className={cn(
-                  'group rounded-lg border bg-card p-5 transition-colors',
+                  'group rounded-lg border bg-card p-6 transition-colors',
                   isSandbox
                     ? 'opacity-50 cursor-not-allowed'
                     : 'cursor-pointer hover:border-foreground/15'
@@ -2086,13 +2096,13 @@ export default function ImportPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-[15px] font-semibold leading-tight">{t('migration_title')}</h3>
-                    <p className="text-sm mt-1.5 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
+                    <p className="text-sm mt-1 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
                       {t('migration_description')}
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+                  <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
                 </div>
-                <div className="flex flex-wrap gap-2 mt-3.5 ml-[52px]">
+                <div className="flex flex-wrap gap-2 mt-4 ml-[52px]">
                   {([
                     { name: 'Fortnox', logo: '/logos/fortnox.svg' },
                     { name: 'Visma', logo: '/logos/visma.jpeg' },
@@ -2100,7 +2110,7 @@ export default function ImportPage() {
                     { name: 'Björn Lundén', logo: '/logos/bjornlunden.png' },
                     { name: 'Briox', logo: '/logos/Briox_logo.png' },
                   ] as const).map(provider => (
-                    <div key={provider.name} className="flex items-center gap-1.5 rounded border border-border/60 bg-muted/30 px-2 py-1">
+                    <div key={provider.name} className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
                       <img src={provider.logo} alt={provider.name} className="h-4 w-4 shrink-0 rounded-sm object-contain" />
                       <span className="text-[11px] font-medium text-muted-foreground">{provider.name}</span>
                     </div>
@@ -2118,7 +2128,7 @@ export default function ImportPage() {
               role="button"
               tabIndex={0}
               className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-colors',
+                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
                 'cursor-pointer hover:border-foreground/15'
               )}
               onClick={() => setMode('bank')}
@@ -2129,10 +2139,10 @@ export default function ImportPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-[15px] font-semibold leading-tight">{t('bankfile_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                   {t('bankfile_description')}
                 </p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {['CSV', 'OFX', 'SEB', 'Swedbank', 'Nordea'].map(fmt => (
                     <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {fmt}
@@ -2140,7 +2150,7 @@ export default function ImportPage() {
                   ))}
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
 
             {/* 4. CSV/Excel-data (ingående balanser, kunder, leverantörer) */}
@@ -2148,7 +2158,7 @@ export default function ImportPage() {
               role="button"
               tabIndex={0}
               className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-colors',
+                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
                 'cursor-pointer hover:border-foreground/15'
               )}
               onClick={() => setMode('csv_data')}
@@ -2159,10 +2169,10 @@ export default function ImportPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-[15px] font-semibold leading-tight">{t('csv_data_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                   {t('csv_data_description')}
                 </p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {[
                     { key: 'XLSX', label: 'XLSX' },
                     { key: 'CSV', label: 'CSV' },
@@ -2177,7 +2187,7 @@ export default function ImportPage() {
                   ))}
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
 
             {/* 5. Bokföringsdata (SIE) */}
@@ -2185,7 +2195,7 @@ export default function ImportPage() {
               role="button"
               tabIndex={0}
               className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-colors',
+                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
                 'cursor-pointer hover:border-foreground/15'
               )}
               onClick={() => setMode('sie')}
@@ -2196,10 +2206,10 @@ export default function ImportPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-[15px] font-semibold leading-tight">{t('sie_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                   {t('sie_description')}
                 </p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {['SIE4', '.se'].map(fmt => (
                     <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {fmt}
@@ -2207,7 +2217,7 @@ export default function ImportPage() {
                   ))}
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
               </div>
             </TabsContent>

@@ -22,6 +22,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
@@ -697,6 +698,18 @@ export default function NewSupplierInvoiceForm({
       const desc = getAccountDescription(accountNumber)
       if (desc) setValue(`items.${index}.description`, desc.name)
     }
+    // Auto-fill the rad's moms from the konto's configured default (e.g.
+    // öresavrundning 3740 = ingen moms), so a rounding line stops inheriting
+    // the 25 % rad-default. Only when the konto carries an explicit default;
+    // otherwise the user's current rate stands. Reverse charge uses its own
+    // rate field, so leave that flow untouched. PostgREST serialises numeric
+    // columns as strings, so coerce: strict === comparisons on vat_rate
+    // (inferVatTreatment) expect a number.
+    const acct = accounts.find((a) => a.account_number === accountNumber)
+    const defaultRate = acct?.default_vat_rate == null ? null : Number(acct.default_vat_rate)
+    if (!watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)) {
+      setValue(`items.${index}.vat_rate`, defaultRate, { shouldDirty: true })
+    }
   }
 
   // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
@@ -847,6 +860,13 @@ export default function NewSupplierInvoiceForm({
   // bookkeeping: the line stays in the breakdown for transparency.
   const payableVat = watchedReverseCharge ? 0 : totalVat
   const total = Math.round((subtotal + payableVat) * 100) / 100
+
+  // Öresavrundning live preview: same helper as the detail page. Display-only;
+  // the registered amount and the booked verifikat keep the exact öre.
+  const displayRounding = getDisplayTotal(
+    { total, currency: watchedCurrency || 'SEK', ore_rounding: oreRounding },
+    { ore_rounding: false },
+  )
 
   // Show the AI-suggested supplier card when we have an inbox item, the AI
   // surfaced a supplier name, and we couldn't match it to an existing record.
@@ -1970,9 +1990,15 @@ export default function NewSupplierInvoiceForm({
                 </span>
                 <span className="tabular-nums sm:w-32 text-right">{formatCurrency(totalVat, watchedCurrency)}</span>
               </div>
+              {displayRounding.applies && (
+                <div className="flex justify-between sm:justify-end sm:gap-8">
+                  <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
+                  <span className="tabular-nums sm:w-32 text-right">{formatCurrency(displayRounding.roundingDelta, watchedCurrency)}</span>
+                </div>
+              )}
               <div className="flex justify-between sm:justify-end sm:gap-8 font-bold text-lg">
                 <span>{t('total_label')}</span>
-                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(total, watchedCurrency)}</span>
+                <span className="tabular-nums sm:w-32 text-right">{formatCurrency(displayRounding.displayed, watchedCurrency)}</span>
               </div>
               {/* Öresavrundning: display-only rounding of the displayed total to
                   whole kronor (SEK only). The registered amount and the booked

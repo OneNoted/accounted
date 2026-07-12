@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 
 export interface GeneralLedgerLine {
@@ -35,8 +37,10 @@ export interface GeneralLedgerReport {
  * Generate general ledger (huvudbok) for a fiscal period.
  * BFL 5 kap. 1 §: systematisk ordning: all transactions grouped by account.
  *
- * Uses joined queries with pagination to handle any number of entries.
- * Avoids the broken .in(entryIds) pattern that silently truncated at 1000 rows.
+ * Uses the shared two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts):
+ * entries first, then lines chunked by entry id, both paginated, so any
+ * number of entries is handled without the pathological journal_entries!inner
+ * embed plan.
  *
  * Opening balances use the opening_balance_entry set by year-end closing
  * when available; falls back to summing prior-period entries.
@@ -56,6 +60,13 @@ export async function generateGeneralLedger(
     /** SIE dim → code filter ({"6":"P001"}). Opening balances are dropped
      *  when set: they are company-wide and cannot be dimension-scoped. */
     dimensions?: Record<string, string>
+    /** Inclusive date sub-range within the fiscal period (kontoanalys).
+     *  Lines before fromDate roll into each account's opening balance so
+     *  the running balance at the range start matches the full-year ledger;
+     *  lines after toDate are dropped. Callers validate the bounds
+     *  (parseReportDateRange). */
+    fromDate?: string
+    toDate?: string
   }
 ): Promise<GeneralLedgerReport> {
   const dimensionFilter =
@@ -88,14 +99,12 @@ export async function generateGeneralLedger(
     }
   }
 
-  // ── Period lines via joined query (excluding OB entry) ─────────
+  // ── Period lines via the two-step entry-lines fetch (excluding OB entry) ──
   // Race condition note: if year-end closing runs concurrently and creates
   // the OB entry between the period query and this query, the entry could
   // be missed. The window is sub-second and the consequence is a single
   // stale report: acceptable.
-  // Supabase types !inner joins as arrays; for many-to-one (line → entry)
-  // it returns a single object at runtime. Cast via `as any` on the query.
-  const rawLines = await fetchAllRows<{
+  const rawLines = await fetchEntryLines<{
     id: string
     account_number: string
     debit_amount: number
@@ -109,33 +118,38 @@ export async function generateGeneralLedger(
       description: string
       source_type: string
     }
-  }>(({ from, to }) => {
-    let query = supabase
-      .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, journal_entry_id, dimensions, journal_entries!inner(entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status)')
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.fiscal_period_id', periodId)
-      .in('journal_entries.status', ['posted', 'reversed'])
+  }>({
+    supabase,
+    entryColumns:
+      'entry_date, voucher_number, voucher_series, description, source_type, company_id, fiscal_period_id, status',
+    lineColumns:
+      'id, account_number, debit_amount, credit_amount, journal_entry_id, dimensions',
+    filterEntries: (q: EntryLinesQuery) => {
+      let query = q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .in('status', ['posted', 'reversed'])
 
-    if (dimensionFilter) {
-      // jsonb containment (@>): served by idx_jel_dimensions_gin.
-      query = query.contains('dimensions', dimensionFilter)
-    }
+      if (obEntryId) {
+        query = query.neq('id', obEntryId)
+      }
 
-    if (obEntryId) {
-      query = query.neq('journal_entry_id', obEntryId)
-    }
-
-    // Stable total order on the line PK: paging is only correct with a
-    // deterministic order, else rows duplicate/skip across pages and balances
-    // double or accounts vanish (see fetch-all.ts ordering invariant). The
-    // report re-sorts lines per account below, so this order is invisible.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return query.order('id', { ascending: true }).range(from, to) as any
-  }, { dedupeBy: (r) => r.id })
+      return query
+    },
+    filterLines: dimensionFilter
+      ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+        (q: EntryLinesQuery) => q.contains('dimensions', dimensionFilter)
+      : undefined,
+  })
 
   if (rawLines.length === 0 && openingBalances.size === 0) {
-    return { accounts: [], period: { start: period.period_start, end: period.period_end } }
+    return {
+      accounts: [],
+      period: {
+        start: options?.fromDate ?? period.period_start,
+        end: options?.toDate ?? period.period_end,
+      },
+    }
   }
 
   // Fetch account names
@@ -153,12 +167,25 @@ export async function generateGeneralLedger(
     accountNameMap.set(acc.account_number, acc.account_name)
   }
 
-  // Group lines by account
+  // Group lines by account. Lines before fromDate accumulate per account so
+  // they can roll into the opening balance below; lines after toDate drop.
+  const fromDate = options?.fromDate
+  const toDate = options?.toDate
   const accountLines = new Map<string, GeneralLedgerLine[]>()
+  const preRangeMovements = new Map<string, number>()
 
   for (const line of rawLines) {
     const entry = line.journal_entries
     const accNum = line.account_number
+    const debit = Math.round((Number(line.debit_amount) || 0) * 100) / 100
+    const credit = Math.round((Number(line.credit_amount) || 0) * 100) / 100
+
+    if (toDate && entry.entry_date > toDate) continue
+    if (fromDate && entry.entry_date < fromDate) {
+      preRangeMovements.set(accNum, (preRangeMovements.get(accNum) || 0) + debit - credit)
+      continue
+    }
+
     if (!accountLines.has(accNum)) {
       accountLines.set(accNum, [])
     }
@@ -172,15 +199,24 @@ export async function generateGeneralLedger(
       journal_entry_id: line.journal_entry_id,
       description: entry.description || '',
       source_type: entry.source_type || '',
-      debit: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
-      credit: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
+      debit,
+      credit,
       balance: 0, // computed below
       ...(hasDims ? { dimensions: line.dimensions as Record<string, string> } : {}),
     })
   }
 
-  // Include accounts that have opening balance but no period lines
-  for (const [accNum, balance] of openingBalances) {
+  // Opening balance at the range start: period IB plus movements before
+  // fromDate. Under a dimension filter the IB map is empty (company-wide IB
+  // cannot be dimension-scoped) but pre-range movements are dimension-scoped
+  // by the query, so they still roll in.
+  const effectiveOpening = new Map<string, number>(openingBalances)
+  for (const [accNum, movement] of preRangeMovements) {
+    effectiveOpening.set(accNum, roundOre((effectiveOpening.get(accNum) || 0) + movement))
+  }
+
+  // Include accounts that carry a balance into the range but have no lines in it
+  for (const [accNum, balance] of effectiveOpening) {
     if (!accountLines.has(accNum) && Math.abs(balance) > 0.005) {
       accountLines.set(accNum, [])
     }
@@ -201,7 +237,7 @@ export async function generateGeneralLedger(
       return a.voucher_number - b.voucher_number
     })
 
-    const opening = Math.round((openingBalances.get(accNum) || 0) * 100) / 100
+    const opening = Math.round((effectiveOpening.get(accNum) || 0) * 100) / 100
     let runningBalance = opening
 
     for (const line of accLines) {
@@ -228,6 +264,9 @@ export async function generateGeneralLedger(
 
   return {
     accounts: result,
-    period: { start: period.period_start, end: period.period_end },
+    period: {
+      start: fromDate ?? period.period_start,
+      end: toDate ?? period.period_end,
+    },
   }
 }

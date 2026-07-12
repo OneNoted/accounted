@@ -140,9 +140,9 @@ export async function AgentKnowledgeView({
                     <TableCell>
                       {r.account_number
                         ? <AccountNumber number={r.account_number} showName size="sm" />
-                        : <span className="text-muted-foreground">–</span>}
+                        : <span className="text-muted-foreground">-</span>}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{vatLabel(r.vat_treatment) ?? '–'}</TableCell>
+                    <TableCell className="text-muted-foreground">{vatLabel(r.vat_treatment) ?? '-'}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -191,7 +191,7 @@ export async function AgentKnowledgeView({
             </Row>
             <Row label={t('conv_series_label')}>
               {conventions.voucher_series_in_use.length === 0 ? (
-                <span className="text-sm text-muted-foreground">–</span>
+                <span className="text-sm text-muted-foreground">-</span>
               ) : (
                 <div className="flex flex-wrap justify-end gap-2">
                   {conventions.voucher_series_in_use.map((s) => (

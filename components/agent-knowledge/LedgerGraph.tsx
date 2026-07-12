@@ -772,7 +772,7 @@ function DetailCard({ p, t }: { p: Payee; t: ReturnType<typeof useTranslations> 
               <div className="h-full rounded-full" style={{ width: `${share}%`, background: CAD[p.cadence] }} />
             </div>
           )}
-          {e.dominant_account_count !== null && e.dominant_account_total !== null && (
+          {e.dominant_account_count != null && e.dominant_account_total != null && (
             <div className="mt-1 tabular-nums opacity-80">
               {t('card_evidence', { k: e.dominant_account_count, n: e.dominant_account_total })}
             </div>

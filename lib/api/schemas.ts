@@ -207,7 +207,9 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'reminder_fee',
   'accrual',
   'result_appropriation',
+  'rot_rut_payout',
   'vat_settlement',
+  'stripe_payout',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -362,6 +364,31 @@ export const CreateInvoiceSchema = z.object({
   your_reference: z.string().optional(),
   our_reference: z.string().optional(),
   notes: z.string().optional(),
+  // Optional online payment link (manual MVP): the user pastes a link created
+  // in their PSP dashboard (e.g. a Stripe Payment Link). https-only because the
+  // URL is rendered in customer-facing emails/PDFs under the company's name.
+  // The invoice form always sends the field ('' when empty), so empty string
+  // normalises to undefined like external_invoice_number above; build-invoice-
+  // write maps undefined to NULL so clearing the field on a draft edit works.
+  payment_link_url: z
+    .union([
+      z
+        .string()
+        .max(2048)
+        .refine((v) => {
+          try {
+            return new URL(v).protocol === 'https:'
+          } catch {
+            return false
+          }
+        }, 'Ogiltig betalningslänk (måste vara en https-adress)'),
+      z.literal(''),
+    ])
+    .transform((v) => v || undefined)
+    .optional(),
+  // Per-invoice opt-out for the automatic Stripe payment link on send.
+  // Omitted → true (create) / kept as sent by the form (edit).
+  payment_link_auto: z.boolean().optional(),
   // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
   // encrypted server-side before it ever hits the DB (see encryptPersonnummer
   // in lib/salary/personnummer.ts). `deduction_housing_designation` is the
@@ -460,6 +487,34 @@ export const RotRutSettleSchema = z.object({
     .string()
     .regex(/^19\d{2}$/, 'Bankkontot måste vara ett BAS 19xx-konto')
     .optional(),
+})
+
+// The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst
+// (dev_docs/skatteverket/husavdrag/exempel_beslut.json + ht.raml).
+export const RotRutBeslutFileSchema = z.object({
+  version: z.string(),
+  // Utförarens orgnr, 12 digits with 16-prefix in SKV's file.
+  utforare: z.string().regex(/^\d{10,12}$/),
+  beslut: z
+    .array(
+      z.object({
+        // NamnPaBegaran as submitted (1-16 chars); the primary match key
+        // against rot_rut_payout_requests.name.
+        namn: z.string().min(1),
+        referensnummer: z.string().regex(/^\d{11}(-\d+)?$/),
+        arenden: z
+          .array(
+            z.object({
+              personnummer: z.string().regex(/^\d{12}$/),
+              fakturanummer: z.string().max(20).optional(),
+              // Whole kronor; 0 = avslag for the ärende.
+              godkantBelopp: z.number().int().min(0),
+            }),
+          )
+          .min(1),
+      }),
+    )
+    .min(1),
 })
 
 // ============================================================
@@ -601,6 +656,14 @@ export const MarkInvoicePaidSchema = z.object({
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
+  // Kundnummer shown on invoices. Free text, not unique in v1. Empty string
+  // and null both clear the value (routes normalize '' to null).
+  customer_number: z
+    .string()
+    .trim()
+    .max(32, 'Customer number must be 32 characters or fewer')
+    .nullable()
+    .optional(),
   email: z.string().email('Invalid email address').optional(),
   phone: z.string().optional(),
   address_line1: z.string().optional(),
@@ -1363,11 +1426,12 @@ export const UpdateSettingsSchema = z.object({
     )
     .nullable()
     .optional(),
-  iban: z.string().optional(),
-  bic: z.string().optional(),
+  iban: z.string().regex(/^SE\d{22}$/, 'Ogiltigt IBAN (SE följt av 22 siffror)').nullable().optional().or(z.literal('')),
+  bic: z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT (8 eller 11 tecken)').nullable().optional().or(z.literal('')),
   accounting_method: AccountingMethodSchema.optional(),
   invoice_prefix: z.string().nullable().optional(),
   next_invoice_number: z.number().int().positive().optional(),
+  next_arrival_number: z.number().int().positive().optional(),
   invoice_default_days: z.number().int().positive().optional(),
   invoice_default_notes: z.string().nullable().optional(),
   default_our_reference: z.string().max(200).nullable().optional(),
@@ -1540,6 +1604,13 @@ export const CreateDeadlineSchema = z.object({
 // Account schemas
 // ============================================================
 
+// Per-account default VAT rate: the sats the booking UI understands, as a
+// decimal fraction. Mirrors the DB CHECK on chart_of_accounts.default_vat_rate.
+const defaultVatRate = z
+  .union([z.literal(0), z.literal(0.06), z.literal(0.12), z.literal(0.25)])
+  .nullable()
+  .optional()
+
 export const CreateAccountSchema = z.object({
   account_number: accountNumber,
   account_name: z.string().min(1, 'Account name is required'),
@@ -1548,6 +1619,7 @@ export const CreateAccountSchema = z.object({
   plan_type: z.enum(['k1', 'full_bas']).optional(),
   description: z.string().nullable().optional(),
   default_vat_code: z.string().nullable().optional(),
+  default_vat_rate: defaultVatRate,
   sru_code: z.string().nullable().optional(),
 })
 
@@ -1556,6 +1628,7 @@ export const UpdateAccountSchema = z.object({
   is_active: z.boolean().optional(),
   description: z.string().nullable().optional(),
   default_vat_code: z.string().nullable().optional(),
+  default_vat_rate: defaultVatRate,
   sru_code: z.string().nullable().optional(),
 })
 

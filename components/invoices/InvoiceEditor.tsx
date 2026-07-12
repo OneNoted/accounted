@@ -23,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags } from 'lucide-react'
 import {
@@ -45,6 +46,7 @@ import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDi
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import {
   ROT_WORK_TYPES,
@@ -119,6 +121,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   // Self-billing is never available when editing an existing draft.
   const [mode, setMode] = useState<'invoice' | 'self_billed'>('invoice')
+  // Active Stripe connection: drives the "auto payment link" toggle in the
+  // payment link section. Absent extension or no connection → toggle hidden.
+  const [stripeConnected, setStripeConnected] = useState(false)
+  useEffect(() => {
+    if (!ENABLED_EXTENSION_IDS.has('stripe')) return
+    let cancelled = false
+    fetch('/api/extensions/ext/stripe/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.connection?.status === 'active') setStripeConnected(true)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const schema = useMemo(() => {
     const itemSchema = z.object({
@@ -196,6 +214,25 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       your_reference: z.string().optional(),
       our_reference: z.string().optional(),
       notes: z.string().optional(),
+      // Optional online payment link (pasted from e.g. the Stripe dashboard).
+      // https-only: mirrors the server-side CreateInvoiceSchema gate.
+      payment_link_url: z
+        .string()
+        .optional()
+        .refine(
+          (v) => {
+            if (!v || !v.trim()) return true
+            try {
+              return new URL(v).protocol === 'https:'
+            } catch {
+              return false
+            }
+          },
+          { message: t('validation_payment_link_https') },
+        ),
+      // Opt-out for the automatic Stripe payment link on send (only rendered
+      // when the company has an active Stripe connection).
+      payment_link_auto: z.boolean().optional(),
       // Self-billing received (mottagen självfaktura). Present in the form for
       // both modes; required only in self_billed mode: enforced in onSubmit.
       external_invoice_number: z.string().optional(),
@@ -297,6 +334,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           your_reference: initial.your_reference ?? '',
           our_reference: initial.our_reference ?? '',
           notes: initial.notes ?? '',
+          payment_link_url: initial.payment_link_url ?? '',
+          payment_link_auto: initial.payment_link_auto ?? true,
           external_invoice_number: '',
           self_billing_agreement_ref: '',
           received_date: '',
@@ -329,6 +368,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           due_date: '',
           currency: 'SEK',
           document_type: 'invoice' as InvoiceDocumentType,
+          payment_link_url: '',
+          payment_link_auto: true,
           external_invoice_number: '',
           self_billing_agreement_ref: '',
           received_date: '',
@@ -715,7 +756,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const deductionTotal = Math.round((deductionByKind.rot + deductionByKind.rut) * 100) / 100
   const hasAnyDeduction = deductionTotal > 0
   const hasAnyRotLine = isInvoiceDoc && watchItems.some((i) => i.deduction_type === 'rot')
-  const toPay = Math.round((total - deductionTotal) * 100) / 100
+
+  // Öresavrundning live preview: same helper as the PDF/email, so the summary
+  // shows exactly what the customer will see. Display-only; the saved invoice
+  // keeps the exact öre.
+  const { rounding: displayRounding, toPay: displayedToPay } = getAmountToPay(
+    { total, currency: watchCurrency, ore_rounding: oreRounding, deduction_total: deductionTotal },
+    null,
+  )
 
   // Periodisering per rad: kräver faktureringsmetoden och en riktig faktura.
   // EU-/exportkunder bokas på 3308/3305 (omvänd skattskyldighet/export) och
@@ -1184,6 +1232,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           your_reference: pendingData.your_reference,
           our_reference: pendingData.our_reference,
           notes: pendingData.notes,
+          payment_link_url: pendingData.payment_link_url,
           invoice_number: numberPreview,
         }),
       })
@@ -1292,7 +1341,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Card>
             <CardHeader>
               <CardTitle>{isSelfBilled ? <>{ts('customer_label')}<RequiredMark /></> : <>{t('customer_card_title')}<RequiredMark /></>}</CardTitle>
-              <CardDescription>{isSelfBilled ? ts('issuer_card_description') : t('customer_card_description')}</CardDescription>
+              {isSelfBilled && <CardDescription>{ts('issuer_card_description')}</CardDescription>}
             </CardHeader>
             <CardContent>
               <Controller
@@ -1960,7 +2009,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Card>
               <CardHeader>
                 <CardTitle>{t('notes_card_title')}</CardTitle>
-              <CardDescription>{t('notes_card_description')}</CardDescription>
             </CardHeader>
               <CardContent>
                 <Textarea
@@ -2084,6 +2132,46 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                   </div>
 
+                  {/* Online payment link (manual MVP): pasted per invoice from
+                      the user's PSP dashboard. Only real invoices: proformas
+                      and delivery notes carry no payment request. */}
+                  {watchDocumentType === 'invoice' && (
+                    <div className="space-y-2">
+                      <Label htmlFor="payment_link_url">{t('payment_link_label')}</Label>
+                      <Input
+                        id="payment_link_url"
+                        type="url"
+                        inputMode="url"
+                        placeholder={t('payment_link_placeholder')}
+                        {...register('payment_link_url')}
+                      />
+                      {errors.payment_link_url ? (
+                        <p className="text-sm text-destructive">{errors.payment_link_url.message}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          {stripeConnected ? t('payment_link_hint_auto') : t('payment_link_hint')}
+                        </p>
+                      )}
+                      {stripeConnected && !watch('payment_link_url')?.trim() && (
+                        <div className="flex items-center gap-2 pt-1">
+                          <Switch
+                            id="payment_link_auto"
+                            checked={watch('payment_link_auto') ?? true}
+                            onCheckedChange={(v) =>
+                              setValue('payment_link_auto', v, { shouldDirty: true })
+                            }
+                          />
+                          <Label
+                            htmlFor="payment_link_auto"
+                            className="text-sm font-normal text-muted-foreground"
+                          >
+                            {t('payment_link_auto_label')}
+                          </Label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Invoice-level default dims (kostnadsställe/projekt):
                       written to every generated journal line; per-item bags
                       (row ⋮ menu) merge on top. Renders only when dimensions
@@ -2144,6 +2232,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   <span>{formatCurrency(0, watchCurrency)}</span>
                 </div>
               )}
+              {displayRounding.applies && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
+                  <span className="tabular-nums">{formatCurrency(displayRounding.roundingDelta, watchCurrency)}</span>
+                </div>
+              )}
               {hasAnyDeduction && (
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">{t('deduction_summary_label')}</span>
@@ -2153,7 +2247,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               <Separator />
               <div className="flex justify-between font-bold text-lg">
                 <span>{hasAnyDeduction ? t('to_pay_label') : t('total_label')}</span>
-                <span>{formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}</span>
+                <span>{formatCurrency(displayedToPay, watchCurrency)}</span>
               </div>
               {hasAnyDeduction && (
                 <div className="flex justify-between text-xs text-muted-foreground">
@@ -2227,7 +2321,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 {hasAnyDeduction ? t('to_pay_label') : t('total_label')}
               </p>
               <p className="text-lg font-bold tabular-nums">
-                {formatCurrency(hasAnyDeduction ? toPay : total, watchCurrency)}
+                {formatCurrency(displayedToPay, watchCurrency)}
               </p>
             </div>
             <div className="flex items-center gap-2">

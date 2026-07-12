@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import {
   extractBearerToken,
   validateApiKey,
@@ -26,6 +26,7 @@ import {
   calculateVatLiability,
 } from '@/lib/reports/kpi'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { ACCOUNT_RUTA, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
@@ -66,6 +67,8 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
+import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
+import { RotRutBeslutFileSchema } from '@/lib/api/schemas'
 import {
   findMatchingVouchersForInvoice,
   validateVoucherForInvoiceLink,
@@ -768,7 +771,7 @@ async function categorizeTransactionCore(
   // Upsert counterparty template for future auto-matching
   try {
     await upsertCounterpartyTemplate(
-      supabase, userId, transaction as Transaction, mappingResult, 'user_approved'
+      supabase, companyId, transaction as Transaction, mappingResult, 'user_approved'
     )
   } catch {
     // Non-critical
@@ -1071,23 +1074,60 @@ export async function computeVatReport(
   // Paginate. An unbounded .select() caps at PostgREST's 1000-row default,
   // which silently truncates a yearly (or busy quarterly) VAT period with
   // >1000 entry lines and under-reports the momsdeklaration.
+  // journal_entries is a to-one embed: PostgREST returns an object at
+  // runtime, but the untyped client infers an array, so accept both shapes.
   const lines = await fetchAllRows<{
+    journal_entry_id: string
     account_number: string
     debit_amount: number
     credit_amount: number
+    journal_entries?: { source_type: string | null } | Array<{ source_type: string | null }>
   }>(({ from, to }) =>
     supabase
       .from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id)')
+      .select('journal_entry_id, account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id, source_type)')
       .eq('journal_entries.company_id', companyId)
       .in('journal_entries.status', ['posted', 'reversed'])
+      // Momsredovisning entries (the settlement verifikat clearing 26xx to
+      // 2650/1650) would zero the rutor once booked; exclude them so this
+      // report matches lib/reports/vat-declaration.ts (fetchVatAccountTotals).
+      .neq('journal_entries.source_type', 'vat_settlement')
       .gte('journal_entries.entry_date', startDate)
       .lte('journal_entries.entry_date', endDate)
+      // Stable total order for correct paging (see fetch-all.ts): without it,
+      // rows can shift across page boundaries on reports over 1000 lines.
+      .order('id', { ascending: true })
       .range(from, to)
   )
 
+  // Settlements booked WITHOUT the vat_settlement tag (manual momsomföring,
+  // SIE-imported settlements, stornos of a settlement) are excluded by shape,
+  // mirroring fetchVatAccountTotals (#984): an entry touching both a
+  // declaration account (ACCOUNT_RUTA) and a settlement net account
+  // (2650/1650) is a momsredovisning, not VAT-bearing activity. Opening
+  // balances are exempt: carried-in 26xx balances are unsettled VAT that
+  // belongs in the next declaration.
+  const declarationEntryIds = new Set<string>()
+  const netEntryIds = new Set<string>()
+  for (const line of lines) {
+    if (ACCOUNT_RUTA[line.account_number]) declarationEntryIds.add(line.journal_entry_id)
+    else if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(line.account_number)) {
+      netEntryIds.add(line.journal_entry_id)
+    }
+  }
+  const settlementShapedIds = new Set<string>()
+  for (const line of lines) {
+    const id = line.journal_entry_id
+    if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
+    const embedded = line.journal_entries
+    const entry = Array.isArray(embedded) ? embedded[0] : embedded
+    if (!entry || entry.source_type === 'opening_balance') continue
+    settlementShapedIds.add(id)
+  }
+
   const accountTotals = new Map<string, { debit: number; credit: number }>()
   for (const line of lines) {
+    if (settlementShapedIds.has(line.journal_entry_id)) continue
     const acc = line.account_number
     const existing = accountTotals.get(acc) ?? { debit: 0, credit: 0 }
     existing.debit += Number(line.debit_amount) || 0
@@ -2155,7 +2195,7 @@ export const tools: McpTool[] = [
       }
       feedbackRateLimit.set(rateKey, now)
 
-      void eventBus
+      emitAfterResponse(() => eventBus
         .emit({
           type: 'agent.feedback',
           payload: {
@@ -2172,7 +2212,7 @@ export const tools: McpTool[] = [
             companyId,
           },
         })
-        .catch((err) => console.error('[mcp] agent.feedback emit failed:', err))
+        .catch((err) => console.error('[mcp] agent.feedback emit failed:', err)))
 
       return {
         recorded: true,
@@ -3580,6 +3620,10 @@ export const tools: McpTool[] = [
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
         notes: { type: 'string' },
+        payment_link_url: {
+          type: 'string',
+          description: 'Optional https pay link for THIS invoice (e.g. Stripe); rendered in the invoice email and PDF.',
+        },
       },
       required: ['customer_id', 'items'],
     },
@@ -3628,6 +3672,21 @@ export const tools: McpTool[] = [
         const bag = resolvedDimBags[i + 1]
         return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
       })
+
+      // Same https-only gate as the web API (CreateInvoiceSchema): the link is
+      // rendered in customer-facing emails/PDFs under the company's name.
+      const paymentLinkUrl = (args.payment_link_url as string | undefined)?.trim() || null
+      if (paymentLinkUrl) {
+        let isHttps = false
+        try {
+          isHttps = new URL(paymentLinkUrl).protocol === 'https:'
+        } catch {
+          isHttps = false
+        }
+        if (!isHttps || paymentLinkUrl.length > 2048) {
+          throw new Error('payment_link_url must be a valid https URL (max 2048 chars).')
+        }
+      }
 
       const today = new Date().toISOString().split('T')[0]
       const currency = ((args.currency as string) || 'SEK') as Currency
@@ -3689,6 +3748,7 @@ export const tools: McpTool[] = [
           our_reference: (args.our_reference as string) || null,
           your_reference: (args.your_reference as string) || null,
           notes: (args.notes as string) || null,
+          payment_link_url: paymentLinkUrl,
         },
         {
           customer_name: customer.name,
@@ -8966,7 +9026,7 @@ export const tools: McpTool[] = [
         // leaves kvittenser null rather than hard-failing the status check;
         // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
         let kvittenser: unknown = null
-        const res = await agiGetKvittenser(supabase, userId, arbetsgivare, period)
+        const res = await agiGetKvittenser({ mode: 'user', supabase, userId }, arbetsgivare, period)
         await writeSkatteverketAudit(ctx, {
           endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
           outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
@@ -9354,6 +9414,82 @@ export const tools: McpTool[] = [
         arenden: result.file.arenden,
         warnings: result.file.warnings,
         upload_url: uploadUrl,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_import_rot_rut_beslut',
+    title: 'Import Rot/Rut Decision File',
+    description:
+      'Import Skatteverkets beslutsfil (decision JSON from the rot/rut e-tjänst) and record godkänt belopp on the matching begäran. Exact matching only; per-beslut outcomes in results. Book the payout afterwards via the settle endpoint hint in next.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        file_content: {
+          type: 'string',
+          description: 'The beslutsfil content verbatim (JSON text as downloaded from skatteverket.se)',
+        },
+      },
+      required: ['file_content'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        imported: { type: 'number' },
+        already_imported: { type: 'number' },
+        errors: { type: 'number' },
+        results: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'Per-beslut outcome: status imported/already_imported/error, request_id, decided_total, rejected flag, next-step hint',
+        },
+      },
+      required: ['imported', 'already_imported', 'errors', 'results'],
+    },
+    annotations: {
+      readOnlyHint: false, // records beslut on rot_rut_payout_requests
+      destructiveHint: false,
+      idempotentHint: true, // re-importing the same file reports already_imported
+      openWorldHint: false,
+    },
+    async execute(args, companyId, _userId, supabase) {
+      const raw = args.file_content as string
+      if (typeof raw !== 'string' || raw.trim() === '') {
+        throw new Error('file_content is required (the beslutsfil JSON text)')
+      }
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(raw)
+      } catch {
+        throw new Error('file_content är inte giltig JSON. Klistra in beslutsfilen oförändrad.')
+      }
+      const validated = RotRutBeslutFileSchema.safeParse(parsed)
+      if (!validated.success) {
+        throw new Error(
+          `Beslutsfilen har fel format: ${validated.error.issues
+            .slice(0, 3)
+            .map((i) => `${i.path.join('.')}: ${i.message}`)
+            .join('; ')}`,
+        )
+      }
+
+      const result = await importRotRutBeslutFile(supabase, companyId, validated.data)
+      if (!result.ok) {
+        throw new Error(
+          result.code === 'ROT_RUT_BESLUT_WRONG_COMPANY'
+            ? 'Beslutsfilens utförare matchar inte företagets organisationsnummer.'
+            : 'Beslutsfilen kunde inte importeras.',
+        )
+      }
+
+      return {
+        imported: result.imported,
+        already_imported: result.already_imported,
+        errors: result.errors,
+        results: result.results,
       }
     },
   },
@@ -11674,6 +11810,21 @@ function jsonRpcError(
 }
 
 /**
+ * Schedule a fire-and-forget telemetry emit so it cannot race Vercel function
+ * suspension: `after()` keeps the function alive past the JSON-RPC response
+ * until the emit settles, which is why event_log inserts used to die with
+ * "TypeError: fetch failed". Falls back to a plain fire-and-forget emit when
+ * no Next request scope exists (direct handler invocation in tests).
+ */
+function emitAfterResponse(emit: () => Promise<void>): void {
+  try {
+    after(emit)
+  } catch {
+    void emit()
+  }
+}
+
+/**
  * Emit `mcp.tool_called` telemetry to the event bus. Fire-and-forget: the
  * dispatcher must never block the JSON-RPC response on telemetry, and a failing
  * handler must never surface to the client. The event bus already isolates
@@ -11693,7 +11844,7 @@ function emitToolCallTelemetry(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tool_called',
       payload: {
@@ -11722,7 +11873,7 @@ function emitToolCallTelemetry(payload: {
       // Last-resort guard. EventBus.emit already swallows handler failures,
       // but if the bus itself is in a bad state we still don't want to break tools.
       console.error('[mcp] tool_called telemetry emit failed:', err)
-    })
+    }))
 }
 
 /** Fire-and-forget telemetry for a tools/list call. */
@@ -11734,7 +11885,7 @@ function emitToolsListTelemetry(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.tools_list_called',
       payload: {
@@ -11752,7 +11903,7 @@ function emitToolsListTelemetry(payload: {
     })
     .catch((err) => {
       console.error('[mcp] tools_list_called telemetry emit failed:', err)
-    })
+    }))
 }
 
 /** Fire-and-forget telemetry for a resources/read call. */
@@ -11767,7 +11918,7 @@ function emitResourceReadTelemetry(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.resource_read',
       payload: {
@@ -11788,7 +11939,7 @@ function emitResourceReadTelemetry(payload: {
     })
     .catch((err) => {
       console.error('[mcp] resource_read telemetry emit failed:', err)
-    })
+    }))
 }
 
 /**
@@ -11836,7 +11987,7 @@ function checkAndEmitNextHintFollowed(
   // Consume the hint so we don't double-count if the agent calls the same
   // tool twice in a row (idempotent retries shouldn't inflate the metric).
   lastResponseHintBySession.delete(sessionId)
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.next_hint_followed',
       payload: {
@@ -11850,7 +12001,7 @@ function checkAndEmitNextHintFollowed(
         companyId,
       },
     })
-    .catch((err) => console.error('[mcp] next_hint_followed emit failed:', err))
+    .catch((err) => console.error('[mcp] next_hint_followed emit failed:', err)))
 }
 
 /**
@@ -11866,7 +12017,7 @@ function emitSkillLoaded(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.skill_loaded',
       payload: {
@@ -11880,7 +12031,7 @@ function emitSkillLoaded(payload: {
         companyId: payload.companyId,
       },
     })
-    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
+    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err)))
 }
 
 /** Fire-and-forget telemetry for workflow lifecycle. */
@@ -11890,7 +12041,7 @@ function emitWorkflowStarted(payload: {
   userId: string
   companyId: string
 }): void {
-  void eventBus
+  emitAfterResponse(() => eventBus
     .emit({
       type: 'mcp.workflow_started',
       payload: {
@@ -11903,7 +12054,7 @@ function emitWorkflowStarted(payload: {
         companyId: payload.companyId,
       },
     })
-    .catch((err) => console.error('[mcp] workflow_started emit failed:', err))
+    .catch((err) => console.error('[mcp] workflow_started emit failed:', err)))
 }
 
 /**

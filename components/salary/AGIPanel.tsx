@@ -18,6 +18,8 @@ import {
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
@@ -717,7 +719,7 @@ export function AGIPanel(props: AGIPanelProps) {
             refresh token or has burned through its 10-refresh budget. The
             only fix is a fresh BankID round-trip. */}
         {(status?.expired === true || status?.canRefresh === false) && !readOnly && (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+          <div className="rounded-md border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">{t('expired_banner_title')}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               {t('expired_banner_description')}
@@ -734,7 +736,7 @@ export function AGIPanel(props: AGIPanelProps) {
             after some users had already connected, so their stored token
             grants moms/skattekonto but not AGI. */}
         {missingAgdScope && !readOnly && (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+          <div className="rounded-md border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
               {t('missing_scope_title')}
             </p>
@@ -784,8 +786,12 @@ export function AGIPanel(props: AGIPanelProps) {
             treatment so the user understands they must fix errors before
             BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && !draftIsStale && (
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
-            <p className="text-sm font-medium">{t('draft_locked_title')}</p>
+          <div className="rounded-md border border-border bg-muted/30 p-3">
+            <p className="text-sm font-medium">
+              <InfoTooltip variant="help" content={t('granskningsunderlag_gloss')}>
+                {t('draft_locked_title')}
+              </InfoTooltip>
+            </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('draft_locked_description')}
             </p>
@@ -793,7 +799,7 @@ export function AGIPanel(props: AGIPanelProps) {
               href={submission.signeringslank}
               target="_blank"
               rel="noreferrer"
-              className="mt-2 inline-flex items-center gap-1 text-sm font-medium text-amber-900 hover:underline dark:text-amber-200"
+              className="mt-2 inline-flex items-center gap-1 text-sm font-medium hover:underline"
             >
               {t('open_signing_link')} <ExternalLink className="h-3.5 w-3.5" />
             </a>
@@ -806,7 +812,7 @@ export function AGIPanel(props: AGIPanelProps) {
             it would file the old amounts. The "Lås upp" button below releases
             the SKV lock; the user then re-submits the freshly generated XML. */}
         {awaitingSigning && draftIsStale && (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+          <div className="rounded-md border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">{t('stale_draft_title')}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               {t('stale_draft_description', {
@@ -849,12 +855,12 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {kontroller.length > 0 && (
-          <div className="space-y-1 rounded-md border bg-muted/30 p-2.5">
+          <div className="space-y-1 rounded-md border bg-muted/30 p-3">
             {kontroller.map((k, i) => (
               <div
                 key={i}
                 className={`flex items-start gap-2 text-xs ${
-                  k.status === 'STOPP' ? 'text-destructive' : 'text-amber-700 dark:text-amber-400'
+                  k.status === 'STOPP' ? 'text-destructive' : 'text-warning'
                 }`}
               >
                 <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -878,7 +884,7 @@ export function AGIPanel(props: AGIPanelProps) {
             status?.expired === true ||
             status?.canRefresh === false
           return (
-            <div className="rounded-md bg-destructive/10 p-2.5 text-sm text-destructive">
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
               {error}
               {sessionExpired && !readOnly && (
@@ -893,8 +899,8 @@ export function AGIPanel(props: AGIPanelProps) {
           )
         })()}
         {success && !error && (
-          <div className="rounded-md bg-emerald-50 p-2.5 text-sm text-emerald-900 dark:bg-emerald-900/20 dark:text-emerald-300">
-            <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
+            <CheckCircle2 className="mr-1 inline h-3.5 w-3.5 text-success" />
             {success}
           </div>
         )}
@@ -920,11 +926,6 @@ export function AGIPanel(props: AGIPanelProps) {
               variant="outline"
               onClick={handleSubmit}
               disabled={actionLoading === 'submit' || !hasSkatteverket}
-              title={
-                !hasSkatteverket
-                  ? t('submit_upgrade_title')
-                  : undefined
-              }
             >
               {actionLoading === 'submit' ? (
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -977,13 +978,7 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {!readOnly && !isSigned && !hasSkatteverket && (
-          <p className="text-xs text-muted-foreground">
-            {t('upgrade_hint_before')}{' '}
-            <a href="/settings/billing" className="font-medium underline hover:no-underline">
-              {t('upgrade_hint_link')}
-            </a>{' '}
-            {t('upgrade_hint_after')}
-          </p>
+          <UpgradeNote>{t('upgrade_note')}</UpgradeNote>
         )}
       </CardContent>
     </Card>
