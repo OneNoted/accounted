@@ -10,14 +10,14 @@ import { useEffect, useState } from "react";
 //
 // Like app/error.tsx, transient failures here (e.g. a token race in the first
 // request after login) heal on a fresh request, so auto-reload ONCE before
-// showing the manual fallback. A per-path sessionStorage time-guard keeps the
-// single reload from becoming a loop on a genuinely broken root layout.
-const RELOAD_STAMP_PREFIX = "accounted:global-error-reload-at:";
-const RELOAD_WINDOW_MS = 12_000;
+// showing the manual fallback. A per-path, per-tab-session flag (a monotonic
+// one-shot, not a time window that could still loop on a slow failing render)
+// keeps the single reload from becoming a loop on a genuinely broken root layout.
+const RELOAD_FLAG_PREFIX = "accounted:global-error-reloaded:";
 
-function stampKey(): string {
+function reloadKey(): string {
   return (
-    RELOAD_STAMP_PREFIX +
+    RELOAD_FLAG_PREFIX +
     (typeof window !== "undefined" ? window.location.pathname : "")
   );
 }
@@ -25,10 +25,7 @@ function stampKey(): string {
 function decideInitialPhase(): "reloading" | "fallback" {
   if (typeof window === "undefined") return "reloading";
   try {
-    const last = Number(window.sessionStorage.getItem(stampKey()) ?? "0");
-    return Number.isFinite(last) && Date.now() - last < RELOAD_WINDOW_MS
-      ? "fallback"
-      : "reloading";
+    return window.sessionStorage.getItem(reloadKey()) ? "fallback" : "reloading";
   } catch {
     return "fallback";
   }
@@ -46,9 +43,9 @@ export default function GlobalError({
     console.error("[global] Unhandled error:", error);
     if (phase !== "reloading") return;
     try {
-      window.sessionStorage.setItem(stampKey(), String(Date.now()));
+      window.sessionStorage.setItem(reloadKey(), "1");
     } catch {
-      // Worst case: no stamp written, and a later error reloads again.
+      // Worst case: no flag written, and a later error reloads again.
     }
     window.location.reload();
   }, [phase, error]);

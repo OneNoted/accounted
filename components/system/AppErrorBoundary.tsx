@@ -25,15 +25,19 @@ import { SupportLink } from '@/components/ui/support-link'
  * browser-navigation heal these transients already relied on. A soft reset()
  * re-renders against the same stale server payload / bundle and just re-throws.
  *
- * A per-path sessionStorage time-guard makes the reload fire at most once, so a
- * genuinely persistent error settles on the manual fallback instead of looping.
+ * A per-path, per-tab-session sessionStorage flag makes the auto-reload fire at
+ * most once per path, so a genuinely persistent error settles on the manual
+ * fallback instead of looping. This is a monotonic one-shot, not a time window:
+ * a time window can still loop if each failing render takes longer than the
+ * window (slow SSR that eventually throws), whereas the flag caps auto-reloads
+ * regardless of timing. sessionStorage is per-tab and cleared on tab close, so
+ * a fresh visit gets a fresh auto-recovery; a different path keeps its own flag.
  */
-const RELOAD_STAMP_PREFIX = 'accounted:app-error-reload-at:'
-const RELOAD_WINDOW_MS = 12_000
+const RELOAD_FLAG_PREFIX = 'accounted:app-error-reloaded:'
 
-function stampKey(): string {
+function reloadKey(): string {
   return (
-    RELOAD_STAMP_PREFIX +
+    RELOAD_FLAG_PREFIX +
     (typeof window !== 'undefined' ? window.location.pathname : '')
   )
 }
@@ -47,10 +51,9 @@ function stampKey(): string {
 function decideInitialPhase(): 'reloading' | 'fallback' {
   if (typeof window === 'undefined') return 'reloading'
   try {
-    const last = Number(window.sessionStorage.getItem(stampKey()) ?? '0')
-    return Number.isFinite(last) && Date.now() - last < RELOAD_WINDOW_MS
-      ? 'fallback'
-      : 'reloading'
+    // Already auto-reloaded this path in this tab session: don't loop, show the
+    // manual fallback.
+    return window.sessionStorage.getItem(reloadKey()) ? 'fallback' : 'reloading'
   } catch {
     // sessionStorage blocked (private mode etc.): don't risk a reload loop,
     // show the fallback so the user always has an explicit way forward.
@@ -74,9 +77,9 @@ export function AppErrorBoundary({
     )
     if (phase !== 'reloading') return
     try {
-      window.sessionStorage.setItem(stampKey(), String(Date.now()))
+      window.sessionStorage.setItem(reloadKey(), '1')
     } catch {
-      // Worst case: no stamp written, and a later error reloads again.
+      // Worst case: no flag written, and a later error reloads again.
     }
     window.location.reload()
   }, [phase, error, scope])
