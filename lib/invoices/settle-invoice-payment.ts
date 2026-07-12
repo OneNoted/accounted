@@ -142,7 +142,9 @@ export async function settleInvoicePayment(
         }
         const sourceType = resolveInvoicePaymentSourceType({
           invoiceAlreadyBooked,
-          accountingMethod,
+          // Settings store a raw string; anything but 'cash' books as accrual,
+          // matching the useCashEntry check above.
+          accountingMethod: accountingMethod === 'cash' ? 'cash' : 'accrual',
         })
         const input: CreateJournalEntryInput = {
           fiscal_period_id: fiscalPeriodId,
