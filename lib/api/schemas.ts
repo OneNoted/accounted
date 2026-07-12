@@ -208,6 +208,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'accrual',
   'result_appropriation',
   'vat_settlement',
+  'stripe_payout',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -384,6 +385,9 @@ export const CreateInvoiceSchema = z.object({
     ])
     .transform((v) => v || undefined)
     .optional(),
+  // Per-invoice opt-out for the automatic Stripe payment link on send.
+  // Omitted → true (create) / kept as sent by the form (edit).
+  payment_link_auto: z.boolean().optional(),
   // ROT/RUT claim info. The personnummer is plaintext on the wire and gets
   // encrypted server-side before it ever hits the DB (see encryptPersonnummer
   // in lib/salary/personnummer.ts). `deduction_housing_designation` is the

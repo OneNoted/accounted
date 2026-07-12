@@ -17,6 +17,10 @@
       "schedule": "0 5 * * *"
     },
     {
+      "path": "/api/extensions/stripe/sync/cron",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },

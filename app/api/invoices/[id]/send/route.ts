@@ -14,6 +14,7 @@ import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { maybeCreatePaymentLinkForInvoice } from '@/lib/extensions/payment-links'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -131,6 +132,43 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
     }
 
+    // Auto-create an online payment link (extension-provided, e.g. Stripe) now
+    // that the number exists, so the email button and PDF QR carry it. A
+    // failure never blocks the send: the faktura is legally valid without a
+    // link, so it degrades to a PARTIAL warning instead. The in-memory row is
+    // only updated after a successful persist: a link rendered on the PDF but
+    // missing from the DB could never be matched back to this invoice when
+    // the payment event arrives.
+    let paymentLinkFailure: string | null = null
+    const linkOutcome = await maybeCreatePaymentLinkForInvoice(
+      supabase,
+      companyId!,
+      user.id,
+      invoice as Invoice,
+      opLog,
+    )
+    if (linkOutcome) {
+      if (linkOutcome.ok) {
+        const { error: linkPersistError } = await supabase
+          .from('invoices')
+          .update({
+            payment_link_url: linkOutcome.url,
+            stripe_payment_link_id: linkOutcome.externalId,
+          })
+          .eq('id', id)
+          .eq('company_id', companyId)
+        if (linkPersistError) {
+          opLog.warn('payment link created but not persisted; sending without it', linkPersistError)
+          paymentLinkFailure = linkPersistError.message
+        } else {
+          ;(invoice as Invoice).payment_link_url = linkOutcome.url
+          ;(invoice as Invoice).stripe_payment_link_id = linkOutcome.externalId
+        }
+      } else {
+        paymentLinkFailure = linkOutcome.reason
+      }
+    }
+
     // Final render with the assigned number: this is the buffer attached to
     // the email and later archived as underlag. Override status to 'sent' on
     // the in-memory copy: the DB flip happens after email delivery (line
@@ -205,6 +243,10 @@ export const POST = withRouteContext(
     // success toast with a sub-warning, and the audit trail records exactly
     // which sub-step broke.
     const partialFailures: Array<{ step: string; reason: string }> = []
+
+    if (paymentLinkFailure) {
+      partialFailures.push({ step: 'payment_link', reason: paymentLinkFailure })
+    }
 
     {
       const { error: updateError } = await supabase
