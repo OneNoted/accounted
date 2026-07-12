@@ -103,7 +103,7 @@ export async function GET(request: Request) {
   type Result = {
     declarationId: string
     period: string
-    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'apigw_config' | 'error'
+    status: 'signed' | 'still_pending' | 'already_claimed' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'apigw_config' | 'error'
     error?: string
   }
   const results: Result[] = []
@@ -210,13 +210,14 @@ export async function GET(request: Request) {
 
   const signed = results.filter(r => r.status === 'signed').length
   const stillPending = results.filter(r => r.status === 'still_pending').length
+  const alreadyClaimed = results.filter(r => r.status === 'already_claimed').length
   const expired = results.filter(r => r.status === 'expired_token').length
   const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const apigwConfig = results.filter(r => r.status === 'apigw_config').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
+    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${alreadyClaimed} already claimed, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
   )
 
   return NextResponse.json(
@@ -224,6 +225,7 @@ export async function GET(request: Request) {
       processed: results.length,
       signed,
       stillPending,
+      alreadyClaimed,
       expired,
       grantRevoked,
       apigwConfig,

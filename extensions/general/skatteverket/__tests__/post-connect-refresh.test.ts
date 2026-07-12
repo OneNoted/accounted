@@ -1,6 +1,21 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const { warnRecorder } = vi.hoisted(() => ({ warnRecorder: vi.fn() }))
+
+// log.warn is suppressed under NODE_ENV=test, so the failure-path tests
+// observe it through this mock instead of a console spy.
+vi.mock('@/lib/logger', () => ({
+  createLogger: () => ({
+    info: vi.fn(),
+    warn: warnRecorder,
+    error: vi.fn(),
+    child() {
+      return this
+    },
+  }),
+}))
+
 vi.mock('@/lib/extensions/context-factory', () => ({
   createExtensionContext: vi.fn().mockReturnValue({ stub: 'ctx' }),
 }))
@@ -134,5 +149,32 @@ describe('runPostConnectRefresh', () => {
 
     expect(result).toEqual({ synced: true, reconciled: 0 })
     expect(mockReconcile).not.toHaveBeenCalled()
+  })
+
+  it('logs a failed pending lookup instead of treating it as no rows', async () => {
+    const supabase = makeSupabase({ data: null, error: { message: 'connection reset' } })
+
+    const result = await runPostConnectRefresh(supabase, USER, COMPANY)
+
+    expect(result).toEqual({ synced: true, reconciled: 0 })
+    expect(mockReconcile).not.toHaveBeenCalled()
+    const warned = warnRecorder.mock.calls.map(c => String(c[0]))
+    expect(warned.some(m => m.includes('kvittens lookup failed'))).toBe(true)
+  })
+
+  it('logs non-throw error outcomes from the reconciler', async () => {
+    const supabase = makeSupabase({ data: [pendingDecl('d-1'), pendingDecl('d-2')] })
+    mockReconcile
+      .mockResolvedValueOnce({ status: 'error', error: 'SKV svarade 500' })
+      .mockResolvedValueOnce({ status: 'signed', kvittensnummer: 'uuid-2' })
+
+    const result = await runPostConnectRefresh(supabase, USER, COMPANY)
+
+    expect(result).toEqual({ synced: true, reconciled: 1 })
+    const errorWarn = warnRecorder.mock.calls.find(c =>
+      String(c[0]).includes('reconcile returned error'),
+    )
+    expect(errorWarn).toBeDefined()
+    expect(errorWarn?.[1]).toMatchObject({ declarationId: 'd-1', message: 'SKV svarade 500' })
   })
 })

@@ -37,6 +37,8 @@ export interface PendingAgiDeclaration {
 export type AgiReconcileOutcome =
   | { status: 'signed'; kvittensnummer: string }
   | { status: 'still_pending' }
+  /** Another run (cron vs post-connect) promoted the row first; no side effects ran. */
+  | { status: 'already_claimed' }
   | { status: 'no_token' }
   | { status: 'expired_token'; error: string }
   | { status: 'no_company_settings' }
@@ -122,7 +124,12 @@ export async function reconcileAgiDeclaration(
   // reference for the audit trail (BFL 5 kap 6§, BFNAR 2013:2 kap 8);
   // we preserve the full kvittens in response_data so it records the
   // actual BankID signer regardless of who triggered the reconciliation.
-  await supabase
+  // Compare-and-set claim: the 2-hourly cron and a post-connect refresh can
+  // race on the same declaration, and the side effects below (salary_runs
+  // stamp, cache cleanup, deadline confirmation, notification) must run
+  // exactly once. Zero updated rows means another run won the claim; a
+  // failed update must not fall through to those side effects either.
+  const { data: claimed, error: claimError } = await supabase
     .from('agi_declarations')
     .update({
       status: 'submitted',
@@ -142,13 +149,31 @@ export async function reconcileAgiDeclaration(
     })
     .eq('id', declarationId)
     .eq('company_id', companyId)
+    .eq('status', 'pending_signature')
+    .select('id')
+
+  if (claimError) {
+    return { status: 'error', error: `Kunde inte uppdatera deklarationen: ${claimError.message}` }
+  }
+  if (!claimed || claimed.length === 0) {
+    return { status: 'already_claimed' }
+  }
 
   if (decl.salary_run_id) {
-    await supabase
+    const { error: runError } = await supabase
       .from('salary_runs')
       .update({ agi_submitted_at: submittedAt })
       .eq('id', decl.salary_run_id)
       .eq('company_id', companyId)
+    if (runError) {
+      // The declaration is already promoted and cannot be unwound here; a
+      // missing agi_submitted_at stamp must stay investigable (BFNAR 2013:2
+      // kap 8 behandlingshistorik) without aborting the remaining steps.
+      log.warn('salary_runs agi_submitted_at stamp failed after claim', {
+        declarationId, companyId, period,
+        message: runError.message,
+      })
+    }
   }
 
   // Clear the locally-cached submission state so the panel doesn't

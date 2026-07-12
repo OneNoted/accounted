@@ -67,7 +67,7 @@ export async function runPostConnectRefresh(
   }
 
   try {
-    const { data: pending } = await supabase
+    const { data: pending, error: pendingError } = await supabase
       .from('agi_declarations')
       .select('id, company_id, salary_run_id, period_year, period_month')
       .eq('company_id', companyId)
@@ -75,13 +75,33 @@ export async function runPostConnectRefresh(
       .order('created_at', { ascending: true })
       .limit(MAX_KVITTENS_CHECKS)
 
+    // Supabase returns query failures as a value, not a throw: without this
+    // branch a transient lookup failure would masquerade as "no pending rows".
+    if (pendingError) {
+      log.warn('post-connect kvittens lookup failed', {
+        companyId,
+        message: pendingError.message,
+      })
+      return result
+    }
+
     for (const decl of (pending ?? []) as PendingAgiDeclaration[]) {
       try {
         const outcome = await reconcileAgiDeclaration(supabase, decl, {
           reconciledBy: 'post-connect',
           userId,
         })
-        if (outcome.status === 'signed') result.reconciled++
+        if (outcome.status === 'signed') {
+          result.reconciled++
+        } else if (outcome.status === 'error') {
+          // Non-throw failures (SKV HTTP errors, claim-update failures) are
+          // returned as an outcome; surface them so they stay attributable.
+          log.warn('post-connect kvittens reconcile returned error', {
+            companyId,
+            declarationId: decl.id,
+            message: outcome.error,
+          })
+        }
       } catch (err) {
         log.warn('post-connect kvittens reconcile failed', {
           companyId,
