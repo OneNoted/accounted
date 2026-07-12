@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -45,6 +45,9 @@ function SkatteverketPersonalConnectionCard() {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+  // Handle of the OAuth popup opened by startConnect: used to verify the
+  // sender identity of incoming postMessages.
+  const popupRef = useRef<Window | null>(null)
 
   // docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
   const SCOPE_LABELS: Record<string, string> = {
@@ -82,12 +85,20 @@ function SkatteverketPersonalConnectionCard() {
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin) return
+      // Source-identity check: only the popup this component opened can
+      // trigger the handler; a window reference cannot be forged by other
+      // same-origin scripts.
+      if (!popupRef.current || event.source !== popupRef.current) return
       if (event.data?.type === 'skatteverket-oauth-success') {
         toast({
           title: tOauth('connected_title'),
           description: tOauth('connected_description'),
         })
         loadStatus()
+        // Verified success: rebroadcast as an internal DOM event so passive
+        // consumers (e.g. the salary page) can react without trusting raw
+        // postMessage.
+        window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
       } else if (event.data?.type === 'skatteverket-oauth-error') {
         toast({
           title: tOauth('connect_failed_title'),
@@ -120,6 +131,7 @@ function SkatteverketPersonalConnectionCard() {
       'skatteverket-oauth',
       `width=${w},height=${h},left=${left},top=${top}`,
     )
+    popupRef.current = popup
     if (!popup) {
       // Popup blocked: fall back to the full-page flow. The callback then
       // lands on /settings/tax?skv_connected=true, handled by
@@ -137,6 +149,9 @@ function SkatteverketPersonalConnectionCard() {
       if (!res.ok) throw new Error(t('disconnect_failed'))
       toast({ title: t('toast_disconnected') })
       await loadStatus()
+      // Connection state changed: notify passive consumers via the same
+      // internal event as a verified OAuth success.
+      window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
     } catch (err) {
       toast({
         title: t('toast_disconnect_failed'),

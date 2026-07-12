@@ -184,16 +184,28 @@ export function AGIPanel(props: AGIPanelProps) {
     fetchSubmission()
   }, [fetchStatus, fetchSubmission])
 
+  // Handle of the OAuth popup opened by handleConnect: used to verify the
+  // sender identity of incoming postMessages.
+  const popupRef = useRef<Window | null>(null)
+
   // Listen for OAuth completion from the BankID popup. When the popup posts
   // back a success/error message we re-fetch status so the panel flips from
   // "expired" / not-connected to "Ansluten" without a full page reload.
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin) return
+      // Source-identity check: only the popup this component opened can
+      // trigger the handler; a window reference cannot be forged by other
+      // same-origin scripts.
+      if (!popupRef.current || event.source !== popupRef.current) return
       if (event.data?.type === 'skatteverket-oauth-success') {
         setError(null)
         setSuccess(t('oauth_success'))
         fetchStatus()
+        // Verified success: rebroadcast as an internal DOM event so passive
+        // consumers (e.g. the salary page) can react without trusting raw
+        // postMessage.
+        window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
       } else if (event.data?.type === 'skatteverket-oauth-error') {
         const reason =
           typeof event.data.reason === 'string' && event.data.reason
@@ -366,6 +378,7 @@ export function AGIPanel(props: AGIPanelProps) {
       'skatteverket-oauth',
       `width=${w},height=${h},left=${left},top=${top}`,
     )
+    popupRef.current = popup
     if (!popup) {
       // Popup blocked: fall back to a full-page navigation.
       window.location.href = url

@@ -1921,7 +1921,7 @@
     "toast_disconnect_failed": "Could not disconnect",
     "loading_status": "Loading status…",
     "disabled_message": "The Skatteverket integration is temporarily disabled. Contact support.",
-    "connect_intro": "Connect to Skatteverket with BankID to submit VAT declarations, employer declarations and fetch the tax account balance.",
+    "connect_intro": "Connect to Skatteverket with BankID to submit VAT declarations, employer declarations and fetch the tax account balance. When you connect, we immediately fetch the company's tax account balance and transactions and check for pending employer declaration receipts (kvittenser) at Skatteverket.",
     "skahmst_note": "On Skatteverket's consent page one of the permissions appears as <code>skahmst (Rubrik saknas)</code>: that's the scope name for tax account balance and transactions (Skattekonto HuvudMan STatus). Skatteverket has not yet published a Swedish description. It's safe to approve.",
     "connect_with_bankid": "Connect with BankID",
     "expired": "Expired",
