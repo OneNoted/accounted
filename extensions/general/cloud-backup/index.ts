@@ -265,6 +265,10 @@ export const cloudBackupExtension: Extension = {
             hourLocal = body.hour_local
             hourUtc = stockholmHourToUtcHour(body.hour_local)
           } else if (validHour(body.hour_utc)) {
+            // Legacy UTC-only request: leave hourLocal undefined so any
+            // stored hour_local is cleared below. The scheduler prefers
+            // hour_local, so keeping a stale value would make the schedule
+            // ignore the requested UTC hour.
             hourUtc = body.hour_utc
           } else {
             return jsonError('hour_local must be an integer between 0 and 23', 400)
@@ -275,7 +279,7 @@ export const cloudBackupExtension: Extension = {
             ...existing,
             enabled: body.enabled,
             hour_utc: hourUtc,
-            hour_local: hourLocal ?? existing?.hour_local,
+            hour_local: hourLocal,
             last_auto_sync_at: existing?.last_auto_sync_at ?? null,
             last_auto_sync_status: existing?.last_auto_sync_status ?? null,
             last_auto_sync_error: existing?.last_auto_sync_error ?? null,

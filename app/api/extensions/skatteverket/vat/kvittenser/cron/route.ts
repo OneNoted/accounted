@@ -154,7 +154,7 @@ export async function GET(request: Request) {
       // Flip the stored state so the panel shows "inlämnad" instead of a
       // stale "awaiting signature" view. Keep the row (unlike AGI, the VAT
       // panel reads it for kvittens display on revisit).
-      await supabase
+      const { error: updateError } = await supabase
         .from('extension_data')
         .update({
           value: JSON.stringify({
@@ -168,6 +168,25 @@ export async function GET(request: Request) {
         .eq('company_id', companyId)
         .eq('extension_id', 'skatteverket')
         .eq('key', key)
+
+      if (updateError) {
+        // The row is still draft_locked, so the next run retries it. Skip
+        // the deadline completion and the notification: doing them now
+        // would double-fire when the retry succeeds.
+        console.error('[vat-kvittenser-cron] Failed to persist signed state', {
+          companyId,
+          period,
+          message: updateError.message,
+          code: updateError.code,
+        })
+        results.push({
+          companyId,
+          period,
+          status: 'error',
+          error: `Failed to persist signed state: ${updateError.message}`,
+        })
+        continue
+      }
 
       // Complete the period's moms deadline. Only possible when the state
       // carries the picker params (written by the one-click chain; states
@@ -207,8 +226,17 @@ export async function GET(request: Request) {
 
       if (err instanceof SkatteverketAuthError && err.code === 'OMBUD_GRANT_MISSING') {
         // System-mode read rejected: downgrade the connection row so the
-        // next run falls back to the user token (if any).
-        await markGrantRevoked(companyId, currentSkvEnvironment(), 'moms_ombud', err.code)
+        // next run falls back to the user token (if any). Best-effort: a
+        // failure here must not abort the remaining companies' rows.
+        try {
+          await markGrantRevoked(companyId, currentSkvEnvironment(), 'moms_ombud', err.code)
+        } catch (revokeErr) {
+          console.warn('[vat-kvittenser-cron] Failed to mark grant revoked', {
+            companyId,
+            period,
+            message: revokeErr instanceof Error ? revokeErr.message : 'Unknown error',
+          })
+        }
         results.push({ companyId, period, status: 'error', error: err.code })
         continue
       }
@@ -217,13 +245,24 @@ export async function GET(request: Request) {
         err instanceof SkatteverketAuthError &&
         (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
       ) {
-        const { data: tokenRow } = await supabase
-          .from('skatteverket_tokens')
-          .select('user_id')
-          .eq('company_id', companyId)
-          .maybeSingle()
-        if (tokenRow?.user_id) {
-          await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
+        // Persist the health flag so the cron stops retrying this
+        // connection. Best-effort: a failure here must not abort the
+        // remaining companies' rows.
+        try {
+          const { data: tokenRow } = await supabase
+            .from('skatteverket_tokens')
+            .select('user_id')
+            .eq('company_id', companyId)
+            .maybeSingle()
+          if (tokenRow?.user_id) {
+            await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
+          }
+        } catch (reconsentErr) {
+          console.warn('[vat-kvittenser-cron] Failed to persist reconsent flag', {
+            companyId,
+            period,
+            message: reconsentErr instanceof Error ? reconsentErr.message : 'Unknown error',
+          })
         }
         results.push({ companyId, period, status: 'expired_token', error: err.code })
         continue

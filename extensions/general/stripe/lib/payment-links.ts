@@ -43,8 +43,11 @@ async function getActiveConnection(
  *
  * The link amount is the customer's payable share (`remaining_amount`, which
  * is total minus ROT/RUT deduction at send time) in the invoice currency.
- * Stripe idempotency keys are derived from the invoice id, so a retried send
- * reuses the same Price and Payment Link instead of minting duplicates.
+ * Stripe idempotency keys are derived from the invoice id plus the payable
+ * amount in minor units: a retried send of the same amount reuses the same
+ * Price and Payment Link instead of minting duplicates, while a resend after
+ * the amount changed mints fresh objects instead of tripping Stripe's
+ * idempotency conflict (reused key with different parameters is rejected).
  */
 export async function createInvoicePaymentLink(
   supabase: SupabaseClient,
@@ -80,14 +83,15 @@ export async function createInvoicePaymentLink(
   const productName = invoice.invoice_number
     ? `Faktura ${invoice.invoice_number}`
     : 'Faktura'
+  const unitAmount = Math.round(payable * 100)
 
   const price = await stripe.prices.create(
     {
       currency: invoice.currency.toLowerCase(),
-      unit_amount: Math.round(payable * 100),
+      unit_amount: unitAmount,
       product_data: { name: productName },
     },
-    { ...opts, idempotencyKey: `acc_inv_price_${invoice.id}` },
+    { ...opts, idempotencyKey: `acc_inv_price_${invoice.id}_${unitAmount}` },
   )
 
   const link = await stripe.paymentLinks.create(
@@ -102,7 +106,7 @@ export async function createInvoicePaymentLink(
         invoice_number: invoice.invoice_number ?? '',
       },
     },
-    { ...opts, idempotencyKey: `acc_inv_plink_${invoice.id}` },
+    { ...opts, idempotencyKey: `acc_inv_plink_${invoice.id}_${unitAmount}` },
   )
 
   log.info('created payment link for invoice', {

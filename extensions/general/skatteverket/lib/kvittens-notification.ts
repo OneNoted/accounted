@@ -11,13 +11,18 @@
  * always available (push-notifications is a separate, optional extension and
  * cross-extension imports are not allowed). Deduplication goes through
  * notification_log under type 'skv_kvittens' so a re-observed kvittens never
- * notifies twice.
+ * notifies twice: the log row is inserted FIRST as a claim, guarded by a
+ * partial unique index on (user_id, reference_id) where notification_type =
+ * 'skv_kvittens' (migration 20260712113000), and the email is only sent when
+ * this invocation won the insert. A unique violation (23505) means another
+ * overlapping cron run already claimed the kvittens.
  *
  * Best-effort by design: a notification failure must never fail the
  * reconciliation that observed the kvittens. The body carries the period and
  * kvittens number but no amounts (same data-minimization stance as the
  * skattekonto drift email).
  */
+import { createHash } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getEmailService } from '@/lib/email/service'
 import { createLogger } from '@/lib/logger'
@@ -40,17 +45,19 @@ export async function sendKvittensNotification(
   supabase: SupabaseClient,
   input: KvittensNotificationInput
 ): Promise<{ sent: boolean; reason?: string }> {
+  const referenceUuid = toReferenceUuid(input.referenceId)
   try {
     const email = getEmailService()
     if (!email.isConfigured()) return { sent: false, reason: 'email_not_configured' }
 
-    // Dedup: one notification per kvittens, ever.
+    // Dedup fast path: cheap read that skips the work below on re-observed
+    // kvittenser. NOT the enforcement: the claim insert further down is.
     const { data: already } = await supabase
       .from('notification_log')
       .select('id')
       .eq('user_id', input.userId)
       .eq('notification_type', 'skv_kvittens')
-      .eq('reference_id', input.referenceId)
+      .eq('reference_id', referenceUuid)
       .maybeSingle()
     if (already) return { sent: false, reason: 'duplicate' }
 
@@ -58,6 +65,31 @@ export async function sendKvittensNotification(
     if (!recipient) {
       log.info('no authorised recipient for kvittens email', { companyId: input.companyId })
       return { sent: false, reason: 'no_recipient' }
+    }
+
+    // Claim before sending. The partial unique index on notification_log
+    // (user_id, reference_id) where notification_type = 'skv_kvittens' makes
+    // this atomic: of two overlapping cron invocations exactly one wins the
+    // insert; the loser gets a unique violation and skips the send.
+    const { error: claimError } = await supabase.from('notification_log').insert({
+      user_id: input.userId,
+      company_id: input.companyId,
+      notification_type: 'skv_kvittens',
+      reference_id: referenceUuid,
+      days_before: 0,
+      delivery_status: 'sent',
+    })
+    if (claimError) {
+      if (claimError.code === '23505') return { sent: false, reason: 'duplicate' }
+      // Without a claim we cannot guarantee single delivery: skip the send
+      // (fail closed on the never-twice guarantee) and let a later
+      // observation retry.
+      log.warn('kvittens claim insert failed', {
+        companyId: input.companyId,
+        referenceId: input.referenceId,
+        error: claimError.message,
+      })
+      return { sent: false, reason: 'claim_failed' }
     }
 
     const label = input.kind === 'vat' ? 'Momsdeklarationen' : 'Arbetsgivardeklarationen'
@@ -76,20 +108,19 @@ export async function sendKvittensNotification(
       '<p>Ingen åtgärd behövs. Kvittensen finns sparad i Accounted.</p>',
     ].join('')
 
-    const result = await email.sendEmail({ to: recipient, subject, text, html })
+    let result: Awaited<ReturnType<typeof email.sendEmail>>
+    try {
+      result = await email.sendEmail({ to: recipient, subject, text, html })
+    } catch (sendErr) {
+      // Release the claim so a later observation can retry the send.
+      await releaseClaim(supabase, input.userId, referenceUuid)
+      throw sendErr
+    }
     if (!result.success) {
       log.warn('kvittens email send failed', { companyId: input.companyId, error: result.error })
+      await releaseClaim(supabase, input.userId, referenceUuid)
       return { sent: false, reason: 'send_failed' }
     }
-
-    await supabase.from('notification_log').insert({
-      user_id: input.userId,
-      company_id: input.companyId,
-      notification_type: 'skv_kvittens',
-      reference_id: input.referenceId,
-      days_before: 0,
-      delivery_status: 'sent',
-    })
 
     return { sent: true }
   } catch (err) {
@@ -99,6 +130,45 @@ export async function sendKvittensNotification(
       error: err instanceof Error ? err.message : String(err),
     })
     return { sent: false, reason: 'error' }
+  }
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * notification_log.reference_id is a uuid column. The AGI cron passes the
+ * declaration row id (already a uuid); the VAT cron has no declaration row
+ * and passes a composite string key, which Postgres would reject (22P02)
+ * before dedup could even happen. Map non-uuid keys to a deterministic
+ * uuid-shaped SHA-256 digest so the same kvittens always resolves to the
+ * same claim row.
+ */
+function toReferenceUuid(referenceId: string): string {
+  if (UUID_PATTERN.test(referenceId)) return referenceId
+  const hex = createHash('sha256').update(referenceId).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
+/** Remove a claim whose email never went out, so a later run can retry. */
+async function releaseClaim(
+  supabase: SupabaseClient,
+  userId: string,
+  referenceUuid: string
+): Promise<void> {
+  try {
+    await supabase
+      .from('notification_log')
+      .delete()
+      .eq('user_id', userId)
+      .eq('notification_type', 'skv_kvittens')
+      .eq('reference_id', referenceUuid)
+  } catch (err) {
+    // A stuck claim only suppresses a retry of this one email: log and move on.
+    log.warn('failed to release kvittens claim', {
+      userId,
+      referenceUuid,
+      error: err instanceof Error ? err.message : String(err),
+    })
   }
 }
 

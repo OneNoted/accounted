@@ -32,6 +32,9 @@ ALTER TABLE public.journal_entries
     'rot_rut_payout',
     'vat_settlement',
     'stripe_payout'
-  ));
+  )) NOT VALID;
+
+ALTER TABLE public.journal_entries
+  VALIDATE CONSTRAINT journal_entries_source_type_check;
 
 NOTIFY pgrst, 'reload schema';

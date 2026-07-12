@@ -22,6 +22,9 @@ ALTER TABLE public.notification_log
     'receipt_matched',
     'missing_underlag',
     'skv_kvittens'
-  ));
+  )) NOT VALID;
+
+ALTER TABLE public.notification_log
+  VALIDATE CONSTRAINT notification_log_notification_type_check;
 
 NOTIFY pgrst, 'reload schema';

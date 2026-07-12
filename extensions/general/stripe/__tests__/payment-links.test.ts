@@ -148,7 +148,7 @@ describe('stripe payment links', () => {
           unit_amount: 123456,
           product_data: { name: 'Faktura F-2026-0001' },
         },
-        { stripeAccount: 'acct_1', idempotencyKey: 'acc_inv_price_inv-1' },
+        { stripeAccount: 'acct_1', idempotencyKey: 'acc_inv_price_inv-1_123456' },
       )
       expect(paymentLinksCreate).toHaveBeenCalledWith(
         {
@@ -160,8 +160,31 @@ describe('stripe payment links', () => {
             invoice_number: 'F-2026-0001',
           },
         },
-        { stripeAccount: 'acct_1', idempotencyKey: 'acc_inv_plink_inv-1' },
+        { stripeAccount: 'acct_1', idempotencyKey: 'acc_inv_plink_inv-1_123456' },
       )
+    })
+
+    it('derives fresh idempotency keys when the payable amount changes', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: ACTIVE_CONNECTION })
+      enqueue({ data: ACTIVE_CONNECTION })
+      const invoice = makeEligibleInvoice()
+      invoice.remaining_amount = 1250
+
+      await createInvoicePaymentLink(
+        supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
+      )
+      // Draft amount changed before a resend: reusing the old key with new
+      // parameters would be rejected by Stripe (idempotency_error).
+      invoice.remaining_amount = 999.5
+      await createInvoicePaymentLink(
+        supabase as unknown as SupabaseClient, 'company-1', 'user-1', invoice,
+      )
+
+      expect(pricesCreate.mock.calls[0][1].idempotencyKey).toBe('acc_inv_price_inv-1_125000')
+      expect(pricesCreate.mock.calls[1][1].idempotencyKey).toBe('acc_inv_price_inv-1_99950')
+      expect(paymentLinksCreate.mock.calls[0][1].idempotencyKey).toBe('acc_inv_plink_inv-1_125000')
+      expect(paymentLinksCreate.mock.calls[1][1].idempotencyKey).toBe('acc_inv_plink_inv-1_99950')
     })
 
     it('propagates Stripe API failures to the caller', async () => {

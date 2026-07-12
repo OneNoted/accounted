@@ -13,6 +13,7 @@ vi.mock('@/lib/invoices/settle-invoice-payment', () => ({
 }))
 
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { eventBus } from '@/lib/events/bus'
 import { syncStripeConnection } from '../lib/sync'
 import type { StripeConnection } from '../types'
 
@@ -84,6 +85,7 @@ function payableInvoice(overrides: Record<string, unknown> = {}) {
 describe('syncStripeConnection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
     vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_123')
     vi.stubEnv('STRIPE_CONNECT_CLIENT_ID', 'ca_test_123')
     vi.mocked(settleInvoicePayment).mockResolvedValue({
@@ -208,6 +210,8 @@ describe('syncStripeConnection', () => {
           }),
         ),
     })
+    const disconnected = vi.fn()
+    eventBus.on('stripe.disconnected', disconnected)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null }) // connection status update
 
@@ -215,6 +219,93 @@ describe('syncStripeConnection', () => {
 
     expect(summary.revoked).toBe(true)
     expect(summary.settled).toBe(0)
+    // Auto-detected revocation must reach the audit trail, mirroring the
+    // user-initiated disconnect emission.
+    expect(disconnected).toHaveBeenCalledWith({
+      connectionId: 'conn-1',
+      stripeAccountId: 'acct_1',
+      reason: 'revoked_upstream',
+      userId: 'user-1',
+      companyId: 'company-1',
+    })
+  })
+
+  it('falls back to accrual/enskild_firma when the company has no settings row', async () => {
+    stubEvents([makeEvent(makeSession())])
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'spe-1' }] }) // claim insert
+    enqueue({ data: payableInvoice() }) // invoice by payment link
+    enqueue({ data: null }) // company_settings: no row (maybeSingle -> null, no error)
+    enqueue({ data: null }) // event row finalize
+    enqueue({ data: null }) // cursor update
+
+    const summary = await syncStripeConnection(supabase as unknown as SupabaseClient, CONNECTION)
+
+    expect(summary.settled).toBe(1)
+    expect(vi.mocked(settleInvoicePayment)).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        accountingMethod: 'accrual',
+        entityType: 'enskild_firma',
+      }),
+    )
+  })
+
+  it('stops mid-batch at the deadline and persists the cursor only over processed events', async () => {
+    let now = 1_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      // Settling the first event burns the remaining time budget.
+      vi.mocked(settleInvoicePayment).mockImplementation(async () => {
+        now = 10_000
+        return {
+          ok: true,
+          newStatus: 'paid',
+          newPaidAmount: 1250,
+          newRemaining: 0,
+          journalEntryId: 'je-9',
+          paidAt: '2026-07-12T00:00:00.000Z',
+        }
+      })
+      stubEvents([
+        makeEvent(makeSession()),
+        makeEvent(makeSession({ id: 'cs_2' }), { id: 'evt_2', created: 1_767_000_100 }),
+      ])
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [{ id: 'spe-1' }] }) // claim insert (evt_1)
+      enqueue({ data: payableInvoice() }) // invoice by payment link
+      enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' } })
+      enqueue({ data: null }) // event row finalize (evt_1)
+      enqueue({ data: null }) // cursor update
+
+      const summary = await syncStripeConnection(
+        supabase as unknown as SupabaseClient,
+        CONNECTION,
+        undefined,
+        5_000, // deadline passes between the first and second event
+      )
+
+      expect(summary).toMatchObject({
+        fetched: 2,
+        settled: 1,
+        needsReview: 0,
+        deadlineReached: true,
+      })
+      expect(vi.mocked(settleInvoicePayment)).toHaveBeenCalledTimes(1)
+      // evt_2 was never claimed and the cursor advanced only over evt_1, so
+      // the next run refetches evt_2 (cursor overlap) and processes it then.
+      expect(vi.mocked(supabase.from).mock.calls.map((c) => c[0])).toEqual([
+        'stripe_payment_events', // claim evt_1
+        'invoices',
+        'company_settings',
+        'stripe_payment_events', // finalize evt_1
+        'stripe_connections', // cursor persisted up to evt_1
+      ])
+    } finally {
+      nowSpy.mockRestore()
+    }
   })
 
   it('records a settle failure (e.g. locked period) as needs_review', async () => {

@@ -37,6 +37,15 @@ export const ROOT_FOLDER_NAME = 'gnubok'
  * räkenskapsår plus Grunddata.zip, and uploads are resumable/chunked. The
  * bound left is JSZip building each archive in memory on a serverless
  * function, hence 300 MB rather than "unlimited".
+ *
+ * Memory budget: worst-case transient usage is ~3x this limit (~900 MB):
+ * JSZip holds the input blobs while generateAsync accumulates output chunks
+ * and then concatenates them into the final ArrayBuffer. The upload path
+ * adds no further copies (md5/sha256 hash via zero-copy Buffer views,
+ * resumable 8 MB chunk views, no multipart concatenation), and files are
+ * generated and uploaded one at a time. That fits the Vercel default
+ * function memory (2048 MB) with ~2x headroom; raise this limit only
+ * together with an explicit memory bump in vercel.json.
  */
 export const SIZE_LIMIT_BYTES = 300 * 1024 * 1024
 /** Bump to force a re-upload of every file when the archive format changes. */

@@ -215,27 +215,47 @@ export async function GET(request: Request) {
         .eq('extension_id', 'skatteverket')
         .eq('key', `agi_submission_${period}`)
 
+      // The declaration is already flipped to submitted above, and the next
+      // run only revisits pending_signature rows: from here on everything is
+      // best-effort. Each step gets its own try/catch so a failure is logged
+      // as a warning without masking the successful filing or skipping the
+      // remaining confirmation steps.
+
       // The kvittens is the canonical filing receipt: confirm the period's
-      // arbetsgivardeklaration deadline (terminal state). Best-effort.
-      await completeTaxDeadline(
-        supabase,
-        companyId,
-        ['arbetsgivardeklaration'],
-        `${decl.period_year}-${String(decl.period_month).padStart(2, '0')}`,
-        'confirmed'
-      )
+      // arbetsgivardeklaration deadline (terminal state).
+      try {
+        await completeTaxDeadline(
+          supabase,
+          companyId,
+          ['arbetsgivardeklaration'],
+          `${decl.period_year}-${String(decl.period_month).padStart(2, '0')}`,
+          'confirmed'
+        )
+      } catch (deadlineErr) {
+        console.warn('[agi-kvittenser-cron] completeTaxDeadline failed after successful filing', {
+          declarationId, companyId, period,
+          message: deadlineErr instanceof Error ? deadlineErr.message : 'Unknown error',
+        })
+      }
 
       // Tell the user: signing happened at Skatteverket, often long after
       // they closed our tab, so this is the only confirmation they get.
       if (resolved.tokenUserId) {
-        await sendKvittensNotification(supabase, {
-          companyId,
-          userId: resolved.tokenUserId,
-          kind: 'agi',
-          period,
-          kvittensnummer: kvittens.uuidKvittens,
-          referenceId: declarationId,
-        })
+        try {
+          await sendKvittensNotification(supabase, {
+            companyId,
+            userId: resolved.tokenUserId,
+            kind: 'agi',
+            period,
+            kvittensnummer: kvittens.uuidKvittens,
+            referenceId: declarationId,
+          })
+        } catch (notifyErr) {
+          console.warn('[agi-kvittenser-cron] sendKvittensNotification failed after successful filing', {
+            declarationId, companyId, period,
+            message: notifyErr instanceof Error ? notifyErr.message : 'Unknown error',
+          })
+        }
       }
 
       results.push({ declarationId, companyId, period, status: 'signed' })
@@ -303,11 +323,12 @@ export async function GET(request: Request) {
   const signed = results.filter(r => r.status === 'signed').length
   const stillPending = results.filter(r => r.status === 'still_pending').length
   const expired = results.filter(r => r.status === 'expired_token').length
+  const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const apigwConfig = results.filter(r => r.status === 'apigw_config').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${apigwConfig} apigw config gaps, ${errors} errors`,
+    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
   )
 
   return NextResponse.json({
@@ -315,6 +336,7 @@ export async function GET(request: Request) {
     signed,
     stillPending,
     expired,
+    grantRevoked,
     apigwConfig,
     errors,
     results,

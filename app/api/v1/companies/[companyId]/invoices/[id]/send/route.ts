@@ -21,6 +21,10 @@
  *      500 INVOICE_SEND_PDF_RENDER_FAILED, no number burned.
  *   6. ensureInvoiceNumber allocates the F-series number atomically.
  *      Fail → 500 INVOICE_SEND_NUMBER_ASSIGN_FAILED.
+ *   6b. Auto-create an online payment link (extension-provided, e.g. Stripe)
+ *      and persist it on the invoice row. Best-effort: a provider or persist
+ *      failure never blocks the send; it surfaces as a PAYMENT_LINK_FAILED
+ *      warning on the response once the email is delivered.
  *   7. Final PDF render with the real number.
  *   8. Email send via Resend (the email extension). Fail → 502
  *      INVOICE_SEND_PROVIDER_FAILED. The number IS consumed at this point;
@@ -44,7 +48,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
-import { maybeCreatePaymentLinkForInvoice } from '@/lib/extensions/payment-links'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -361,41 +365,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 6b: auto-create an online payment link (extension-provided, e.g.
     // Stripe) now that the number exists, so the email button and PDF QR
-    // carry it. Failure degrades to a warning: the faktura is legally valid
-    // without a link. The in-memory row is only updated after a successful
-    // persist so a link on the PDF can always be matched back to the row.
-    let paymentLinkFailure: string | null = null
-    const linkOutcome = await maybeCreatePaymentLinkForInvoice(
+    // carry it. Failure degrades to a PAYMENT_LINK_FAILED warning: the
+    // faktura is legally valid without a link. The helper mirrors the link
+    // onto the in-memory row only after a successful persist so a link on
+    // the PDF can always be matched back to the row.
+    const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
       ctx.supabase,
       ctx.companyId!,
       ctx.userId,
-      { ...(typed as Invoice), invoice_number: finalInvoiceNumber },
+      typed as Invoice,
       ctx.log,
+      {
+        invoiceNumber: finalInvoiceNumber,
+        logPrefix: 'invoices.send: ',
+        logContext: { invoiceId },
+      },
     )
-    if (linkOutcome) {
-      if (linkOutcome.ok) {
-        const { error: linkPersistError } = await ctx.supabase
-          .from('invoices')
-          .update({
-            payment_link_url: linkOutcome.url,
-            stripe_payment_link_id: linkOutcome.externalId,
-          })
-          .eq('id', invoiceId)
-          .eq('company_id', ctx.companyId!)
-        if (linkPersistError) {
-          ctx.log.warn('invoices.send: payment link created but not persisted; sending without it', {
-            invoiceId,
-            err: linkPersistError,
-          })
-          paymentLinkFailure = linkPersistError.message
-        } else {
-          typed.payment_link_url = linkOutcome.url
-          typed.stripe_payment_link_id = linkOutcome.externalId
-        }
-      } else {
-        paymentLinkFailure = linkOutcome.reason
-      }
-    }
 
     // Also override `status` to 'sent' on the in-memory copy. The actual DB
     // flip happens at step 9a (after email delivery), but if we render with

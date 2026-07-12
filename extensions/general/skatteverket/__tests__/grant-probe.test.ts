@@ -48,6 +48,17 @@ describe('probeCompanyGrants', () => {
     expect(mockSkvRequestWithAuth.mock.calls[1][0]).toEqual({ mode: 'system' })
   })
 
+  it('records the actual 2xx status as detail, not a hardcoded 200', async () => {
+    mockSkvRequestWithAuth
+      .mockResolvedValueOnce({ ok: true, status: 204 }) // saldo
+      .mockResolvedValueOnce({ ok: true, status: 200 }) // utkast
+
+    const result = await probeCompanyGrants('company-1', '165560000000')
+
+    expect(result.lasombud).toEqual({ status: 'granted', detail: '204' })
+    expect(result.momsOmbud).toEqual({ status: 'granted', detail: '200' })
+  })
+
   it('felkod 3 (no skattekonto) still proves the lasombud authorization', async () => {
     mockSkvRequestWithAuth
       .mockResolvedValueOnce({ ok: false, status: 400, json: async () => ({ felkod: 3 }) })

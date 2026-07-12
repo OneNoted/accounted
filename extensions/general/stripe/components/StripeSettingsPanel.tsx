@@ -79,8 +79,8 @@ export default function StripeSettingsPanel() {
       if (connected) {
         toast({ title: t('connected_toast_title'), description: t('connected_toast_description') })
       } else if (error) {
-        let message: string
-        try { message = decodeURIComponent(error) } catch { message = error }
+        // useSearchParams().get() already returns the decoded value; do not decode again.
+        let message = error
         if (message === 'account_already_connected') message = t('error_account_already_connected')
         else if (message === 'access_denied') message = t('error_access_denied')
         else if (['invalid_state', 'missing_parameters', 'connection_failed', 'activation_failed'].includes(message)) {

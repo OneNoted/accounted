@@ -23,8 +23,18 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
       this.name = 'SkatteverketAuthError'
     }
   }
-  return { SkatteverketAuthError, skvRequest: vi.fn(), skvRequestWithAuth: vi.fn() }
+  return {
+    SkatteverketAuthError,
+    skvRequest: vi.fn(),
+    skvRequestWithAuth: vi.fn(),
+    getSkatteverketEnvironment: vi.fn(() => 'test'),
+  }
 })
+
+vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
+  getConnection: vi.fn().mockResolvedValue(null),
+  markGrantRevoked: vi.fn().mockResolvedValue(undefined),
+}))
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
   RECONSENT_ERROR_CODES: [
@@ -55,6 +65,7 @@ import { skvRequestWithAuth, SkatteverketAuthError } from '@/extensions/general/
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
+import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
@@ -62,6 +73,7 @@ const mockSkvRequest = vi.mocked(skvRequestWithAuth)
 const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
 const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
 const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
+const mockMarkGrantRevoked = vi.mocked(markGrantRevoked)
 
 function makeRequest() {
   return new Request('http://localhost/api/extensions/skatteverket/vat/kvittenser/cron', {
@@ -79,18 +91,26 @@ const LOCKED_STATE = {
   signeringsLank: 'https://skv.test/sign/abc',
 }
 
-function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknown }>) {
+function makeSupabaseStub(
+  tables: Record<string, { data: unknown; error?: unknown; updateError?: unknown }>,
+) {
   return {
     from: vi.fn((table: string) => {
       const result = tables[table] ?? { data: null, error: null }
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
-      for (const method of ['select', 'eq', 'in', 'like', 'order', 'limit', 'update', 'delete', 'insert']) {
+      let isUpdate = false
+      for (const method of ['select', 'eq', 'in', 'like', 'order', 'limit', 'delete', 'insert']) {
         chain[method] = vi.fn(() => chain)
       }
+      chain.update = vi.fn(() => {
+        isUpdate = true
+        return chain
+      })
       chain.maybeSingle = vi.fn().mockResolvedValue(resolved)
       chain.single = vi.fn().mockResolvedValue(resolved)
-      chain.then = (resolve: (v: unknown) => void) => resolve(resolved)
+      chain.then = (resolve: (v: unknown) => void) =>
+        resolve(isUpdate && result.updateError ? { data: null, error: result.updateError } : resolved)
       return chain
     }),
   } as any
@@ -108,6 +128,7 @@ function stubHappyTables(state: Record<string, unknown> = LOCKED_STATE) {
 describe('VAT kvittenser cron', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>
   let logSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -115,13 +136,17 @@ describe('VAT kvittenser cron', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
     mockVerifyCronSecret.mockReturnValue(null)
+    mockMarkNeedsReconsent.mockResolvedValue(undefined)
+    mockMarkGrantRevoked.mockResolvedValue(undefined)
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
 
   afterEach(() => {
     errorSpy.mockRestore()
     logSpy.mockRestore()
+    warnSpy.mockRestore()
   })
 
   it('returns 401 when cron auth fails', async () => {
@@ -256,5 +281,98 @@ describe('VAT kvittenser cron', () => {
     expect(body.errors).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'error', error: 'fetch failed' })
     expect(errorSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failing signed-state update yields an error row and skips deadline + notification', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        extension_data: {
+          data: [{ company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) }],
+          updateError: { message: 'connection reset', code: '08006' },
+        },
+        skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+      }),
+    )
+    mockSkvRequest.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ kvittensnummer: 'KV-123' }),
+    } as any)
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.signed).toBe(0)
+    expect(body.errors).toBe(1)
+    expect(body.results[0]).toMatchObject({
+      companyId: 'comp-1',
+      period: '202606',
+      status: 'error',
+      error: 'Failed to persist signed state: connection reset',
+    })
+    expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
+    expect(mockSendKvittensNotification).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+  })
+
+  function stubTwoCompanyTables() {
+    return makeSupabaseStub({
+      extension_data: {
+        data: [
+          { company_id: 'comp-1', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) },
+          { company_id: 'comp-2', key: 'submission_202606', value: JSON.stringify(LOCKED_STATE) },
+        ],
+      },
+      skatteverket_tokens: { data: { user_id: 'user-1', status: 'active' } },
+    })
+  }
+
+  it('a throwing markGrantRevoked does not abort the remaining companies', async () => {
+    mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    mockSkvRequest
+      .mockRejectedValueOnce(new SkatteverketAuthError('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ kvittensnummer: 'KV-123' }),
+      } as any)
+    mockMarkGrantRevoked.mockRejectedValueOnce(new Error('db outage'))
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.processed).toBe(2)
+    expect(body.results[0]).toMatchObject({
+      companyId: 'comp-1',
+      status: 'error',
+      error: 'OMBUD_GRANT_MISSING',
+    })
+    expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
+    expect(mockMarkGrantRevoked).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a throwing markNeedsReconsent does not abort the remaining companies', async () => {
+    mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    mockSkvRequest
+      .mockRejectedValueOnce(new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'))
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ kvittensnummer: 'KV-456' }),
+      } as any)
+    mockMarkNeedsReconsent.mockRejectedValueOnce(new Error('network blip'))
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.processed).toBe(2)
+    expect(body.results[0]).toMatchObject({
+      companyId: 'comp-1',
+      status: 'expired_token',
+      error: 'SESSION_EXPIRED',
+    })
+    expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 })

@@ -14,9 +14,11 @@ export default async function BackupSettingsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const params = await searchParams
-  const qs = new URLSearchParams({ view: 'export' })
+  const qs = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
     if (typeof value === 'string') qs.set(key, value)
   }
+  // Set last so an incoming ?view=... can never override the intended view.
+  qs.set('view', 'export')
   redirect(`/import?${qs.toString()}#cloud-backup`)
 }

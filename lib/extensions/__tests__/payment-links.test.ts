@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { maybeCreatePaymentLinkForInvoice } from '@/lib/extensions/payment-links'
+import {
+  maybeCreatePaymentLinkForInvoice,
+  applyPaymentLinkToInvoice,
+} from '@/lib/extensions/payment-links'
 import { makeInvoice } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice } from '@/types'
@@ -90,5 +93,108 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
     )
     expect(result).toEqual({ ok: false, reason: 'stripe down' })
     expect(log.warn).toHaveBeenCalled()
+  })
+})
+
+describe('applyPaymentLinkToInvoice', () => {
+  function mockPersist(error: { message: string } | null) {
+    const eqCompany = vi.fn().mockResolvedValue({ error })
+    const eqId = vi.fn().mockReturnValue({ eq: eqCompany })
+    const update = vi.fn().mockReturnValue({ eq: eqId })
+    const from = vi.fn().mockReturnValue({ update })
+    return { client: { from } as unknown as SupabaseClient, from, update, eqId, eqCompany }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    extensionRegistry.unregister('fake-psp')
+  })
+
+  it('is a no-op when no provider is registered', async () => {
+    const persist = mockPersist(null)
+    const invoice = eligibleInvoice()
+    const result = await applyPaymentLinkToInvoice(
+      persist.client, 'company-1', 'user-1', invoice, log,
+    )
+    expect(result).toEqual({ failure: null })
+    expect(persist.from).not.toHaveBeenCalled()
+    expect(invoice.payment_link_url).toBeNull()
+  })
+
+  it('persists the link, then mirrors it onto the invoice object', async () => {
+    registerProvider(vi.fn().mockResolvedValue({
+      url: 'https://buy.stripe.com/test_abc',
+      externalId: 'plink_1',
+    }))
+    const persist = mockPersist(null)
+    const invoice = eligibleInvoice()
+    const result = await applyPaymentLinkToInvoice(
+      persist.client, 'company-1', 'user-1', invoice, log,
+    )
+    expect(result).toEqual({ failure: null })
+    expect(persist.update).toHaveBeenCalledWith({
+      payment_link_url: 'https://buy.stripe.com/test_abc',
+      stripe_payment_link_id: 'plink_1',
+    })
+    expect(persist.eqId).toHaveBeenCalledWith('id', invoice.id)
+    expect(persist.eqCompany).toHaveBeenCalledWith('company_id', 'company-1')
+    expect(invoice.payment_link_url).toBe('https://buy.stripe.com/test_abc')
+    expect(invoice.stripe_payment_link_id).toBe('plink_1')
+  })
+
+  it('persist failure returns { failure } and does NOT mutate the invoice', async () => {
+    registerProvider(vi.fn().mockResolvedValue({
+      url: 'https://buy.stripe.com/test_abc',
+      externalId: 'plink_1',
+    }))
+    const persist = mockPersist({ message: 'row is locked' })
+    const invoice = eligibleInvoice()
+    const result = await applyPaymentLinkToInvoice(
+      persist.client, 'company-1', 'user-1', invoice, log,
+      { logPrefix: 'invoices.send: ', logContext: { invoiceId: invoice.id } },
+    )
+    expect(result).toEqual({ failure: 'row is locked' })
+    expect(invoice.payment_link_url).toBeNull()
+    expect(invoice.stripe_payment_link_id).toBeUndefined()
+    expect(log.warn).toHaveBeenCalledWith(
+      'invoices.send: payment link created but not persisted; sending without it',
+      { invoiceId: invoice.id, err: { message: 'row is locked' } },
+    )
+  })
+
+  it('provider failure returns { failure: reason } without touching the DB', async () => {
+    registerProvider(vi.fn().mockRejectedValue(new Error('stripe down')))
+    const persist = mockPersist(null)
+    const invoice = eligibleInvoice()
+    const result = await applyPaymentLinkToInvoice(
+      persist.client, 'company-1', 'user-1', invoice, log,
+    )
+    expect(result).toEqual({ failure: 'stripe down' })
+    expect(persist.from).not.toHaveBeenCalled()
+    expect(invoice.payment_link_url).toBeNull()
+  })
+
+  it('passes the invoiceNumber override to the provider without mutating the invoice', async () => {
+    const create = vi.fn().mockResolvedValue({
+      url: 'https://buy.stripe.com/test_abc',
+      externalId: 'plink_1',
+    })
+    registerProvider(create)
+    const persist = mockPersist(null)
+    const invoice = eligibleInvoice({ invoice_number: null })
+    await applyPaymentLinkToInvoice(
+      persist.client, 'company-1', 'user-1', invoice, log,
+      { invoiceNumber: 'F-2026-0042' },
+    )
+    expect(create).toHaveBeenCalledWith(
+      persist.client,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ invoice_number: 'F-2026-0042' }),
+    )
+    expect(invoice.invoice_number).toBeNull()
   })
 })

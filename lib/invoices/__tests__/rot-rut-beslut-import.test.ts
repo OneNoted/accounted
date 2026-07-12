@@ -73,8 +73,7 @@ describe('importRotRutBeslutFile', () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow()] })
     enqueue({ data: [makeItemRow()] })
-    enqueue({ data: null }) // item update
-    enqueue({ data: null }) // request update
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
 
     const result = await importRotRutBeslutFile(db, 'company-1', makeFile())
 
@@ -89,14 +88,22 @@ describe('importRotRutBeslutFile', () => {
       rejected: false,
     })
     expect(result.results[0].next).toContain(`/api/rot-rut/payout-requests/${REQUEST_ID}/settle`)
+    // All writes go through the atomic RPC: items + header in one transaction.
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('apply_rot_rut_beslut', {
+      p_request_id: REQUEST_ID,
+      p_items: [{ item_id: 'item-1', decided_amount: 2000 }],
+      p_decided_total: 2000,
+      p_skv_referensnummer: '20260000185-01',
+      p_new_status: 'submitted',
+    })
   })
 
   it('matches by personnummer when fakturanummer is absent', async () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow()] })
     enqueue({ data: [makeItemRow()] })
-    enqueue({ data: null })
-    enqueue({ data: null })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
 
     const file = makeFile()
     file.beslut[0].arenden = [{ personnummer: PNR, godkantBelopp: 1500 }]
@@ -111,8 +118,7 @@ describe('importRotRutBeslutFile', () => {
     enqueue(ORG_SETTINGS)
     enqueue({ data: [makeRequestRow()] })
     enqueue({ data: [makeItemRow()] })
-    enqueue({ data: null })
-    enqueue({ data: null })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc
 
     const file = makeFile()
     file.beslut[0].arenden = [{ personnummer: PNR, fakturanummer: '96458', godkantBelopp: 0 }]
@@ -126,6 +132,10 @@ describe('importRotRutBeslutFile', () => {
       rejected: true,
     })
     expect(result.results[0].next).toBeUndefined()
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'apply_rot_rut_beslut',
+      expect.objectContaining({ p_new_status: 'rejected' }),
+    )
   })
 
   it('is idempotent: a request with the same referensnummer already decided reports already_imported', async () => {
@@ -191,5 +201,71 @@ describe('importRotRutBeslutFile', () => {
     expect(result.results[0].status).toBe('error')
     // Only the three reads happened: settings, requests, items. No writes.
     expect((supabase.from as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('maps an RPC failure to an error outcome (nothing partially applied)', async () => {
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow()] })
+    enqueue({ data: [makeItemRow()] })
+    enqueue({ error: { message: 'apply_rot_rut_beslut: item item-1 not found on request' } })
+
+    const result = await importRotRutBeslutFile(db, 'company-1', makeFile())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.errors).toBe(1)
+    expect(result.results[0]).toMatchObject({
+      status: 'error',
+      request_id: REQUEST_ID,
+      error: expect.stringContaining('not found'),
+    })
+  })
+
+  it('does not re-decide a request when a later beslut shares the name but not the referensnummer', async () => {
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow()] })
+    enqueue({ data: [makeItemRow()] }) // items for the first beslut
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc for the first beslut
+
+    const file = makeFile()
+    file.beslut.push({
+      namn: 'ROT 2026-07-02',
+      referensnummer: '20260000186-01',
+      arenden: [{ personnummer: PNR, fakturanummer: '96458', godkantBelopp: 3000 }],
+    })
+    const result = await importRotRutBeslutFile(db, 'company-1', file)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.imported).toBe(1)
+    expect(result.errors).toBe(1)
+    expect(result.results[0]).toMatchObject({ status: 'imported', decided_total: 2000 })
+    // The second beslut must NOT silently overwrite the first decision: the
+    // in-memory request is now decided, so name matching finds nothing.
+    expect(result.results[1]).toMatchObject({ status: 'error' })
+    expect(result.results[1].error).toContain('Ingen aktiv begäran')
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports already_imported when the same referensnummer repeats within one file', async () => {
+    enqueue(ORG_SETTINGS)
+    enqueue({ data: [makeRequestRow()] })
+    enqueue({ data: [makeItemRow()] })
+    enqueue({ data: null }) // apply_rot_rut_beslut rpc for the first beslut
+
+    const file = makeFile()
+    file.beslut.push({ ...file.beslut[0] })
+    const result = await importRotRutBeslutFile(db, 'company-1', file)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.imported).toBe(1)
+    expect(result.already_imported).toBe(1)
+    expect(result.results[1]).toMatchObject({
+      status: 'already_imported',
+      request_id: REQUEST_ID,
+    })
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
   })
 })

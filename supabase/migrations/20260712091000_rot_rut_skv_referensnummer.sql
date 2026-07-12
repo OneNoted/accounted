@@ -13,6 +13,9 @@ ALTER TABLE public.rot_rut_payout_requests
   DROP CONSTRAINT IF EXISTS rot_rut_payout_requests_skv_referensnummer_check;
 ALTER TABLE public.rot_rut_payout_requests
   ADD CONSTRAINT rot_rut_payout_requests_skv_referensnummer_check
-  CHECK (skv_referensnummer IS NULL OR skv_referensnummer ~ '^\d{11}(-\d+)?$');
+  CHECK (skv_referensnummer IS NULL OR skv_referensnummer ~ '^\d{11}(-\d+)?$') NOT VALID;
+
+ALTER TABLE public.rot_rut_payout_requests
+  VALIDATE CONSTRAINT rot_rut_payout_requests_skv_referensnummer_check;
 
 NOTIFY pgrst, 'reload schema';

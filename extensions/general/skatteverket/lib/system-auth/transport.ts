@@ -103,6 +103,10 @@ export const mtlsTransport: SystemAuthTransport = {
           },
           (res) => {
             const chunks: Buffer[] = []
+            // Mid-body failures (after headers) emit 'error' on the response
+            // stream, not the request: without this listener the promise
+            // stays pending and the unhandled 'error' event crashes Node.
+            res.on('error', reject)
             res.on('data', (chunk: Buffer) => chunks.push(chunk))
             res.on('end', () =>
               resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') })

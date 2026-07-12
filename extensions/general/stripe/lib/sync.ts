@@ -1,9 +1,13 @@
 import type Stripe from 'stripe'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getStripe } from '@/lib/stripe/client'
-import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { eventBus } from '@/lib/events/bus'
+import {
+  settleInvoicePayment,
+  type InvoiceWithCustomerName,
+} from '@/lib/invoices/settle-invoice-payment'
 import { createLogger, type Logger } from '@/lib/logger'
-import type { EntityType, Invoice } from '@/types'
+import type { EntityType } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
 import { processPayoutPaidEvent } from './payouts'
 import type { StripeConnection } from '../types'
@@ -63,6 +67,8 @@ export interface StripeSyncSummary {
   alreadyProcessed: number
   /** Set when the connection turned out to be revoked upstream. */
   revoked?: boolean
+  /** Set when the caller's time budget ran out before all events were processed. */
+  deadlineReached?: boolean
 }
 
 type TerminalStatus = 'matched_booked' | 'needs_review' | 'ignored'
@@ -78,6 +84,14 @@ export async function syncStripeConnection(
   supabase: SupabaseClient,
   connection: StripeConnection,
   log: Logger = defaultLog,
+  /**
+   * Absolute deadline (epoch ms) from the caller's time budget (the cron
+   * route). When it passes mid-batch the event loop stops BEFORE the next
+   * unprocessed event; the cursor then advances only over what was actually
+   * processed, so the next run resumes exactly where this one stopped.
+   * Omitted (manual sync, tests): no budget, the full batch is processed.
+   */
+  deadlineMs?: number,
 ): Promise<StripeSyncSummary> {
   const summary: StripeSyncSummary = {
     fetched: 0,
@@ -120,6 +134,22 @@ export async function syncStripeConnection(
           error_message: 'Åtkomsten återkallades hos Stripe.',
         })
         .eq('id', connection.id)
+      // An upstream revocation is the same outward-facing consent transition
+      // as a user-initiated disconnect: land it in the audit trail too.
+      try {
+        await eventBus.emit({
+          type: 'stripe.disconnected',
+          payload: {
+            connectionId: connection.id,
+            stripeAccountId: connection.stripe_account_id,
+            reason: 'revoked_upstream',
+            userId: connection.user_id,
+            companyId: connection.company_id,
+          },
+        })
+      } catch {
+        // Audit event failure must not block marking the connection revoked.
+      }
       summary.revoked = true
       return summary
     }
@@ -132,8 +162,27 @@ export async function syncStripeConnection(
   events.sort((a, b) => a.created - b.created)
 
   let maxCreated = 0
+  let lastProcessedEventId: string | null = null
+  let processedCount = 0
   for (const event of events) {
+    // Enforce the time budget per event, not just per connection: a large
+    // batch must not blow the cron's maxDuration. The fetch above is a single
+    // bounded call; the expensive part is the per-event DB + bookkeeping work
+    // below. Breaking here, before claiming or counting the event, keeps the
+    // cursor behind the unprocessed tail so the next run picks it up.
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      summary.deadlineReached = true
+      log.info('time budget exhausted mid-connection; stopping event batch', {
+        connectionId: connection.id,
+        processed: processedCount,
+        remaining: events.length - processedCount,
+      })
+      break
+    }
+
     maxCreated = Math.max(maxCreated, event.created)
+    lastProcessedEventId = event.id
+    processedCount++
 
     // Payouts run through their own idempotent ledger (stripe_payouts).
     if (event.type === 'payout.paid') {
@@ -201,7 +250,7 @@ export async function syncStripeConnection(
       .from('stripe_connections')
       .update({
         last_event_created_at: new Date(maxCreated * 1000).toISOString(),
-        last_event_id: events[events.length - 1]?.id ?? null,
+        last_event_id: lastProcessedEventId,
       })
       .eq('id', connection.id)
   }
@@ -280,8 +329,9 @@ async function processCheckoutSessionEvent(
   // is the invoice id we stamped into the link metadata. Both are exact keys,
   // both scoped to the connection's company.
   const paymentLinkId = idOf(session.payment_link)
-  type InvoiceRow = Invoice & { customer?: { name?: string | null } | null }
-  let invoice: InvoiceRow | null = null
+  // Only the customer's name is joined; InvoiceWithCustomerName models that
+  // partial relation honestly (shared with the settlement boundary).
+  let invoice: InvoiceWithCustomerName | null = null
 
   if (paymentLinkId) {
     const { data } = await supabase
@@ -290,7 +340,7 @@ async function processCheckoutSessionEvent(
       .eq('company_id', connection.company_id)
       .eq('stripe_payment_link_id', paymentLinkId)
       .maybeSingle()
-    invoice = data as InvoiceRow | null
+    invoice = data as InvoiceWithCustomerName | null
   }
   if (!invoice && session.metadata?.invoice_id) {
     const { data } = await supabase
@@ -299,7 +349,7 @@ async function processCheckoutSessionEvent(
       .eq('company_id', connection.company_id)
       .eq('id', session.metadata.invoice_id)
       .maybeSingle()
-    invoice = data as InvoiceRow | null
+    invoice = data as InvoiceWithCustomerName | null
   }
 
   if (!invoice) {
@@ -335,11 +385,13 @@ async function processCheckoutSessionEvent(
     return { status: 'needs_review', reason: 'amount_mismatch', ...outcomeBase }
   }
 
+  // maybeSingle: a company without a settings row is a legitimate no-result
+  // case that falls back to the defaults below, not a swallowed error.
   const { data: settings } = await supabase
     .from('company_settings')
     .select('accounting_method, entity_type')
     .eq('company_id', connection.company_id)
-    .single()
+    .maybeSingle()
   const accountingMethod = settings?.accounting_method || 'accrual'
   const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 

@@ -219,34 +219,39 @@ async function applyBeslut(
     matches.push({ itemId: candidates[0].id, godkantBelopp: arende.godkantBelopp })
   }
 
-  // 4. Apply: per-item decided amounts, then the request header.
-  for (const match of matches) {
-    const { error: itemUpdateError } = await supabase
-      .from('rot_rut_payout_request_items')
-      .update({ decided_amount: match.godkantBelopp })
-      .eq('id', match.itemId)
-    if (itemUpdateError) {
-      return { ...base, status: 'error', request_id: request.id, error: itemUpdateError.message }
-    }
-  }
-
+  // 4. Apply atomically: per-item decided amounts plus the request header go
+  //    through one RPC (apply_rot_rut_beslut) so a mid-sequence failure can
+  //    never leave some items decided but the header untouched (or vice
+  //    versa). The function raises on any missing row, rolling back the
+  //    whole beslut.
   const decidedTotal = matches.reduce((sum, m) => sum + m.godkantBelopp, 0)
   const rejected = decidedTotal === 0
-  const { error: requestUpdateError } = await supabase
-    .from('rot_rut_payout_requests')
-    .update({
-      decided_total: decidedTotal,
-      decided_at: new Date().toISOString(),
-      skv_referensnummer: beslut.referensnummer,
-      // A beslut proves the file was submitted; 0 kr approved on every
-      // ärende is an avslag. Settle (paid/partially_paid) stays a separate,
-      // explicit act.
-      status: rejected ? 'rejected' : request.status === 'generated' ? 'submitted' : request.status,
-    })
-    .eq('id', request.id)
-  if (requestUpdateError) {
-    return { ...base, status: 'error', request_id: request.id, error: requestUpdateError.message }
+  // A beslut proves the file was submitted; 0 kr approved on every ärende is
+  // an avslag. Settle (paid/partially_paid) stays a separate, explicit act.
+  const newStatus = rejected
+    ? 'rejected'
+    : request.status === 'generated'
+      ? 'submitted'
+      : request.status
+  const { error: applyError } = await supabase.rpc('apply_rot_rut_beslut', {
+    p_request_id: request.id,
+    p_items: matches.map((m) => ({ item_id: m.itemId, decided_amount: m.godkantBelopp })),
+    p_decided_total: decidedTotal,
+    p_skv_referensnummer: beslut.referensnummer,
+    p_new_status: newStatus,
+  })
+  if (applyError) {
+    return { ...base, status: 'error', request_id: request.id, error: applyError.message }
   }
+
+  // Keep the shared in-memory request list in sync with what was just
+  // written: a later beslut in the same file (same name, different
+  // referensnummer) must see this request as decided instead of re-applying
+  // a second decision on top of the first.
+  request.skv_referensnummer = beslut.referensnummer
+  request.decided_at = new Date().toISOString()
+  request.decided_total = decidedTotal
+  request.status = newStatus
 
   return {
     ...base,

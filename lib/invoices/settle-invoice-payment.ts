@@ -9,7 +9,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { eventBus } from '@/lib/events'
-import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
+import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 
 /**
  * The core "apply a payment to an invoice" operation, extracted from the
@@ -42,8 +42,18 @@ export interface SettleCustomLine {
   line_description?: string
 }
 
+/**
+ * Invoice shape at the settlement boundary. Callers typically join only the
+ * customer's name (`customer:customers(name)`), so the relation is modelled
+ * as exactly that: reading any other Customer field here would be undefined
+ * at runtime. A fully joined Customer still satisfies this structurally.
+ */
+export type InvoiceWithCustomerName = Omit<Invoice, 'customer'> & {
+  customer?: Pick<Customer, 'name'> | null
+}
+
 export interface SettleInvoicePaymentParams {
-  invoice: Invoice & { customer?: { name?: string | null } | null }
+  invoice: InvoiceWithCustomerName
   /** Payment amount in the INVOICE currency (caller converts if needed). */
   paymentAmountInInvoiceCurrency: number
   /** Booking date (YYYY-MM-DD). */
@@ -159,11 +169,13 @@ export async function settleInvoicePayment(
         const journalEntry = await createJournalEntry(supabase, companyId, userId, input)
         journalEntryId = journalEntry?.id ?? null
       } else if (useCashEntry) {
+        // The entry helpers never read invoice.customer (the display name is
+        // passed explicitly), so the partial customer relation is safe here.
         const journalEntry = await createInvoiceCashEntry(
           supabase,
           companyId,
           userId,
-          invoice,
+          invoice as Invoice,
           paymentDate,
           entityType,
           invoice.customer?.name ?? undefined,
@@ -175,7 +187,7 @@ export async function settleInvoicePayment(
           supabase,
           companyId,
           userId,
-          invoice,
+          invoice as Invoice,
           paymentDate,
           exchangeRateDifference,
           invoice.customer?.name ?? undefined,

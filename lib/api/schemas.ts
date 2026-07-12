@@ -207,6 +207,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'reminder_fee',
   'accrual',
   'result_appropriation',
+  'rot_rut_payout',
   'vat_settlement',
   'stripe_payout',
 ])

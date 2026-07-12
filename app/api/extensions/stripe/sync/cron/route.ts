@@ -61,6 +61,10 @@ export const GET = withCronContext('cron.stripe_sync', async (_request, ctx) => 
 
   const startTime = Date.now()
   const TIME_BUDGET_MS = 240_000 // leave a minute of margin inside maxDuration
+  // Absolute deadline shared with syncStripeConnection so a single
+  // connection's event batch cannot blow the budget on its own: the sync
+  // stops between events and persists its cursor up to what it processed.
+  const deadlineMs = startTime + TIME_BUDGET_MS
 
   const results: Array<{
     connectionId: string
@@ -71,7 +75,7 @@ export const GET = withCronContext('cron.stripe_sync', async (_request, ctx) => 
   }> = []
 
   for (const connection of connections as StripeConnection[]) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) {
+    if (Date.now() >= deadlineMs) {
       ctx.log.info('time budget reached', { processedSoFar: results.length })
       break
     }
@@ -82,7 +86,12 @@ export const GET = withCronContext('cron.stripe_sync', async (_request, ctx) => 
     }
 
     try {
-      const summary = await syncStripeConnection(supabase, connection, ctx.log)
+      const summary = await syncStripeConnection(supabase, connection, ctx.log, deadlineMs)
+      if (summary.deadlineReached) {
+        ctx.log.info('connection stopped early on time budget; remaining events resume next run', {
+          connectionId: connection.id,
+        })
+      }
       results.push({
         connectionId: connection.id,
         settled: summary.settled,

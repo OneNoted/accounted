@@ -55,7 +55,7 @@ async function probeLasombud(orgNumber: string): Promise<ProbeClassification> {
       undefined,
       { baseUrl: getSkattekontoBaseUrl() }
     )
-    if (response.ok) return { status: 'granted', detail: '200' }
+    if (response.ok) return { status: 'granted', detail: String(response.status) }
 
     // felkod 3 = no skattekonto registered: the authorization layer passed,
     // the account state is a separate matter.
