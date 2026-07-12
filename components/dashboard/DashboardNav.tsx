@@ -175,7 +175,6 @@ const navItems: NavItem[] = [
   // Arbeta: everything the user produces. The bookkeeping funnel leads
   // (Bokföring · Underlag · Transaktioner · Granskning: kept as separate
   // rows until the unified workspace lands), then the transactional flows.
-  // Löner: "Beta" badge while we validate the end-to-end salary + AGI flow.
   // employerOnly: shown to aktiebolag and to any employer (pays_salaries), so an
   // enskild firma that hires staff gets payroll. Owner self-payroll stays
   // blocked at the engine/DB layer (EF owner takes egna uttag, not lön). #782
@@ -185,7 +184,7 @@ const navItems: NavItem[] = [
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
-  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true, betaBadge: true },
+  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Analys: read the numbers. KPI stays a separate row until the fused
   // Rapporter surface (nav_ia_redesign §F) is built.
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
@@ -196,7 +195,7 @@ const navItems: NavItem[] = [
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'data' },
   { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data' },
   { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data' },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true, betaBadge: true },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'data' },
   { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data' },
   { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', requiresDimensions: true },

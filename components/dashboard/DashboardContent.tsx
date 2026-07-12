@@ -12,6 +12,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
+import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
 import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
 import {
   ChevronRight,
@@ -122,6 +123,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
 
   return (
     <div className="stagger-enter space-y-8">
+      <BackupHealthBanner />
       {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. Once the assistant is built the
