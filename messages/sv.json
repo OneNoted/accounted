@@ -4585,6 +4585,7 @@
     "card_tax_paid": "Betald {date}",
     "card_tax_unpaid": "Skatt och avgifter för {period} — senast den 12:e.",
     "card_tax_none": "Ingen bokförd lönekörning ännu.",
+    "card_tax_reconnect": "Automatisk avstämning pausad. Anslut Skatteverket igen.",
     "card_blockers_title": "Att åtgärda",
     "card_blockers_detail": "{bank} saknar bankkonto · {email} saknar e-post",
     "card_blockers_none": "Inga blockerare — alla anställda är kompletta.",

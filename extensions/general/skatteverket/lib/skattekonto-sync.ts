@@ -4,6 +4,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import type {
@@ -125,8 +126,10 @@ function upcomingToRow(
  * 3. Upsert rows by (company_id, dedup_key). When a kommande row graduates
  *    to tidigare it's updated in place: same dedup_key, status flips,
  *    transaktionsidentitet populated.
- * 4. Cache the saldo response in extension_data with a fetched-at timestamp.
- * 5. Emit skattekonto.synced and (when applicable) other events.
+ * 4. Auto-settle AGI tax payments from booked AGI debit rows (see
+ *    agi-tax-settlement.ts).
+ * 5. Cache the saldo response in extension_data with a fetched-at timestamp.
+ * 6. Emit skattekonto.synced and (when applicable) other events.
  */
 export async function syncSkattekonto(
   ctx: ExtensionContext,
@@ -212,6 +215,16 @@ export async function syncSkattekonto(
       throw new Error(`Kunde inte spara skattekonto-transaktioner: ${error.message}`)
     }
   }
+
+  // Auto-settle AGI tax payments: when the "Arbetsgivardeklaration YYYYMM"
+  // debit is booked and the account is not in deficit, the period is paid.
+  // Best-effort inside (never throws).
+  await settleAgiTaxPayments(
+    ctx.supabase,
+    ctx.companyId,
+    bookedRows,
+    saldo.saldoSkatteverket,
+  )
 
   // Cache balance snapshot.
   const snapshot: SkattekontoBalanceSnapshot = {

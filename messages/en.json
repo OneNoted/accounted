@@ -4585,6 +4585,7 @@
     "card_tax_paid": "Paid {date}",
     "card_tax_unpaid": "Tax and contributions for {period} — due on the 12th.",
     "card_tax_none": "No posted payroll run yet.",
+    "card_tax_reconnect": "Automatic reconciliation paused. Reconnect Skatteverket.",
     "card_blockers_title": "Needs attention",
     "card_blockers_detail": "{bank} missing bank account · {email} missing email",
     "card_blockers_none": "No blockers — all employees are complete.",
