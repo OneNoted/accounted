@@ -216,8 +216,10 @@ export async function syncSkattekonto(
     }
   }
 
-  // Auto-settle AGI tax payments: when the "Arbetsgivardeklaration YYYYMM"
-  // debit is booked and the account is not in deficit, the period is paid.
+  // Auto-settle AGI tax payments: when the period's AGI debit is booked
+  // (one combined "Arbetsgivardeklaration YYYYMM" row in the test
+  // environment, the "Avdragen skatt" + "Arbetsgivaravgift" pair in prod)
+  // and the account is not in deficit, the period is paid.
   // Best-effort inside (never throws).
   await settleAgiTaxPayments(
     ctx.supabase,

@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -38,11 +38,16 @@ export function SkatteverketConnectPanel() {
 
 function SkatteverketPersonalConnectionCard() {
   const t = useTranslations('settings_skatteverket_connect')
+  // Toast strings shared with TaxSettingsContent's query-param fallback path.
+  const tOauth = useTranslations('settings_skatteverket')
   const { toast } = useToast()
   const hasSkatteverket = useCapability(CAPABILITY.skatteverket)
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
+  // Handle of the OAuth popup opened by startConnect: used to verify the
+  // sender identity of incoming postMessages.
+  const popupRef = useRef<Window | null>(null)
 
   // docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
   const SCOPE_LABELS: Record<string, string> = {
@@ -53,7 +58,7 @@ function SkatteverketPersonalConnectionCard() {
     agd: t('scope_agd'),
   }
 
-  async function loadStatus() {
+  const loadStatus = useCallback(async () => {
     setLoading(true)
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/status')
@@ -68,15 +73,71 @@ function SkatteverketPersonalConnectionCard() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     loadStatus()
-  }, [])
+  }, [loadStatus])
+
+  // Listen for OAuth completion from the BankID popup (same pattern as
+  // AGIPanel): the callback page posts success/error and closes itself, so
+  // the settings page never navigates and we just re-fetch the status.
+  useEffect(() => {
+    function handleMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return
+      // Source-identity check: only the popup this component opened can
+      // trigger the handler; a window reference cannot be forged by other
+      // same-origin scripts.
+      if (!popupRef.current || event.source !== popupRef.current) return
+      if (event.data?.type === 'skatteverket-oauth-success') {
+        toast({
+          title: tOauth('connected_title'),
+          description: tOauth('connected_description'),
+        })
+        loadStatus()
+        // Verified success: rebroadcast as an internal DOM event so passive
+        // consumers (e.g. the salary page) can react without trusting raw
+        // postMessage.
+        window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+      } else if (event.data?.type === 'skatteverket-oauth-error') {
+        toast({
+          title: tOauth('connect_failed_title'),
+          description:
+            typeof event.data.reason === 'string' && event.data.reason
+              ? event.data.reason
+              : undefined,
+          variant: 'destructive',
+        })
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [loadStatus, toast, tOauth])
 
   function startConnect() {
+    // Open the BankID OAuth flow in a centered popup. The callback page
+    // detects `window.opener`, posts back a message and closes itself: the
+    // settings page never navigates, so browser history stays clean and
+    // closing the settings afterwards cannot walk Back into the consumed
+    // OAuth chain (the "redirected to Skatteverket again" bug).
     const returnTo = encodeURIComponent('/settings/tax')
-    window.location.href = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
+    const url = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
+    const w = 600
+    const h = 750
+    const left = window.screenX + (window.outerWidth - w) / 2
+    const top = window.screenY + (window.outerHeight - h) / 2
+    const popup = window.open(
+      url,
+      'skatteverket-oauth',
+      `width=${w},height=${h},left=${left},top=${top}`,
+    )
+    popupRef.current = popup
+    if (!popup) {
+      // Popup blocked: fall back to the full-page flow. The callback then
+      // lands on /settings/tax?skv_connected=true, handled by
+      // TaxSettingsContent's query-param effect.
+      window.location.href = url
+    }
   }
 
   async function disconnect() {
@@ -88,6 +149,9 @@ function SkatteverketPersonalConnectionCard() {
       if (!res.ok) throw new Error(t('disconnect_failed'))
       toast({ title: t('toast_disconnected') })
       await loadStatus()
+      // Connection state changed: notify passive consumers via the same
+      // internal event as a verified OAuth success.
+      window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
     } catch (err) {
       toast({
         title: t('toast_disconnect_failed'),
@@ -235,7 +299,11 @@ function SkatteverketPersonalConnectionCard() {
         )}
 
         <div className="flex gap-2 pt-2">
-          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('skattekonto') || !scopes.includes('agd')) && (
+          {/* The skattekonto read scope is named `skahmst` in the live grants;
+              accept the older `skattekonto` name too (mirrors the missing-scope
+              notice above). Checking only `skattekonto` kept this button
+              permanently visible on healthy connections. */}
+          {(status.expired || status.needsReconsent || !status.canRefresh || !(scopes.includes('skahmst') || scopes.includes('skattekonto')) || !scopes.includes('agd')) && (
             <Button
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket}

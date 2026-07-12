@@ -59,21 +59,75 @@ export interface SkattekontoMatchCandidate {
   matched_via_agi_period?: boolean
 }
 
+/** Swedish month names exactly as SKV writes them in prod transaktionstext. */
+export const SWEDISH_MONTH_NUMBERS: Record<string, number> = {
+  januari: 1,
+  februari: 2,
+  mars: 3,
+  april: 4,
+  maj: 5,
+  juni: 6,
+  juli: 7,
+  augusti: 8,
+  september: 9,
+  oktober: 10,
+  november: 11,
+  december: 12,
+}
+
+const MONTH_NAME_ALTERNATION = Object.keys(SWEDISH_MONTH_NUMBERS).join('|')
+
+// Production skattekonto rows write the period as "<keyword> <månad> <år>"
+// ("Avdragen skatt maj 2026", "Arbetsgivaravgift maj 2026"); the numeric
+// "Arbetsgivardeklaration 202605" form is what the SKV test environment uses.
+const MONTH_NAME_PERIOD_RE = new RegExp(
+  `(?:arbetsgivardeklaration|arbetsgivaravgift|avdragen skatt|\\bagi\\b)\\s+(${MONTH_NAME_ALTERNATION})\\s+(\\d{4})\\b`,
+  'i',
+)
+
 /**
  * Parse an AGI period from a Skatteverket transaktionstext.
  *
  * Examples that match:
- *   "Arbetsgivardeklaration 202605"
+ *   "Arbetsgivardeklaration 202605"      (test environment)
  *   "arbetsgivardeklaration 2026-05"
  *   "AGI 202605"
+ *   "Avdragen skatt maj 2026"            (production)
+ *   "Arbetsgivaravgift maj 2026"         (production)
+ *   "Beslut 260703 arbetsgivaravgift mars 2026"  (production beslut rows)
+ *
+ * Beslut rows parsing to their period is intentional (audited): it lets match
+ * suggestions period-boost correction rows too. This is safe because (a) the
+ * settlement module never uses parseAgiPeriod; it classifies with its own
+ * start-anchored regexes and parseNumericAgiPeriod only, so a beslut row can
+ * never mark a period paid, and (b) the only production callers are
+ * findMatchSuggestionsBulk and findMatchCandidates in this file, both of which
+ * require an exact amount+side match on a 1630 line before suggesting anything,
+ * so a beslut row can only ever be suggested against an entry carrying exactly
+ * the beslut's amount.
  *
  * Returns null when no period token is present or the value is out of range.
+ */
+export function parseAgiPeriod(
+  transaktionstext: string,
+): { year: number; month: number } | null {
+  return (
+    parseNumericAgiPeriod(transaktionstext) ??
+    parseMonthNameAgiPeriod(transaktionstext)
+  )
+}
+
+/**
+ * The numeric-token subset of parseAgiPeriod ("Arbetsgivardeklaration 202605",
+ * "AGI 2026-05"). Exported separately because the settlement's combined-row
+ * classifier must stay pinned to this form: the month-name form always means
+ * the split tax/avgift rows, which settle pairwise.
  *
  * The fallback (numeric YYYYMM after any AGI keyword) covers older SKV variants
  * that omit the leading word but still place the period adjacent to "AGI" or
  * "arbetsgivaravgift" elsewhere in the row.
  */
-export function parseAgiPeriod(
+export function parseNumericAgiPeriod(
   transaktionstext: string,
 ): { year: number; month: number } | null {
   const text = transaktionstext.toLowerCase()
@@ -95,6 +149,17 @@ export function parseAgiPeriod(
     if (isValidPeriod(year, month)) return { year, month }
   }
 
+  return null
+}
+
+function parseMonthNameAgiPeriod(
+  transaktionstext: string,
+): { year: number; month: number } | null {
+  const m = MONTH_NAME_PERIOD_RE.exec(transaktionstext)
+  if (!m) return null
+  const month = SWEDISH_MONTH_NUMBERS[m[1].toLowerCase()]
+  const year = Number(m[2])
+  if (month && isValidPeriod(year, month)) return { year, month }
   return null
 }
 

@@ -1,21 +1,28 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { createLogger } from '@/lib/logger'
 import { verifyCronSecret } from '@/lib/auth/cron'
-import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
-import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
-import { resolveReadAuth, currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
-import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
-import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
+import { reconcileAgiDeclaration } from '@/extensions/general/skatteverket/lib/agi-kvittens-reconcile'
+import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
 ensureInitialized()
 
 export const maxDuration = 60
+
+// Failure logs route through the structured logger so third-party error
+// strings pass its redaction. The APIGW warn / budget + summary logs /
+// capability skip stay on console.*: their content is fixed internal strings.
+const log = createLogger('agi-kvittenser-cron')
+
+// Cron responses must never be cached: they report a point-in-time run.
+const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' } as const
 
 /**
  * GET /api/extensions/skatteverket/agi/kvittenser/cron
@@ -45,13 +52,19 @@ export async function GET(request: Request) {
   if (authError) return authError
 
   if (process.env.SKATTEVERKET_ENABLED !== 'true') {
-    return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
+    return NextResponse.json(
+      { message: 'Skatteverket extension disabled', processed: 0 },
+      { headers: NO_STORE_HEADERS },
+    )
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !supabaseServiceKey) {
-    return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Missing Supabase configuration' },
+      { status: 500, headers: NO_STORE_HEADERS },
+    )
   }
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey)
@@ -64,25 +77,33 @@ export async function GET(request: Request) {
     .limit(100)
 
   if (pendingError) {
-    console.error('[agi-kvittenser-cron] Failed to fetch pending declarations', {
+    log.error('Failed to fetch pending declarations', {
       message: pendingError.message,
       code: pendingError.code,
     })
-    return NextResponse.json({ error: 'Failed to fetch pending declarations' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Failed to fetch pending declarations' },
+      { status: 500, headers: NO_STORE_HEADERS },
+    )
   }
 
   if (!pending || pending.length === 0) {
-    return NextResponse.json({ message: 'No pending signatures', processed: 0 })
+    return NextResponse.json(
+      { message: 'No pending signatures', processed: 0 },
+      { headers: NO_STORE_HEADERS },
+    )
   }
 
   const startTime = Date.now()
   const TIME_BUDGET_MS = 50_000
 
+  // No companyId here: results echo back in the HTTP response body, so
+  // tenant identifiers stay in internal log context only (declarationId
+  // is enough to find the row).
   type Result = {
     declarationId: string
-    companyId: string
     period: string
-    status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'apigw_config' | 'error'
+    status: 'signed' | 'still_pending' | 'already_claimed' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'apigw_config' | 'error'
     error?: string
   }
   const results: Result[] = []
@@ -107,158 +128,25 @@ export async function GET(request: Request) {
     }
 
     try {
-      // Auth resolution prefers system credentials (verified lasombud grant)
-      // and falls back to the company's user token: kvittens polling is the
-      // canonical case for the hybrid model, since the user signed at SKV
-      // and their 65-minute session is usually long dead by the time the
-      // kvittens exists.
-      const resolved = await resolveReadAuth(supabase, companyId, { requires: 'lasombud' })
-      if (!resolved.ok) {
-        if (resolved.reason === 'needs_reconsent') {
-          // A connection flagged needs_reconsent cannot heal on its own
-          // (SKV's per-flow refresh tokens live 65 minutes): skip quietly
-          // instead of failing the same declaration every run.
-          results.push({ declarationId, companyId, period, status: 'expired_token', error: 'needs_reconsent' })
-        } else {
-          results.push({ declarationId, companyId, period, status: 'no_token' })
-        }
-        continue
-      }
-
-      const { data: settings } = await supabase
-        .from('company_settings')
-        .select('org_number, entity_type')
-        .eq('company_id', companyId)
-        .single()
-
-      if (!settings?.org_number) {
-        results.push({ declarationId, companyId, period, status: 'no_company_settings' })
-        continue
-      }
-
-      const arbetsgivare = formatRedovisare(
-        settings.org_number as string,
-        settings.entity_type as 'enskild_firma' | 'aktiebolag',
+      // The shared reconciler resolves auth (system grant → user token),
+      // fetches the kvittens, and on a hit promotes the declaration +
+      // stamps salary_runs / deadline / notification. Auth errors propagate
+      // to the catch below, which owns the cron-specific side effects.
+      const outcome = await reconcileAgiDeclaration(
+        supabase,
+        {
+          id: declarationId,
+          company_id: companyId,
+          salary_run_id: (decl.salary_run_id as string | null) ?? null,
+          period_year: decl.period_year as number,
+          period_month: decl.period_month as number,
+        },
+        { reconciledBy: 'cron' },
       )
 
-      const kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period)
-      if (!kvittRes.ok) {
-        results.push({
-          declarationId, companyId, period,
-          status: 'error',
-          error: kvittRes.error,
-        })
-        continue
-      }
-
-      const kvittens = kvittRes.data.kvittenser?.[0]
-      if (!kvittens?.uuidKvittens) {
-        results.push({ declarationId, companyId, period, status: 'still_pending' })
-        continue
-      }
-
-      // The presence of uuidKvittens confirms SKV signed and accepted
-      // the AGI. signeradTid is the precise signing moment; if SKV omits
-      // it we fall back to reconciliation time + warn so the discrepancy
-      // is investigable. Leaving NULL would hide that the filing occurred
-      // at all, which itself misstates behandlingshistorik (BFNAR 2013:2
-      // kap 8 / BFL 5 kap 6§). The fallback only applies on this code
-      // path because we're inside the kvittens-found branch above.
-      const submittedAt = kvittens.signeradTid || new Date().toISOString()
-      if (!kvittens.signeradTid) {
-        console.warn('[agi-kvittenser-cron] kvittens missing signeradTid; using reconciliation time', {
-          declarationId, companyId, period, uuidKvittens: kvittens.uuidKvittens,
-        })
-      }
-
-      // submitted_by is the token-owning auth.users row: the human who
-      // connected via BankID. The legally load-bearing signer identity
-      // is kvittens.signeradAv (a personnummer), which the token user_id
-      // does NOT necessarily match (e.g. if the connected user is a
-      // bookkeeper but the deklarationsombud signed). We preserve the
-      // full kvittens in response_data so the audit trail (BFL 5 kap 6§,
-      // BFNAR 2013:2 kap 8) records the actual BankID signer regardless
-      // of who triggered the reconciliation.
-      await supabase
-        .from('agi_declarations')
-        .update({
-          status: 'submitted',
-          kvittensnummer: kvittens.uuidKvittens,
-          submitted_at: submittedAt,
-          submitted_by: resolved.tokenUserId,
-          response_data: {
-            signeradAv: kvittens.signeradAv ?? null,
-            signeradTid: kvittens.signeradTid ?? null,
-            uuidKvittens: kvittens.uuidKvittens,
-            arbetsgivare: kvittens.arbetsgivare ?? null,
-            period: kvittens.period ?? null,
-            underlag: kvittens.underlag ?? null,
-            reconciledBy: 'cron',
-          },
-        })
-        .eq('id', declarationId)
-
-      if (decl.salary_run_id) {
-        await supabase
-          .from('salary_runs')
-          .update({ agi_submitted_at: submittedAt })
-          .eq('id', decl.salary_run_id)
-          .eq('company_id', companyId)
-      }
-
-      // Clear the locally-cached submission state so the panel doesn't
-      // pop a stale "awaiting signature" view if the user revisits.
-      await supabase
-        .from('extension_data')
-        .delete()
-        .eq('company_id', companyId)
-        .eq('extension_id', 'skatteverket')
-        .eq('key', `agi_submission_${period}`)
-
-      // The declaration is already flipped to submitted above, and the next
-      // run only revisits pending_signature rows: from here on everything is
-      // best-effort. Each step gets its own try/catch so a failure is logged
-      // as a warning without masking the successful filing or skipping the
-      // remaining confirmation steps.
-
-      // The kvittens is the canonical filing receipt: confirm the period's
-      // arbetsgivardeklaration deadline (terminal state).
-      try {
-        await completeTaxDeadline(
-          supabase,
-          companyId,
-          ['arbetsgivardeklaration'],
-          `${decl.period_year}-${String(decl.period_month).padStart(2, '0')}`,
-          'confirmed'
-        )
-      } catch (deadlineErr) {
-        console.warn('[agi-kvittenser-cron] completeTaxDeadline failed after successful filing', {
-          declarationId, companyId, period,
-          message: deadlineErr instanceof Error ? deadlineErr.message : 'Unknown error',
-        })
-      }
-
-      // Tell the user: signing happened at Skatteverket, often long after
-      // they closed our tab, so this is the only confirmation they get.
-      if (resolved.tokenUserId) {
-        try {
-          await sendKvittensNotification(supabase, {
-            companyId,
-            userId: resolved.tokenUserId,
-            kind: 'agi',
-            period,
-            kvittensnummer: kvittens.uuidKvittens,
-            referenceId: declarationId,
-          })
-        } catch (notifyErr) {
-          console.warn('[agi-kvittenser-cron] sendKvittensNotification failed after successful filing', {
-            declarationId, companyId, period,
-            message: notifyErr instanceof Error ? notifyErr.message : 'Unknown error',
-          })
-        }
-      }
-
-      results.push({ declarationId, companyId, period, status: 'signed' })
+      const result: Result = { declarationId, period, status: outcome.status }
+      if ('error' in outcome) result.error = outcome.error
+      results.push(result)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
 
@@ -267,7 +155,7 @@ export async function GET(request: Request) {
         // Downgrade the connection row so the next run falls back to the
         // user token (if any). Never touches skatteverket_tokens.
         await markGrantRevoked(companyId, currentSkvEnvironment(), 'lasombud', err.code)
-        results.push({ declarationId, companyId, period, status: 'grant_revoked', error: err.code })
+        results.push({ declarationId, period, status: 'grant_revoked', error: err.code })
         continue
       }
 
@@ -285,12 +173,12 @@ export async function GET(request: Request) {
         if (tokenRow?.user_id) {
           await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
         }
-        results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
+        results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue
       }
       if (err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
         // skvRequest already deleted the token row.
-        results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
+        results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue
       }
       if (err instanceof SkatteverketAuthError && err.code === 'ACCESS_DENIED') {
@@ -311,34 +199,39 @@ export async function GET(request: Request) {
             { declarationId, companyId, period, message },
           )
         }
-        results.push({ declarationId, companyId, period, status: 'apigw_config', error: err.code })
+        results.push({ declarationId, period, status: 'apigw_config', error: err.code })
         continue
       }
 
-      console.error('[agi-kvittenser-cron] Reconciliation failed', { declarationId, companyId, period, message })
-      results.push({ declarationId, companyId, period, status: 'error', error: message })
+      log.error('Reconciliation failed', { declarationId, companyId, period, message })
+      results.push({ declarationId, period, status: 'error', error: message })
     }
   }
 
   const signed = results.filter(r => r.status === 'signed').length
   const stillPending = results.filter(r => r.status === 'still_pending').length
+  const alreadyClaimed = results.filter(r => r.status === 'already_claimed').length
   const expired = results.filter(r => r.status === 'expired_token').length
   const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const apigwConfig = results.filter(r => r.status === 'apigw_config').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
+    `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${alreadyClaimed} already claimed, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
   )
 
-  return NextResponse.json({
-    processed: results.length,
-    signed,
-    stillPending,
-    expired,
-    grantRevoked,
-    apigwConfig,
-    errors,
-    results,
-  })
+  return NextResponse.json(
+    {
+      processed: results.length,
+      signed,
+      stillPending,
+      alreadyClaimed,
+      expired,
+      grantRevoked,
+      apigwConfig,
+      errors,
+      results,
+    },
+    { headers: NO_STORE_HEADERS },
+  )
 }
