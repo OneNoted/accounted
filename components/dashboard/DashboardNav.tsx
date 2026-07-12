@@ -38,7 +38,10 @@ import {
   Percent,
   Landmark,
   CalendarClock,
+  CalendarRange,
   FileCheck,
+  FileSpreadsheet,
+  ScrollText,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -115,7 +118,10 @@ type NavLabelKey =
   | 'vat_declaration'
   | 'skattekonto'
   | 'deadlines'
+  | 'periodiseringar'
   | 'year_end'
+  | 'annual_report'
+  | 'income_declaration'
   | 'help'
   | 'settings'
 
@@ -153,6 +159,9 @@ interface NavItem {
   // capability. Cosmetic only, the page and API gates are the real
   // enforcement; this just keeps the sidebar honest for non-payers.
   requiredCapability?: CapabilityKey
+  // Statutory surfaces that only exist for one company form (INK2 vs
+  // NE-bilaga, årsredovisning): hidden for the other entity type.
+  entityOnly?: EntityType
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -194,11 +203,19 @@ const navItems: NavItem[] = [
   { href: '/import', labelKey: 'import', icon: Upload, group: 'data' },
   // Skatt & bokslut: everything submitted to the state. Rescues the
   // previously nav-orphaned /skattekonto and /deadlines, and promotes the
-  // VAT declaration out of the report catalog.
+  // VAT declaration out of the report catalog. The year-end chain
+  // (periodiseringar → bokslut → årsredovisning → inkomstdeklaration) is
+  // listed in workflow order; the last two are entity-gated because the
+  // surfaces only exist for one company form (ÅR + INK2 for aktiebolag,
+  // NE-bilaga for enskild firma).
   { href: '/reports/vat-declaration', labelKey: 'vat_declaration', icon: Percent, group: 'skatt' },
   { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
   { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
+  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
   { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
@@ -306,14 +323,29 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     if (href === '/salary') {
       return pathname === '/salary' || pathname.startsWith('/salary/runs')
     }
-    // Bokslut (/bookkeeping/year-end) and Moms (/reports/vat-declaration)
-    // have their own rows under Skatt & bokslut: carve them out of their
-    // parent routes so exactly one row lights up.
+    // Routes with their own rows under Skatt & bokslut (Bokslut, Moms,
+    // Periodiseringar, Årsredovisning, Inkomstdeklaration) are carved out
+    // of their parent routes so exactly one row lights up.
     if (href === '/bookkeeping') {
-      return pathname.startsWith('/bookkeeping') && !pathname.startsWith('/bookkeeping/year-end')
+      return (
+        pathname.startsWith('/bookkeeping') &&
+        !pathname.startsWith('/bookkeeping/year-end') &&
+        !pathname.startsWith('/bookkeeping/periodiseringar')
+      )
+    }
+    if (href === '/bookkeeping/year-end') {
+      return (
+        pathname.startsWith('/bookkeeping/year-end') &&
+        !pathname.startsWith('/bookkeeping/year-end/arsredovisning')
+      )
     }
     if (href === '/reports') {
-      return pathname.startsWith('/reports') && !pathname.startsWith('/reports/vat-declaration')
+      return (
+        pathname.startsWith('/reports') &&
+        !pathname.startsWith('/reports/vat-declaration') &&
+        !pathname.startsWith('/reports/ink2-declaration') &&
+        !pathname.startsWith('/reports/ne-declaration')
+      )
     }
     return pathname.startsWith(href)
   }
@@ -427,6 +459,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // the active company holds the capability. The page + API gates enforce
     // the paywall; this keeps the sidebar from advertising a dead workspace.
     if (item.requiredCapability && !capabilities.includes(item.requiredCapability)) return false
+    // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
+    // enskild firma; the page for the other form doesn't exist.
+    if (item.entityOnly && item.entityOnly !== entityType) return false
     // Hide the Assistent (/chat) tab until the agent is built: mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).
