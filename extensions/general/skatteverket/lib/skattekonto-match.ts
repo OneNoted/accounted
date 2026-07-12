@@ -96,6 +96,16 @@ const MONTH_NAME_PERIOD_RE = new RegExp(
  *   "Arbetsgivaravgift maj 2026"         (production)
  *   "Beslut 260703 arbetsgivaravgift mars 2026"  (production beslut rows)
  *
+ * Beslut rows parsing to their period is intentional (audited): it lets match
+ * suggestions period-boost correction rows too. This is safe because (a) the
+ * settlement module never uses parseAgiPeriod; it classifies with its own
+ * start-anchored regexes and parseNumericAgiPeriod only, so a beslut row can
+ * never mark a period paid, and (b) the only production callers are
+ * findMatchSuggestionsBulk and findMatchCandidates in this file, both of which
+ * require an exact amount+side match on a 1630 line before suggesting anything,
+ * so a beslut row can only ever be suggested against an entry carrying exactly
+ * the beslut's amount.
+ *
  * Returns null when no period token is present or the value is out of range.
  */
 export function parseAgiPeriod(

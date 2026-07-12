@@ -194,7 +194,25 @@ export async function settleAgiTaxPayments(
       if (!decl) continue
 
       const paidDate = resolveSettlementDate(draws, decl)
-      if (!paidDate) continue
+      if (!paidDate) {
+        // Refusing to settle must leave a trace: a rounding divergence between
+        // the stored declaration totals and SKV's actual draw would otherwise
+        // block auto-settlement for the period with nothing to diagnose.
+        // Amounts only, in ore; transaction texts can carry personal data.
+        log.info('agi settlement candidates did not match declared amounts', {
+          companyId,
+          period: key,
+          declaredTaxOre: Math.round(decl.total_tax * 100),
+          declaredAvgifterOre: Math.round(decl.total_avgifter * 100),
+          taxDrawsOre: draws.tax.map(r => drawnOre(r)),
+          avgiftDrawsOre: draws.avgift.map(r => drawnOre(r)),
+          combinedDrawsOre: draws.combined.map(r => drawnOre(r)),
+          taxDrawCount: draws.tax.length,
+          avgiftDrawCount: draws.avgift.length,
+          combinedDrawCount: draws.combined.length,
+        })
+        continue
+      }
 
       const { error: updateError } = await supabase
         .from('agi_declarations')
