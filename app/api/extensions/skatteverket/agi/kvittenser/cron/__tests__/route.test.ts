@@ -13,6 +13,25 @@ vi.mock('@/lib/auth/cron', () => ({
   verifyCronSecret: vi.fn().mockReturnValue(null),
 }))
 
+// The route and the reconcile helper log through '@/lib/logger'. The real
+// logger suppresses info/warn under NODE_ENV=test, so warn/error output is
+// observed via these recorders instead of console spies. Console spies stay
+// for the route's remaining console.* lines (APIGW warn, summary, skip).
+const { warnRecorder, errorRecorder } = vi.hoisted(() => ({
+  warnRecorder: vi.fn(),
+  errorRecorder: vi.fn(),
+}))
+
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: vi.fn(),
+    warn: warnRecorder,
+    error: errorRecorder,
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
+
 vi.mock('@/extensions/general/skatteverket/lib/agi-client', () => ({
   agiGetKvittenser: vi.fn(),
 }))
@@ -191,9 +210,12 @@ describe('AGI kvittenser cron', () => {
     expect(body.errors).toBe(0)
     expect(body.grantRevoked).toBe(0)
     expect(body.results[0].status).toBe('signed')
+    // Tenant identifiers stay in internal log context only.
+    expect(body.results[0]).not.toHaveProperty('companyId')
     expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
     expect(mockSendKvittensNotification).toHaveBeenCalledTimes(1)
     expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
   })
 
   it('still reports signed and sends the notification when completeTaxDeadline throws', async () => {
@@ -234,9 +256,10 @@ describe('AGI kvittenser cron', () => {
       referenceId: 'decl-1',
     })
 
-    // The failure is a warning, not an error.
+    // The failure is a warning (via the structured logger), not an error.
     expect(errorSpy).not.toHaveBeenCalled()
-    const warnMessages = warnSpy.mock.calls.map(c => String(c[0]))
+    expect(errorRecorder).not.toHaveBeenCalled()
+    const warnMessages = warnRecorder.mock.calls.map(c => String(c[0]))
     expect(warnMessages.some(m => m.includes('completeTaxDeadline failed'))).toBe(true)
   })
 
@@ -264,7 +287,8 @@ describe('AGI kvittenser cron', () => {
     expect(body.errors).toBe(0)
     expect(body.results[0].status).toBe('signed')
     expect(errorSpy).not.toHaveBeenCalled()
-    const warnMessages = warnSpy.mock.calls.map(c => String(c[0]))
+    expect(errorRecorder).not.toHaveBeenCalled()
+    const warnMessages = warnRecorder.mock.calls.map(c => String(c[0]))
     expect(warnMessages.some(m => m.includes('sendKvittensNotification failed'))).toBe(true)
   })
 
@@ -302,10 +326,11 @@ describe('AGI kvittenser cron', () => {
     expect(body.errors).toBe(0)
     expect(body.results[0]).toMatchObject({
       declarationId: 'decl-1',
-      companyId: 'comp-1',
       status: 'apigw_config',
       error: 'ACCESS_DENIED',
     })
+    // companyId is internal log context, never response payload.
+    expect(body.results[0]).not.toHaveProperty('companyId')
 
     // Warn carries the actionable config hint plus the context to act on it.
     expect(warnSpy).toHaveBeenCalledTimes(1)
@@ -320,6 +345,7 @@ describe('AGI kvittenser cron', () => {
 
     // The whole point: no error-level log for a config gap retries cannot heal.
     expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
 
     // The config gap stays visible in the run summary.
@@ -360,11 +386,13 @@ describe('AGI kvittenser cron', () => {
       'decl-3',
     ])
     expect(body.results.every((r: { status: string }) => r.status === 'apigw_config')).toBe(true)
+    expect(body.results.every((r: Record<string, unknown>) => !('companyId' in r))).toBe(true)
 
     // But the identical config-gap warning is logged exactly once per run.
     expect(warnSpy).toHaveBeenCalledTimes(1)
     expect(String(warnSpy.mock.calls[0][0])).toContain('Utvecklarportalen')
     expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
 
     const summaryLine = logSpy.mock.calls.map(c => String(c[0])).find(m => m.includes('Processed'))
     expect(summaryLine).toContain('3 apigw config gaps')
@@ -384,7 +412,9 @@ describe('AGI kvittenser cron', () => {
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
     expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'SESSION_EXPIRED')
     expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnSpy).not.toHaveBeenCalled()
+    expect(warnRecorder).not.toHaveBeenCalled()
   })
 
   it('still records expired_token for TOKEN_REVOKED without reconsent flagging', async () => {
@@ -400,6 +430,7 @@ describe('AGI kvittenser cron', () => {
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'TOKEN_REVOKED' })
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
+    expect(errorRecorder).not.toHaveBeenCalled()
   })
 
   it('still logs at error level for other SkatteverketAuthError codes', async () => {
@@ -414,9 +445,10 @@ describe('AGI kvittenser cron', () => {
     expect(body.errors).toBe(1)
     expect(body.apigwConfig).toBe(0)
     expect(body.results[0]).toMatchObject({ status: 'error', error: 'Du har inte behörighet.' })
-    expect(errorSpy).toHaveBeenCalledTimes(1)
-    expect(String(errorSpy.mock.calls[0][0])).toContain('Reconciliation failed')
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+    expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
     expect(warnSpy).not.toHaveBeenCalled()
+    expect(warnRecorder).not.toHaveBeenCalled()
   })
 
   it('still logs at error level for generic errors', async () => {
@@ -428,6 +460,7 @@ describe('AGI kvittenser cron', () => {
 
     expect(body.errors).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'error', error: 'fetch failed' })
-    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(errorRecorder).toHaveBeenCalledTimes(1)
+    expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
   })
 })

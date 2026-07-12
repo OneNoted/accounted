@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { agiGetKvittenser } from './agi-client'
@@ -19,10 +20,11 @@ import { sendKvittensNotification } from './kvittens-notification'
  * cron maps them to per-run statuses and side effects (needs_reconsent
  * flagging, grant revocation) that differ from the post-connect path.
  *
- * Logging uses console.* rather than the structured logger: warn-level output
- * is part of the cron's observable contract and the structured logger
- * suppresses warns under NODE_ENV=test.
+ * Logging goes through the structured logger (redaction + level filtering);
+ * the cron tests observe it via a logger mock.
  */
+
+const log = createLogger('agi-kvittens-reconcile')
 
 export interface PendingAgiDeclaration {
   id: string
@@ -100,21 +102,26 @@ export async function reconcileAgiDeclaration(
   // at all, which itself misstates behandlingshistorik (BFNAR 2013:2
   // kap 8 / BFL 5 kap 6§). The fallback only applies on this code
   // path because we're inside the kvittens-found branch above.
+  // The fallback is an upper bound (reconciliation ran after signing)
+  // recorded to keep behandlingshistorik complete; response_data.signeradTid
+  // stays null and submittedAtEstimated=true marks the estimate so it is
+  // never mistaken for the legal filing time.
   const submittedAt = kvittens.signeradTid || new Date().toISOString()
   if (!kvittens.signeradTid) {
-    console.warn('[agi-kvittens-reconcile] kvittens missing signeradTid; using reconciliation time', {
-      declarationId, companyId, period, uuidKvittens: kvittens.uuidKvittens,
+    log.warn('kvittens missing signeradTid; using reconciliation time', {
+      declarationId, companyId, period,
     })
   }
 
-  // submitted_by is the token-owning auth.users row: the human who
-  // connected via BankID. The legally load-bearing signer identity
-  // is kvittens.signeradAv (a personnummer), which the token user_id
-  // does NOT necessarily match (e.g. if the connected user is a
-  // bookkeeper but the deklarationsombud signed). We preserve the
-  // full kvittens in response_data so the audit trail (BFL 5 kap 6§,
-  // BFNAR 2013:2 kap 8) records the actual BankID signer regardless
-  // of who triggered the reconciliation.
+  // submitted_by records the TECHNICAL submitter: the token-owning
+  // auth.users row, i.e. the human who connected via BankID. The LEGAL
+  // signatory is response_data.signeradAv from the kvittens (a
+  // personnummer), which the token user_id does NOT necessarily match
+  // (e.g. if the connected user is a bookkeeper but the
+  // deklarationsombud signed). signeradAv is the authoritative
+  // reference for the audit trail (BFL 5 kap 6§, BFNAR 2013:2 kap 8);
+  // we preserve the full kvittens in response_data so it records the
+  // actual BankID signer regardless of who triggered the reconciliation.
   await supabase
     .from('agi_declarations')
     .update({
@@ -125,6 +132,7 @@ export async function reconcileAgiDeclaration(
       response_data: {
         signeradAv: kvittens.signeradAv ?? null,
         signeradTid: kvittens.signeradTid ?? null,
+        submittedAtEstimated: !kvittens.signeradTid,
         uuidKvittens: kvittens.uuidKvittens,
         arbetsgivare: kvittens.arbetsgivare ?? null,
         period: kvittens.period ?? null,
@@ -133,6 +141,7 @@ export async function reconcileAgiDeclaration(
       },
     })
     .eq('id', declarationId)
+    .eq('company_id', companyId)
 
   if (decl.salary_run_id) {
     await supabase
@@ -144,6 +153,10 @@ export async function reconcileAgiDeclaration(
 
   // Clear the locally-cached submission state so the panel doesn't
   // pop a stale "awaiting signature" view if the user revisits.
+  // No declaration-id guard is needed here: the cache key is
+  // deliberately period-scoped and agi_declarations is UNIQUE per
+  // company+period, so no two declarations share a key and there is
+  // no cross-declaration race to guard.
   await supabase
     .from('extension_data')
     .delete()
@@ -168,7 +181,7 @@ export async function reconcileAgiDeclaration(
       'confirmed'
     )
   } catch (deadlineErr) {
-    console.warn('[agi-kvittens-reconcile] completeTaxDeadline failed after successful filing', {
+    log.warn('completeTaxDeadline failed after successful filing', {
       declarationId, companyId, period,
       message: deadlineErr instanceof Error ? deadlineErr.message : 'Unknown error',
     })
@@ -187,7 +200,7 @@ export async function reconcileAgiDeclaration(
         referenceId: declarationId,
       })
     } catch (notifyErr) {
-      console.warn('[agi-kvittens-reconcile] sendKvittensNotification failed after successful filing', {
+      log.warn('sendKvittensNotification failed after successful filing', {
         declarationId, companyId, period,
         message: notifyErr instanceof Error ? notifyErr.message : 'Unknown error',
       })

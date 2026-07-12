@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { createLogger } from '@/lib/logger'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
@@ -14,6 +15,14 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 ensureInitialized()
 
 export const maxDuration = 60
+
+// Failure logs route through the structured logger so third-party error
+// strings pass its redaction. The APIGW warn / budget + summary logs /
+// capability skip stay on console.*: their content is fixed internal strings.
+const log = createLogger('agi-kvittenser-cron')
+
+// Cron responses must never be cached: they report a point-in-time run.
+const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' } as const
 
 /**
  * GET /api/extensions/skatteverket/agi/kvittenser/cron
@@ -43,13 +52,19 @@ export async function GET(request: Request) {
   if (authError) return authError
 
   if (process.env.SKATTEVERKET_ENABLED !== 'true') {
-    return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
+    return NextResponse.json(
+      { message: 'Skatteverket extension disabled', processed: 0 },
+      { headers: NO_STORE_HEADERS },
+    )
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!supabaseUrl || !supabaseServiceKey) {
-    return NextResponse.json({ error: 'Missing Supabase configuration' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Missing Supabase configuration' },
+      { status: 500, headers: NO_STORE_HEADERS },
+    )
   }
 
   const supabase = createClient(supabaseUrl, supabaseServiceKey)
@@ -62,23 +77,31 @@ export async function GET(request: Request) {
     .limit(100)
 
   if (pendingError) {
-    console.error('[agi-kvittenser-cron] Failed to fetch pending declarations', {
+    log.error('Failed to fetch pending declarations', {
       message: pendingError.message,
       code: pendingError.code,
     })
-    return NextResponse.json({ error: 'Failed to fetch pending declarations' }, { status: 500 })
+    return NextResponse.json(
+      { error: 'Failed to fetch pending declarations' },
+      { status: 500, headers: NO_STORE_HEADERS },
+    )
   }
 
   if (!pending || pending.length === 0) {
-    return NextResponse.json({ message: 'No pending signatures', processed: 0 })
+    return NextResponse.json(
+      { message: 'No pending signatures', processed: 0 },
+      { headers: NO_STORE_HEADERS },
+    )
   }
 
   const startTime = Date.now()
   const TIME_BUDGET_MS = 50_000
 
+  // No companyId here: results echo back in the HTTP response body, so
+  // tenant identifiers stay in internal log context only (declarationId
+  // is enough to find the row).
   type Result = {
     declarationId: string
-    companyId: string
     period: string
     status: 'signed' | 'still_pending' | 'no_token' | 'no_company_settings' | 'expired_token' | 'grant_revoked' | 'apigw_config' | 'error'
     error?: string
@@ -121,7 +144,7 @@ export async function GET(request: Request) {
         { reconciledBy: 'cron' },
       )
 
-      const result: Result = { declarationId, companyId, period, status: outcome.status }
+      const result: Result = { declarationId, period, status: outcome.status }
       if ('error' in outcome) result.error = outcome.error
       results.push(result)
     } catch (err) {
@@ -132,7 +155,7 @@ export async function GET(request: Request) {
         // Downgrade the connection row so the next run falls back to the
         // user token (if any). Never touches skatteverket_tokens.
         await markGrantRevoked(companyId, currentSkvEnvironment(), 'lasombud', err.code)
-        results.push({ declarationId, companyId, period, status: 'grant_revoked', error: err.code })
+        results.push({ declarationId, period, status: 'grant_revoked', error: err.code })
         continue
       }
 
@@ -150,12 +173,12 @@ export async function GET(request: Request) {
         if (tokenRow?.user_id) {
           await markNeedsReconsent(supabase, tokenRow.user_id as string, err.code)
         }
-        results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
+        results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue
       }
       if (err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
         // skvRequest already deleted the token row.
-        results.push({ declarationId, companyId, period, status: 'expired_token', error: err.code })
+        results.push({ declarationId, period, status: 'expired_token', error: err.code })
         continue
       }
       if (err instanceof SkatteverketAuthError && err.code === 'ACCESS_DENIED') {
@@ -176,12 +199,12 @@ export async function GET(request: Request) {
             { declarationId, companyId, period, message },
           )
         }
-        results.push({ declarationId, companyId, period, status: 'apigw_config', error: err.code })
+        results.push({ declarationId, period, status: 'apigw_config', error: err.code })
         continue
       }
 
-      console.error('[agi-kvittenser-cron] Reconciliation failed', { declarationId, companyId, period, message })
-      results.push({ declarationId, companyId, period, status: 'error', error: message })
+      log.error('Reconciliation failed', { declarationId, companyId, period, message })
+      results.push({ declarationId, period, status: 'error', error: message })
     }
   }
 
@@ -196,14 +219,17 @@ export async function GET(request: Request) {
     `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${expired} expired, ${grantRevoked} grants revoked, ${apigwConfig} apigw config gaps, ${errors} errors`,
   )
 
-  return NextResponse.json({
-    processed: results.length,
-    signed,
-    stillPending,
-    expired,
-    grantRevoked,
-    apigwConfig,
-    errors,
-    results,
-  })
+  return NextResponse.json(
+    {
+      processed: results.length,
+      signed,
+      stillPending,
+      expired,
+      grantRevoked,
+      apigwConfig,
+      errors,
+      results,
+    },
+    { headers: NO_STORE_HEADERS },
+  )
 }
