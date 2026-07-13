@@ -164,6 +164,84 @@ describe('POST /api/invoices/[id]/send', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_CANCELLED')
   })
 
+  it.each(['sent', 'paid', 'overdue', 'partially_paid', 'credited'] as const)(
+    'returns 409 and posts no journal entry when invoice status is %s',
+    async (issuedStatus) => {
+      const issuedInvoice = makeInvoice({
+        id: 'inv-1',
+        status: issuedStatus,
+        customer,
+        items: [],
+      })
+      enqueue({ data: issuedInvoice, error: null })
+
+      const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+      expect(status).toBe(409)
+      expect((body.error as unknown as { code: string }).code).toBe('INVOICE_ALREADY_SENT')
+      expect(mockSendEmail).not.toHaveBeenCalled()
+      expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    },
+  )
+
+  it('skips journal entry, archive and event when a concurrent request won the status flip', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-race' })
+
+    // Optimistic-locked flip matches 0 rows: another request already sent it.
+    enqueue({ data: [], error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      partial?: boolean
+      partial_failures?: Array<{ step: string }>
+    }>(response)
+
+    // The email did go out, so the response is still a (partial) success.
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.partial).toBe(true)
+    expect(body.partial_failures?.some((f) => f.step === 'status_update')).toBe(true)
+    // The winning request owns the bookkeeping: no second verifikat here.
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'invoice.sent' })
+    )
+  })
+
+  it('defers the journal entry when the status flip errors (row stays draft, retry re-books once)', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-fliperr' })
+
+    // Status flip hits a DB error: the invoice remains 'draft'.
+    enqueue({ data: null, error: { message: 'connection reset' } })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      partial?: boolean
+      partial_failures?: Array<{ step: string; reason: string }>
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.partial).toBe(true)
+    expect(body.partial_failures?.some((f) => f.step === 'status_update')).toBe(true)
+    // No entry now: the retry (invoice still draft) runs the full pipeline
+    // and posts exactly one, instead of this request + the retry posting two.
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when customer has no email', async () => {
     const noEmailInvoice = makeInvoice({
       id: 'inv-1',
@@ -201,8 +279,8 @@ describe('POST /api/invoices/[id]/send', () => {
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
 
-    // Update invoice status to 'sent'
-    enqueue({ data: null, error: null })
+    // Update invoice status to 'sent' (optimistic lock: returns the matched row)
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     // Update invoice with journal_entry_id
     enqueue({ data: null, error: null })
 
@@ -244,7 +322,7 @@ describe('POST /api/invoices/[id]/send', () => {
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-2' })
 
     // Update invoice status
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -263,7 +341,7 @@ describe('POST /api/invoices/[id]/send', () => {
     mockCreateInvoiceJournalEntry.mockRejectedValue(new Error('Period locked'))
 
     // Update invoice status
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -293,7 +371,7 @@ describe('POST /api/invoices/[id]/send', () => {
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
 
     // Update status to 'sent'
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     // Update with journal_entry_id
     enqueue({ data: null, error: null })
 
@@ -325,7 +403,7 @@ describe('POST /api/invoices/[id]/send', () => {
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-100' })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-2' })
 
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
@@ -388,7 +466,7 @@ describe('POST /api/invoices/[id]/send', () => {
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-banner' })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
 
-    enqueue({ data: null, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
