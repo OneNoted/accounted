@@ -72,6 +72,12 @@ ALTER TABLE public.pending_operations
     'create_employee',               -- payroll gap-closure 1.8
     'update_employee',               -- payroll gap-closure 1.8
     'set_employee_opening_balances'  -- payroll gap-closure 2.4 (cutover)
-  ));
+  )) NOT VALID;
+
+-- NOT VALID: skips the full-table scan that ADD CONSTRAINT would otherwise
+-- run while holding ACCESS EXCLUSIVE on this continuously written table.
+-- Existing rows all satisfy the old (strict subset) list; the constraint is
+-- validated in 20260713123000 under a non-blocking SHARE UPDATE EXCLUSIVE
+-- lock. New writes are enforced either way.
 
 NOTIFY pgrst, 'reload schema';

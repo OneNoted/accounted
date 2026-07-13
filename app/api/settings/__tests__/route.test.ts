@@ -98,6 +98,11 @@ describe('PUT /api/settings', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+    // The guard consumed the count result and the update never ran.
+    expect(supabase.from.mock.calls.map(([table]) => table)).toEqual([
+      'company_settings',
+      'employee_vacation_balances',
+    ])
   })
 
   it('fails closed when the open-balances guard query errors', async () => {
@@ -114,5 +119,12 @@ describe('PUT /api/settings', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
+    // The 500 must come from the guard, not from company_settings.update()
+    // swallowing the queued error: the guard query ran and no second
+    // company_settings query followed it.
+    expect(supabase.from.mock.calls.map(([table]) => table)).toEqual([
+      'company_settings',
+      'employee_vacation_balances',
+    ])
   })
 })

@@ -65,6 +65,9 @@ ALTER TABLE public.pending_operations
     'update_employee',
     'set_employee_opening_balances',
     'vacation_year_close'            -- payroll gap-closure 3.4 (semesterårsavslut)
-  ));
+  )) NOT VALID;
+
+-- NOT VALID for the same reason as 20260713100000: no full-table scan under
+-- ACCESS EXCLUSIVE. Validated in 20260713123000.
 
 NOTIFY pgrst, 'reload schema';

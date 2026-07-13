@@ -59,6 +59,17 @@ describe('assertNoPlaintextPersonnummer', () => {
     ).not.toThrow()
   })
 
+  it('fails closed when the payload nests past the scan depth (PII could hide below)', () => {
+    // Before the fail-closed change, the scanner silently accepted anything
+    // past MAX_DEPTH, so this personnummer would have been persisted.
+    const payload = {
+      l1: { l2: { l3: { l4: { l5: { l6: { l7: { personnummer: '198501011234' } } } } } } },
+    }
+    expect(() => assertNoPlaintextPersonnummer(payload, 'params')).toThrow(
+      /cannot be scanned for plaintext PII/,
+    )
+  })
+
   it('does not value-match: an EF org number equal to a personnummer passes under a business key', () => {
     // For enskild firma the org number IS the owner's personnummer; the
     // guard is key-based so legitimate counterparty data stays stageable.

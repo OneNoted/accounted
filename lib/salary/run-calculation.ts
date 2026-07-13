@@ -289,7 +289,9 @@ export async function runSalaryCalculation(
   }
 
   const ytdByEmployee = new Map<string, { gross: number; tax: number; net: number }>()
-  for (const prior of (priorRuns || []) as Array<{
+  // Cast via unknown: supabase-js infers the to-one `salary_run` embed as an
+  // array, but PostgREST returns an object for a many-to-one relationship.
+  for (const prior of (priorRuns || []) as unknown as Array<{
     employee_id: string
     gross_salary: number
     tax_withheld: number

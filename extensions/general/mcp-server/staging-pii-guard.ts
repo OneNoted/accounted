@@ -18,11 +18,22 @@
 
 const FORBIDDEN_KEYS = new Set(['personnummer', 'pnr', 'social_security_number', 'ssn'])
 
-/** Cycle/degenerate-payload stop: staged payloads are shallow JSON. */
+/**
+ * Cycle/degenerate-payload stop: staged payloads are shallow JSON. Anything
+ * nesting deeper is rejected (fail closed), never silently accepted: a
+ * payload too deep to scan could hide a forbidden key below the limit.
+ */
 const MAX_DEPTH = 6
 
-function findForbiddenKey(value: unknown, depth: number): string | null {
-  if (depth > MAX_DEPTH || value === null || typeof value !== 'object') return null
+/** Sentinel: the payload nests past MAX_DEPTH, so it cannot be fully scanned. */
+const DEPTH_EXCEEDED = Symbol('depth-exceeded')
+
+function findForbiddenKey(
+  value: unknown,
+  depth: number,
+): string | typeof DEPTH_EXCEEDED | null {
+  if (value === null || typeof value !== 'object') return null
+  if (depth > MAX_DEPTH) return DEPTH_EXCEEDED
   if (Array.isArray(value)) {
     for (const item of value) {
       const hit = findForbiddenKey(item, depth + 1)
@@ -40,14 +51,21 @@ function findForbiddenKey(value: unknown, depth: number): string | null {
 
 /**
  * Throws when `payload` (params or preview_data) carries a plaintext
- * personnummer-bearing key at any nesting level. `label` names the offending
- * payload in the error so the tool author sees exactly what to fix.
+ * personnummer-bearing key at any nesting level, or nests too deep to scan
+ * (fail closed). `label` names the offending payload in the error so the
+ * tool author sees exactly what to fix.
  */
 export function assertNoPlaintextPersonnummer(
   payload: Record<string, unknown>,
   label: 'params' | 'preview_data',
 ): void {
   const hit = findForbiddenKey(payload, 0)
+  if (hit === DEPTH_EXCEEDED) {
+    throw new Error(
+      `Staging blocked: ${label} nests deeper than ${MAX_DEPTH} levels and cannot be scanned for plaintext PII. ` +
+        'Flatten the payload; staged payloads are shallow JSON by design.',
+    )
+  }
   if (hit) {
     throw new Error(
       `Staging blocked: ${label} contains plaintext PII key "${hit}". ` +
