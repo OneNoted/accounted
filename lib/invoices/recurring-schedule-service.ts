@@ -19,10 +19,16 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import {
+  prepareInvoicePdfRender,
+  buildSwishQrDataUrl,
+  buildPaymentLinkQrDataUrl,
+} from '@/lib/invoices/pdf-render-helpers'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import {
   generateInvoiceEmailHtml,
   generateInvoiceEmailText,
@@ -386,6 +392,18 @@ async function sendInvoiceFromSchedule(
     })
     return false
   }
+  // The sandbox must never deliver a real email to a real address. The
+  // interactive send routes enforce this with guardSandbox, but cron and
+  // run-now reach this function without any route-level guard, so the
+  // invariant is enforced here at the email chokepoint. Freeze-and-retain
+  // like the paywall path below: the invoice is still generated as a draft.
+  if (await isSandboxCompany(supabase, companyId)) {
+    log.warn('sandbox company; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      companyId,
+    })
+    return false
+  }
   // Paywall: email sending is a paid capability. The invoice itself is still
   // created (bookkeeping stays free); it just isn't emailed, and the schedule
   // surfaces the standard manual-send warning (freeze-and-retain).
@@ -416,11 +434,32 @@ async function sendInvoiceFromSchedule(
 
   const items = (invoice.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
 
+  // Auto-create an online payment link (extension-provided, e.g. Stripe) so
+  // the email button and PDF QR carry it: parity with the manual and v1 send
+  // routes. Best-effort: the faktura is legally valid without a link, so a
+  // failure only logs and the send proceeds. On success the helper mirrors
+  // payment_link_url onto this invoice object, which the email template and
+  // QR builder below read.
+  const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
+    supabase,
+    companyId,
+    userId,
+    invoice,
+    log,
+  )
+  if (paymentLinkFailure) {
+    log.warn('payment link creation failed for recurring invoice; sending without it', {
+      invoiceId: invoice.id,
+      reason: paymentLinkFailure,
+    })
+  }
+
   // Render PDF with status overridden to 'sent' so the customer doesn't
   // receive a "UTKAST" stamp.
   const renderableInvoice = { ...invoice, status: 'sent' as const }
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(company)
   const swishQrDataUrl = await buildSwishQrDataUrl(company, renderableInvoice)
+  const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -429,6 +468,7 @@ async function sendInvoiceFromSchedule(
       company: renderCompany,
       branding,
       swishQrDataUrl,
+      paymentLinkQrDataUrl,
     }),
   )
 
