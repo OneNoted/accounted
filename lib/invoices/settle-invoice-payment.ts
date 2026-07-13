@@ -7,7 +7,7 @@ import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 
@@ -116,7 +116,19 @@ export async function settleInvoicePayment(
 
   // Ledger math + overpayment guard. Runs BEFORE any journal entry is
   // created so a doomed overpayment never burns a voucher number.
-  const payment = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency)
+  // Custom-line SEK settlements absorb a sub-krona öresavrundning residual
+  // (customer paid the rounded "Att betala" from the PDF, up to 1 kr off the
+  // stored öre total) ONLY when the lines actually carry the residual on
+  // 3740, mirroring the bank-transaction match flow; lines that don't (e.g.
+  // a deliberate sub-krona partial) get the strict plan instead. The
+  // generated-entry paths (Stripe sync, no-body mark-paid) always pay the
+  // exact remaining, so absorption is a no-op there.
+  const payment = planInvoicePaymentForLines(
+    invoice,
+    paymentAmountInInvoiceCurrency,
+    customLines,
+    invoice.currency,
+  )
   if (!payment.ok) {
     return {
       ok: false,

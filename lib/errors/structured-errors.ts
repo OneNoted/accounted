@@ -1792,6 +1792,66 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Inga aktiva anställda finns i företaget.',
     message_en: 'No active employees in the company.',
   },
+  SALARY_RUN_LINE_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Lönebeskedets rader kan bara redigeras medan lönekörningen är ett utkast.',
+    message_en: 'Payslip lines can only be edited while the salary run is a draft.',
+  },
+  SALARY_RUN_EMPLOYEE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Anställd finns inte i denna lönekörning.',
+    message_en: 'Employee is not part of this salary run.',
+  },
+  SALARY_LINE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Lönebeskedsraden kunde inte hittas.',
+    message_en: 'Payslip line not found.',
+  },
+  SALARY_RUN_EMPLOYEE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Den anställda finns redan i lönekörningen.',
+    message_en: 'Employee is already part of this salary run.',
+  },
+  SALARY_RUN_EMPLOYEES_NOT_DRAFT: {
+    httpStatus: 400,
+    message_sv: 'Anställda kan bara läggas till eller tas bort medan lönekörningen är ett utkast.',
+    message_en: 'Employees can only be added or removed while the salary run is a draft.',
+  },
+  ABSENCE_RANGE_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Frånvarointervallet är för stort. Max 92 dagar per anrop.',
+    message_en: 'Absence range too large. Maximum 92 days per request.',
+  },
+  ABSENCE_HOURS_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Total frånvarotid för dagen överstiger 24 timmar.',
+    message_en: 'Total absence hours for the day exceed 24 hours.',
+  },
+  OPENING_BALANCES_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Ingående saldon är låsta: den anställda har en bokförd lönekörning.',
+    message_en: 'Opening balances are locked: the employee has a booked salary run.',
+  },
+  VACATION_YEAR_NOT_ENDED: {
+    httpStatus: 400,
+    message_sv: 'Semesteråret kan inte stängas innan det har tagit slut.',
+    message_en: 'The vacation year cannot be closed before it has ended.',
+  },
+  VACATION_YEAR_ALREADY_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Semesteråret är redan stängt.',
+    message_en: 'The vacation year is already closed.',
+  },
+  VACATION_CLOSE_ADJUSTMENT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Semestersaldon rullades men justeringsverifikationen kunde inte bokföras. Bokför justeringen manuellt från rapporten.',
+    message_en: 'Vacation balances rolled but the adjustment entry failed to post. Book the adjustment manually from the report.',
+  },
+  VACATION_BALANCE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inget semestersaldo finns för den anställda ännu.',
+    message_en: 'No vacation balance exists for the employee yet.',
+  },
   SALARY_RUN_TAX_TABLE_MISSING: {
     httpStatus: 400,
     message_sv: 'Skattetabellen saknas för perioden. Importera skattetabellen först.',

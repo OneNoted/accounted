@@ -60,11 +60,24 @@ export const POST = withRouteContext(
     }
 
     // A cancelled invoice keeps its F-series number for compliance with ML 17
-    // kap 24§ but is not a valid faktura: sending it would silently
-    // re-activate it (the .update({ status: 'sent' }) below has no status
-    // guard) and could deliver a "MAKULERAD" PDF as if it were live.
+    // kap 24§ but is not a valid faktura: sending it would deliver a
+    // "MAKULERAD" PDF as if it were live. Checked before the generic draft
+    // guard below for the more specific error message.
     if (invoice.status === 'cancelled') {
       return errorResponseFromCode('INVOICE_SEND_CANCELLED', opLog, { requestId })
+    }
+
+    // Only drafts may enter the send pipeline. The UI already hides Send for
+    // non-drafts, but a direct POST against an issued invoice would re-email
+    // the customer and post a SECOND revenue verifikat
+    // (createInvoiceJournalEntry has no dedup), overwriting journal_entry_id
+    // and orphaning the first entry. Mirrors the v1 route and the MCP commit
+    // executor, which both reject non-drafts.
+    if (invoice.status !== 'draft') {
+      return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
+        requestId,
+        details: { currentStatus: invoice.status },
+      })
     }
 
     const customer = invoice.customer as Customer
@@ -223,16 +236,36 @@ export const POST = withRouteContext(
       partialFailures.push({ step: 'payment_link', reason: paymentLinkFailure })
     }
 
+    // Optimistic-locked flip (draft → sent). Two concurrent sends can both
+    // pass the draft guard above and both email the customer, but only the
+    // request that wins this compare-and-set runs the bookkeeping steps
+    // below: the loser would otherwise post a duplicate revenue verifikat
+    // and archive the PDF twice. PostgREST returns no error for a 0-row
+    // update, so the row count via .select('id') is the actual lock signal.
+    // A genuine update error also skips the follow-ups: the row is still
+    // 'draft', so a later retry re-runs the whole pipeline and ends with
+    // exactly one journal entry (at the cost of a duplicate email).
+    let statusFlipped = false
     {
-      const { error: updateError } = await supabase
+      const { data: flipRows, error: updateError } = await supabase
         .from('invoices')
         .update({ status: 'sent' })
         .eq('id', id)
         .eq('company_id', companyId)
+        .eq('status', 'draft')
+        .select('id')
 
       if (updateError) {
         opLog.warn('failed to update invoice status to sent', updateError)
         partialFailures.push({ step: 'status_update', reason: updateError.message })
+      } else if (!flipRows || flipRows.length === 0) {
+        opLog.warn('invoice already flipped to sent by a concurrent request; skipping bookkeeping follow-ups')
+        partialFailures.push({
+          step: 'status_update',
+          reason: 'Fakturan skickades samtidigt av en annan begäran; bokföringen hanterades där.',
+        })
+      } else {
+        statusFlipped = true
       }
     }
 
@@ -240,7 +273,7 @@ export const POST = withRouteContext(
     const accountingMethod = (company as Record<string, unknown>).accounting_method as string | undefined
     let createdJournalEntryId: string | undefined
 
-    if (isRealInvoice && (!accountingMethod || accountingMethod === 'accrual')) {
+    if (statusFlipped && isRealInvoice && (!accountingMethod || accountingMethod === 'accrual')) {
       try {
         const journalEntry = await createInvoiceJournalEntry(
           supabase,
@@ -284,7 +317,7 @@ export const POST = withRouteContext(
       }
     }
 
-    if (isRealInvoice) {
+    if (statusFlipped && isRealInvoice) {
       try {
         const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
         await uploadDocument(supabase, user.id, companyId!, {
@@ -304,10 +337,15 @@ export const POST = withRouteContext(
       }
     }
 
-    await eventBus.emit({
-      type: 'invoice.sent',
-      payload: { invoice: invoice as Invoice, companyId: companyId!, userId: user.id },
-    })
+    // Gated like the steps above: on a lost race the winning request emits
+    // it; on a flip error the row is still 'draft', so emitting would
+    // contradict DB state and the retry emits it instead.
+    if (statusFlipped) {
+      await eventBus.emit({
+        type: 'invoice.sent',
+        payload: { invoice: invoice as Invoice, companyId: companyId!, userId: user.id },
+      })
+    }
 
     if (partialFailures.length > 0) {
       opLog.warn('invoice sent with partial follow-up failures', {

@@ -2015,6 +2015,17 @@ export type PendingOperationType =
   // Dimensions PR6: bulk retag of posted-line dimensions via the audited
   // retag_line_dimensions RPC (gnubok_tag_journal_lines).
   | 'retag_line_dimensions'
+  // Payroll gap-closure: payslip line edits + absence registration (1.7),
+  // employee master data (1.8; personnummer encrypted at staging), and
+  // cutover opening balances for mid-year migrations (2.4).
+  | 'update_payslip_line'
+  | 'register_absence'
+  | 'create_employee'
+  | 'update_employee'
+  | 'set_employee_opening_balances'
+  // Semesterårsavslut: rolls vacation balances into the next year and may
+  // post a 2920/2940 drift-adjustment verifikation (Phase 3).
+  | 'vacation_year_close'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
@@ -3466,6 +3477,11 @@ export interface Employee {
   vacation_days_per_year: number
   vacation_days_saved: number
   semestertillagg_rate: number
+  // Arbetsschema-lite: weekly schedule driving the hourly/daily divisors
+  // (173/21 at the defaults). employment_degree keeps prorating base salary;
+  // these ONLY drive divisors.
+  hours_per_week: number
+  workdays_per_week: number
   email: string | null
   phone: string | null
   address_line1: string | null

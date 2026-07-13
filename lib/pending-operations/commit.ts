@@ -3384,6 +3384,252 @@ async function commitGenerateAgi(
   }
 }
 
+async function commitUpdatePayslipLine(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  const lineId = params.salary_line_item_id as string
+  const patch = params.patch as Record<string, unknown> | undefined
+  if (!salaryRunId || !lineId || !patch || Object.keys(patch).length === 0) {
+    return { error: 'salary_run_id, salary_line_item_id and patch are required', status: 400 }
+  }
+
+  try {
+    const { updatePayslipLine } = await import('@/lib/salary/payslip-lines')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await updatePayslipLine(supabase, {
+      companyId,
+      salaryRunId,
+      lineId,
+      patch: patch as never,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte uppdatera lönebeskedsraden: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        salary_line_item_id: lineId,
+        salary_run_id: salaryRunId,
+        item_type: result.data.item_type,
+        description: result.data.description,
+        amount: result.data.amount,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to update payslip line',
+      status: 500,
+    }
+  }
+}
+
+async function commitCreateEmployee(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  try {
+    const { createEmployee } = await import('@/lib/salary/employee-commands')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await createEmployee(supabase, {
+      companyId,
+      userId,
+      input: params as never,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      const detailMessage =
+        (result.details?.message as string | undefined) ?? entry?.message_sv
+      return {
+        error: detailMessage ?? `Kunde inte skapa anställd: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return { data: { ...result.data } }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to create employee',
+      status: 500,
+    }
+  }
+}
+
+async function commitUpdateEmployee(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const employeeId = params.employee_id as string
+  const patch = params.patch as Record<string, unknown> | undefined
+  if (!employeeId || !patch) {
+    return { error: 'employee_id and patch are required', status: 400 }
+  }
+
+  try {
+    const { updateEmployee } = await import('@/lib/salary/employee-commands')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await updateEmployee(supabase, { companyId, employeeId, patch })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      const detailMessage =
+        (result.details?.message as string | undefined) ?? entry?.message_sv
+      return {
+        error: detailMessage ?? `Kunde inte uppdatera anställd: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return { data: { ...result.data } }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to update employee',
+      status: 500,
+    }
+  }
+}
+
+async function commitRegisterAbsence(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const employeeId = params.employee_id as string
+  const from = params.from as string
+  const to = params.to as string
+  const absenceType = params.absence_type as string
+  if (!employeeId || !from || !to || !absenceType) {
+    return { error: 'employee_id, from, to and absence_type are required', status: 400 }
+  }
+
+  try {
+    const { upsertAbsenceRange } = await import('@/lib/salary/absence')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await upsertAbsenceRange(supabase, {
+      companyId,
+      employeeId,
+      from,
+      to,
+      absenceType,
+      hoursPerDay: (params.hours_per_day as number | undefined) ?? 8,
+      notes: (params.notes as string | null | undefined) ?? null,
+      includeWeekends: (params.include_weekends as boolean | undefined) ?? false,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte registrera frånvaron: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        employee_id: employeeId,
+        absence_type: absenceType,
+        from,
+        to,
+        day_count: result.data.count,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to register absence',
+      status: 500,
+    }
+  }
+}
+
+async function commitSetEmployeeOpeningBalances(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const items = params.items as Array<Record<string, unknown>> | undefined
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return { error: 'items are required', status: 400 }
+  }
+
+  try {
+    const { OpeningBalancesBulkSchema } = await import('@/lib/api/schemas')
+    const parsed = OpeningBalancesBulkSchema.safeParse({ items })
+    if (!parsed.success) {
+      return { error: 'Ogiltiga ingående saldon i den godkända operationen', status: 400 }
+    }
+    const { setOpeningBalancesBulk } = await import('@/lib/salary/opening-balances')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await setOpeningBalancesBulk(supabase, {
+      companyId,
+      userId,
+      items: parsed.data.items,
+    })
+    if (!result.ok) {
+      const itemSummary = result.itemErrors
+        ?.map((e) => `${e.employee_id}: ${e.message}`)
+        .join('; ')
+      const entry = getErrorEntry(result.code)
+      return {
+        error: itemSummary ?? entry?.message_sv ?? `Kunde inte spara ingående saldon: ${result.code}`,
+        status: entry?.httpStatus ?? 400,
+      }
+    }
+    return {
+      data: {
+        employee_count: result.data.count,
+        employee_opening_balances_ids: result.data.rows.map((r) => r.employee_opening_balances_id),
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to set opening balances',
+      status: 500,
+    }
+  }
+}
+
+async function commitVacationYearClose(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const yearStart = params.vacation_year_start as string
+  if (!yearStart) return { error: 'vacation_year_start is required', status: 400 }
+  const bookAdjustment = params.book_adjustment !== false
+
+  try {
+    const { commitVacationYearClose: runClose } = await import('@/lib/salary/semesterberedning')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await runClose(supabase, companyId, userId, yearStart, { bookAdjustment })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Semesterårsavslutet misslyckades: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        vacation_year_closure_id: result.data.closure_id,
+        adjustment_entry_id: result.data.adjustment_entry_id,
+        vacation_year_start: yearStart,
+        employee_count: result.data.report.rows.length,
+        drift_2920: result.data.report.sek.drift_2920,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to close vacation year',
+      status: 500,
+    }
+  }
+}
+
 // ── Skatteverket filing commit handlers (PR5) ─────────────────────
 //
 // Core cannot import @/extensions (CI guard), so these reach the Skatteverket
@@ -3874,6 +4120,24 @@ async function commitPendingOperationInner(
         break
       case 'generate_agi':
         result = await commitGenerateAgi(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_payslip_line':
+        result = await commitUpdatePayslipLine(supabase, companyId, pendingOp.params)
+        break
+      case 'register_absence':
+        result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)
+        break
+      case 'create_employee':
+        result = await commitCreateEmployee(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_employee':
+        result = await commitUpdateEmployee(supabase, companyId, pendingOp.params)
+        break
+      case 'set_employee_opening_balances':
+        result = await commitSetEmployeeOpeningBalances(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'vacation_year_close':
+        result = await commitVacationYearClose(supabase, userId, companyId, pendingOp.params)
         break
       case 'match_batch_allocate':
         result = await commitMatchBatchAllocate(supabase, companyId, pendingOp.params)
