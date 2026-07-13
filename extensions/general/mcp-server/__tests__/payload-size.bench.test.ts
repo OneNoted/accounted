@@ -97,9 +97,22 @@ describe('tools/list payload size guard', () => {
     //     already-minimal ~24-token description. Headroom before the change was
     //     under 10 tokens, so even this smallest possible addition crossed;
     //     other descriptions are at their trimmed floor per the entries above.
+    //   * 45.5K → 50K with the payroll gap-closure (8 tools): 3 reads
+    //     (gnubok_get_employee, gnubok_get_payslip, gnubok_list_absence) + 5
+    //     staged writes (update_payslip_line, register_absence,
+    //     create_employee, update_employee, set_employee_opening_balances).
+    //     create/update_employee carry the full employee-config inputSchema
+    //     (~27 properties each: the whole point is agent-driveable payroll
+    //     onboarding), and every staged write inlines STAGED_OPERATION_SCHEMA
+    //     + _meta. Property descriptions trimmed to enum-only where the name
+    //     is self-evident; the remainder is wire contract, not prose.
+    //   * 50K → 51K with the vacation workflow (gap-closure Phase 3):
+    //     gnubok_get_vacation_balance (ledger read) + gnubok_close_vacation_year
+    //     (staged HIGH semesterårsavslut with STAGED_OPERATION_SCHEMA + _meta).
+    //     Fortnox gap category E closed; both schemas already minimal.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(45_500)
+    expect(approxTokens).toBeLessThan(51_000)
   })
 })
