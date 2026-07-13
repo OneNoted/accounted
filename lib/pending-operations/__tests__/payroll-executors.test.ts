@@ -130,13 +130,12 @@ describe('commitPendingOperation: register_absence', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
-    enqueue({ data: null }) // bulk delete
     enqueue({
       data: [
         { id: 'a1', absence_date: '2026-03-02', absence_type: 'sick', hours: 8, notes: null, salary_run_employee_id: null, created_at: '', updated_at: '' },
         { id: 'a2', absence_date: '2026-03-03', absence_type: 'sick', hours: 8, notes: null, salary_run_employee_id: null, created_at: '', updated_at: '' },
       ],
-    }) // bulk insert
+    }) // bulk upsert
     enqueue({ data: null, error: null }) // finalize
 
     const op = makePendingOp({
@@ -165,8 +164,7 @@ describe('commitPendingOperation: register_absence', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // assertEmployee
-    enqueue({ data: null }) // bulk delete
-    enqueue({ data: null, error: { code: '23514', message: 'Total tid över 24h' } }) // insert trips trigger
+    enqueue({ data: null, error: { code: '23514', message: 'Total tid över 24h' } }) // upsert trips trigger
     enqueue({ data: null, error: null }) // finalize (failed)
 
     const op = makePendingOp({
@@ -307,6 +305,7 @@ describe('commitPendingOperation: update_employee', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: [{ id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', employment_start: '2024-01-15', is_active: true }] }) // employees
     enqueue({ data: [] }) // locks
+    enqueue({ data: [] }) // existing created_by lookup
     enqueue({
       data: [
         {

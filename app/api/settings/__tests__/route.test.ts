@@ -83,4 +83,36 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
   })
+
+  it('blocks a vacation-year basis change while open balances exist', async () => {
+    enqueueMany([
+      { data: { salary_vacation_year_basis: 'calendar', onboarding_complete: true } }, // oldSettings
+      { data: null, count: 2 },                                                            // open-rows count
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_vacation_year_basis: 'statutory_apr_mar' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+  })
+
+  it('fails closed when the open-balances guard query errors', async () => {
+    enqueueMany([
+      { data: { salary_vacation_year_basis: 'calendar', onboarding_complete: true } }, // oldSettings
+      { data: null, count: null, error: { message: 'connection reset' } },                 // guard query fails
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { salary_vacation_year_basis: 'statutory_apr_mar' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(500)
+  })
 })

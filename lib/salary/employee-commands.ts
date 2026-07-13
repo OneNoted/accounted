@@ -230,6 +230,13 @@ export async function updateEmployee(
   ) {
     issues.push('Jämkningens startdatum måste anges när jämkningsprocent sätts')
   }
+  if (
+    merged.jamkning_valid_from &&
+    merged.jamkning_valid_to &&
+    (merged.jamkning_valid_to as string) < (merged.jamkning_valid_from as string)
+  ) {
+    issues.push('Jämkningens slutdatum måste vara efter startdatumet')
+  }
   if (issues.length > 0) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { message: issues.join('. ') } }
   }

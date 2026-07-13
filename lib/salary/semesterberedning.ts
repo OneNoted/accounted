@@ -527,10 +527,23 @@ export async function commitVacationYearClose(
           lines,
         })
         adjustmentEntryId = entry.id
-        await supabase
+        const { error: linkError } = await supabase
           .from('vacation_year_closures')
           .update({ adjustment_entry_id: entry.id })
           .eq('id', closureId)
+        if (linkError) {
+          // The verifikat IS posted; only the closure link failed. Surface
+          // it with the entry id so nobody re-posts the adjustment manually.
+          return {
+            ok: false,
+            code: 'VACATION_CLOSE_ADJUSTMENT_FAILED',
+            details: {
+              closure_id: closureId,
+              adjustment_entry_id: entry.id,
+              message: `Justeringsverifikatet är bokfört men kunde inte länkas till semesterårsavslutet: ${linkError.message}`,
+            },
+          }
+        }
       } catch (err) {
         // The days roll committed; the adjustment did not. Surface loudly:
         // the closure row (sans adjustment_entry_id) shows exactly what is

@@ -35,6 +35,22 @@ vi.mock('@/lib/api/v1/check-period-lock', () => ({
   checkPeriodLock: (...a: unknown[]) => mockCheckPeriodLock(...a),
 }))
 
+// Only decryption is mocked ('mock_born_YYYY' resolves to a mid-year birth
+// in YYYY); the age-tier math runs the real calculateAgeAtYearStart.
+vi.mock('@/lib/salary/personnummer', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/salary/personnummer')>(
+    '@/lib/salary/personnummer',
+  )
+  return {
+    ...actual,
+    decryptPersonnummer: (encrypted: string) => {
+      const m = /^mock_born_(\d{4})$/.exec(encrypted)
+      if (!m) throw new Error('not an encrypted fixture')
+      return `${m[1]}06151234`
+    },
+  }
+})
+
 import { previewVacationYearClose, commitVacationYearClose } from '@/lib/salary/semesterberedning'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -172,6 +188,47 @@ describe('previewVacationYearClose: beredning math', () => {
     expect(sek.booked_2920).toBe(10000)
     expect(sek.drift_2920).toBe(8690.84)
     expect(sek.adjustment_needed).toBe(true)
+  })
+
+  it('applies per-employee age-tier avgifter to the 2940 target', async () => {
+    const EMPLOYEE_2 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const EMPLOYEE_3 = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const ledgerRow = (employeeId: string) => ({
+      id: `vb-${employeeId}`,
+      employee_id: employeeId,
+      vacation_year_start: '2025-01-01',
+      entitled_days: 25,
+      accrued_days: 0,
+      taken_days: 15,
+      saved_days: {},
+      forced_payout_days: 0,
+      status: 'open',
+    })
+    mock.enqueue({ data: null }) // closure check
+    mock.enqueue({
+      data: [
+        { ...ROSTER_ROW, personnummer: 'mock_born_1990' },
+        { ...ROSTER_ROW, id: EMPLOYEE_2, first_name: 'Sven', personnummer: 'mock_born_1957' },
+        { ...ROSTER_ROW, id: EMPLOYEE_3, first_name: 'Ulla', personnummer: 'mock_born_1935' },
+      ],
+    }) // roster
+    mock.enqueue({
+      data: [ledgerRow(EMPLOYEE_ID), ledgerRow(EMPLOYEE_2), ledgerRow(EMPLOYEE_3)],
+    }) // ledger rows
+    mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const { rows, sek } = result.data
+
+    // Settlement year 2026: born 1990 standard, born 1957 fyllt 67 vid
+    // årets ingång (10.21%), born 1935 exempt (0%).
+    expect(rows.map((r) => r.avgifter_rate)).toEqual([0.3142, 0.1021, 0])
+    // Each employee: 10 remaining days x 1557.57 = 15 575.70 liability.
+    // 15575.70 x 0.3142 = 4893.88, 15575.70 x 0.1021 = 1590.28, exempt 0.
+    expect(sek.computed_avgifter).toBe(6484.16)
+    expect(sek.drift_2940).toBe(3342.16)
   })
 
   it('refuses to close a year that has not ended', async () => {

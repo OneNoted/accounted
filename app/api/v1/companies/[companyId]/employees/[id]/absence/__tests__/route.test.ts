@@ -153,6 +153,23 @@ describe('GET /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(res.status).toBe(400)
   })
 
+  it('rejects a reversed range (from > to) with VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await listAbsence(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/absence?from=2026-03-31&to=2026-03-01`,
+      ),
+      absenceParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
   it('rejects a range beyond 92 days with ABSENCE_RANGE_TOO_LARGE', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -198,8 +215,7 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: [
-          { data: null, error: null }, // bulk delete
-          { data: [SAMPLE_DAY, { ...SAMPLE_DAY, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', absence_date: '2026-03-04' }], error: null },
+          { data: [SAMPLE_DAY, { ...SAMPLE_DAY, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', absence_date: '2026-03-04' }], error: null }, // bulk upsert
         ],
       }),
     )
@@ -240,7 +256,6 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: { id: EMPLOYEE_ID }, error: null },
         salary_absence_days: [
-          { data: null, error: null },
           { data: null, error: { code: '23514', message: 'Total tid över 24h' } },
         ],
       }),

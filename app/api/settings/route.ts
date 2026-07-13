@@ -73,11 +73,16 @@ export const PUT = withRouteContext(
       body.salary_vacation_year_basis !==
         (oldSettings as Record<string, unknown> | null)?.salary_vacation_year_basis
     ) {
-      const { count: openRows } = await supabase
+      const { count: openRows, error: openRowsError } = await supabase
         .from('employee_vacation_balances')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .eq('status', 'open')
+      // Fail closed: a failed check must not let the basis change through
+      // and orphan open vacation-ledger rows.
+      if (openRowsError) {
+        return NextResponse.json({ error: openRowsError.message }, { status: 500 })
+      }
       if ((openRows ?? 0) > 0) {
         return NextResponse.json(
           {

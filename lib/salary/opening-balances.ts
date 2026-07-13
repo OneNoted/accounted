@@ -269,11 +269,31 @@ export async function setOpeningBalancesBulk(
     }
   }
 
+  // created_by is an audit column: it must survive a re-upsert of an
+  // existing row, so carry the stored value forward and only stamp the
+  // caller on genuinely new rows.
+  const { data: existingRows, error: existingErr } = await supabase
+    .from('employee_opening_balances')
+    .select('employee_id, created_by')
+    .eq('company_id', args.companyId)
+    .in('employee_id', employeeIds)
+  if (existingErr) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: existingErr.message } }
+  }
+  const createdByByEmployee = new Map(
+    ((existingRows ?? []) as Array<{ employee_id: string; created_by: string | null }>).map(
+      (r) => [r.employee_id, r.created_by],
+    ),
+  )
+
   // Single multi-row upsert on the natural key: atomic by construction.
   const { data: upserted, error } = await supabase
     .from('employee_opening_balances')
     .upsert(
-      rows.map((r) => ({ ...r, created_by: args.userId })),
+      rows.map((r) => ({
+        ...r,
+        created_by: createdByByEmployee.get(r.employee_id) ?? args.userId,
+      })),
       { onConflict: 'company_id,employee_id' },
     )
     .select(ROW_COLUMNS)

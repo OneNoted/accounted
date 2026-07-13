@@ -95,9 +95,8 @@ describe('upsertAbsenceRange', () => {
     if (!result.ok) expect(result.code).toBe('ABSENCE_RANGE_TOO_LARGE')
   })
 
-  it('bulk-deletes then bulk-inserts the expanded weekday rows', async () => {
+  it('bulk-upserts the expanded weekday rows in one statement', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
-    mock.enqueue({ data: null }) // bulk delete
     mock.enqueue({
       data: [
         { id: '1', absence_date: '2026-03-02', absence_type: 'sick', hours: 8, notes: null, salary_run_employee_id: null, created_at: '', updated_at: '' },
@@ -116,7 +115,7 @@ describe('upsertAbsenceRange', () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.count).toBe(2)
     const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
-    expect(fromCalls).toEqual(['employees', 'salary_absence_days', 'salary_absence_days'])
+    expect(fromCalls).toEqual(['employees', 'salary_absence_days'])
   })
 
   it('dry-run expands without touching salary_absence_days', async () => {
@@ -147,7 +146,6 @@ describe('upsertAbsenceRange', () => {
 
   it('maps the 24h-cap trigger (23514) to ABSENCE_HOURS_CONFLICT', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
-    mock.enqueue({ data: null }) // bulk delete ok
     mock.enqueue({ data: null, error: { code: '23514', message: 'Total tid över 24h' } })
 
     const result = await upsertAbsenceRange(supabase, {
@@ -165,9 +163,8 @@ describe('upsertAbsenceRange', () => {
 })
 
 describe('upsertAbsenceDay', () => {
-  it('replaces the (date, type) row via delete + insert', async () => {
+  it('replaces the (date, type) row via an atomic upsert', async () => {
     mock.enqueue({ data: { id: EMPLOYEE_ID } })
-    mock.enqueue({ data: null }) // delete
     mock.enqueue({
       data: {
         id: '1',

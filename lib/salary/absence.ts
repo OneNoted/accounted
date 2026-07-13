@@ -12,8 +12,9 @@
  * day rows by the calculation engine. The API accepts ranges for ergonomics
  * and expands them server-side.
  *
- * Upserts use DELETE+INSERT on the natural key (employee, date, type): truly
- * idempotent, so PUT retries are safe.
+ * Upserts use a native ON CONFLICT upsert on the natural key (employee,
+ * date, type): atomic and truly idempotent, so PUT retries are safe and a
+ * rejected write (e.g. the 24h cap) never drops existing rows.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -148,29 +149,22 @@ export async function upsertAbsenceDay(
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
-  const { error: deleteError } = await supabase
-    .from('salary_absence_days')
-    .delete()
-    .eq('company_id', args.companyId)
-    .eq('employee_id', args.employeeId)
-    .eq('absence_date', args.day.absence_date)
-    .eq('absence_type', args.day.absence_type)
-
-  if (deleteError) {
-    return { ok: false, code: 'INTERNAL_ERROR', details: { message: deleteError.message } }
-  }
-
+  // Atomic upsert on the natural-key unique index: a rejected write (24h
+  // cap, constraint) leaves any existing row untouched.
   const { data, error } = await supabase
     .from('salary_absence_days')
-    .insert({
-      company_id: args.companyId,
-      employee_id: args.employeeId,
-      absence_date: args.day.absence_date,
-      absence_type: args.day.absence_type,
-      hours: args.day.hours,
-      notes: args.day.notes ?? null,
-      salary_run_employee_id: args.day.salary_run_employee_id ?? null,
-    })
+    .upsert(
+      {
+        company_id: args.companyId,
+        employee_id: args.employeeId,
+        absence_date: args.day.absence_date,
+        absence_type: args.day.absence_type,
+        hours: args.day.hours,
+        notes: args.day.notes ?? null,
+        salary_run_employee_id: args.day.salary_run_employee_id ?? null,
+      },
+      { onConflict: 'employee_id,absence_date,absence_type' },
+    )
     .select(ABSENCE_COLUMNS)
     .single()
 
@@ -237,24 +231,13 @@ export async function upsertAbsenceRange(
     return { ok: true, data: { count: 0, days: [] } }
   }
 
-  // Bulk upsert on the natural key: delete the covered (date, type) rows,
-  // then insert the fresh set. Both statements target the exact same key
-  // space, so a retry converges on the same end state.
-  const { error: deleteError } = await supabase
-    .from('salary_absence_days')
-    .delete()
-    .eq('company_id', args.companyId)
-    .eq('employee_id', args.employeeId)
-    .eq('absence_type', args.absenceType)
-    .in('absence_date', dates)
-
-  if (deleteError) {
-    return { ok: false, code: 'INTERNAL_ERROR', details: { message: deleteError.message } }
-  }
-
+  // Bulk atomic upsert on the natural-key unique index (employee, date,
+  // type). One statement: a retry converges on the same end state, and a
+  // rejected write (e.g. the 24h cap on one day) rolls back the whole range
+  // without dropping the previously stored rows.
   const { data, error } = await supabase
     .from('salary_absence_days')
-    .insert(rows)
+    .upsert(rows, { onConflict: 'employee_id,absence_date,absence_type' })
     .select(ABSENCE_COLUMNS)
 
   if (error) {

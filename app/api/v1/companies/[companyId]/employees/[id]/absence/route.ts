@@ -40,11 +40,13 @@ const AbsenceDay = z.object({
   updated_at: z.string(),
 })
 
-const RangeQuery = z.object({
-  from: isoDate,
-  to: isoDate,
-  type: AbsenceTypeSchema.optional(),
-})
+const RangeQuery = z
+  .object({
+    from: isoDate,
+    to: isoDate,
+    type: AbsenceTypeSchema.optional(),
+  })
+  .refine((v) => v.from <= v.to, { message: 'from must be <= to', path: ['from'] })
 
 registerEndpoint({
   operation: 'employees.absence.list',

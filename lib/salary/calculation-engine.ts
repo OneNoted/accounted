@@ -679,6 +679,8 @@ export function calculateAvgifterRate(
   // eligible at year start (18-22) become 19-23 during the year. We test the
   // year-start age, not the during-year age. Skatteverket's AGI validator
   // rejects 23-year-olds at year start as not eligible.
+  // calculateAgeAtYearStart is birth-year based (2026: born 2003-2007), so
+  // January 1 birthdays land in the correct Skatteverket cohort.
   // Active period: 1 April 2026 - 30 September 2027.
   if (config.avgifterYouthRate !== null && ageAtYearStart >= 18 && ageAtYearStart <= 22) {
     const [, monthStr] = input.paymentDate.split('-')

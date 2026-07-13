@@ -63,8 +63,8 @@ async function seedBookedRun(companyId: string, userId: string, employeeId: stri
     [runId, companyId, userId],
   )
   await getPool().query(
-    `INSERT INTO public.salary_run_employees (id, salary_run_id, employee_id, company_id, salary_type, monthly_salary)
-     VALUES ($1, $2, $3, $4, 'monthly', 35000)`,
+    `INSERT INTO public.salary_run_employees (id, salary_run_id, employee_id, company_id, salary_type, monthly_salary, employment_degree)
+     VALUES ($1, $2, $3, $4, 'monthly', 35000, 100)`,
     [randomUUID(), runId, employeeId, companyId],
   )
   return runId
@@ -190,8 +190,8 @@ describe('enforce_opening_balances_lock trigger', () => {
       [runId, seed.companyId, seed.userId],
     )
     await getPool().query(
-      `INSERT INTO public.salary_run_employees (id, salary_run_id, employee_id, company_id, salary_type, monthly_salary)
-       VALUES ($1, $2, $3, $4, 'monthly', 35000)`,
+      `INSERT INTO public.salary_run_employees (id, salary_run_id, employee_id, company_id, salary_type, monthly_salary, employment_degree)
+       VALUES ($1, $2, $3, $4, 'monthly', 35000, 100)`,
       [randomUUID(), runId, seed.employeeId, seed.companyId],
     )
 

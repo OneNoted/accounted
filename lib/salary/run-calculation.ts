@@ -250,28 +250,13 @@ export async function runSalaryCalculation(
     .eq('salary_run.status', 'booked')
     .lt('salary_run.period_month', run.period_month)
 
-  const ytdByEmployee = new Map<string, { gross: number; tax: number; net: number }>()
-  for (const prior of (priorRuns || []) as Array<{
-    employee_id: string
-    gross_salary: number
-    tax_withheld: number
-    net_salary: number
-  }>) {
-    const current = ytdByEmployee.get(prior.employee_id) || { gross: 0, tax: 0, net: 0 }
-    current.gross += prior.gross_salary
-    current.tax += prior.tax_withheld
-    current.net += prior.net_salary
-    ytdByEmployee.set(prior.employee_id, current)
-  }
-
   // 6b. Cutover opening balances (payroll gap-closure 2.2): a company that
   //     switched to Accounted mid-year has YTD state from its previous
-  //     payroll system that no booked run here carries. Merge it into the
-  //     YTD map when the run's period is in the cutover year, on or after
-  //     the cutover month (the month gate prevents double-count if someone
-  //     backdates an in-system run before cutover). YTD is payslip display
-  //     + reporting only: per-month tax lookup and the per-month avgifter
-  //     caps never read it.
+  //     payroll system that no booked run here carries. Fetched BEFORE the
+  //     prior-run aggregation because the cutover month also decides which
+  //     booked runs count (see the exclusion in the loop below). YTD is
+  //     payslip display + reporting only: per-month tax lookup and the
+  //     per-month avgifter caps never read it.
   const rosterEmployeeIds = runEmployees
     .map((sre) => sre.employee?.id)
     .filter((id): id is string => !!id)
@@ -279,6 +264,14 @@ export async function runSalaryCalculation(
     string,
     { cutoverDate: string; karensPeriodsAdjustment: number }
   >()
+  const openingRowsTyped: Array<{
+    employee_id: string
+    cutover_date: string
+    ytd_gross: number
+    ytd_tax: number
+    ytd_net: number
+    karens_periods_adjustment: number
+  }> = []
   if (rosterEmployeeIds.length > 0) {
     const { data: openingRows } = await supabase
       .from('employee_opening_balances')
@@ -286,29 +279,58 @@ export async function runSalaryCalculation(
       .eq('company_id', companyId)
       .in('employee_id', rosterEmployeeIds)
 
-    for (const opening of (openingRows || []) as Array<{
-      employee_id: string
-      cutover_date: string
-      ytd_gross: number
-      ytd_tax: number
-      ytd_net: number
-      karens_periods_adjustment: number
-    }>) {
+    for (const opening of (openingRows || []) as typeof openingRowsTyped) {
+      openingRowsTyped.push(opening)
       openingByEmployee.set(opening.employee_id, {
         cutoverDate: opening.cutover_date,
         karensPeriodsAdjustment: opening.karens_periods_adjustment ?? 0,
       })
-      const cutoverYear = Number(opening.cutover_date.slice(0, 4))
-      const cutoverMonth = Number(opening.cutover_date.slice(5, 7))
-      const runOnOrAfterCutover =
-        run.period_year === cutoverYear && run.period_month >= cutoverMonth
-      if (!runOnOrAfterCutover) continue
-      const current = ytdByEmployee.get(opening.employee_id) || { gross: 0, tax: 0, net: 0 }
-      current.gross = roundOre(current.gross + (opening.ytd_gross || 0))
-      current.tax = roundOre(current.tax + (opening.ytd_tax || 0))
-      current.net = roundOre(current.net + (opening.ytd_net || 0))
-      ytdByEmployee.set(opening.employee_id, current)
     }
+  }
+
+  const ytdByEmployee = new Map<string, { gross: number; tax: number; net: number }>()
+  for (const prior of (priorRuns || []) as Array<{
+    employee_id: string
+    gross_salary: number
+    tax_withheld: number
+    net_salary: number
+    salary_run: { period_year: number; period_month: number }
+  }>) {
+    // The opening balance is authoritative for pre-cutover YTD: a booked run
+    // backdated before the cutover month covers a month the opening already
+    // carries, so counting both would double the YTD.
+    const opening = openingByEmployee.get(prior.employee_id)
+    if (opening) {
+      const cutoverYear = Number(opening.cutoverDate.slice(0, 4))
+      const cutoverMonth = Number(opening.cutoverDate.slice(5, 7))
+      if (
+        prior.salary_run.period_year === cutoverYear &&
+        prior.salary_run.period_month < cutoverMonth
+      ) {
+        continue
+      }
+    }
+    const current = ytdByEmployee.get(prior.employee_id) || { gross: 0, tax: 0, net: 0 }
+    current.gross += prior.gross_salary
+    current.tax += prior.tax_withheld
+    current.net += prior.net_salary
+    ytdByEmployee.set(prior.employee_id, current)
+  }
+
+  // Merge the opening YTD when the run's period is in the cutover year, on
+  // or after the cutover month (the month gate prevents double-count if
+  // someone backdates an in-system run before cutover).
+  for (const opening of openingRowsTyped) {
+    const cutoverYear = Number(opening.cutover_date.slice(0, 4))
+    const cutoverMonth = Number(opening.cutover_date.slice(5, 7))
+    const runOnOrAfterCutover =
+      run.period_year === cutoverYear && run.period_month >= cutoverMonth
+    if (!runOnOrAfterCutover) continue
+    const current = ytdByEmployee.get(opening.employee_id) || { gross: 0, tax: 0, net: 0 }
+    current.gross = roundOre(current.gross + (opening.ytd_gross || 0))
+    current.tax = roundOre(current.tax + (opening.ytd_tax || 0))
+    current.net = roundOre(current.net + (opening.ytd_net || 0))
+    ytdByEmployee.set(opening.employee_id, current)
   }
 
   // 7. Pay period bounds: used to load per-day absence + worked-day records.
