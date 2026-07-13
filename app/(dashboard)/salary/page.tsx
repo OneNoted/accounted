@@ -15,6 +15,8 @@ import { ArrowRight, CalendarClock, CheckCircle2, HandCoins, Loader2, Plus, User
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
+import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -151,6 +153,16 @@ export default function SalaryPage() {
       .then(({ data }) => setAgiDeadline(data ?? null))
   }, [company])
 
+  // The active run's AGI submission record: lets the hero distinguish
+  // "lämna in till Skatteverket" from "väntar på din BankID-signatur".
+  // Only fetched while a booked run is still unfiled; null otherwise.
+  const activeRun = runs.find(r => r.status !== 'corrected')
+  const { submission: agiSubmission } = useAgiSubmission(
+    activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at
+      ? `${activeRun.period_year}${String(activeRun.period_month).padStart(2, '0')}`
+      : null,
+  )
+
   // One-click run creation: the API seeds all active employees, calculates,
   // and resolves period/pay-date/series defaults from settings.
   async function startRun() {
@@ -244,7 +256,8 @@ export default function SalaryPage() {
   }
 
   // ── Hero state machine (first match wins) ────────────────────────────────
-  const activeRun = runs.find(r => r.status !== 'corrected')
+  // activeRun is derived above the loading return (the AGI submission hook
+  // needs it before any early return).
   const latestBooked = runs.find(r => r.status === 'booked')
   const periodOf = (r: SalaryRun) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
 
@@ -315,6 +328,19 @@ export default function SalaryPage() {
       }
     }
     if (activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at) {
+      // The underlag may already be at Skatteverket waiting for a BankID
+      // signature: telling the user to "lämna in" something they already
+      // submitted reads as a broken flow. Follow the real filing state.
+      const agiState = deriveAgiFilingState(activeRun, agiSubmission)
+      if (agiState === 'awaiting_signing' || agiState === 'underlag_submitted') {
+        return {
+          kind: 'cta',
+          title: t('hero_agi_signing_title', { period: periodOf(activeRun) }),
+          description: t('hero_agi_signing_description'),
+          label: t('hero_agi_signing_action'),
+          runId: activeRun.id,
+        }
+      }
       return {
         kind: 'cta',
         title: t('hero_agi_title', { period: periodOf(activeRun) }),

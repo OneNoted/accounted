@@ -50,7 +50,7 @@
     },
     {
       "path": "/api/extensions/skatteverket/agi/kvittenser/cron",
-      "schedule": "0 */2 * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/extensions/skatteverket/vat/kvittenser/cron",
