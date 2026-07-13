@@ -125,14 +125,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       employment_type: employmentType,
       employment_start: form.get('employment_start') as string || undefined,
       employment_end: form.get('employment_end') as string || undefined,
-      employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
-      hours_per_week: parseFloat(form.get('hours_per_week') as string) || 40,
-      workdays_per_week: parseFloat(form.get('workdays_per_week') as string) || 5,
+      // Sparse patch: an empty/cleared field is OMITTED (undefined keys are
+      // dropped by JSON.stringify) so the server's patch schema leaves the
+      // column unchanged. Hardcoded fallbacks here would silently reset real
+      // DB values on submit.
+      employment_degree: parseFloat(form.get('employment_degree') as string) || undefined,
+      hours_per_week: parseFloat(form.get('hours_per_week') as string) || undefined,
+      workdays_per_week: parseFloat(form.get('workdays_per_week') as string) || undefined,
       salary_type: salaryType,
       f_skatt_status: tax?.f_skatt_status,
       is_sidoinkomst: tax?.is_sidoinkomst,
       tax_table_number: tax?.tax_table_number ?? undefined,
-      tax_column: tax?.tax_column ?? 1,
+      tax_column: tax?.tax_column ?? undefined,
       tax_municipality: tax?.tax_municipality || undefined,
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
@@ -142,7 +146,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       clearing_number: normalizeBankNumber(clearing) || undefined,
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
-      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
+      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || undefined,
       // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
     }

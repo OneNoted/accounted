@@ -158,6 +158,16 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(body).toContain('select_accounts=conn-1')
     expect(body).not.toContain('bank_error')
 
+    // ASVS V3.3: inline scripts are nonce-bound. The response-level CSP
+    // declares the nonce and BOTH chunks (shell watchdog + redirect) carry
+    // it; no un-nonced inline script may exist on this page.
+    const csp = response.headers.get('content-security-policy') ?? ''
+    const nonceMatch = /script-src 'nonce-([^']+)'/.exec(csp)
+    expect(nonceMatch).not.toBeNull()
+    const nonce = nonceMatch![1]
+    expect(body.split(`<script nonce="${nonce}">`).length - 1).toBe(2)
+    expect(body).not.toContain('<script>')
+
     // Verify the update payload: status=pending_selection, no last_synced_at,
     // and every account defaults to enabled=true so the picker can simply
     // mirror current state without back-filling.

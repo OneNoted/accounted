@@ -8,6 +8,7 @@ import {
   computeInitialRunDate,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type {
   RecurringInvoiceSchedule,
   RecurringInvoiceScheduleItem,
@@ -181,9 +182,18 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     //    items) fails every hourly retry and would otherwise skip the month
     //    silently via the stale roll-forward above. A later successful run
     //    overwrites the warning.
+    // Defence in depth (ASVS V2.3): the email chokepoint inside the schedule
+    // service enforces the sandbox rule on its own; the route additionally
+    // resolves it here and passes an explicit suppress flag, so the invariant
+    // does not hinge on a single check buried in a library function. The
+    // invoice is still generated as a draft (freeze-and-retain).
+    const suppressAutoSend = schedule.auto_send
+      ? await isSandboxCompany(supabase, schedule.company_id)
+      : false
+
     let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
     try {
-      result = await executeRecurringSchedule(supabase, schedule, now)
+      result = await executeRecurringSchedule(supabase, schedule, now, { suppressAutoSend })
     } catch (err) {
       const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300)
       await supabase

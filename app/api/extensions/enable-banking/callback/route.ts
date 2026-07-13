@@ -1,6 +1,8 @@
+import { randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { createLogger } from '@/lib/logger'
 import { createSession, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
@@ -17,6 +19,12 @@ import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 // otherwise the audit row is silently dropped on a cold instance where this
 // redirect route is the first event-emitting code path to execute.
 ensureInitialized()
+
+// Structured logger for audit-trail failures (ISO 27001 A.8.15): a failed
+// audit-event emission must be visible to log-based alerting, not just a raw
+// console line. The stable message below is what monitoring keys on.
+const log = createLogger('enable-banking/callback')
+const AUDIT_EMIT_FAILED = 'audit event emit failed'
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>
 
@@ -181,37 +189,72 @@ export async function GET(request: Request) {
     )
   }
 
+  // Kick the finalize work off eagerly, decoupled from the response stream:
+  // if the user closes the tab mid-stream, the stream is cancelled but this
+  // promise keeps running, so the session persistence, cash-account mirror
+  // and consent_granted audit emit are not lost (ASVS V16). Never rejects:
+  // failures resolve to the cleanup redirect target.
+  const finalizePromise = (async (): Promise<string> => {
+    try {
+      return await finalizeConnection(supabase, pendingConnection, code)
+    } catch (finalizeError) {
+      console.error('[enable-banking] Callback error', {
+        message: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+        stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
+        name: finalizeError instanceof Error ? finalizeError.name : undefined,
+        state,
+        connectionId: pendingConnection.id,
+      })
+      return cleanupFailedFinalize(supabase, pendingConnection)
+    }
+  })()
+
+  // Keep the serverless function alive until the finalize work settles even
+  // if the client disconnects and the platform considers the response done.
+  try {
+    after(() => finalizePromise.then(() => undefined))
+  } catch {
+    // Outside a request scope (unit tests, plain node server): the stream's
+    // own await below still drives the promise to completion.
+  }
+
+  // Per-request CSP nonce for the two inline scripts on the finalize page
+  // (ASVS V3.3): mirrors the mcp-oauth consent page. The global next.config
+  // CSP also applies; the intersection means inline scripts on THIS response
+  // must carry the nonce.
+  const cspNonce = randomBytes(16).toString('base64')
+  const csp = [
+    "default-src 'none'",
+    `script-src 'nonce-${cspNonce}'`,
+    "style-src 'unsafe-inline'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; ')
+
   // Stream: flush the branded "Slutför bankanslutningen" shell immediately,
-  // run the slow finalize work, then stream a client-side redirect to the
+  // await the finalize work, then stream a client-side redirect to the
   // outcome URL. The user sees progress from the first byte instead of a
   // blank tab.
   const encoder = new TextEncoder()
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      controller.enqueue(encoder.encode(renderFinalizeShell(pendingConnection.bank_name)))
-
-      let targetPath: string
+      controller.enqueue(encoder.encode(renderFinalizeShell(pendingConnection.bank_name, cspNonce)))
+      const targetPath = await finalizePromise
       try {
-        targetPath = await finalizeConnection(supabase, pendingConnection, code)
-      } catch (finalizeError) {
-        console.error('[enable-banking] Callback error', {
-          message: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
-          stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
-          name: finalizeError instanceof Error ? finalizeError.name : undefined,
-          state,
-          connectionId: pendingConnection.id,
-        })
-        targetPath = await cleanupFailedFinalize(supabase, pendingConnection)
+        controller.enqueue(encoder.encode(renderFinalizeRedirect(`${baseUrl}${targetPath}`, cspNonce)))
+        controller.close()
+      } catch {
+        // Stream already cancelled (client closed the tab). The finalize
+        // work above completed regardless; there is just no one to redirect.
       }
-
-      controller.enqueue(encoder.encode(renderFinalizeRedirect(`${baseUrl}${targetPath}`)))
-      controller.close()
     },
   })
 
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': csp,
       // The body carries a one-time OAuth outcome: never cache, never buffer
       // (X-Accel-Buffering opts out of proxy buffering so the shell chunk
       // actually reaches the browser before the work finishes).
@@ -366,9 +409,12 @@ async function finalizeConnection(
           },
         })
       } catch (emitError) {
-        console.error('[enable-banking] Failed to emit cash_account_mirror_failed event', {
+        // A.8.15: structured error (not bare console) so log-based alerting
+        // catches a dropped security event instead of it vanishing silently.
+        log.error(AUDIT_EMIT_FAILED, emitError as Error, {
+          eventType: 'bank_connection.cash_account_mirror_failed',
           connectionId: updatedConnection.id,
-          error: emitError instanceof Error ? emitError.message : String(emitError),
+          accountUid: account.uid,
         })
       }
     }
@@ -406,12 +452,13 @@ async function finalizeConnection(
       },
     })
   } catch (emitError) {
-    // Non-fatal: redirect the user even if the audit event fails. Sentry
-    // surfaces the error; the underlying DB write (the source of truth for
-    // the connection state) has already succeeded.
-    console.error('[enable-banking] Failed to emit consent_granted event', {
+    // Non-fatal: redirect the user even if the audit event fails. The
+    // structured error record is the alerting channel (A.8.15): production
+    // log monitoring keys on the stable message. The underlying DB write
+    // (the source of truth for the connection state) has already succeeded.
+    log.error(AUDIT_EMIT_FAILED, emitError as Error, {
+      eventType: 'bank_connection.consent_granted',
       connectionId: updatedConnection.id,
-      error: emitError instanceof Error ? emitError.message : String(emitError),
     })
   }
 

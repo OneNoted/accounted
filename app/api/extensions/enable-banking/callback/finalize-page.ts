@@ -17,8 +17,14 @@
  * The page is standalone HTML (no app bundle), styled to match the editorial
  * monochrome design system; see app/api/mcp-oauth/authorize for the sibling
  * standalone page this mirrors. Swedish-only, like the rest of the
- * enable-banking extension surfaces. The app's global CSP allows inline
- * script/style ('unsafe-inline'), so the redirect script is not blocked.
+ * enable-banking extension surfaces.
+ *
+ * Inline scripts are nonce-bound (ASVS V3.3): the route generates a
+ * per-request nonce, stamps it on every <script> tag here, and sets a
+ * response-level CSP with script-src 'nonce-...'. The global next.config CSP
+ * (which still carries 'unsafe-inline' for the app bundle) also applies;
+ * browsers enforce the intersection, so an injected inline script without
+ * the nonce is blocked on this response.
  */
 
 function escapeHtml(value: string): string {
@@ -34,9 +40,10 @@ function escapeHtml(value: string): string {
  * Opening chunk: full document head, styles, spinner and heading, plus a
  * watchdog that reveals an escape hatch if the server work takes abnormally
  * long (dead function, hung upstream). Deliberately does NOT close <body>:
- * the redirect chunk does.
+ * the redirect chunk does. `cspNonce` must match the script-src nonce the
+ * route puts in the response's Content-Security-Policy header.
  */
-export function renderFinalizeShell(bankName: string | null): string {
+export function renderFinalizeShell(bankName: string | null, cspNonce: string): string {
   const heading = bankName
     ? `Slutf&ouml;r anslutningen till ${escapeHtml(bankName)}&hellip;`
     : 'Slutf&ouml;r bankanslutningen&hellip;'
@@ -149,7 +156,7 @@ export function renderFinalizeShell(bankName: string | null): string {
       eller <a href="/settings/banking">g&aring; till bankinst&auml;llningarna</a>.
     </p>
   </main>
-  <script>
+  <script nonce="${escapeHtml(cspNonce)}">
     setTimeout(function () {
       var el = document.getElementById('slow-notice');
       if (el) el.hidden = false;
@@ -164,12 +171,12 @@ export function renderFinalizeShell(bankName: string | null): string {
  * history so Back cannot re-trigger it), a meta refresh for no-JS, and a
  * visible link as the last resort.
  */
-export function renderFinalizeRedirect(url: string): string {
+export function renderFinalizeRedirect(url: string, cspNonce: string): string {
   // <-escape so a "</script>" sequence can never terminate the block
   // early, even though our URLs are app-relative and query-encoded.
   const jsUrl = JSON.stringify(url).replace(/</g, '\\u003c')
 
-  return `  <script>window.location.replace(${jsUrl});</script>
+  return `  <script nonce="${escapeHtml(cspNonce)}">window.location.replace(${jsUrl});</script>
   <noscript><meta http-equiv="refresh" content="0;url=${escapeHtml(url)}"></noscript>
   <div class="fallback"><a href="${escapeHtml(url)}">Klicka h&auml;r om du inte skickas vidare automatiskt</a></div>
 </body>

@@ -59,6 +59,7 @@ import {
 } from '@/lib/api/idempotency'
 import { toToolError, type NextActionHint } from './tool-result'
 import { findSupplierCandidates } from './supplier-candidates'
+import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
@@ -291,6 +292,12 @@ async function stagePendingOperation(
   period_status?: PeriodStatusForDate
   next?: NextActionHint
 }> {
+  // PII chokepoint (ISO 27001 A.8.11): no staged payload may persist a
+  // plaintext personnummer. Enforced here so every current and future
+  // staging tool inherits the rule, not just the ones that remembered it.
+  assertNoPlaintextPersonnummer(params, 'params')
+  assertNoPlaintextPersonnummer(previewData, 'preview_data')
+
   const riskLevel = getRiskLevel(operationType)
   const branding = getBranding().appName.toLowerCase()
 
@@ -9806,8 +9813,11 @@ export const tools: McpTool[] = [
           total_saveable_days: report.rows.reduce((s, r) => s + r.saveable_days, 0),
           total_expiring_days: report.rows.reduce((s, r) => s + r.expiring_days, 0),
           computed_liability: report.sek.computed_liability,
+          computed_avgifter: report.sek.computed_avgifter,
           booked_2920: report.sek.booked_2920,
+          booked_2940: report.sek.booked_2940,
           drift_2920: report.sek.drift_2920,
+          drift_2940: report.sek.drift_2940,
           adjustment_needed: report.sek.adjustment_needed,
         },
         actor,

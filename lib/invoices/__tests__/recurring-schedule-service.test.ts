@@ -333,4 +333,26 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockApplyPaymentLink).not.toHaveBeenCalled()
     expect(mockCreateJE).not.toHaveBeenCalled()
   })
+
+  it('route-level suppressAutoSend skips the send path without relying on the internal chokepoint', async () => {
+    // Defence in depth (ASVS V2.3): the flag comes from the route's own
+    // isSandboxCompany resolution, so sending is suppressed even before the
+    // service-internal sandbox check runs. Invoice creation is unaffected.
+    enqueue({ data: customer, error: null })
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompleteInvoice(), error: null })
+
+    const result = await executeRecurringSchedule(client, makeSchedule(), today, {
+      suppressAutoSend: true,
+    })
+
+    expect(result.invoiceId).toBe('inv-1')
+    expect(result.autoSent).toBe(false)
+    expect(result.warning).toContain('Auto-utskick misslyckades')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+    // The suppress branch bails before the email chokepoint entirely.
+    expect(mockIsSandbox).not.toHaveBeenCalled()
+    expect(mockCreateJE).not.toHaveBeenCalled()
+  })
 })

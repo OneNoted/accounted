@@ -144,6 +144,17 @@ export function getStockholmDateHour(instant: Date): { date: string; hour: numbe
   }
 }
 
+export interface ExecuteScheduleOptions {
+  /**
+   * Defence-in-depth sandbox suppression (ASVS V2.3): callers that resolved
+   * `isSandboxCompany` at the route level pass true to skip the auto-send
+   * path outright, so the sandbox invariant does not hinge solely on the
+   * chokepoint inside sendInvoiceFromSchedule. Freeze-and-retain semantics
+   * are unchanged: the invoice is still created as a numbered draft.
+   */
+  suppressAutoSend?: boolean
+}
+
 /**
  * Spawn one invoice from a schedule. Always creates the invoice; auto_send
  * additionally renders + emails + flips status + creates JE + archives PDF.
@@ -155,6 +166,7 @@ export async function executeRecurringSchedule(
   supabase: SupabaseClient,
   schedule: RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleItem[] },
   today: Date = new Date(),
+  options: ExecuteScheduleOptions = {},
 ): Promise<ExecuteResult> {
   const opLog = log.child({ scheduleId: schedule.id, companyId: schedule.company_id })
 
@@ -335,7 +347,15 @@ export async function executeRecurringSchedule(
   // 9. Auto-send path. If anything below fails, we keep the invoice (now a
   //    numbered draft) and surface a Swedish warning on the schedule: the
   //    user can manually send from /invoices/[id].
-  if (schedule.auto_send) {
+  if (schedule.auto_send && options.suppressAutoSend) {
+    // Route-level sandbox suppression: same outcome as the internal sandbox
+    // chokepoint below (no email, invoice retained as draft, manual-send
+    // warning), reached without entering the send path at all.
+    opLog.warn('auto-send suppressed by route-level sandbox guard', {
+      invoiceId: invoice.id,
+    })
+    warning = 'Auto-utskick misslyckades: fakturan finns som utkast och kan skickas manuellt.'
+  } else if (schedule.auto_send) {
     try {
       autoSent = await sendInvoiceFromSchedule(
         supabase,
