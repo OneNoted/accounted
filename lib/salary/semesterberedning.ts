@@ -20,8 +20,14 @@
  *   sammalöneregeln (monthly): monthly/dailyDivisor + monthly x tillägg
  *   procentregeln (monthly)  : monthly x 12 x rate / entitled days
  *   procentregeln (hourly)   : hourly x hours_per_week x 52 x rate / entitled
- * Avgifter on the liability use the standard 31.42% (per-employee reduced
- * rates are a refinement the report calls out, not silently applied).
+ * Avgifter on the liability use per-employee age tiers at the settlement
+ * year (born <= 1937 exempt, fyllt 67 vid årets ingång 10.21%, otherwise
+ * 31.42%), matching the rates the per-run accruals booked on 2940; a flat
+ * 31.42% target would "correct" a correct booked balance to a wrong one
+ * for companies with 67+ staff. The temporary youth discount is
+ * deliberately NOT provisioned: it is payment-month- and cap-dependent and
+ * expires Sep 2027, so the full rate is the prudent target (ÅRL
+ * försiktighetsprincipen); youth accruals therefore show a top-up drift.
  *
  * The frozen report is stored on vacation_year_closures (BFL 7 kap: it is
  * the underlag for the adjustment entry). The UNIQUE
@@ -33,9 +39,15 @@ import { roundOre, sumOre } from '@/lib/money'
 import { dailyDivisor } from './work-schedule'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
+import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 
 const STANDARD_AVGIFTER_RATE = 0.3142
+/** Ålderspensionsavgift only, for fyllt 67 vid årets ingång (SAL 2 kap). */
+const REDUCED_AVGIFTER_RATE = 0.1021
+/** Threshold applies to payment years >= 2026; every close this module can
+ * run settles 2026 or later, so the pre-2026 66-year threshold never applies. */
+const REDUCED_AVGIFT_AGE = 67
 /** Book an adjustment only beyond this drift (öre noise is not a bokslut post). */
 const DRIFT_TOLERANCE_SEK = 1
 
@@ -61,6 +73,9 @@ export interface VacationCloseEmployeeRow {
   next_year_entitled: number
   day_value_sek: number
   computed_liability_sek: number
+  /** Age-tier avgifter rate applied to this employee's liability for the
+   * 2940 target (0 exempt, 0.1021 fyllt 67, 0.3142 standard). */
+  avgifter_rate: number
 }
 
 export interface VacationCloseReport {
@@ -85,6 +100,7 @@ interface EmployeeRosterRow {
   id: string
   first_name: string
   last_name: string
+  personnummer: string | null
   vacation_rule: string
   vacation_days_per_year: number
   salary_type: string
@@ -117,6 +133,33 @@ function dayValueSek(emp: EmployeeRosterRow): number {
   return roundOre((monthly * 12 * rate) / Math.max(emp.vacation_days_per_year, 1))
 }
 
+/**
+ * Age-tier avgifter rate for the semesterlöneskuld provision.
+ *
+ * The liability settles when vacation is taken during the NEXT vacation
+ * year, so the tier is evaluated against that settlement year. This matches
+ * the per-run accruals, which credit 2940 at each employee's actual rate
+ * (calculation-engine.ts step 10). The temporary youth discount is not
+ * applied here (see the module header). An absent or undecryptable
+ * personnummer falls back to the standard rate, mirroring the run engine.
+ */
+function avgifterRateFor(emp: EmployeeRosterRow, settlementYear: number): number {
+  if (!emp.personnummer) return STANDARD_AVGIFTER_RATE
+  let pnr: string
+  try {
+    pnr = decryptPersonnummer(emp.personnummer)
+  } catch {
+    return STANDARD_AVGIFTER_RATE
+  }
+  const birthYear = parseInt(pnr.slice(0, 4))
+  if (!Number.isFinite(birthYear)) return STANDARD_AVGIFTER_RATE
+  if (birthYear <= 1937) return 0
+  if (calculateAgeAtYearStart(pnr, settlementYear) >= REDUCED_AVGIFT_AGE) {
+    return REDUCED_AVGIFTER_RATE
+  }
+  return STANDARD_AVGIFTER_RATE
+}
+
 /** Prorated entitlement for the new year (Semesterlagen 3a §: round UP). */
 function nextYearEntitled(emp: EmployeeRosterRow, newYearStart: string, newYearEnd: string): number {
   if (emp.employment_end && emp.employment_end < newYearStart) return 0
@@ -138,7 +181,7 @@ async function loadRoster(
   const { data, error } = await supabase
     .from('employees')
     .select(
-      'id, first_name, last_name, vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
+      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
     )
     .eq('company_id', companyId)
     .eq('is_active', true)
@@ -244,6 +287,9 @@ export async function previewVacationYearClose(
   )
 
   const closingYear = Number(closingYearStart.slice(0, 4))
+  // The rolled liability is paid out during the new vacation year: that is
+  // the year the avgifter age tier is evaluated against.
+  const settlementYear = Number(newYearStart.slice(0, 4))
   const rows: VacationCloseEmployeeRow[] = []
 
   for (const emp of roster.data) {
@@ -298,11 +344,14 @@ export async function previewVacationYearClose(
       next_year_entitled: nextYearEntitled(emp, newYearStart, newYearBounds.end),
       day_value_sek: dayValue,
       computed_liability_sek: liability,
+      avgifter_rate: avgifterRateFor(emp, settlementYear),
     })
   }
 
   const computedLiability = sumOre(rows.map((r) => r.computed_liability_sek))
-  const computedAvgifter = roundOre(computedLiability * STANDARD_AVGIFTER_RATE)
+  const computedAvgifter = sumOre(
+    rows.map((r) => roundOre(r.computed_liability_sek * r.avgifter_rate)),
+  )
 
   const booked = await bookedBalance(supabase, companyId, yearEnd)
   if (!booked.ok) return booked
