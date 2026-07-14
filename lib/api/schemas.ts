@@ -1493,6 +1493,9 @@ export const UpdateSettingsSchema = z.object({
   invoice_footer_text: z.string().max(500).nullable().optional(),
   // Automation
   send_invoice_reminders: z.boolean().optional(),
+  reminder_days_level_1: z.number().int().min(1).max(365).optional(),
+  reminder_days_level_2: z.number().int().min(1).max(365).optional(),
+  reminder_days_level_3: z.number().int().min(1).max(365).optional(),
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: z.boolean().optional(),
   reminder_fee_amount: z

@@ -116,6 +116,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
+  const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
@@ -210,7 +211,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data.company_id
           ? supabase
               .from('company_settings')
-              .select('ore_rounding, vat_registered')
+              .select('ore_rounding, vat_registered, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
               .eq('company_id', data.company_id)
               .maybeSingle()
           : Promise.resolve(null),
@@ -243,6 +244,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       if (typeof settings?.vat_registered === 'boolean') {
         setVatRegistered(settings.vat_registered)
       }
+      setReminderDays([
+        settings?.reminder_days_level_1 ?? 15,
+        settings?.reminder_days_level_2 ?? 30,
+        settings?.reminder_days_level_3 ?? 45,
+      ])
     }
     if (creditNoteRes?.data) {
       setCreditNote(creditNoteRes.data as Invoice)
@@ -1080,7 +1086,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </CardTitle>
                 {reminders.length === 0 && (
                   <CardDescription>
-                    {t('reminders_description')}
+                    {t('reminders_description', {
+                      day1: reminderDays[0],
+                      day2: reminderDays[1],
+                      day3: reminderDays[2],
+                    })}
                   </CardDescription>
                 )}
               </CardHeader>
