@@ -59,6 +59,7 @@ export const POST = withRouteContext(
         country: body.country || 'Sweden',
         org_number: body.org_number,
         vat_number: body.vat_number,
+        personal_number: body.personal_number || null,
         language: body.language || 'sv',
         default_payment_terms: body.default_payment_terms || 30,
         notes: body.notes,

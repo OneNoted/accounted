@@ -1157,7 +1157,7 @@ export interface CreateCustomerInput {
   country?: string
   org_number?: string
   vat_number?: string
-  personal_number?: string
+  personal_number?: string | null
   language?: 'sv' | 'en'
   default_payment_terms?: number
   notes?: string

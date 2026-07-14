@@ -136,7 +136,7 @@ export default function CustomerForm({
     onSubmit({
       ...data,
       email: data.email || undefined,
-      personal_number: data.personal_number || undefined,
+      personal_number: data.personal_number || null,
     })
   }
 
