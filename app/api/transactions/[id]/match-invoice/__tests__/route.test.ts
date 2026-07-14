@@ -196,6 +196,30 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect((body.error as unknown as { code: string }).code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
   })
 
+  it('returns 400 before booking when matching against a credit note', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null })
+    const creditNote = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: -12500,
+      credited_invoice_id: 'original-invoice-1',
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: creditNote, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_INVOICE_CREDIT_NOTE')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when invoice is not in unpaid state', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null })
     const invoice = makeInvoice({ id: VALID_UUID, status: 'paid' })

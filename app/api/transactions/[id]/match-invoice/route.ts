@@ -104,6 +104,10 @@ export const POST = withRouteContext(
       })
     }
 
+    if (invoice.credited_invoice_id) {
+      return errorResponseFromCode('MATCH_INVOICE_CREDIT_NOTE', txLog, { requestId })
+    }
+
     if (invoice.status !== 'sent' && invoice.status !== 'overdue' && invoice.status !== 'partially_paid') {
       return errorResponseFromCode('MATCH_INVOICE_NOT_OPEN', txLog, {
         requestId,

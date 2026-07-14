@@ -137,6 +137,7 @@ export async function findMatchingInvoices(
       customer:customers(*)
     `)
     .eq('company_id', companyId)
+    .is('credited_invoice_id', null)
     .in('status', ['sent', 'overdue', 'partially_paid'])
     .order('due_date', { ascending: true })
 
@@ -149,7 +150,8 @@ export async function findMatchingInvoices(
   // attached but whose status leaked (still 'sent'/'overdue'). Partially-paid
   // invoices can legitimately take more payments, so they pass through.
   // Without this, a status leak would double-book the receipt.
-  const fullCandidateIds = invoices
+  const payableInvoices = invoices.filter((inv) => !inv.credited_invoice_id)
+  const fullCandidateIds = payableInvoices
     .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
     .map((inv) => inv.id as string)
   const paidIds = new Set<string>()
@@ -164,7 +166,7 @@ export async function findMatchingInvoices(
       paidIds.add((row as { invoice_id: string }).invoice_id)
     }
   }
-  const filteredInvoices = invoices.filter((inv) => !paidIds.has(inv.id as string))
+  const filteredInvoices = payableInvoices.filter((inv) => !paidIds.has(inv.id as string))
   if (filteredInvoices.length === 0) {
     return []
   }

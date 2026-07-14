@@ -509,6 +509,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isProforma = docType === 'proforma'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  const isCreditNote = !!invoice.credited_invoice_id
   // An unnumbered draft is one saved via "Spara som utkast" that hasn't been
   // finalized: no F-number yet, so it can still be reviewed-and-created or
   // hard-deleted. Once finalized it gets a number and behaves like any draft.
@@ -632,7 +633,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('mark_as_sent')}
             </Button>
           )}
-          {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && (
+          {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && !isCreditNote && (
             <Button
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}

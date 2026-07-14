@@ -114,6 +114,24 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(status).toBe(400)
   })
 
+  it('rejects a sent credit note before booking a payment', async () => {
+    const invoice = makeInvoice({
+      status: 'sent',
+      credited_invoice_id: 'original-invoice-1',
+    })
+    enqueue({ data: invoice, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: unknown } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+    expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('marks sent invoice as paid with accrual method', async () => {
     const customer = makeCustomer()
     const invoice = makeInvoice({

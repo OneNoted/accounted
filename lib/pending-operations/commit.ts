@@ -905,6 +905,9 @@ async function commitMarkInvoicePaid(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return { error: 'Kreditfakturor kan inte markeras som betalda.', status: 409 }
+  }
   if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
     return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
   }
@@ -1374,6 +1377,9 @@ async function commitMatchTransactionInvoice(
     .single()
 
   if (invError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return { error: 'Kreditfakturor kan inte registreras som betalda.', status: 409 }
+  }
   if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }

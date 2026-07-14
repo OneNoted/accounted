@@ -40,6 +40,13 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
     }
 
+    if (invoice.credited_invoice_id) {
+      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
+        requestId,
+        details: { reason: 'credit_note' },
+      })
+    }
+
     if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
       return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
         requestId,
