@@ -52,7 +52,7 @@ export async function DELETE(
 
   const { data: invoice, error: fetchError } = await supabase
     .from('invoices')
-    .select('id, status, invoice_number, user_id')
+    .select('id, status, invoice_number, user_id, credited_invoice_id, journal_entry_id')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
@@ -63,6 +63,34 @@ export async function DELETE(
 
   if (invoice.status !== 'draft') {
     return errorResponseFromCode('INVOICE_DELETE_NOT_DRAFT', log)
+  }
+
+  // A credit note draft has a reserved KR number but is not an issued
+  // document until it is sent or marked as sent. With no posted entry linked,
+  // it can be hard-deleted and recreated with the same deterministic number.
+  if (invoice.credited_invoice_id && !invoice.journal_entry_id) {
+    const { data: removed, error: removeError } = await supabase
+      .from('invoices')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .eq('status', 'draft')
+      .is('journal_entry_id', null)
+      .select('id')
+
+    if (removeError) {
+      return NextResponse.json({ error: removeError.message }, { status: 500 })
+    }
+    if (!removed || removed.length === 0) {
+      return errorResponseFromCode('INVOICE_CANCEL_RACE', log)
+    }
+
+    await eventBus.emit({
+      type: 'invoice.draft_deleted',
+      payload: { invoiceId: id, companyId, userId: user.id },
+    })
+
+    return NextResponse.json({ data: { deleted: true } })
   }
 
   // Unnumbered drafts (saved via "Spara som utkast", never finalized) are not
@@ -161,7 +189,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // received self-billing document) may be edited.
     const { data: existing, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, journal_entry_id, is_self_billed')
+      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id')
       .eq('id', id)
       .eq('company_id', companyId!)
       .single()

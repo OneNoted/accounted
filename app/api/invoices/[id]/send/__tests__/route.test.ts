@@ -66,6 +66,11 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
     mockCreateInvoiceJournalEntry(...args),
 }))
 
+const mockIssueCreditNote = vi.fn()
+vi.mock('@/lib/invoices/issue-credit-note', () => ({
+  issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
+}))
+
 // The sandbox guard issues a company_settings query at the top of the route;
 // short-circuit it in tests since the queued mock-supabase is shaped for the
 // route's existing fetch chain, not an extra pre-flight read.
@@ -113,6 +118,12 @@ describe('POST /api/invoices/[id]/send', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     mockIsConfigured.mockReturnValue(true)
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
+    mockIssueCreditNote.mockResolvedValue({
+      complete: true,
+      journalEntryId: 'credit-je-1',
+      journalEntryRequired: true,
+      failures: [],
+    })
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -312,6 +323,109 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'invoice.sent' })
     )
+  })
+
+  it('issues and books a credit-note draft through the email send flow', async () => {
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2024001',
+      status: 'draft',
+      credited_invoice_id: 'inv-1',
+      customer,
+      items: (invoice.items ?? []).map((item) => ({
+        ...item,
+        invoice_id: 'credit-1',
+        quantity: -Math.abs(item.quantity),
+        line_total: -Math.abs(item.line_total),
+        vat_amount: -Math.abs(item.vat_amount ?? 0),
+      })),
+      subtotal: -10000,
+      vat_amount: -2500,
+      total: -12500,
+    })
+    const original = {
+      id: 'inv-1',
+      invoice_number: 'F-2024001',
+      status: 'sent',
+      journal_entry_id: 'original-je-1',
+      paid_at: null,
+      paid_amount: null,
+      total: 12500,
+    }
+
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: original, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'credit-message-1' })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+
+    const request = createMockRequest('/api/invoices/credit-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'credit-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; message: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.message).toContain('Kreditfakturan har skickats')
+    expect(mockIssueCreditNote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'company-1',
+        creditNote: expect.objectContaining({ id: 'credit-1' }),
+        originalInvoice: original,
+        accountingMethod: 'accrual',
+      }),
+    )
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({ filename: 'kreditfaktura-KR-F-2024001.pdf' }),
+        ],
+      }),
+    )
+    expect(emitSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'invoice.sent' }),
+    )
+  })
+
+  it('does not email a credit note when its bookkeeping cannot be completed', async () => {
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2024001',
+      status: 'draft',
+      credited_invoice_id: 'inv-1',
+      customer,
+      items: invoice.items,
+    })
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2024001',
+        status: 'sent',
+        journal_entry_id: 'original-je-1',
+        paid_at: null,
+        paid_amount: null,
+        total: 12500,
+      },
+      error: null,
+    })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    mockIssueCreditNote.mockResolvedValue({
+      complete: false,
+      journalEntryId: null,
+      journalEntryRequired: true,
+      failures: [{ step: 'journal_entry', reason: 'Perioden är låst' }],
+    })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/invoices/credit-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'credit-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(500)
+    expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('skips journal entry for cash method', async () => {

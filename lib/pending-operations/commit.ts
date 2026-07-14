@@ -1146,6 +1146,12 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return {
+      error: 'Credit notes must be issued through the invoice send flow',
+      status: 409,
+    }
+  }
   // partially_paid/credited imply the invoice was already issued too: the
   // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
   if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
@@ -1315,6 +1321,12 @@ async function commitMarkInvoiceSent(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return {
+      error: 'Credit notes must be issued through the invoice send flow',
+      status: 409,
+    }
+  }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
 
   try {

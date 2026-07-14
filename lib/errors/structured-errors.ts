@@ -764,6 +764,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',
     message_en: 'Only sent, paid, or overdue invoices can be credited.',
   },
+  INVOICE_CREDIT_ISSUE_INCOMPLETE: {
+    httpStatus: 500,
+    message_sv:
+      'Kreditfakturan kunde inte utfärdas färdigt. Ingen e-post skickades. Försök igen.',
+    message_en:
+      'The credit note could not be issued completely. No email was sent. Please try again.',
+  },
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
