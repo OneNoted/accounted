@@ -71,10 +71,12 @@ describe('gnubok_list_companies', () => {
       },
     ] as never)
 
-    const inMock = vi.fn().mockResolvedValue({
+    const rangeMock = vi.fn().mockResolvedValue({
       data: [{ company_id: DEFAULT_COMPANY_ID, company_name: 'Configured Default AB' }],
       error: null,
     })
+    const orderMock = vi.fn(() => ({ range: rangeMock }))
+    const inMock = vi.fn(() => ({ order: orderMock }))
     const supabase = {
       from: vi.fn(() => ({
         select: vi.fn(() => ({ in: inMock })),
@@ -91,6 +93,8 @@ describe('gnubok_list_companies', () => {
 
     expect(getUserCompanies).toHaveBeenCalledWith(supabase, 'user-1')
     expect(inMock).toHaveBeenCalledWith('company_id', [DEFAULT_COMPANY_ID, OTHER_COMPANY_ID])
+    expect(orderMock).toHaveBeenCalledWith('company_id', { ascending: true })
+    expect(rangeMock).toHaveBeenCalledWith(0, 999)
     expect(result).toEqual({
       companies: [
         {
