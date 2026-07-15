@@ -179,7 +179,15 @@ export default function SendInvoiceDialog({
         onOpenChange(false)
         const successMessage = data.message || t('send_success_default', { email: invoice.customer.email ?? '' })
         toast({
-          title: t(isCreditNote ? 'credit_send_success_title' : 'send_success_title'),
+          title: t(
+            shouldBookOnIssue && !data.partial
+              ? isCreditNote
+                ? 'credit_send_book_success_title'
+                : 'send_book_success_title'
+              : isCreditNote
+                ? 'credit_send_success_title'
+                : 'send_success_title',
+          ),
           description: data.partial
             ? t('partial_success', { message: successMessage })
             : isCreditNote
@@ -193,6 +201,10 @@ export default function SendInvoiceDialog({
           title: t(
             isCreditRepair
               ? 'credit_repair_success_title'
+              : shouldBookOnIssue && !data.partial
+                ? isCreditNote
+                  ? 'credit_mark_book_success_title'
+                  : 'mark_book_success_title'
               : isCreditNote
                 ? 'credit_mark_success_title'
                 : 'mark_success_title',
@@ -340,11 +352,19 @@ export default function SendInvoiceDialog({
                 ? 'complete_credit_bookkeeping'
                 : isCreditNote
                   ? mode === 'email'
-                    ? 'send_credit_note'
-                    : 'mark_credit_note_sent'
+                    ? shouldBookOnIssue
+                      ? 'send_credit_note_and_book'
+                      : 'send_credit_note'
+                    : shouldBookOnIssue
+                      ? 'mark_credit_note_sent_and_book'
+                      : 'mark_credit_note_sent'
                   : mode === 'email'
-                    ? 'send_invoice'
-                    : 'mark_as_sent',
+                    ? shouldBookOnIssue
+                      ? 'send_invoice_and_book'
+                      : 'send_invoice'
+                    : shouldBookOnIssue
+                      ? 'mark_as_sent_and_book'
+                      : 'mark_as_sent',
             )}
           </Button>
         </DialogFooter>

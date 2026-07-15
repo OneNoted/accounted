@@ -17,6 +17,7 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
+import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
 import {
   Loader2,
   ArrowLeft,
@@ -35,6 +36,7 @@ import {
   Lock,
   CalendarClock,
   Pencil,
+  Copy,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -528,6 +530,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
   const isCreditNote = !!invoice.credited_invoice_id
+  const booksOnIssue = isCreditNote
+    ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
+    : accountingMethod === 'accrual'
   const preferredSendMode = getCreditNoteSendMode({
     customerHasEmail,
     isSandbox,
@@ -560,6 +565,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // in place (header + lines) via /invoices/{id}/edit. Sent/paid invoices are
   // immutable (BFL); they are corrected with a credit note instead.
   const isEditableDraft = isEditableInvoiceDraft(invoice)
+  const isCopyable = canCopyInvoice(invoice)
   const hasAccruedItems = invoice.items.some(itemHasAccrual)
   return (
     <div className="space-y-8">
@@ -642,7 +648,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('send_via_email')}
+                {t(booksOnIssue ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
               <Button
@@ -652,9 +658,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('mark_sent_manually')}
+                {t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
+          )}
+          {isCopyable && canWrite && (
+            <Link href={`/invoices?copy=${invoice.id}`}>
+              <Button variant="outline">
+                <Copy className="mr-2 h-4 w-4" />
+                {t('copy_invoice')}
+              </Button>
+            </Link>
           )}
           {creditNoteNeedsRepair && (
             <Button
@@ -1304,7 +1318,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             onClick={() => openSendDialog('manual')}
                           >
                             <Send className="mr-2 h-4 w-4" />
-                            {t('mark_sent_manually')}
+                            {t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}
                           </Button>
                           <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
                             {t('send_manual_hint_with_email')}
