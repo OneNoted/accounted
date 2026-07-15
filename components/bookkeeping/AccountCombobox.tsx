@@ -40,9 +40,10 @@ interface AccountComboboxProps {
   // internal one. Lets a parent imperatively focus the field (e.g. auto-advance
   // to the next konteringsrad's account on Enter: see JournalEntryForm.focusAccount).
   inputRef?: React.RefCallback<HTMLInputElement>
+  disabled?: boolean
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -247,11 +248,12 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
         placeholder="Sök konto…"
         className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
+        disabled={disabled}
       />
 
 
       {/* Dropdown */}
-      {isOpen && flatList.length > 0 && (
+      {isOpen && !disabled && flatList.length > 0 && (
         <div
           ref={listRef}
           className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] max-h-[300px] overflow-y-auto rounded-md border border-input bg-card shadow-md"
@@ -296,7 +298,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       )}
 
       {/* Empty state */}
-      {isOpen && search.trim() && flatList.length === 0 && (
+      {isOpen && !disabled && search.trim() && flatList.length === 0 && (
         <div className="absolute z-50 top-full left-0 mt-1 min-w-[24rem] w-[max(100%,34rem)] rounded-md border border-input bg-card shadow-md p-3">
           <p className="text-sm text-muted-foreground">
             Hittade inget konto som matchar.

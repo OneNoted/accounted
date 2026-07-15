@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -15,9 +16,14 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Plus, Trash2 } from 'lucide-react'
+import { Loader2, Plus, Trash2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import {
+  changeCorrectionLineAccount,
+  getSelectableCorrectionCatalog,
+} from '@/lib/bookkeeping/correction-line-account'
+import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import type { JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 interface CorrectionLine {
@@ -37,9 +43,25 @@ interface Props {
 export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCorrected }: Props) {
   const { toast } = useToast()
   const router = useRouter()
+  const t = useTranslations('journal_detail')
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const [catalog, setCatalog] = useState<CatalogAccount[]>([])
+  const [accountsStatus, setAccountsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [lines, setLines] = useState<CorrectionLine[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const activeAccounts = useMemo(
+    () => accounts.filter((account) => account.is_active),
+    [accounts],
+  )
+  const selectableCatalog = useMemo(
+    () => getSelectableCorrectionCatalog(accounts, catalog),
+    [accounts, catalog],
+  )
+  const accountNameSources = useMemo(
+    () => [...accounts, ...catalog],
+    [accounts, catalog],
+  )
 
   const originalLines = ((entry.lines || []) as JournalEntryLine[])
     .slice()
@@ -56,22 +78,39 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           line_description: l.line_description || '',
         }))
       )
-      fetchAccounts()
+      void fetchAccounts()
     }
   }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchAccounts() {
+    setAccountsStatus('loading')
     try {
-      const res = await fetch('/api/bookkeeping/accounts')
+      const [res, basCatalog] = await Promise.all([
+        fetch('/api/bookkeeping/accounts?active=false'),
+        loadBasCatalog(),
+      ])
+      if (!res.ok) throw new Error(`accounts ${res.status}`)
       const { data } = await res.json()
       setAccounts(data || [])
+      setCatalog(basCatalog)
+      setAccountsStatus('ready')
     } catch {
-      // Accounts will be empty: user can still type account numbers manually
+      setAccounts([])
+      setCatalog([])
+      setAccountsStatus('error')
     }
   }
 
   const updateLine = (index: number, field: keyof CorrectionLine, value: string) => {
     setLines((prev) => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)))
+  }
+
+  const updateLineAccount = (index: number, accountNumber: string) => {
+    setLines((prev) => prev.map((line, lineIndex) => (
+      lineIndex === index
+        ? changeCorrectionLineAccount(line, accountNumber, accountNameSources)
+        : line
+    )))
   }
 
   const addLine = () => {
@@ -186,14 +225,30 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             </p>
           </div>
 
+          {accountsStatus !== 'ready' && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
+              <span className="flex items-center gap-2">
+                {accountsStatus === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
+                {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
+              </span>
+              {accountsStatus === 'error' && (
+                <Button variant="outline" size="sm" onClick={() => void fetchAccounts()}>
+                  {t('accounts_retry')}
+                </Button>
+              )}
+            </div>
+          )}
+
           <div className="space-y-2">
             {lines.map((line, index) => (
               <div key={index} className="space-y-2 sm:space-y-0 sm:grid sm:grid-cols-[1fr_1fr_120px_120px_auto] sm:gap-2 sm:items-start border-b sm:border-0 pb-3 sm:pb-0 last:border-0">
                 <div className="grid grid-cols-[1fr_auto] sm:contents gap-2">
                   <AccountCombobox
                     value={line.account_number}
-                    accounts={accounts}
-                    onChange={(v) => updateLine(index, 'account_number', v)}
+                    accounts={activeAccounts}
+                    catalog={selectableCatalog}
+                    onChange={(v) => updateLineAccount(index, v)}
+                    disabled={accountsStatus !== 'ready'}
                   />
                   <Button
                     variant="ghost"
