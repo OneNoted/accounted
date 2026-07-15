@@ -786,6 +786,9 @@ export const CreateSupplierInvoiceItemSchema = z.object({
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,
+  // Optional invoice PDF/image already stored in the WORM document archive.
+  // The route verifies company ownership and that the document is unused.
+  document_id: uuid.optional(),
   supplier_invoice_number: z.string().min(1, 'Supplier invoice number is required'),
   invoice_date: isoDate,
   due_date: isoDate,

@@ -28,9 +28,10 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import DocumentUploadZone, { type UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, MessageCircle, Link2, CalendarClock, Tags } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
 
 interface LineItem {
@@ -66,6 +67,7 @@ interface ExistingSupplierInvoice {
 // paths still return a flat string, so accept both.
 interface CreateResult {
   data?: { id: string; arrival_number: number }
+  warnings?: Array<{ code: string; message: string }>
   error?:
     | string
     | {
@@ -331,6 +333,7 @@ export default function NewSupplierInvoiceForm({
   const [pendingSupplierSelect, setPendingSupplierSelect] = useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [newSupplier, setNewSupplier] = useState<NewSupplierForm>(EMPTY_NEW_SUPPLIER)
+  const [documentFiles, setDocumentFiles] = useState<UploadedFile[]>([])
 
   // Inbox/AI state
   const [extractedData, setExtractedData] = useState<InvoiceExtractionResult | null>(null)
@@ -392,6 +395,9 @@ export default function NewSupplierInvoiceForm({
   const watchedInvoiceDate = watch('invoice_date')
   const watchedDueDate = watch('due_date')
   const watchedPaymentReference = watch('payment_reference')
+  const documentUploadInProgress = documentFiles.some((file) => file.status === 'uploading')
+  const documentUploadFailed = documentFiles.some((file) => file.status === 'error')
+  const uploadedDocumentId = documentFiles.find((file) => file.status === 'uploaded')?.id
   // Returns true when the field currently matches whatever the AI wrote
   // when the form first loaded. Edits diverge it, hiding the dot.
   function stillFromAi(value: string | null | undefined, original: string | null | undefined): boolean {
@@ -943,6 +949,7 @@ export default function NewSupplierInvoiceForm({
       : data.due_date
     return {
       supplier_id: data.supplier_id,
+      ...(!inboxItemId && uploadedDocumentId ? { document_id: uploadedDocumentId } : {}),
       supplier_invoice_number: data.supplier_invoice_number,
       invoice_date: data.invoice_date,
       due_date: dueDate,
@@ -1044,10 +1051,36 @@ export default function NewSupplierInvoiceForm({
       body: JSON.stringify(buildPayload(data)),
     })
     const result = await res.json()
+    if (
+      res.ok &&
+      (result as CreateResult).warnings?.some((warning) => warning.code === 'DOCUMENT_LINK_FAILED')
+    ) {
+      toast({
+        title: t('document_link_warning_title'),
+        description: t('document_link_warning_description'),
+        variant: 'destructive',
+      })
+    }
     return { ok: res.ok, status: res.status, result }
   }
 
   function onSubmit(data: FormData) {
+    if (documentUploadInProgress) {
+      toast({
+        title: t('document_upload_in_progress_title'),
+        description: t('document_upload_in_progress_description'),
+        variant: 'destructive',
+      })
+      return
+    }
+    if (documentUploadFailed) {
+      toast({
+        title: t('document_upload_failed_title'),
+        description: t('document_upload_failed_description'),
+        variant: 'destructive',
+      })
+      return
+    }
     // Hard block: under faktureringsmetoden (and for privately-paid kvitton) a
     // verifikation is posted at registration, and BFL 5 kap kräver att
     // verifikationsnumret ligger i en obruten serie inom ett räkenskapsår. No
@@ -1328,6 +1361,34 @@ export default function NewSupplierInvoiceForm({
     setTimeout(() => invoiceNumberInputRef.current?.focus(), 0)
   }
 
+  function handleDocumentFilesChange(nextFiles: UploadedFile[]) {
+    const retainedKeys = new Set(nextFiles.map((file) => file.uploadKey))
+    const removedDocuments = documentFiles.filter(
+      (file) => file.id && !retainedKeys.has(file.uploadKey),
+    )
+
+    setDocumentFiles(nextFiles)
+    for (const document of removedDocuments) {
+      void fetch(`/api/documents/${document.id}`, { method: 'DELETE' })
+    }
+  }
+
+  async function discardUploadedDocument() {
+    const ids = documentFiles
+      .filter((file) => file.status === 'uploaded' && file.id)
+      .map((file) => file.id as string)
+    await Promise.allSettled(
+      ids.map((documentId) => fetch(`/api/documents/${documentId}`, { method: 'DELETE' })),
+    )
+  }
+
+  function handleCancel() {
+    void discardUploadedDocument().finally(() => {
+      if (onCancel) onCancel()
+      else router.push(inboxItemId ? '/e/general/invoice-inbox' : '/supplier-invoices')
+    })
+  }
+
   // Match-on-create: register the invoice, then match the picked transaction.
   // EF goes straight through (auto-approve included). AB stores the picked
   // transaction and routes through the same review dialog as the plain
@@ -1558,6 +1619,25 @@ export default function NewSupplierInvoiceForm({
                 </>
               )}
             </div>
+
+            {!inboxItemId && (
+              <div className="space-y-3 rounded-lg border border-border p-4">
+                <div className="flex items-start gap-3">
+                  <Paperclip className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div>
+                    <Label>{t('document_label')}</Label>
+                    <p className="text-xs text-muted-foreground">{t('document_help')}</p>
+                  </div>
+                </div>
+                <DocumentUploadZone
+                  files={documentFiles}
+                  onFilesChange={handleDocumentFilesChange}
+                  maxFiles={1}
+                  disabled={isSubmitting}
+                  compact
+                />
+              </div>
+            )}
 
             {/* Invoice-level default dims (kostnadsställe/projekt): applied to
                 every generated journal line; per-row bags in Kontering merge on
@@ -2052,10 +2132,8 @@ export default function NewSupplierInvoiceForm({
             type="button"
             variant="outline"
             className="w-full sm:w-auto"
-            onClick={() => {
-              if (onCancel) onCancel()
-              else router.push(inboxItemId ? '/e/general/invoice-inbox' : '/supplier-invoices')
-            }}
+            onClick={handleCancel}
+            disabled={isSubmitting || documentUploadInProgress}
           >
             {t('cancel')}
           </Button>
@@ -2064,7 +2142,7 @@ export default function NewSupplierInvoiceForm({
               type="submit"
               variant="outline"
               className="w-full sm:w-auto"
-              disabled={isSubmitting || !canWrite || showNoPeriodWarning}
+              disabled={isSubmitting || documentUploadInProgress || !canWrite || showNoPeriodWarning}
               onClick={() => { submitModeRef.current = 'register_and_match' }}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
@@ -2074,7 +2152,7 @@ export default function NewSupplierInvoiceForm({
           )}
           <Button
             type="submit"
-            disabled={isSubmitting || !canWrite || showNoPeriodWarning}
+            disabled={isSubmitting || documentUploadInProgress || !canWrite || showNoPeriodWarning}
             className="w-full sm:w-auto"
             onClick={() => { submitModeRef.current = 'register' }}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}

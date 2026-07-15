@@ -20,6 +20,8 @@ export interface UnderlagReference {
   id: string
   /** invoice_number / supplier_invoice_number: the UI builds the label from this. */
   number: string
+  /** Retained source document owned by a referenced supplier invoice, if any. */
+  document_id?: string
 }
 
 interface InvoiceRow {
@@ -30,6 +32,7 @@ interface InvoiceRow {
 interface SupplierInvoiceRow {
   id: string
   supplier_invoice_number: string
+  document_id?: string | null
 }
 
 /**
@@ -86,28 +89,34 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   // --- Supplier invoices ---------------------------------------------------
-  const supplierInvoices = new Map<string, string>()
+  const supplierInvoices = new Map<string, { number: string; documentId?: string }>()
 
   // Registration booking (accrual) on the invoice itself.
   const { data: registrationLinks } = await supabase
     .from('supplier_invoices')
-    .select('id, supplier_invoice_number')
+    .select('id, supplier_invoice_number, document_id')
     .eq('company_id', companyId)
     .eq('registration_journal_entry_id', journalEntryId)
 
   for (const si of (registrationLinks ?? []) as SupplierInvoiceRow[]) {
-    supplierInvoices.set(si.id, si.supplier_invoice_number)
+    supplierInvoices.set(si.id, {
+      number: si.supplier_invoice_number,
+      ...(si.document_id ? { documentId: si.document_id } : {}),
+    })
   }
 
   // Payment booking on the invoice itself.
   const { data: paymentLinks } = await supabase
     .from('supplier_invoices')
-    .select('id, supplier_invoice_number')
+    .select('id, supplier_invoice_number, document_id')
     .eq('company_id', companyId)
     .eq('payment_journal_entry_id', journalEntryId)
 
   for (const si of (paymentLinks ?? []) as SupplierInvoiceRow[]) {
-    supplierInvoices.set(si.id, si.supplier_invoice_number)
+    supplierInvoices.set(si.id, {
+      number: si.supplier_invoice_number,
+      ...(si.document_id ? { documentId: si.document_id } : {}),
+    })
   }
 
   // Partial-payment rows → supplier_invoice_payments.
@@ -126,18 +135,28 @@ export async function getJournalEntryUnderlagReferences(
   if (supplierPaymentIds.size > 0) {
     const { data: paidSupplierInvoices } = await supabase
       .from('supplier_invoices')
-      .select('id, supplier_invoice_number')
+      .select('id, supplier_invoice_number, document_id')
       .eq('company_id', companyId)
       .in('id', Array.from(supplierPaymentIds))
 
     for (const si of (paidSupplierInvoices ?? []) as SupplierInvoiceRow[]) {
-      supplierInvoices.set(si.id, si.supplier_invoice_number)
+      supplierInvoices.set(si.id, {
+        number: si.supplier_invoice_number,
+        ...(si.document_id ? { documentId: si.document_id } : {}),
+      })
     }
   }
 
   // --- Assemble ------------------------------------------------------------
   const references: UnderlagReference[] = []
   for (const [id, number] of invoices) references.push({ type: 'invoice', id, number })
-  for (const [id, number] of supplierInvoices) references.push({ type: 'supplier_invoice', id, number })
+  for (const [id, supplierInvoice] of supplierInvoices) {
+    references.push({
+      type: 'supplier_invoice',
+      id,
+      number: supplierInvoice.number,
+      ...(supplierInvoice.documentId ? { document_id: supplierInvoice.documentId } : {}),
+    })
+  }
   return references
 }
