@@ -84,13 +84,18 @@ export const POST = withRouteContext(
         })
       }
 
-      const { data: existingDocumentUse } = await supabase
+      const { data: existingDocumentUse, error: existingDocumentUseError } = await supabase
         .from('supplier_invoices')
         .select('id')
         .eq('company_id', companyId)
         .eq('document_id', body.document_id)
         .limit(1)
         .maybeSingle()
+
+      if (existingDocumentUseError) {
+        log.error('supplier invoice document usage lookup failed', existingDocumentUseError)
+        return errorResponse(existingDocumentUseError, log, { requestId })
+      }
 
       if (existingDocumentUse) {
         return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {

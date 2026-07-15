@@ -90,6 +90,7 @@ function buildCreditNoteLines(
     credit_amount: line.debit_amount,
     line_description: line.line_description
       .replace('Försäljning faktura', 'Kreditfaktura')
+      .replace('Utgående moms faktura', 'Moms kreditfaktura')
       .replace('Utgående moms', 'Moms kreditfaktura'),
   }))
 }

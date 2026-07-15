@@ -71,6 +71,9 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
     }
 
+    const isCreditNote = !!invoice.credited_invoice_id
+    const isCreditDeliveryRetry = isCreditNote && invoice.status === 'sent'
+
     // A cancelled invoice keeps its F-series number for compliance with ML 17
     // kap 24§ but is not a valid faktura: sending it would deliver a
     // "MAKULERAD" PDF as if it were live. Checked before the generic draft
@@ -85,7 +88,7 @@ export const POST = withRouteContext(
     // (createInvoiceJournalEntry has no dedup), overwriting journal_entry_id
     // and orphaning the first entry. Mirrors the v1 route and the MCP commit
     // executor, which both reject non-drafts.
-    if (invoice.status !== 'draft') {
+    if (invoice.status !== 'draft' && !isCreditDeliveryRetry) {
       return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
         requestId,
         details: { currentStatus: invoice.status },
@@ -112,7 +115,6 @@ export const POST = withRouteContext(
 
     const items = (invoice.items as InvoiceItem[]).sort((a, b) => a.sort_order - b.sort_order)
 
-    const isCreditNote = !!invoice.credited_invoice_id
     let originalInvoice: CreditNoteOriginalInvoice | undefined
     let originalInvoiceNumber: string | undefined
     if (invoice.credited_invoice_id) {
@@ -201,7 +203,7 @@ export const POST = withRouteContext(
     )
 
     const emailData = {
-      invoice: invoice as Invoice,
+      invoice: renderableInvoice,
       customer,
       company: company as CompanySettings,
     }
@@ -224,34 +226,37 @@ export const POST = withRouteContext(
       partialFailures.push({ step: 'payment_link', reason: paymentLinkFailure })
     }
 
-    let statusFlipped = false
+    let statusFlipped = isCreditDeliveryRetry
     let creditJournalEntryId: string | null = null
 
     // Credit notes must be fully issued and booked before delivery. The CAS is
     // the single-winner lock; the idempotent issue service can repair any
     // immutable entry that committed before a later database step failed.
     if (isCreditNote && originalInvoice) {
-      const { data: flipRows, error: updateError } = await supabase
-        .from('invoices')
-        .update({ status: 'sent' })
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .eq('status', 'draft')
-        .select('id')
+      if (!isCreditDeliveryRetry) {
+        const { data: flipRows, error: updateError } = await supabase
+          .from('invoices')
+          .update({ status: 'sent' })
+          .eq('id', id)
+          .eq('company_id', companyId)
+          .eq('status', 'draft')
+          .select('id')
 
-      if (updateError) {
-        return errorResponseFromCode('INVOICE_CREDIT_ISSUE_INCOMPLETE', opLog, {
-          requestId,
-          details: { failures: [{ step: 'status_update', reason: updateError.message }] },
-        })
+        if (updateError) {
+          opLog.error('credit note status update failed before issue', updateError)
+          return errorResponseFromCode('INVOICE_CREDIT_ISSUE_INCOMPLETE', opLog, {
+            requestId,
+            details: { failure_steps: ['status_update'] },
+          })
+        }
+        if (!flipRows || flipRows.length === 0) {
+          return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
+            requestId,
+            details: { currentStatus: 'sent' },
+          })
+        }
+        statusFlipped = true
       }
-      if (!flipRows || flipRows.length === 0) {
-        return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
-          requestId,
-          details: { currentStatus: 'sent' },
-        })
-      }
-      statusFlipped = true
 
       const issueResult = await issueCreditNote({
         supabase,
@@ -275,10 +280,16 @@ export const POST = withRouteContext(
             .eq('status', 'sent')
             .is('journal_entry_id', null)
         }
-        return errorResponseFromCode('INVOICE_CREDIT_ISSUE_INCOMPLETE', opLog, {
-          requestId,
-          details: { failures: issueResult.failures },
-        })
+        return errorResponseFromCode(
+          issueResult.repairRequired
+            ? 'INVOICE_CREDIT_REPAIR_REQUIRED'
+            : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
+          opLog,
+          {
+            requestId,
+            details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
+          },
+        )
       }
     }
 
@@ -303,7 +314,7 @@ export const POST = withRouteContext(
       opLog.error('email provider failed to send invoice', new Error(result.error || 'Unknown'))
       return errorResponseFromCode('INVOICE_SEND_PROVIDER_FAILED', opLog, {
         requestId,
-        details: { providerError: result.error },
+        details: { retryable: true },
       })
     }
 
@@ -386,7 +397,7 @@ export const POST = withRouteContext(
         opLog.error('failed to create invoice journal entry on send', err as Error)
         partialFailures.push({
           step: 'journal_entry',
-          reason: err instanceof Error ? err.message : 'unknown',
+          reason: 'Fakturans verifikat kunde inte skapas.',
         })
       }
     }
@@ -406,7 +417,7 @@ export const POST = withRouteContext(
         opLog.error('failed to store invoice PDF as underlag', err as Error)
         partialFailures.push({
           step: 'pdf_archive',
-          reason: err instanceof Error ? err.message : 'unknown',
+          reason: 'Fakturans PDF kunde inte arkiveras.',
         })
       }
     }

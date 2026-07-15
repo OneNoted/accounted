@@ -87,6 +87,7 @@ export type CoreEvent =
   // Articles (artikelregister)
   | { type: 'article.created'; payload: { article: Article; userId: string; companyId: string } }
   | { type: 'article.updated'; payload: { article: Article; userId: string; companyId: string } }
+  | { type: 'article.deleted'; payload: { articleId: string; userId: string; companyId: string } }
   // Suppliers
   | { type: 'supplier.created'; payload: { supplier: Supplier; userId: string; companyId: string } }
   // Receipts

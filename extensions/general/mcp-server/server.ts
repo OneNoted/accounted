@@ -1859,16 +1859,23 @@ export const tools: McpTool[] = [
       const displayNames = new Map<string, string>()
 
       if (companyIds.length > 0) {
-        const { data: settings, error } = await supabase
-          .from('company_settings')
-          .select('company_id, company_name')
-          .in('company_id', companyIds)
-        if (error) {
-          log.warn('gnubok_list_companies display-name lookup failed', { error: error.message })
-        } else {
-          for (const row of settings ?? []) {
+        try {
+          const settings = await fetchAllRows<{ company_id: string; company_name: string | null }>(
+            ({ from, to }) =>
+              supabase
+                .from('company_settings')
+                .select('company_id, company_name')
+                .in('company_id', companyIds)
+                .order('company_id', { ascending: true })
+                .range(from, to),
+          )
+          for (const row of settings) {
             if (row.company_name) displayNames.set(row.company_id, row.company_name)
           }
+        } catch (error) {
+          log.warn('gnubok_list_companies display-name lookup failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          })
         }
       }
 

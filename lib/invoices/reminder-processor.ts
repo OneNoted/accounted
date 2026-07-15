@@ -158,7 +158,8 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     .from('invoices')
     .select(`
       *,
-      customer:customers(*)
+      customer:customers(*),
+      credit_notes:invoices!credited_invoice_id(id, status, creation_complete)
     `)
     .in('status', ['sent', 'overdue'])
     .is('credited_invoice_id', null)
@@ -179,6 +180,17 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
 
   // Process each invoice
   for (const invoice of overdueInvoices) {
+    const activeCreditNotes = ((invoice as { credit_notes?: Array<{
+      status: string
+      creation_complete?: boolean
+    }> }).credit_notes ?? []).filter(
+      (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
+    )
+    if (activeCreditNotes.length > 0) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: active credit note exists`)
+      continue
+    }
+
     const customer = invoice.customer as Customer
 
     // Skip if customer has no email
@@ -250,11 +262,22 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // produce a reminder for an already-paid invoice.
     const { data: currentInvoice } = await supabase
       .from('invoices')
-      .select('status')
+      .select('status, credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
       .eq('id', invoice.id)
+      .eq('company_id', invoice.company_id)
       .single()
 
-    if (!currentInvoice || !['sent', 'overdue'].includes(currentInvoice.status as string)) {
+    const currentCreditNotes = ((currentInvoice as { credit_notes?: Array<{
+      status: string
+      creation_complete?: boolean
+    }> } | null)?.credit_notes ?? []).filter(
+      (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
+    )
+    if (
+      !currentInvoice ||
+      !['sent', 'overdue'].includes(currentInvoice.status as string) ||
+      currentCreditNotes.length > 0
+    ) {
       log.info(`Skipping invoice ${invoice.invoice_number}: status changed to ${currentInvoice?.status ?? 'unknown'} mid-run`)
       continue
     }

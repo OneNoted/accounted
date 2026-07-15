@@ -2987,6 +2987,7 @@
     "load_failed_title": "Kunde inte ladda inställningar",
     "no_active_company": "Inget aktivt företag",
     "company_settings_failed": "Kunde inte ladda företagsinställningar",
+    "fiscal_period_failed": "Kunde inte ladda räkenskapsperioden",
     "original_invoice_failed": "Kunde inte ladda originalfakturan",
     "journal_preview_intro": "Följande bokföringsverifikation skapas automatiskt:",
     "voucher_description": "Försäljning faktura{numberSpace}{customerSuffix}",

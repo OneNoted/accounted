@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { decryptPersonnummer } from '@/lib/salary/personnummer'
 
 const captured: { insert: unknown[]; update: unknown[] } = { insert: [], update: [] }
 let queryResult: { data: unknown; error: unknown } = { data: null, error: null }
@@ -120,9 +121,12 @@ describe('personal_number on customer routes', () => {
       { params: Promise.resolve({}) },
     )
 
-    const { status } = await parseJsonResponse(response)
+    const { status, body } = await parseJsonResponse<{ data: { personal_number: string } }>(response)
     expect(status).toBe(200)
-    expect((captured.insert[0] as CustomerWrite).personal_number).toBe('19900101-1234')
+    const encrypted = (captured.insert[0] as CustomerWrite).personal_number as string
+    expect(encrypted).not.toBe('19900101-1234')
+    expect(decryptPersonnummer(encrypted)).toBe('19900101-1234')
+    expect(body.data.personal_number).toBe('********-1234')
   })
 
   it('updates the personal number for an existing private customer', async () => {
@@ -144,7 +148,9 @@ describe('personal_number on customer routes', () => {
     )
 
     expect(response.status).toBe(200)
-    expect((captured.update[0] as CustomerWrite).personal_number).toBe('900101-1234')
+    const encrypted = (captured.update[0] as CustomerWrite).personal_number as string
+    expect(encrypted).not.toBe('900101-1234')
+    expect(decryptPersonnummer(encrypted)).toBe('900101-1234')
   })
 
   it('clears the personal number when null is sent', async () => {
@@ -181,6 +187,26 @@ describe('personal_number on customer routes', () => {
 
     expect(response.status).toBe(200)
     expect(captured.update[0]).not.toHaveProperty('personal_number')
+  })
+
+  it('rejects a personal number for a corporate customer', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'swedish_business' },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { personal_number: '900101-1234' },
+      }),
+      routeParams,
+    )
+
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED')
+    expect(captured.update).toHaveLength(0)
   })
 
   it('returns 404 when the customer does not exist', async () => {

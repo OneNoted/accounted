@@ -96,6 +96,7 @@ export default function SendInvoiceDialog({
         ])
 
         if (settingsResult.error) throw new Error(t('company_settings_failed'))
+        if (periodResult.error) throw new Error(t('fiscal_period_failed'))
         if (originalResult.error) throw new Error(t('original_invoice_failed'))
 
         if (cancelled) return

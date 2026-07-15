@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -146,6 +147,7 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     enqueue({ data: null, error: null, count: 0 })
     enqueue({ data: null, error: null, count: 1 })
 
+    const emitSpy = vi.spyOn(eventBus, 'emit')
     const response = await DELETE(
       createMockRequest('/api/articles/a1', { method: 'DELETE' }),
       createMockRouteParams({ id: 'a1' }),
@@ -157,5 +159,9 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(1, 'articles')
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'invoice_items')
     expect(supabase.from).toHaveBeenNthCalledWith(3, 'articles')
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'article.deleted',
+      payload: { articleId: 'a1', companyId: 'company-1', userId: 'user-1' },
+    })
   })
 })

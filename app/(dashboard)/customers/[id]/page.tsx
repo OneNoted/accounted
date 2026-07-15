@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
@@ -296,7 +297,9 @@ export default function CustomerDetailPage({
             {customer.customer_type === 'individual' && (customer.personal_number || customer.org_number) && (
               <div className="text-sm">
                 <span className="text-muted-foreground">{t('label_personal_number')} </span>
-                <span className="tabular-nums">{customer.personal_number || customer.org_number}</span>
+                <span className="tabular-nums">
+                  {maskCustomerPersonalNumber(customer.personal_number || customer.org_number)}
+                </span>
               </div>
             )}
             {customer.vat_number && (

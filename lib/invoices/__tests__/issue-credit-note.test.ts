@@ -86,6 +86,7 @@ describe('issueCreditNote', () => {
       complete: true,
       journalEntryId: 'journal-1',
       journalEntryRequired: true,
+      repairRequired: false,
       failures: [],
     })
     expect(mockCreateCreditNoteJournalEntry).toHaveBeenCalledWith(
@@ -127,6 +128,7 @@ describe('issueCreditNote', () => {
       complete: true,
       journalEntryId: null,
       journalEntryRequired: false,
+      repairRequired: false,
       failures: [],
     })
     expect(mockCreateCreditNoteJournalEntry).not.toHaveBeenCalled()
@@ -190,5 +192,28 @@ describe('issueCreditNote', () => {
     expect(creditNoteNeedsJournalEntry('cash', { ...original, status: 'paid' })).toBe(true)
     expect(creditNoteNeedsJournalEntry('cash', { ...original, paid_amount: 100 })).toBe(true)
     expect(creditNoteNeedsJournalEntry('accrual', original)).toBe(true)
+  })
+
+  it('reuses the posted voucher that wins a concurrent create race', async () => {
+    enqueue({ data: null, error: null })
+    mockCreateCreditNoteJournalEntry.mockRejectedValue(new Error('duplicate source'))
+    enqueue({ data: { id: 'journal-winner' }, error: null })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    enqueue({ data: [{ id: 'invoice-1' }], error: null })
+
+    const result = await issueCreditNote({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      creditNote: makeCreditNote(),
+      originalInvoice: { id: 'invoice-1', invoice_number: 'F-100', status: 'sent' },
+      entityType: 'enskild_firma',
+      accountingMethod: 'accrual',
+      log,
+    })
+
+    expect(result.complete).toBe(true)
+    expect(result.journalEntryId).toBe('journal-winner')
+    expect(result.failures).toEqual([])
   })
 })

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * A followable reference from a verifikation back to its underlag: the customer
@@ -55,21 +56,21 @@ export async function getJournalEntryUnderlagReferences(
   const invoices = new Map<string, string>()
 
   // Direct link (faktureringsmetod registration, or invoices.journal_entry_id).
-  const { data: directInvoices } = await supabase
-    .from('invoices')
-    .select('id, invoice_number')
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', journalEntryId)
+  const directInvoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
+    supabase.from('invoices').select('id, invoice_number')
+      .eq('company_id', companyId).eq('journal_entry_id', journalEntryId)
+      .order('id', { ascending: true }).range(from, to),
+  )
 
   for (const inv of (directInvoices ?? []) as InvoiceRow[]) {
     invoices.set(inv.id, inv.invoice_number)
   }
 
   // Payment rows (kontantmetod inbetalning, partial payments) → invoice_payments.
-  const { data: paymentRows } = await supabase
-    .from('invoice_payments')
-    .select('invoice_id')
-    .eq('journal_entry_id', journalEntryId)
+  const paymentRows = await fetchAllRows<{ id: string; invoice_id: string | null }>(({ from, to }) =>
+    supabase.from('invoice_payments').select('id, invoice_id')
+      .eq('journal_entry_id', journalEntryId).order('id', { ascending: true }).range(from, to),
+  )
 
   const paymentInvoiceIds = new Set<string>()
   for (const row of (paymentRows ?? []) as { invoice_id: string | null }[]) {
@@ -77,11 +78,11 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   if (paymentInvoiceIds.size > 0) {
-    const { data: paidInvoices } = await supabase
-      .from('invoices')
-      .select('id, invoice_number')
-      .eq('company_id', companyId)
-      .in('id', Array.from(paymentInvoiceIds))
+    const paidInvoices = await fetchAllRows<InvoiceRow>(({ from, to }) =>
+      supabase.from('invoices').select('id, invoice_number')
+        .eq('company_id', companyId).in('id', Array.from(paymentInvoiceIds))
+        .order('id', { ascending: true }).range(from, to),
+    )
 
     for (const inv of (paidInvoices ?? []) as InvoiceRow[]) {
       invoices.set(inv.id, inv.invoice_number)
@@ -92,11 +93,11 @@ export async function getJournalEntryUnderlagReferences(
   const supplierInvoices = new Map<string, { number: string; documentId?: string }>()
 
   // Registration booking (accrual) on the invoice itself.
-  const { data: registrationLinks } = await supabase
-    .from('supplier_invoices')
-    .select('id, supplier_invoice_number, document_id')
-    .eq('company_id', companyId)
-    .eq('registration_journal_entry_id', journalEntryId)
+  const registrationLinks = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
+    supabase.from('supplier_invoices').select('id, supplier_invoice_number, document_id')
+      .eq('company_id', companyId).eq('registration_journal_entry_id', journalEntryId)
+      .order('id', { ascending: true }).range(from, to),
+  )
 
   for (const si of (registrationLinks ?? []) as SupplierInvoiceRow[]) {
     supplierInvoices.set(si.id, {
@@ -106,11 +107,11 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   // Payment booking on the invoice itself.
-  const { data: paymentLinks } = await supabase
-    .from('supplier_invoices')
-    .select('id, supplier_invoice_number, document_id')
-    .eq('company_id', companyId)
-    .eq('payment_journal_entry_id', journalEntryId)
+  const paymentLinks = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
+    supabase.from('supplier_invoices').select('id, supplier_invoice_number, document_id')
+      .eq('company_id', companyId).eq('payment_journal_entry_id', journalEntryId)
+      .order('id', { ascending: true }).range(from, to),
+  )
 
   for (const si of (paymentLinks ?? []) as SupplierInvoiceRow[]) {
     supplierInvoices.set(si.id, {
@@ -120,10 +121,10 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   // Partial-payment rows → supplier_invoice_payments.
-  const { data: supplierPaymentRows } = await supabase
-    .from('supplier_invoice_payments')
-    .select('supplier_invoice_id')
-    .eq('journal_entry_id', journalEntryId)
+  const supplierPaymentRows = await fetchAllRows<{ id: string; supplier_invoice_id: string | null }>(
+    ({ from, to }) => supabase.from('supplier_invoice_payments').select('id, supplier_invoice_id')
+      .eq('journal_entry_id', journalEntryId).order('id', { ascending: true }).range(from, to),
+  )
 
   const supplierPaymentIds = new Set<string>()
   for (const row of (supplierPaymentRows ?? []) as { supplier_invoice_id: string | null }[]) {
@@ -133,11 +134,11 @@ export async function getJournalEntryUnderlagReferences(
   }
 
   if (supplierPaymentIds.size > 0) {
-    const { data: paidSupplierInvoices } = await supabase
-      .from('supplier_invoices')
-      .select('id, supplier_invoice_number, document_id')
-      .eq('company_id', companyId)
-      .in('id', Array.from(supplierPaymentIds))
+    const paidSupplierInvoices = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
+      supabase.from('supplier_invoices').select('id, supplier_invoice_number, document_id')
+        .eq('company_id', companyId).in('id', Array.from(supplierPaymentIds))
+        .order('id', { ascending: true }).range(from, to),
+    )
 
     for (const si of (paidSupplierInvoices ?? []) as SupplierInvoiceRow[]) {
       supplierInvoices.set(si.id, {

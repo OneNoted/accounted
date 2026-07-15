@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   buildInvoiceCopyInitial,
   canCopyInvoice,
@@ -62,24 +63,46 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
 
     let cancelled = false
 
-    void supabase
-      .from('invoices')
-      .select('*, items:invoice_items(*)')
-      .eq('id', copyFromId)
-      .eq('company_id', company.id)
-      .single()
-      .then(({ data, error }) => {
+    const loadCopySource = async () => {
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', copyFromId)
+        .eq('company_id', company.id)
+        .single()
+
+      let items: Record<string, unknown>[] = []
+      if (!error && data) {
+        try {
+          items = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+            supabase
+              .from('invoice_items')
+              .select('*')
+              .eq('invoice_id', copyFromId)
+              .eq('company_id', company.id)
+              .order('id', { ascending: true })
+              .range(from, to),
+          )
+        } catch {
+          if (!cancelled) setCopyLoad({ sourceId: copyFromId, initial: null, failed: true })
+          return
+        }
+      }
+
         if (cancelled) return
-        if (error || !data || !canCopyInvoice(data)) {
+        const source = data ? { ...data, items } : null
+        if (error || !source || !canCopyInvoice(source)) {
           setCopyLoad({ sourceId: copyFromId, initial: null, failed: true })
           return
         }
         setCopyLoad({
           sourceId: copyFromId,
-          initial: buildInvoiceCopyInitial(data as InvoiceCopySource),
+          initial: buildInvoiceCopyInitial(source as InvoiceCopySource),
           failed: false,
         })
-      })
+    }
+
+    void loadCopySource()
 
     return () => {
       cancelled = true

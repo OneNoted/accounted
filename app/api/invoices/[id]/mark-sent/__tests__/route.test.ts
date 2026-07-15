@@ -187,7 +187,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     )
   })
 
-  it('archives the PDF even when journal entry creation fails (non-blocking)', async () => {
+  it('restores the draft and fails closed when journal entry creation fails', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })
     enqueue({ data: [{ id: 'inv-1' }], error: null })
@@ -195,32 +195,11 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
 
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{
-      success: boolean
-      journal_entry_id: string | null
-      partial?: boolean
-      partial_failures?: Array<{ step: string }>
-    }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBeNull()
-    expect(body.partial).toBe(true)
-    expect(body.partial_failures).toContainEqual(
-      expect.objectContaining({ step: 'journal_entry' }),
-    )
-
-    expect(mockUploadDocument).toHaveBeenCalledTimes(1)
-    expect(mockUploadDocument).toHaveBeenCalledWith(
-      expect.anything(),
-      'user-1',
-      'company-1',
-      expect.objectContaining({ name: 'faktura-F-2026010.pdf' }),
-      expect.objectContaining({
-        upload_source: 'system',
-        journal_entry_id: undefined,
-      })
-    )
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_BOOK_FAILED')
+    expect(mockUploadDocument).not.toHaveBeenCalled()
   })
 
   it('still returns 200 when PDF archival itself fails', async () => {

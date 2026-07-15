@@ -36,7 +36,7 @@ ensureInitialized()
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.mark_sent',
-  async (_request, { supabase, user, companyId, log }, { params }) => {
+  async (_request, { supabase, user, companyId, log, requestId }, { params }) => {
   const { id } = await params
 
   // Fetch invoice
@@ -48,22 +48,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (invoiceError || !invoice) {
-    return NextResponse.json({ error: 'Fakturan hittades inte' }, { status: 404 })
+    return errorResponseFromCode('INVOICE_NOT_FOUND', log, { requestId })
   }
 
   const isCreditNote = !!invoice.credited_invoice_id
 
   if (!isCreditNote && invoice.status !== 'draft') {
-    return NextResponse.json(
-      { error: 'Endast utkast kan markeras som skickade' },
-      { status: 400 }
-    )
+    return errorResponseFromCode('INVOICE_MARK_SENT_INVALID_STATUS', log, { requestId })
   }
   if (isCreditNote && !['draft', 'sent'].includes(invoice.status)) {
-    return NextResponse.json(
-      { error: 'Kreditfakturan kan inte utfärdas i nuvarande status' },
-      { status: 400 },
-    )
+    return errorResponseFromCode('INVOICE_MARK_SENT_INVALID_STATUS', log, { requestId })
   }
 
   // Assign invoice number now if this draft doesn't have one yet
@@ -71,10 +65,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
     log.error('failed to assign invoice number on mark-sent', err as Error)
-    return NextResponse.json(
-      { error: 'Kunde inte tilldela fakturanummer. Försök igen.' },
-      { status: 500 }
-    )
+    return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
   }
 
   // Fetch full company settings for PDF rendering and accounting method
@@ -85,7 +76,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (settingsError || !settings) {
-    return NextResponse.json({ error: 'Kunde inte läsa företagsinställningarna' }, { status: 500 })
+    return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', log, { requestId })
   }
 
   const accountingMethod = (settings.accounting_method || 'accrual') as AccountingMethod
@@ -102,7 +93,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .single()
 
     if (!original) {
-      return NextResponse.json({ error: 'Originalfakturan hittades inte' }, { status: 404 })
+      return errorResponseFromCode('INVOICE_CREDIT_ORIGINAL_NOT_FOUND', log, { requestId })
     }
 
     originalInvoice = original as CreditNoteOriginalInvoice
@@ -119,10 +110,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     originalInvoice?.status === 'credited' &&
     (!journalEntryRequired || !!invoice.journal_entry_id)
   ) {
-    return NextResponse.json(
-      { error: 'Kreditfakturan har redan utfärdats' },
-      { status: 400 },
-    )
+    return errorResponseFromCode('INVOICE_CREDIT_ALREADY_ISSUED', log, { requestId })
   }
 
   // Compare-and-set prevents two concurrent requests from posting two journal
@@ -138,13 +126,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select('id')
 
     if (updateError) {
-      return NextResponse.json({ error: 'Kunde inte uppdatera status' }, { status: 500 })
+      log.error('invoice mark-sent status update failed', updateError)
+      return errorResponseFromCode('INVOICE_MARK_SENT_STATUS_FAILED', log, { requestId })
     }
     if (!updatedRows || updatedRows.length === 0) {
-      return NextResponse.json(
-        { error: 'Fakturan har redan skickats av en annan begäran' },
-        { status: 409 },
-      )
+      return errorResponseFromCode('INVOICE_MARK_SENT_RACE', log, { requestId })
     }
     statusFlipped = true
   }
@@ -180,9 +166,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           .eq('status', 'sent')
           .is('journal_entry_id', null)
       }
-      return errorResponseFromCode('INVOICE_CREDIT_ISSUE_INCOMPLETE', log, {
-        details: { failures: issueResult.failures },
-      })
+      return errorResponseFromCode(
+        issueResult.repairRequired
+          ? 'INVOICE_CREDIT_REPAIR_REQUIRED'
+          : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
+        log,
+        {
+          requestId,
+          details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
+        },
+      )
     }
   } else if (isRealInvoice && accountingMethod === 'accrual') {
     try {
@@ -233,7 +226,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           log.error('mark-sent: journal_entry_id link to invoice failed', linkError, {
             journalEntryId: journalEntry.id,
           })
-          partialFailures.push({ step: 'journal_link', reason: linkError.message })
+          partialFailures.push({
+            step: 'journal_link',
+            reason: 'Verifikatet skapades men kunde inte kopplas till fakturan.',
+          })
         }
       } else {
         partialFailures.push({
@@ -245,9 +241,30 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       log.error('failed to create invoice journal entry on mark-sent', err as Error)
       partialFailures.push({
         step: 'journal_entry',
-        reason: err instanceof Error ? err.message : 'Okänt fel',
+        reason: 'Fakturans verifikat kunde inte skapas.',
       })
     }
+  }
+
+  if (isRealInvoice && accountingMethod === 'accrual' && !isCreditNote && !journalEntryId) {
+    if (statusFlipped) {
+      const { error: rollbackError } = await supabase
+        .from('invoices')
+        .update({ status: 'draft' })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .eq('status', 'sent')
+        .is('journal_entry_id', null)
+      if (rollbackError) log.error('failed to restore draft after mark-sent booking failure', rollbackError)
+    }
+    return errorResponseFromCode('INVOICE_MARK_SENT_BOOK_FAILED', log, { requestId })
+  }
+
+  if (partialFailures.some((failure) => failure.step === 'journal_link')) {
+    return errorResponseFromCode('INVOICE_MARK_SENT_REPAIR_REQUIRED', log, {
+      requestId,
+      details: { failure_steps: ['journal_link'] },
+    })
   }
 
   // Render and archive the PDF as underlag so it remains retrievable even if
@@ -295,7 +312,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       log.error('failed to archive invoice PDF on mark-sent', err as Error)
       partialFailures.push({
         step: 'pdf_archive',
-        reason: err instanceof Error ? err.message : 'Okänt fel',
+        reason: 'Fakturans PDF kunde inte arkiveras.',
       })
     }
   }

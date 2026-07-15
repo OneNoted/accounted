@@ -454,6 +454,8 @@ describe('POST /api/invoices (create credit note)', () => {
     enqueue({ data: creditNote, error: null })
     // Insert credit note items
     enqueue({ data: null, error: null })
+    // Mark creation complete
+    enqueue({ data: null, error: null })
     // Fetch complete credit note
     enqueue({ data: { ...creditNote, items: [] }, error: null })
 
@@ -469,7 +471,7 @@ describe('POST /api/invoices (create credit note)', () => {
     expect(status).toBe(200)
     expect(body.data.status).toBe('draft')
     expect(emitSpy).not.toHaveBeenCalled()
-    expect(mockSupabase.from).toHaveBeenCalledTimes(5)
+    expect(mockSupabase.from).toHaveBeenCalledTimes(6)
   })
 
   it('returns an existing credit-note draft instead of creating a duplicate', async () => {

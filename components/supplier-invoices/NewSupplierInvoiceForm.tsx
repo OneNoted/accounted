@@ -305,6 +305,7 @@ export default function NewSupplierInvoiceForm({
   // with onCreated (dialog mode), otherwise navigate like the old standalone
   // page did.
   const finishCreate = (invoiceId?: string) => {
+    createFinishedRef.current = true
     if (onCreated) onCreated(invoiceId)
     else router.push(afterCreate(invoiceId))
   }
@@ -334,6 +335,8 @@ export default function NewSupplierInvoiceForm({
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [newSupplier, setNewSupplier] = useState<NewSupplierForm>(EMPTY_NEW_SUPPLIER)
   const [documentFiles, setDocumentFiles] = useState<UploadedFile[]>([])
+  const documentFilesRef = useRef<UploadedFile[]>([])
+  const createFinishedRef = useRef(false)
 
   // Inbox/AI state
   const [extractedData, setExtractedData] = useState<InvoiceExtractionResult | null>(null)
@@ -381,6 +384,19 @@ export default function NewSupplierInvoiceForm({
   })
 
   useUnsavedChanges(isDirty)
+
+  useEffect(() => {
+    documentFilesRef.current = documentFiles
+  }, [documentFiles])
+
+  useEffect(() => () => {
+    if (inboxItemId || createFinishedRef.current) return
+    for (const file of documentFilesRef.current) {
+      if (file.status === 'uploaded' && file.id) {
+        void fetch(`/api/documents/${file.id}`, { method: 'DELETE', keepalive: true })
+      }
+    }
+  }, [inboxItemId])
 
   const { fields, append, remove, replace } = useFieldArray({ control, name: 'items' })
   const watchedItems = watch('items')

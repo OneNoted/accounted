@@ -35,6 +35,7 @@ export interface IssueCreditNoteResult {
   complete: boolean
   journalEntryId: string | null
   journalEntryRequired: boolean
+  repairRequired: boolean
   failures: CreditNoteIssueFailure[]
 }
 
@@ -153,10 +154,25 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
         journalEntryId = journalEntry?.id ?? null
       }
     } catch (error) {
-      log.error('failed to create or recover credit note journal entry on issue', error, {
-        creditNoteId: creditNote.id,
-      })
-      failures.push({ step: 'journal_entry', reason: errorMessage(error) })
+      // A concurrent issuer may have won the unique posted-source guard after
+      // our initial lookup. Re-read and reuse that immutable voucher.
+      try {
+        journalEntryId = await findExistingCreditJournalEntry(
+          supabase,
+          companyId,
+          issuedCreditNote,
+        )
+      } catch (recoveryError) {
+        log.error('failed to recover credit note journal entry after create conflict', recoveryError, {
+          creditNoteId: creditNote.id,
+        })
+      }
+      if (!journalEntryId) {
+        log.error('failed to create or recover credit note journal entry on issue', error, {
+          creditNoteId: creditNote.id,
+        })
+        failures.push({ step: 'journal_entry', reason: errorMessage(error) })
+      }
     }
 
     if (!journalEntryId) {
@@ -166,7 +182,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           reason: 'Ingen öppen bokföringsperiod hittades för kreditfakturans datum.',
         })
       }
-      return { complete: false, journalEntryId, journalEntryRequired, failures }
+      return { complete: false, journalEntryId, journalEntryRequired, repairRequired: false, failures }
     }
 
     if (creditNote.journal_entry_id !== journalEntryId) {
@@ -187,7 +203,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           step: 'journal_link',
           reason: linkError?.message ?? 'Kreditfakturan kunde inte kopplas till verifikatet.',
         })
-        return { complete: false, journalEntryId, journalEntryRequired, failures }
+        return { complete: false, journalEntryId, journalEntryRequired, repairRequired: true, failures }
       }
     }
 
@@ -214,7 +230,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
       }
 
       if (failures.length > 0) {
-        return { complete: false, journalEntryId, journalEntryRequired, failures }
+        return { complete: false, journalEntryId, journalEntryRequired, repairRequired: true, failures }
       }
     }
   }
@@ -238,7 +254,13 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
         step: 'original_status',
         reason: originalStatusError?.message ?? 'Originalfakturan kunde inte markeras som krediterad.',
       })
-      return { complete: false, journalEntryId, journalEntryRequired, failures }
+      return {
+        complete: false,
+        journalEntryId,
+        journalEntryRequired,
+        repairRequired: journalEntryRequired && !!journalEntryId,
+        failures,
+      }
     }
     originalStatusChanged = true
   }
@@ -254,5 +276,5 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
     }
   }
 
-  return { complete: true, journalEntryId, journalEntryRequired, failures }
+  return { complete: true, journalEntryId, journalEntryRequired, repairRequired: false, failures }
 }

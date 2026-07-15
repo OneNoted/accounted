@@ -681,9 +681,34 @@ export const CreateCustomerSchema = z.object({
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
+}).superRefine((customer, ctx) => {
+  if (customer.personal_number && customer.customer_type !== 'individual') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['personal_number'],
+      message: 'Personal number is only allowed for individual customers',
+    })
+  }
 })
 
-export const UpdateCustomerSchema = CreateCustomerSchema.partial()
+export const UpdateCustomerSchema = z.object({
+  name: z.string().min(1, 'Customer name is required').optional(),
+  customer_type: CustomerTypeSchema.optional(),
+  customer_number: z.string().trim().max(32).nullable().optional(),
+  email: z.string().email('Invalid email address').optional(),
+  phone: z.string().optional(),
+  address_line1: z.string().optional(),
+  address_line2: z.string().optional(),
+  postal_code: z.string().optional(),
+  city: z.string().optional(),
+  country: z.string().optional(),
+  org_number: z.string().optional(),
+  vat_number: z.string().optional(),
+  personal_number: z.string().regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number').nullable().optional(),
+  language: z.enum(['sv', 'en']).optional(),
+  default_payment_terms: z.number().int().positive().optional(),
+  notes: z.string().optional(),
+})
 
 // ============================================================
 // Supplier schemas

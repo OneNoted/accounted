@@ -2987,6 +2987,7 @@
     "load_failed_title": "Could not load settings",
     "no_active_company": "No active company",
     "company_settings_failed": "Could not load company settings",
+    "fiscal_period_failed": "Could not load the fiscal period",
     "original_invoice_failed": "Could not load the original invoice",
     "journal_preview_intro": "The following bookkeeping verifikat is created automatically:",
     "voucher_description": "Sales invoice{numberSpace}{customerSuffix}",

@@ -289,6 +289,7 @@ async function createCreditNote(
     .select('*, customer:customers(*), items:invoice_items(*)')
     .eq('credited_invoice_id', input.credited_invoice_id)
     .eq('company_id', companyId)
+    .eq('creation_complete', true)
     .maybeSingle()
 
   if (existingCreditNoteError) {
@@ -371,6 +372,7 @@ async function createCreditNote(
       // against the same dimension cells in reports (dimensions PR7).
       default_dimensions: originalInvoice.default_dimensions ?? {},
       status: 'draft',
+      creation_complete: false,
     })
     .select()
     .single()
@@ -382,6 +384,7 @@ async function createCreditNote(
         .select('*, customer:customers(*), items:invoice_items(*)')
         .eq('credited_invoice_id', input.credited_invoice_id)
         .eq('company_id', companyId)
+        .eq('creation_complete', true)
         .maybeSingle()
       if (racedCreditNote) return NextResponse.json({ data: racedCreditNote })
     }
@@ -399,7 +402,17 @@ async function createCreditNote(
   const { error: itemsError } = await supabase.from('invoice_items').insert(creditNoteItems)
 
   if (itemsError) {
-    await supabase.from('invoices').delete().eq('id', creditNote.id)
+    const { error: cleanupError } = await supabase
+      .from('invoices')
+      .delete()
+      .eq('id', creditNote.id)
+      .eq('company_id', companyId)
+      .eq('creation_complete', false)
+    if (cleanupError) {
+      log.error('failed to clean up incomplete credit note', cleanupError, {
+        creditNoteId: creditNote.id,
+      })
+    }
     log.error('credit note items insert failed; rolled back', itemsError, {
       creditNoteId: creditNote.id,
     })
@@ -409,11 +422,32 @@ async function createCreditNote(
     })
   }
 
-  const { data: completeCreditNote } = await supabase
+  const { error: completionError } = await supabase
+    .from('invoices')
+    .update({ creation_complete: true, updated_at: new Date().toISOString() })
+    .eq('id', creditNote.id)
+    .eq('company_id', companyId)
+    .eq('creation_complete', false)
+
+  if (completionError) {
+    log.error('failed to mark credit note creation complete', completionError, {
+      creditNoteId: creditNote.id,
+    })
+    return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, { requestId })
+  }
+
+  const { data: completeCreditNote, error: completeCreditNoteError } = await supabase
     .from('invoices')
     .select('*, customer:customers(*), items:invoice_items(*)')
     .eq('id', creditNote.id)
+    .eq('company_id', companyId)
+    .eq('creation_complete', true)
     .single()
+
+  if (completeCreditNoteError || !completeCreditNote) {
+    log.error('failed to read completed credit note', completeCreditNoteError)
+    return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, { requestId })
+  }
 
   // A credit note is only issued when the user sends it or marks it as sent.
   // Until then it is a non-editable draft: no journal entry is created and

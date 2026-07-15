@@ -41,9 +41,12 @@ describe('buildCreditNoteItem', () => {
       vat_amount: -500,
       deduction_type: 'rot',
       deduction_amount: -600,
+      labor_hours: 2,
       work_type: 'BYGG',
       housing_designation: 'Test 1:2',
       revenue_account: '3041',
+      accrual_period_start: '2026-07-01',
+      accrual_period_end: '2026-12-31',
       accrual_balance_account: '2970',
       dimensions: { '6': 'P001' },
     })

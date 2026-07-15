@@ -118,7 +118,7 @@ export const DELETE = withRouteContext(
   'article.delete',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ articleId: id })
 
     const { error: articleError } = await supabase
@@ -143,6 +143,7 @@ export const DELETE = withRouteContext(
       .from('invoice_items')
       .select('id', { count: 'exact', head: true })
       .eq('article_id', id)
+      .eq('company_id', companyId)
 
     if (usageError) {
       opLog.error('article usage check failed', usageError)
@@ -176,6 +177,11 @@ export const DELETE = withRouteContext(
     if (deletedCount === 0) {
       return errorResponseFromCode('ARTICLE_NOT_FOUND', opLog, { requestId })
     }
+
+    await eventBus.emit({
+      type: 'article.deleted',
+      payload: { articleId: id, companyId, userId: user.id },
+    })
 
     return NextResponse.json({ success: true })
   },

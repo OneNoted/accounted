@@ -428,6 +428,41 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('retries delivery for an already-issued credit note after provider failure', async () => {
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2024001',
+      status: 'sent',
+      credited_invoice_id: 'inv-1',
+      customer,
+      items: invoice.items,
+    })
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2024001',
+        status: 'credited',
+        journal_entry_id: 'original-je-1',
+        paid_at: null,
+        paid_amount: null,
+        total: 12500,
+      },
+      error: null,
+    })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'retry-message-1' })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/credit-1/send', { method: 'POST' }),
+      createMockRouteParams({ id: 'credit-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(mockIssueCreditNote).toHaveBeenCalledTimes(1)
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+  })
+
   it('skips journal entry for cash method', async () => {
     const cashCompany = makeCompanySettings({ accounting_method: 'cash' })
     enqueue({ data: invoice, error: null })
@@ -565,12 +600,10 @@ describe('POST /api/invoices/[id]/send', () => {
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
-    // Provider errors map to 502 PROVIDER_FAILED with the provider message in details.
+    // Provider errors map to a safe retryable response without leaking provider text.
     expect(status).toBe(502)
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_PROVIDER_FAILED')
-    expect(
-      (body.error as unknown as { details?: { providerError?: string } }).details?.providerError,
-    ).toContain('SMTP error')
+    expect((body.error as unknown as { details?: { retryable?: boolean } }).details?.retryable).toBe(true)
   })
 
   it('renders the final PDF as if already sent (no UTKAST banner)', async () => {

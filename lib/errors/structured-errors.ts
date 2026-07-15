@@ -771,6 +771,41 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The credit note could not be issued completely. No email was sent. Please try again.',
   },
+  INVOICE_CREDIT_REPAIR_REQUIRED: {
+    httpStatus: 500,
+    message_sv: 'Kreditfakturans verifikat skapades, men utfärdandet måste slutföras. Försök igen eller kontakta support.',
+    message_en: 'The credit-note voucher was created, but issuance must be completed. Retry or contact support.',
+  },
+  INVOICE_CREDIT_ALREADY_ISSUED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan har redan utfärdats.',
+    message_en: 'The credit note has already been issued.',
+  },
+  INVOICE_MARK_SENT_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Fakturan kan inte markeras som skickad i nuvarande status.',
+    message_en: 'The invoice cannot be marked as sent in its current status.',
+  },
+  INVOICE_MARK_SENT_STATUS_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturans status kunde inte uppdateras.',
+    message_en: 'The invoice status could not be updated.',
+  },
+  INVOICE_MARK_SENT_RACE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan ändrades av en annan begäran. Ladda om och försök igen.',
+    message_en: 'The invoice was changed by another request. Reload and retry.',
+  },
+  INVOICE_MARK_SENT_BOOK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturan kunde inte bokföras och ligger kvar som utkast.',
+    message_en: 'The invoice could not be posted and remains a draft.',
+  },
+  INVOICE_MARK_SENT_REPAIR_REQUIRED: {
+    httpStatus: 500,
+    message_sv: 'Verifikatet skapades, men kopplingen till fakturan måste återställas. Kontakta support.',
+    message_en: 'The voucher was created, but its invoice link must be repaired. Contact support.',
+  },
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
@@ -1655,6 +1690,16 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Artikeln kunde inte uppdateras.',
     message_en: 'Failed to update article.',
+  },
+  INVOICE_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturan kunde inte tas bort eller makuleras.',
+    message_en: 'The invoice could not be deleted or cancelled.',
+  },
+  CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv: 'Personnummer kan endast sparas för privatkunder.',
+    message_en: 'Personal numbers can only be stored for individual customers.',
   },
   ARTICLE_DELETE_FAILED: {
     httpStatus: 500,
