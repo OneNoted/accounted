@@ -1656,6 +1656,16 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Artikeln kunde inte uppdateras.',
     message_en: 'Failed to update article.',
   },
+  ARTICLE_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Artikeln kunde inte tas bort.',
+    message_en: 'Failed to delete article.',
+  },
+  ARTICLE_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Artikeln har använts på en faktura och kan därför inte tas bort.',
+    message_en: 'The article has been used on an invoice and cannot be deleted.',
+  },
   ARTICLE_REVENUE_ACCOUNT_INVALID: {
     httpStatus: 400,
     message_sv: 'Försäljningskontot finns inte eller är inte ett aktivt intäktskonto (klass 3).',

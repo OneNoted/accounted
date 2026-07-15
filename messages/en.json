@@ -4249,6 +4249,7 @@
     "back": "Back to articles",
     "edit": "Edit",
     "deactivate": "Deactivate",
+    "delete": "Delete",
     "edit_dialog_title": "Edit article",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
     "type_vara": "Goods",
@@ -4279,6 +4280,11 @@
     "deactivate_confirm_label": "Deactivate",
     "deactivated_title": "Article deactivated",
     "deactivate_failed_title": "Could not deactivate article",
+    "delete_confirm_title": "Delete {name}",
+    "delete_confirm_description": "The article and its article number are permanently deleted. This is only possible if the article has never been used on an invoice.",
+    "delete_confirm_label": "Delete",
+    "deleted_title": "Article deleted",
+    "delete_failed_title": "Could not delete article",
     "activate_and_save": "Activate and save"
   },
   "form_article": {
