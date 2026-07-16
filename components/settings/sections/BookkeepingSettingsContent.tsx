@@ -42,7 +42,11 @@ export function BookkeepingSettingsContent() {
     const lockedThrough = (formData.get('bookkeeping_locked_through') as string) || null
     const accountingMethod = (formData.get('accounting_method') as string) || 'accrual'
     const defaultVoucherSeries = (formData.get('default_voucher_series') as string) || 'A'
-    const deferInvoiceBooking = formData.get('defer_invoice_booking') === 'true'
+    // Deferred booking is an accrual-only concept (#967): normalize to false
+    // under kontantmetoden so switching back to accrual can never re-activate
+    // a stale flag the user set in a mode where it had no effect.
+    const deferInvoiceBooking =
+      accountingMethod === 'accrual' && formData.get('defer_invoice_booking') === 'true'
 
     const updates: Record<string, unknown> = {
       bookkeeping_locked_through: lockedThrough,

@@ -114,6 +114,16 @@ describe('POST /api/invoices/[id]/book', () => {
     expect(body.error.code).toBe('INVOICE_BOOK_INVALID_STATUS')
   })
 
+  it('fails closed when company settings cannot be read', async () => {
+    enqueue({ data: makeUnbookedInvoice(), error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await bookRequest())
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INVOICE_BOOK_FAILED')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('rejects booking under the cash method', async () => {
     enqueue({ data: makeUnbookedInvoice(), error: null })
     enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null })

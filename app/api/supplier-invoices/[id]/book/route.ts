@@ -51,12 +51,18 @@ export const POST = withRouteContext(
 
     // The registration entry is a faktureringsmetoden concept; under
     // kontantmetoden the invoice is booked in full when it is paid.
-    const { data: settings } = await supabase
+    const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
       .select('accounting_method')
       .eq('company_id', companyId)
       .single()
-    if ((settings?.accounting_method || 'accrual') !== 'accrual') {
+    // Fail closed: booking with guessed settings could apply the wrong
+    // method's rules, so a failed/missing settings read aborts.
+    if (settingsError || !settings) {
+      log.error('failed to load company settings for deferred booking', settingsError ?? undefined, { invoiceId: id })
+      return errorResponseFromCode('SI_BOOK_FAILED', log, { requestId })
+    }
+    if ((settings.accounting_method || 'accrual') !== 'accrual') {
       return errorResponseFromCode('SI_BOOK_CASH_METHOD', log, { requestId })
     }
 
@@ -90,15 +96,18 @@ export const POST = withRouteContext(
       })
     }
 
-    // CAS-guarded link: only claim the invoice if it is still unbooked. A
-    // concurrent book/mark-paid that got there first would otherwise leave
-    // this entry double-posting 2440 + ingående moms, so cancel it.
+    // CAS-guarded link: only claim the invoice if it is still unbooked AND
+    // still in a bookable status. A concurrent book/mark-paid/credit that got
+    // there first would otherwise leave this entry double-posting 2440 +
+    // ingående moms (mark-paid moves to paid without touching the
+    // registration link), so cancel it.
     const { data: linked, error: linkError } = await supabase
       .from('supplier_invoices')
       .update({ registration_journal_entry_id: journalEntry.id })
       .eq('id', id)
       .eq('company_id', companyId)
       .is('registration_journal_entry_id', null)
+      .in('status', BOOKABLE_STATUSES)
       .select()
       .single()
 

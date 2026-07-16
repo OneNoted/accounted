@@ -284,9 +284,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const response = await fetch(`/api/invoices/${invoice.id}/book`, { method: 'POST' })
       const data = await response.json()
       if (!response.ok) {
-        throw new Error(data.error || t('book_failed_fallback'))
+        // data.error is a structured object for this route; only strings are
+        // usable as a toast message.
+        const message =
+          typeof data.error === 'string'
+            ? data.error
+            : typeof data.error?.message === 'string'
+              ? data.error.message
+              : t('book_failed_fallback')
+        throw new Error(message)
       }
-      toast({ title: t('booked_title'), description: t('booked_description') })
+      if (Array.isArray(data.warnings) && data.warnings.length > 0) {
+        // Booked, but a follow-up is needed (e.g. periodiseringar failed).
+        toast({ title: t('booked_title'), description: t('booked_with_warnings_description'), variant: 'destructive' })
+      } else {
+        toast({ title: t('booked_title'), description: t('booked_description') })
+      }
       fetchInvoice()
     } catch (error) {
       toast({

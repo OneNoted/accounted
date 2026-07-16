@@ -52,15 +52,21 @@ export const POST = withRouteContext(
 
     // The revenue-at-issue entry is a faktureringsmetoden concept; under
     // kontantmetoden the sale is booked in full when it is paid.
-    const { data: settings } = await supabase
+    const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', companyId)
       .single()
-    if ((settings?.accounting_method || 'accrual') !== 'accrual') {
+    // Fail closed: booking with guessed settings could apply the wrong
+    // method's or entity type's rules, so a failed/missing settings read aborts.
+    if (settingsError || !settings) {
+      log.error('failed to load company settings for deferred booking', settingsError ?? undefined, { invoiceId: id })
+      return errorResponseFromCode('INVOICE_BOOK_FAILED', log, { requestId })
+    }
+    if ((settings.accounting_method || 'accrual') !== 'accrual') {
       return errorResponseFromCode('INVOICE_BOOK_CASH_METHOD', log, { requestId })
     }
-    const entityType = ((settings as Partial<CompanySettings>)?.entity_type as EntityType) || 'enskild_firma'
+    const entityType = ((settings as Partial<CompanySettings>).entity_type as EntityType) || 'enskild_firma'
 
     let journalEntry
     try {
@@ -89,15 +95,18 @@ export const POST = withRouteContext(
       })
     }
 
-    // CAS-guarded link: only claim the invoice if it is still unbooked. A
-    // concurrent book/mark-paid that got there first would otherwise leave
-    // this entry double-posting revenue, so cancel it.
+    // CAS-guarded link: only claim the invoice if it is still unbooked, still
+    // in a bookable status, and still uncredited. A concurrent
+    // book/mark-paid/credit that got there first would otherwise leave this
+    // entry double-posting revenue, so cancel it.
     const { data: linked, error: linkError } = await supabase
       .from('invoices')
       .update({ journal_entry_id: journalEntry.id })
       .eq('id', id)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
+      .in('status', BOOKABLE_STATUSES)
+      .is('credited_invoice_id', null)
       .select()
       .single()
 

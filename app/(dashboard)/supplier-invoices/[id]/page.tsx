@@ -291,6 +291,10 @@ export default function SupplierInvoiceDetailPage() {
     const result = await res.json()
     if (!res.ok) {
       toast({ title: t('book_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } else if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+      // Booked, but a follow-up is needed (e.g. periodiseringar failed).
+      toast({ title: t('booked_title'), description: t('booked_with_warnings_description'), variant: 'destructive' })
+      fetchInvoice()
     } else {
       toast({ title: t('booked_title'), description: t('booked_description') })
       fetchInvoice()
