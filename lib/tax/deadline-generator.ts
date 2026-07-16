@@ -4,6 +4,7 @@
 
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { TaxDeadlineType, DeadlineStatus } from '@/types'
 
 const log = createLogger('deadline-generator')
@@ -24,7 +25,16 @@ export const TAX_RELEVANT_FIELDS = [
   'vat_registered',
   'pays_salaries',
   'fiscal_year_start_month',
+  'tax_turnover_over_40m',
+  'vat_has_eu_trade',
+  'vat_filing_method',
+  'periodisk_sammanstallning_enabled',
+  'periodisk_sammanstallning_period',
+  'periodisk_sammanstallning_filing_method',
 ] as const
+
+export const DEADLINE_SETTINGS_SELECT =
+  'company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, tax_turnover_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
 
 /**
  * Check if any tax-relevant fields changed
@@ -39,6 +49,34 @@ export function didTaxFieldsChange(
     }
   }
   return false
+}
+
+export function hasTaxRelevantFields(body: Record<string, unknown>): boolean {
+  return TAX_RELEVANT_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(body, field))
+}
+
+export function toDeadlineSettings(
+  settings: Partial<CompanySettingsForDeadlines>,
+): CompanySettingsForDeadlines {
+  if (settings.entity_type !== 'aktiebolag' && settings.entity_type !== 'enskild_firma') {
+    throw new Error('Company entity type is required to generate tax deadlines')
+  }
+
+  return {
+    entity_type: settings.entity_type,
+    moms_period: settings.moms_period ?? null,
+    f_skatt: settings.f_skatt ?? true,
+    vat_registered: settings.vat_registered ?? false,
+    pays_salaries: settings.pays_salaries ?? false,
+    fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
+    tax_turnover_over_40m: settings.tax_turnover_over_40m ?? false,
+    vat_has_eu_trade: settings.vat_has_eu_trade ?? false,
+    vat_filing_method: settings.vat_filing_method ?? 'electronic',
+    periodisk_sammanstallning_enabled: settings.periodisk_sammanstallning_enabled ?? false,
+    periodisk_sammanstallning_period: settings.periodisk_sammanstallning_period ?? 'monthly',
+    periodisk_sammanstallning_filing_method:
+      settings.periodisk_sammanstallning_filing_method ?? 'electronic',
+  }
 }
 
 /**
@@ -69,8 +107,32 @@ export async function generateTaxDeadlinesForUser(
   // Get applicable deadline configs based on settings
   const applicableConfigs = getApplicableDeadlineConfigs(settings)
 
-  const startDate = `${Math.min(...years)}-01-01`
-  const endDate = `${Math.max(...years)}-12-31`
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const todayIso = formatDateISO(today)
+  const endDate = `${Math.max(...years) + 1}-12-31`
+
+  // Completed future deadlines represent real filing progress. Preserve them
+  // and do not create a second pending row for the same obligation.
+  const { data: completedRows, error: completedRowsError } = await supabase
+    .from('deadlines')
+    .select('tax_deadline_type, tax_period')
+    .eq('company_id', companyId)
+    .eq('source', 'system')
+    .eq('is_completed', true)
+    .gte('due_date', todayIso)
+
+  if (completedRowsError) {
+    log.error('Error fetching completed deadlines:', completedRowsError)
+    throw completedRowsError
+  }
+
+  const completedKeys = new Set(
+    (completedRows ?? []).map(
+      (row: { tax_deadline_type: string | null; tax_period: string | null }) =>
+        `${row.tax_deadline_type}:${row.tax_period}`,
+    ),
+  )
 
   // Generate new deadlines
   const deadlines: Array<{
@@ -103,9 +165,12 @@ export async function generateTaxDeadlinesForUser(
         const dueDate = formatDateISO(adjustedDate)
 
         // Skip if the deadline is in the past
-        const today = new Date()
-        today.setHours(0, 0, 0, 0)
         if (adjustedDate < today) {
+          continue
+        }
+
+        const deadlineKey = `${config.type}:${instance.period}`
+        if (completedKeys.has(deadlineKey)) {
           continue
         }
 
@@ -139,15 +204,24 @@ export async function generateTaxDeadlinesForUser(
     }
   }
 
+  const uniqueDeadlines = Array.from(
+    new Map(
+      deadlines.map((deadline) => [
+        `${deadline.tax_deadline_type}:${deadline.tax_period}`,
+        deadline,
+      ]),
+    ).values(),
+  )
+
   // Insert the replacement rows BEFORE deleting the old set. A failed insert
-  // then leaves the previous deadlines intact — the old delete-first order
+  // then leaves the previous deadlines intact: the old delete-first order
   // meant any insert failure (like the 23502 user_id regression) wiped the
   // company's tax deadlines without replacing them.
   let newIds: string[] = []
-  if (deadlines.length > 0) {
+  if (uniqueDeadlines.length > 0) {
     const { data: insertedData, error: insertError } = await supabase
       .from('deadlines')
-      .insert(deadlines)
+      .insert(uniqueDeadlines)
       .select('id')
 
     if (insertError) {
@@ -164,7 +238,8 @@ export async function generateTaxDeadlinesForUser(
     .delete()
     .eq('company_id', companyId)
     .eq('source', 'system')
-    .gte('due_date', startDate)
+    .eq('is_completed', false)
+    .gte('due_date', todayIso)
     .lte('due_date', endDate)
 
   if (newIds.length > 0) {
@@ -179,7 +254,7 @@ export async function generateTaxDeadlinesForUser(
   }
 
   return {
-    created: deadlines.length,
+    created: uniqueDeadlines.length,
     deleted: deletedData?.length || 0,
   }
 }
@@ -232,40 +307,51 @@ export async function regenerateTaxDeadlinesForUser(
   return generateTaxDeadlinesForUser(supabase, companyId, newSettings, [currentYear, currentYear + 1])
 }
 
+interface DeadlineSettingsRow extends Partial<CompanySettingsForDeadlines> {
+  company_id: string
+}
+
+interface UpcomingDeadlineCompanyRow {
+  id: string
+  company_id: string
+}
+
+export function findSettingsMissingUpcomingDeadlines(
+  settingsRows: DeadlineSettingsRow[],
+  upcomingDeadlineRows: UpcomingDeadlineCompanyRow[],
+): DeadlineSettingsRow[] {
+  const companiesWithDeadlines = new Set(upcomingDeadlineRows.map((row) => row.company_id))
+  return settingsRows.filter((settings) => !companiesWithDeadlines.has(settings.company_id))
+}
+
+async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<DeadlineSettingsRow[]> {
+  return fetchAllRows<DeadlineSettingsRow>(({ from, to }) =>
+    supabase
+      .from('company_settings')
+      .select(DEADLINE_SETTINGS_SELECT)
+      .order('company_id', { ascending: true })
+      .range(from, to),
+  )
+}
+
 /**
- * Generate tax deadlines for the new year (called by annual cron job)
+ * Generate tax deadlines for the new year for every company.
  */
 export async function generateNewYearDeadlines(
   supabase: SupabaseClient
 ): Promise<{ usersProcessed: number; totalCreated: number }> {
   const newYear = new Date().getFullYear()
-
-  // Fetch all companies with company settings
-  const { data: allSettings, error } = await supabase
-    .from('company_settings')
-    .select('company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month')
-
-  if (error) {
-    log.error('Error fetching company settings:', error)
-    throw error
-  }
+  const allSettings = await fetchAllDeadlineSettings(supabase)
 
   let usersProcessed = 0
   let totalCreated = 0
 
-  for (const settings of allSettings || []) {
+  for (const settings of allSettings) {
     try {
       const result = await generateTaxDeadlinesForUser(
         supabase,
         settings.company_id,
-        {
-          entity_type: settings.entity_type,
-          moms_period: settings.moms_period,
-          f_skatt: settings.f_skatt,
-          vat_registered: settings.vat_registered,
-          pays_salaries: settings.pays_salaries ?? false,
-          fiscal_year_start_month: settings.fiscal_year_start_month,
-        },
+        toDeadlineSettings(settings),
         [newYear, newYear + 1]
       )
       usersProcessed++
@@ -276,4 +362,50 @@ export async function generateNewYearDeadlines(
   }
 
   return { usersProcessed, totalCreated }
+}
+
+/**
+ * Repair companies that have settings but no upcoming system tax deadlines.
+ */
+export async function backfillMissingTaxDeadlines(
+  supabase: SupabaseClient,
+): Promise<{ companiesScanned: number; companiesRepaired: number; totalCreated: number }> {
+  const today = formatDateISO(new Date())
+  const [allSettings, upcomingDeadlineRows] = await Promise.all([
+    fetchAllDeadlineSettings(supabase),
+    fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
+      supabase
+        .from('deadlines')
+        .select('id, company_id')
+        .eq('source', 'system')
+        .eq('deadline_type', 'tax')
+        .gte('due_date', today)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+  ])
+
+  const missingSettings = findSettingsMissingUpcomingDeadlines(allSettings, upcomingDeadlineRows)
+  let companiesRepaired = 0
+  let totalCreated = 0
+
+  for (const settings of missingSettings) {
+    try {
+      const result = await regenerateTaxDeadlinesForUser(
+        supabase,
+        settings.company_id,
+        toDeadlineSettings(settings),
+      )
+      companiesRepaired++
+      totalCreated += result.created
+    } catch (err) {
+      log.error(`Error repairing deadlines for company ${settings.company_id}:`, err)
+    }
+  }
+
+  return {
+    companiesScanned: allSettings.length,
+    companiesRepaired,
+    totalCreated,
+  }
 }

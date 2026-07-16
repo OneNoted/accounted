@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
+import {
+  DEADLINE_SETTINGS_SELECT,
+  regenerateTaxDeadlinesForUser,
+  toDeadlineSettings,
+} from '@/lib/tax/deadline-generator'
 
 /**
  * POST /api/tax-deadlines/generate
@@ -14,7 +18,7 @@ export const POST = withRouteContext(
     // Fetch company settings
     const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
-      .select('entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month')
+      .select(DEADLINE_SETTINGS_SELECT)
       .eq('company_id', companyId)
       .single()
 
@@ -26,14 +30,11 @@ export const POST = withRouteContext(
     }
 
     try {
-      const result = await regenerateTaxDeadlinesForUser(supabase, companyId, {
-        entity_type: settings.entity_type,
-        moms_period: settings.moms_period,
-        f_skatt: settings.f_skatt,
-        vat_registered: settings.vat_registered,
-        pays_salaries: settings.pays_salaries ?? false,
-        fiscal_year_start_month: settings.fiscal_year_start_month,
-      })
+      const result = await regenerateTaxDeadlinesForUser(
+        supabase,
+        companyId,
+        toDeadlineSettings(settings),
+      )
 
       return NextResponse.json({
         success: true,

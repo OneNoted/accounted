@@ -17,6 +17,10 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
   const [paysSalaries, setPaysSalaries] = useState(settings.pays_salaries ?? false)
+  const [momsPeriod, setMomsPeriod] = useState(settings.moms_period || '')
+  const [turnoverOver40m, setTurnoverOver40m] = useState(settings.tax_turnover_over_40m ?? false)
+  const [hasEuTrade, setHasEuTrade] = useState(settings.vat_has_eu_trade ?? false)
+  const [psEnabled, setPsEnabled] = useState(settings.periodisk_sammanstallning_enabled ?? false)
 
   const isEnskildFirma = settings.entity_type === 'enskild_firma'
 
@@ -69,7 +73,11 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             <Checkbox
               id="vat_registered"
               checked={vatRegistered}
-              onCheckedChange={(v) => setVatRegistered(v === true)}
+              onCheckedChange={(value) => {
+                const checked = value === true
+                setVatRegistered(checked)
+                if (checked && turnoverOver40m) setMomsPeriod('monthly')
+              }}
             />
             <input type="hidden" name="vat_registered" value={vatRegistered ? 'true' : 'false'} />
             <div className="space-y-1">
@@ -99,7 +107,8 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
                 <Label>{t('moms_period_label')}</Label>
                 <Select
                   name="moms_period"
-                  defaultValue={settings.moms_period || undefined}
+                  value={momsPeriod || undefined}
+                  onValueChange={setMomsPeriod}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder={t('select_period_placeholder')} />
@@ -115,26 +124,129 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
                 </p>
               </div>
 
-              <div className="max-w-xs space-y-2">
-                <Label>{t('periodisk_label')}</Label>
-                <Select
-                  name="periodisk_sammanstallning_period"
-                  defaultValue={settings.periodisk_sammanstallning_period || 'monthly'}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('select_period_placeholder')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
-                    <SelectItem value="quarterly">{t('period_quarterly')}</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {t('periodisk_help')}
-                </p>
+              <div className="flex items-start space-x-3">
+                <Checkbox
+                  id="vat_has_eu_trade"
+                  checked={hasEuTrade}
+                  onCheckedChange={(value) => {
+                    const checked = value === true
+                    setHasEuTrade(checked)
+                    if (!checked) setPsEnabled(false)
+                  }}
+                />
+                <input type="hidden" name="vat_has_eu_trade" value={hasEuTrade ? 'true' : 'false'} />
+                <div className="space-y-1">
+                  <Label htmlFor="vat_has_eu_trade" className="cursor-pointer">
+                    {t('vat_has_eu_trade_label')}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('vat_has_eu_trade_help')}
+                  </p>
+                </div>
               </div>
+
+              {momsPeriod === 'yearly' && !hasEuTrade && !isEnskildFirma && (
+                <div className="max-w-xs space-y-2">
+                  <Label>{t('vat_filing_method_label')}</Label>
+                  <Select
+                    name="vat_filing_method"
+                    defaultValue={settings.vat_filing_method || 'electronic'}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="electronic">{t('filing_method_electronic')}</SelectItem>
+                      <SelectItem value="paper">{t('filing_method_paper')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t('vat_filing_method_help')}</p>
+                </div>
+              )}
+
+              {hasEuTrade && (
+                <div className="space-y-4">
+                  <div className="flex items-start space-x-3">
+                    <Checkbox
+                      id="periodisk_sammanstallning_enabled"
+                      checked={psEnabled}
+                      onCheckedChange={(value) => setPsEnabled(value === true)}
+                    />
+                    <input
+                      type="hidden"
+                      name="periodisk_sammanstallning_enabled"
+                      value={psEnabled ? 'true' : 'false'}
+                    />
+                    <div className="space-y-1">
+                      <Label htmlFor="periodisk_sammanstallning_enabled" className="cursor-pointer">
+                        {t('periodisk_enabled_label')}
+                      </Label>
+                      <p className="text-xs text-muted-foreground">{t('periodisk_enabled_help')}</p>
+                    </div>
+                  </div>
+
+                  {psEnabled && (
+                    <div className="grid max-w-2xl grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>{t('periodisk_label')}</Label>
+                        <Select
+                          name="periodisk_sammanstallning_period"
+                          defaultValue={settings.periodisk_sammanstallning_period || 'monthly'}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
+                            <SelectItem value="quarterly">{t('period_quarterly')}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">{t('periodisk_help')}</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>{t('periodisk_filing_method_label')}</Label>
+                        <Select
+                          name="periodisk_sammanstallning_filing_method"
+                          defaultValue={settings.periodisk_sammanstallning_filing_method || 'electronic'}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="electronic">{t('filing_method_electronic')}</SelectItem>
+                            <SelectItem value="paper">{t('filing_method_paper')}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          {t('periodisk_filing_method_help')}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
+
+          <div className="flex items-start space-x-3">
+            <Checkbox
+              id="tax_turnover_over_40m"
+              checked={turnoverOver40m}
+              onCheckedChange={(value) => {
+                const checked = value === true
+                setTurnoverOver40m(checked)
+                if (checked && vatRegistered) setMomsPeriod('monthly')
+              }}
+            />
+            <input
+              type="hidden"
+              name="tax_turnover_over_40m"
+              value={turnoverOver40m ? 'true' : 'false'}
+            />
+            <div className="space-y-1">
+              <Label htmlFor="tax_turnover_over_40m" className="cursor-pointer">
+                {t('tax_turnover_over_40m_label')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t('tax_turnover_over_40m_help')}
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 

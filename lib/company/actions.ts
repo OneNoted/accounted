@@ -5,6 +5,11 @@ import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { normalizeVatNumber, isValidSwedishVatNumber, deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import {
+  regenerateTaxDeadlinesForUser,
+  toDeadlineSettings,
+} from '@/lib/tax/deadline-generator'
+import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 
 /**
@@ -237,7 +242,21 @@ async function createCompanyFromOnboardingImpl(params: {
     return { error: 'Kunde inte skapa räkenskapsår. Försök igen.' }
   }
 
-  // 5. Set as active company
+  // 5. Create the automatic tax deadlines while the onboarding data is still
+  // available. Treat this as part of company creation so a new company never
+  // starts in the broken state where valid settings exist without deadlines.
+  try {
+    await regenerateTaxDeadlinesForUser(
+      supabase,
+      newCompanyId,
+      toDeadlineSettings(settingsToSave as Partial<CompanySettingsForDeadlines>),
+    )
+  } catch (deadlineError) {
+    await rollback('tax deadline generation failed', deadlineError)
+    return { error: 'Kunde inte skapa skattedeadlines. Försök igen.' }
+  }
+
+  // 6. Set as active company
   try {
     await setActiveCompany(supabase, user.id, newCompanyId)
   } catch (err) {

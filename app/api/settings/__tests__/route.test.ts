@@ -19,9 +19,16 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const deadlineMocks = vi.hoisted(() => ({
+  regenerate: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/tax/deadline-generator', () => ({
-  didTaxFieldsChange: vi.fn().mockReturnValue(false),
-  regenerateTaxDeadlinesForUser: vi.fn().mockResolvedValue(undefined),
+  DEADLINE_SETTINGS_SELECT: 'company_id, entity_type, moms_period',
+  hasTaxRelevantFields: vi.fn((body: Record<string, unknown>) =>
+    ['entity_type', 'moms_period', 'f_skatt', 'vat_registered'].some((field) => field in body)),
+  regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
+  toDeadlineSettings: vi.fn((settings: Record<string, unknown>) => settings),
 }))
 
 import { PUT } from '../route'
@@ -82,6 +89,37 @@ describe('PUT /api/settings', () => {
 
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('regenerates deadlines when unchanged tax settings are saved', async () => {
+    const settings = {
+      company_id: 'company-1',
+      entity_type: 'aktiebolag',
+      moms_period: 'monthly',
+      f_skatt: true,
+      vat_registered: false,
+      pays_salaries: false,
+      fiscal_year_start_month: 1,
+      onboarding_complete: true,
+    }
+    enqueueMany([
+      { data: settings },
+      { data: { id: 's1', ...settings } },
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { f_skatt: true, vat_registered: false },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(200)
+    expect(deadlineMocks.regenerate).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ entity_type: 'aktiebolag', f_skatt: true }),
+    )
   })
 
   it('updates all three reminder thresholds', async () => {
@@ -147,6 +185,28 @@ describe('PUT /api/settings', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects quarterly VAT when taxable turnover is above SEK 40 million', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        vat_registered: true,
+        vat_number: 'SE556012579001',
+        moms_period: 'quarterly',
+        tax_turnover_over_40m: false,
+        onboarding_complete: true,
+      },
+    })
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { tax_turnover_over_40m: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 

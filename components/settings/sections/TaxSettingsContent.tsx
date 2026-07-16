@@ -53,8 +53,15 @@ export function TaxSettingsContent() {
       vat_registered: vatRegistered,
       vat_number: vatRegistered ? ((formData.get('vat_number') as string) || null) : null,
       moms_period: vatRegistered ? ((formData.get('moms_period') as string) || null) : null,
+      tax_turnover_over_40m: formData.get('tax_turnover_over_40m') === 'true',
+      vat_has_eu_trade: vatRegistered && formData.get('vat_has_eu_trade') === 'true',
+      vat_filing_method: (formData.get('vat_filing_method') as string) || 'electronic',
+      periodisk_sammanstallning_enabled:
+        vatRegistered && formData.get('periodisk_sammanstallning_enabled') === 'true',
       periodisk_sammanstallning_period:
         (formData.get('periodisk_sammanstallning_period') as string) || 'monthly',
+      periodisk_sammanstallning_filing_method:
+        (formData.get('periodisk_sammanstallning_filing_method') as string) || 'electronic',
       tax_contact_name: (formData.get('tax_contact_name') as string) || null,
       tax_contact_phone: (formData.get('tax_contact_phone') as string) || null,
       tax_contact_email: (formData.get('tax_contact_email') as string) || null,

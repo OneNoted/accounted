@@ -18,6 +18,7 @@ const supabase = createClient()
 
 export default function DeadlinesPage() {
   const { company } = useCompany()
+  const companyId = company?.id
   const t = useTranslations('deadlines')
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
@@ -26,16 +27,16 @@ export default function DeadlinesPage() {
   const { toast } = useToast()
 
   const fetchData = useCallback(async () => {
-    if (!company) return
+    if (!companyId) return
     setIsLoading(true)
 
     try {
       const today = new Date().toISOString().split('T')[0]
 
       const [deadlinesRes, customersRes, overdueRes] = await Promise.all([
-        supabase.from('deadlines').select('*, customer:customers(name)').eq('company_id', company.id).order('due_date', { ascending: true }),
-        supabase.from('customers').select('id, name').eq('company_id', company.id).order('name', { ascending: true }),
-        supabase.from('invoices').select('total_sek, total').eq('company_id', company.id).in('status', ['sent', 'unpaid']).lt('due_date', today),
+        supabase.from('deadlines').select('*, customer:customers(name)').eq('company_id', companyId).order('due_date', { ascending: true }),
+        supabase.from('customers').select('id, name').eq('company_id', companyId).order('name', { ascending: true }),
+        supabase.from('invoices').select('total_sek, total').eq('company_id', companyId).in('status', ['sent', 'unpaid']).lt('due_date', today),
       ])
 
       if (deadlinesRes.error) throw deadlinesRes.error
@@ -60,7 +61,7 @@ export default function DeadlinesPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [toast, t])
+  }, [companyId, toast, t])
 
   useEffect(() => {
     fetchData()

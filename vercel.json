@@ -11,7 +11,7 @@
     },
     {
       "path": "/api/tax-deadlines/cron",
-      "schedule": "0 0 2 1 *"
+      "schedule": "0 0 * * *"
     },
     {
       "path": "/api/extensions/enable-banking/sync/cron",

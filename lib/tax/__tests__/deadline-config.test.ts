@@ -14,9 +14,107 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     vat_registered: true,
     pays_salaries: false,
     fiscal_year_start_month: 1,
+    tax_turnover_over_40m: false,
+    vat_has_eu_trade: false,
+    vat_filing_method: 'electronic',
+    periodisk_sammanstallning_enabled: false,
+    periodisk_sammanstallning_period: 'monthly',
+    periodisk_sammanstallning_filing_method: 'electronic',
     ...overrides,
   }
 }
+
+describe('VAT filing deadlines', () => {
+  it('uses the second following month for monthly filers at or below SEK 40 million', () => {
+    const dates = getConfig('moms_monthly').generateDates(2026, makeSettings({ moms_period: 'monthly' }))
+
+    expect(dates[0]).toMatchObject({ day: 12, month: 2, year: 2026, period: '2026-01' })
+    expect(dates[10]).toMatchObject({ day: 17, month: 0, year: 2027, period: '2026-11' })
+  })
+
+  it('uses the following month for monthly filers above SEK 40 million', () => {
+    const dates = getConfig('moms_monthly').generateDates(2026, makeSettings({
+      moms_period: 'monthly',
+      tax_turnover_over_40m: true,
+    }))
+
+    expect(dates[0]).toMatchObject({ day: 26, month: 1, year: 2026, period: '2026-01' })
+    expect(dates[10]).toMatchObject({ day: 27, month: 11, year: 2026, period: '2026-11' })
+  })
+
+  it('uses May, August, November and February for quarterly VAT', () => {
+    const dates = getConfig('moms_quarterly').generateDates(2026, makeSettings())
+
+    expect(dates.map(({ day, month, year }) => ({ day, month, year }))).toEqual([
+      { day: 12, month: 4, year: 2026 },
+      { day: 17, month: 7, year: 2026 },
+      { day: 12, month: 10, year: 2026 },
+      { day: 12, month: 1, year: 2027 },
+    ])
+  })
+
+  it('uses the entity, EU-trade and filing-method rules for yearly VAT', () => {
+    const config = getConfig('moms_yearly')
+
+    expect(config.generateDates(2027, makeSettings({
+      entity_type: 'enskild_firma',
+      moms_period: 'yearly',
+    }))[0]).toMatchObject({ day: 12, month: 4, year: 2027, period: '2026' })
+    expect(config.generateDates(2027, makeSettings({
+      entity_type: 'enskild_firma',
+      moms_period: 'yearly',
+      vat_has_eu_trade: true,
+    }))[0]).toMatchObject({ day: 26, month: 1, year: 2027, period: '2026' })
+    expect(config.generateDates(2027, makeSettings({
+      moms_period: 'yearly',
+      vat_filing_method: 'paper',
+    }))[0]).toMatchObject({ day: 12, month: 6, year: 2027, period: '2026' })
+  })
+})
+
+describe('monthly tax and employer deadlines', () => {
+  it('uses the 12th for F-tax except January and August', () => {
+    const dates = getConfig('f_skatt').generateDates(2026, makeSettings())
+    expect(dates[0].day).toBe(17)
+    expect(dates[1].day).toBe(12)
+    expect(dates[7].day).toBe(17)
+  })
+
+  it('uses the 26th for AGI above SEK 40 million', () => {
+    const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
+      pays_salaries: true,
+      tax_turnover_over_40m: true,
+    }))
+    expect(dates.every((date) => date.day === 26)).toBe(true)
+  })
+})
+
+describe('periodic EU sales list deadlines', () => {
+  const config = getConfig('periodisk_sammanstallning')
+
+  it('is only applicable when explicitly enabled', () => {
+    expect(config.condition(makeSettings())).toBe(false)
+    expect(config.condition(makeSettings({ periodisk_sammanstallning_enabled: true }))).toBe(true)
+  })
+
+  it('uses the 25th monthly for electronic filing', () => {
+    const dates = config.generateDates(2026, makeSettings({
+      periodisk_sammanstallning_enabled: true,
+    }))
+    expect(dates).toHaveLength(12)
+    expect(dates[0]).toMatchObject({ day: 25, month: 1, year: 2026, period: '2026-01' })
+  })
+
+  it('uses the 20th quarterly for paper filing', () => {
+    const dates = config.generateDates(2026, makeSettings({
+      periodisk_sammanstallning_enabled: true,
+      periodisk_sammanstallning_period: 'quarterly',
+      periodisk_sammanstallning_filing_method: 'paper',
+    }))
+    expect(dates).toHaveLength(4)
+    expect(dates[0]).toMatchObject({ day: 20, month: 3, year: 2026, period: '2026-Q1' })
+  })
+})
 
 describe('inkomstdeklaration_ab: digital filing deadlines', () => {
   const config = getConfig('inkomstdeklaration_ab')

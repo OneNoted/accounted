@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { didTaxFieldsChange, regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
+import {
+  DEADLINE_SETTINGS_SELECT,
+  hasTaxRelevantFields,
+  regenerateTaxDeadlinesForUser,
+  toDeadlineSettings,
+} from '@/lib/tax/deadline-generator'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 
@@ -40,7 +45,7 @@ export const PUT = withRouteContext(
     // Fetch current settings to check for tax-relevant changes
     const { data: oldSettings } = await supabase
       .from('company_settings')
-      .select('entity_type, moms_period, f_skatt, vat_registered, vat_number, pays_salaries, fiscal_year_start_month, onboarding_complete, salary_vacation_year_basis, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
+      .select(`${DEADLINE_SETTINGS_SELECT}, vat_number, onboarding_complete, salary_vacation_year_basis, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3`)
       .eq('company_id', companyId)
       .single()
 
@@ -108,6 +113,7 @@ export const PUT = withRouteContext(
 
     // Validate: VAT-registered must have VAT number (ML 11 kap. 8§) and moms period (SFL 26 kap.)
     const effectiveVatRegistered = body.vat_registered ?? oldSettings?.vat_registered
+    const effectiveMomsPeriod = body.moms_period ?? oldSettings?.moms_period
     if (effectiveVatRegistered === true) {
       const effectiveVatNumber = body.vat_number ?? oldSettings?.vat_number
       if (!effectiveVatNumber) {
@@ -116,13 +122,33 @@ export const PUT = withRouteContext(
           { status: 400 }
         )
       }
-      const effectiveMomsPeriod = body.moms_period ?? oldSettings?.moms_period
       if (!effectiveMomsPeriod) {
         return NextResponse.json(
           { error: 'Momsperiod krävs när företaget är momsregistrerat (SFL 26 kap.)' },
           { status: 400 }
         )
       }
+    }
+
+    const effectiveTurnoverOver40m =
+      body.tax_turnover_over_40m ?? oldSettings?.tax_turnover_over_40m ?? false
+    if (effectiveVatRegistered && effectiveTurnoverOver40m && effectiveMomsPeriod !== 'monthly') {
+      return NextResponse.json(
+        { error: 'Företag med beskattningsunderlag över 40 miljoner kronor måste redovisa moms varje månad.' },
+        { status: 400 },
+      )
+    }
+
+    const effectivePsEnabled =
+      body.periodisk_sammanstallning_enabled ??
+      oldSettings?.periodisk_sammanstallning_enabled ??
+      false
+    const effectiveEuTrade = body.vat_has_eu_trade ?? oldSettings?.vat_has_eu_trade ?? false
+    if (effectivePsEnabled && (!effectiveVatRegistered || !effectiveEuTrade)) {
+      return NextResponse.json(
+        { error: 'Periodisk sammanställning kräver momsregistrering och EU-handel.' },
+        { status: 400 },
+      )
     }
 
     const { data, error } = await supabase
@@ -139,17 +165,12 @@ export const PUT = withRouteContext(
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    // Check if tax-relevant fields changed and regenerate deadlines
-    if (oldSettings && didTaxFieldsChange(oldSettings, data)) {
+    // Every tax-form save regenerates the upcoming set. This also repairs
+    // companies whose settings were already correct but whose deadline rows
+    // were lost by an earlier generation failure.
+    if (hasTaxRelevantFields(body)) {
       try {
-        await regenerateTaxDeadlinesForUser(supabase, companyId, {
-          entity_type: data.entity_type,
-          moms_period: data.moms_period,
-          f_skatt: data.f_skatt,
-          vat_registered: data.vat_registered,
-          pays_salaries: data.pays_salaries ?? false,
-          fiscal_year_start_month: data.fiscal_year_start_month,
-        })
+        await regenerateTaxDeadlinesForUser(supabase, companyId, toDeadlineSettings(data))
         console.log('Tax deadlines regenerated after settings change')
       } catch (err) {
         console.error('Failed to regenerate tax deadlines:', err)

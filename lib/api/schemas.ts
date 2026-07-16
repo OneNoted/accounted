@@ -256,6 +256,7 @@ export const DeadlineSourceSchema = z.enum(['system', 'user'])
 export const MomsPeriodSchema = z.enum(['monthly', 'quarterly', 'yearly'])
 
 export const PsPeriodTypeSchema = z.enum(['monthly', 'quarterly'])
+export const TaxFilingMethodSchema = z.enum(['electronic', 'paper'])
 
 export const DocumentUploadSourceSchema = z.enum([
   'camera', 'file_upload', 'email', 'e_invoice', 'scan', 'api', 'system',
@@ -1433,7 +1434,12 @@ export const UpdateSettingsSchema = z.object({
     .nullable()
     .optional(),
   moms_period: MomsPeriodSchema.nullable().optional(),
+  tax_turnover_over_40m: z.boolean().optional(),
+  vat_has_eu_trade: z.boolean().optional(),
+  vat_filing_method: TaxFilingMethodSchema.optional(),
+  periodisk_sammanstallning_enabled: z.boolean().optional(),
   periodisk_sammanstallning_period: PsPeriodTypeSchema.optional(),
+  periodisk_sammanstallning_filing_method: TaxFilingMethodSchema.optional(),
   tax_contact_name: z.string().max(200).nullable().optional(),
   tax_contact_phone: z.string().max(40).nullable().optional(),
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),

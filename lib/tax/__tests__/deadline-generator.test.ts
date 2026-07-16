@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTaxDeadlinesForUser } from '../deadline-generator'
+import {
+  findSettingsMissingUpcomingDeadlines,
+  generateTaxDeadlinesForUser,
+} from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
 const SETTINGS: CompanySettingsForDeadlines = {
@@ -10,6 +13,12 @@ const SETTINGS: CompanySettingsForDeadlines = {
   vat_registered: true,
   pays_salaries: true,
   fiscal_year_start_month: 1,
+  tax_turnover_over_40m: false,
+  vat_has_eu_trade: false,
+  vat_filing_method: 'electronic',
+  periodisk_sammanstallning_enabled: false,
+  periodisk_sammanstallning_period: 'monthly',
+  periodisk_sammanstallning_filing_method: 'electronic',
 }
 
 // Future year so generated dates are never skipped as "in the past".
@@ -20,12 +29,16 @@ const FUTURE_YEAR = new Date().getFullYear() + 1
  * insert payload, so the tests can assert the insert-first/delete-after
  * ordering that prevents regeneration failures from wiping deadlines.
  */
-function makeRecordingSupabase(opts: { insertError?: { code: string; message: string } } = {}) {
+function makeRecordingSupabase(opts: {
+  insertError?: { code: string; message: string }
+  completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
+} = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
 
   const from = vi.fn(() => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+    let isDelete = false
     const self = () => chain
     chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
       calls.push('insert')
@@ -40,6 +53,7 @@ function makeRecordingSupabase(opts: { insertError?: { code: string; message: st
     })
     chain.delete = vi.fn(() => {
       calls.push('delete')
+      isDelete = true
       return chain
     })
     chain.eq = vi.fn(self)
@@ -49,7 +63,16 @@ function makeRecordingSupabase(opts: { insertError?: { code: string; message: st
       calls.push(`not(${String(args[2]).slice(0, 20)}…)`)
       return chain
     })
-    chain.select = vi.fn(async () => ({ data: [{ id: 'old-1' }, { id: 'old-2' }], error: null }))
+    chain.select = vi.fn(() => {
+      if (isDelete) {
+        return Promise.resolve({ data: [{ id: 'old-1' }, { id: 'old-2' }], error: null })
+      }
+      return chain
+    })
+    chain.then = vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve({
+      data: opts.completedRows ?? [],
+      error: null,
+    }).then(resolve))
     return chain
   })
 
@@ -110,5 +133,32 @@ describe('generateTaxDeadlinesForUser', () => {
 
     expect(calls).toContain('insert')
     expect(calls).not.toContain('delete')
+  })
+
+  it('does not replace a completed future obligation with a new pending row', async () => {
+    const completedPeriod = `${FUTURE_YEAR}-01`
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      completedRows: [{ tax_deadline_type: 'f_skatt', tax_period: completedPeriod }],
+    })
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+
+    expect(getInsertPayload()).not.toContainEqual(expect.objectContaining({
+      tax_deadline_type: 'f_skatt',
+      tax_period: completedPeriod,
+    }))
+  })
+})
+
+describe('findSettingsMissingUpcomingDeadlines', () => {
+  it('returns only companies without a future system deadline', () => {
+    const settings = [
+      { company_id: 'company-1', entity_type: 'aktiebolag' as const },
+      { company_id: 'company-2', entity_type: 'enskild_firma' as const },
+    ]
+
+    expect(findSettingsMissingUpcomingDeadlines(settings, [
+      { id: 'deadline-1', company_id: 'company-1' },
+    ])).toEqual([settings[1]])
   })
 })
