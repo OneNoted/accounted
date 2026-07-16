@@ -517,7 +517,7 @@
     "generate_success_title": "Tax deadlines created",
     "generate_success_description": "{count} deadlines were created from your tax settings.",
     "generate_none_title": "No deadlines created",
-    "generate_none_description": "Fill in the company's tax settings first, and deadlines for VAT, employer declarations and F-tax will be created.",
+    "generate_none_description": "No new deadlines to create. Check that your tax settings are filled in if you expected more.",
     "generate_failed_title": "Could not create deadlines",
     "generate_failed_description": "Tax deadlines could not be created right now."
   },

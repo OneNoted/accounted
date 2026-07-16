@@ -148,12 +148,15 @@ export const PUT = withRouteContext(
     const taxFieldsChanged = Boolean(oldSettings && didTaxFieldsChange(oldSettings, data))
     let existingSystemDeadlineCount = 0
     if (!taxFieldsChanged) {
-      const { count } = await supabase
+      const { count, error: countError } = await supabase
         .from('deadlines')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .eq('source', 'system')
-      existingSystemDeadlineCount = count ?? 0
+      // Fail safe: on a count error, assume deadlines already exist so we do
+      // NOT delete+regenerate on a transient failure (regeneration would reset
+      // is_completed/status). A non-zero placeholder keeps the self-heal off.
+      existingSystemDeadlineCount = countError ? 1 : (count ?? 0)
     }
 
     if (shouldRegenerateTaxDeadlines(taxFieldsChanged, existingSystemDeadlineCount)) {

@@ -517,7 +517,7 @@
     "generate_success_title": "Skattedeadlines skapade",
     "generate_success_description": "{count} deadlines skapades från dina skatteinställningar.",
     "generate_none_title": "Inga deadlines skapades",
-    "generate_none_description": "Fyll i företagets skatteinställningar först, så skapas deadlines för moms, arbetsgivardeklaration och F-skatt.",
+    "generate_none_description": "Inga nya deadlines att skapa. Kontrollera att skatteinställningarna är ifyllda om du väntade dig fler.",
     "generate_failed_title": "Kunde inte skapa deadlines",
     "generate_failed_description": "Det gick inte att skapa skattedeadlines just nu."
   },
