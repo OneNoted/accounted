@@ -31,7 +31,12 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DocumentUploadZone, { type UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
+import {
+  LEGAL_VAT_RATES,
+  findIllegalVatRateRow,
+  findReverseChargeAccountWarningRows,
+} from '@/lib/vat/supplier-invoice-line-checks'
+import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
 
 interface LineItem {
@@ -141,8 +146,6 @@ function rateToPctString(rate: number): string {
   return Number.isFinite(pct) ? String(pct) : ''
 }
 
-const VAT_RATE_PRESETS = [0.25, 0.12, 0.06, 0]
-
 function VatRateCell({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const t = useTranslations('supplier_invoice_editor')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -212,7 +215,7 @@ function VatRateCell({ value, onChange }: { value: number; onChange: (v: number)
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[6rem]">
-          {VAT_RATE_PRESETS.map((preset) => (
+          {LEGAL_VAT_RATES.map((preset) => (
             <DropdownMenuItem
               key={preset}
               onSelect={() => onChange(preset)}
@@ -443,6 +446,14 @@ export default function NewSupplierInvoiceForm({
     !!watchedInvoiceDate &&
     !periods.some((p) => watchedInvoiceDate >= p.period_start && watchedInvoiceDate <= p.period_end)
   const showNoPeriodWarning = willBookAtRegistration && invoiceDateOutsidePeriod
+
+  // Advisory nudge (#863 item 2): reverse charge purchases are normally booked
+  // on cost accounts (4xxx/5xxx), so flag lines sitting on a class 1 or 6
+  // account while omvand skattskyldighet is on. Never blocks submission: class
+  // 6 has legitimate reverse charge uses (e.g. 6540 for EU cloud services).
+  const rcAccountWarningRows = watchedReverseCharge
+    ? findReverseChargeAccountWarningRows(watchedItems ?? [])
+    : []
 
   useEffect(() => {
     fetchSuppliers()
@@ -1133,9 +1144,7 @@ export default function NewSupplierInvoiceForm({
     // illegal rates here. Reverse-charge invoices skip this: their line vat_rate
     // is forced to 0 and RcRateSelect already restricts the self-assessed rate.
     if (!data.reverse_charge) {
-      const rowWithIllegalRate = data.items.findIndex(
-        (item) => !VAT_RATE_PRESETS.includes(item.vat_rate),
-      )
+      const rowWithIllegalRate = findIllegalVatRateRow(data.items)
       if (rowWithIllegalRate !== -1) {
         toast({
           title: t('illegal_vat_rate_title'),
@@ -1772,6 +1781,22 @@ export default function NewSupplierInvoiceForm({
                 </Label>
               </div>
             </div>
+
+            {/* Non-blocking account-range hint for reverse charge (#863 item 2) */}
+            {rcAccountWarningRows.length > 0 && (
+              <div
+                role="status"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+              >
+                <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
+                <p className="text-sm text-warning-foreground">
+                  {t('rc_account_warning', {
+                    count: rcAccountWarningRows.length,
+                    rows: rcAccountWarningRows.map((i) => i + 1).join(', '),
+                  })}
+                </p>
+              </div>
+            )}
 
             {/* Desktop table */}
             <div className="hidden sm:block">
