@@ -11,6 +11,7 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -355,10 +356,12 @@ export const POST = withRouteContext(
     }
 
     const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-    const accountingMethod = ((company as Record<string, unknown>).accounting_method || 'accrual') as AccountingMethod
     let createdJournalEntryId: string | undefined = creditJournalEntryId ?? undefined
 
-    if (statusFlipped && !isCreditNote && isRealInvoice && accountingMethod === 'accrual') {
+    // #967: deferred companies send WITHOUT booking; ekonomi books later via
+    // POST /api/invoices/[id]/book. The invoice then legitimately sits at
+    // journal_entry_id = NULL until then, like under kontantmetoden.
+    if (statusFlipped && !isCreditNote && isRealInvoice && booksInvoicesOnIssue(company as CompanySettings)) {
       try {
         const journalEntry = await createInvoiceJournalEntry(
           supabase,
