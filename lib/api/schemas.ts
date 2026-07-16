@@ -912,6 +912,10 @@ export const CreateJournalEntrySchema = z.object({
 })
 
 export const CorrectJournalEntrySchema = z.object({
+  // Optional verifikationstext for the corrected entry. When omitted the
+  // server falls back to "Rättelse: <original description>"; supplying it lets
+  // the user replace a header that echoed the wrong account's label (#1031).
+  description: z.string().trim().min(1, 'Description cannot be empty').optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
 })
 
@@ -1469,6 +1473,8 @@ export const UpdateSettingsSchema = z.object({
   iban: z.string().regex(/^SE\d{22}$/, 'Ogiltigt IBAN (SE följt av 22 siffror)').nullable().optional().or(z.literal('')),
   bic: z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT (8 eller 11 tecken)').nullable().optional().or(z.literal('')),
   accounting_method: AccountingMethodSchema.optional(),
+  // #967: register/send invoices without booking; booking is a separate step.
+  defer_invoice_booking: z.boolean().optional(),
   invoice_prefix: z.string().nullable().optional(),
   next_invoice_number: z.number().int().positive().optional(),
   next_arrival_number: z.number().int().positive().optional(),

@@ -13,7 +13,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const validation = await validateBody(request, CorrectJournalEntrySchema)
     if (!validation.success) return validation.response
-    const result = await correctEntry(supabase, companyId, user.id, id, validation.data.lines)
+    const result = await correctEntry(supabase, companyId, user.id, id, validation.data.lines, {
+      description: validation.data.description,
+    })
     return NextResponse.json({ data: result })
   },
   { requireWrite: true },

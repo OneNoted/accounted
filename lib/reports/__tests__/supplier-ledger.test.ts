@@ -9,7 +9,7 @@ let results: Array<{ data?: unknown; error?: unknown }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'lte', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -330,5 +330,100 @@ describe('generateSupplierLedger', () => {
 
     expect(report.total_outstanding).toBe(100)
     expect(report.total_current).toBe(100)
+  })
+})
+
+describe('generateSupplierLedger: historical as-of reconstruction (#1021)', () => {
+  const invoiceBase = {
+    supplier_id: 'sup-1',
+    supplier: { id: 'sup-1', name: 'Leverantören AB' },
+    invoice_date: '2024-05-01',
+    due_date: '2024-06-01',
+    currency: 'SEK',
+  }
+
+  it('reopens an invoice whose payment came after the as-of date', async () => {
+    results = [
+      // Query 1: invoices (historical path also fetches status='paid')
+      {
+        data: [
+          { ...invoiceBase, id: 'si-1', total: 8000, paid_amount: 8000, remaining_amount: 0, paid_at: '2024-07-01T10:00:00Z', status: 'paid' },
+        ],
+        error: null,
+      },
+      // Query 2: payment rows dated after the as-of date
+      {
+        data: [{ supplier_invoice_id: 'si-1', amount: 8000, payment_date: '2024-07-01' }],
+        error: null,
+      },
+    ]
+
+    const report = await generateSupplierLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].total_outstanding).toBe(8000)
+    expect(report.total_outstanding).toBe(8000)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('reduces outstanding by payments on or before the as-of date and skips settled invoices', async () => {
+    results = [
+      {
+        data: [
+          // Partially paid at the as-of date: 4 000 of 10 000 paid.
+          { ...invoiceBase, id: 'si-1', total: 10000, paid_amount: 10000, remaining_amount: 0, paid_at: '2024-07-05T10:00:00Z', status: 'paid' },
+          // Fully settled before the as-of date: must not appear.
+          { ...invoiceBase, id: 'si-2', total: 500, paid_amount: 500, remaining_amount: 0, paid_at: '2024-06-01T10:00:00Z', status: 'paid' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { supplier_invoice_id: 'si-1', amount: 4000, payment_date: '2024-06-10' },
+          { supplier_invoice_id: 'si-1', amount: 6000, payment_date: '2024-07-05' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateSupplierLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.total_outstanding).toBe(6000)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('falls back to paid_at for fully paid invoices without payment rows', async () => {
+    results = [
+      {
+        data: [
+          { ...invoiceBase, id: 'si-1', total: 3000, paid_amount: 3000, remaining_amount: 0, paid_at: '2024-08-01T10:00:00Z', status: 'paid' },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const report = await generateSupplierLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.total_outstanding).toBe(3000)
+  })
+
+  it('keeps the live remaining_amount for the live (non-backdated) view', async () => {
+    // No asOfDate: single query, stored remaining_amount trusted as-is.
+    results = [
+      {
+        data: [
+          { ...invoiceBase, id: 'si-1', total: 3000, paid_amount: 1000, remaining_amount: 2000, status: 'partially_paid' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateSupplierLedger(supabase, 'company-1')
+
+    expect(report.total_outstanding).toBe(2000)
+    expect(report.unpaid_count).toBe(1)
   })
 })

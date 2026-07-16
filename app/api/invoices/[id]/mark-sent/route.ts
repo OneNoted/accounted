@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -177,7 +178,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         },
       )
     }
-  } else if (isRealInvoice && accountingMethod === 'accrual') {
+  } else if (isRealInvoice && booksInvoicesOnIssue(settings as CompanySettings)) {
+    // #967: deferred companies fall past this branch (mark-sent WITHOUT
+    // booking); ekonomi books later via POST /api/invoices/[id]/book, like
+    // under kontantmetoden.
     try {
       const journalEntry = await createInvoiceJournalEntry(
         supabase,
@@ -246,7 +250,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
   }
 
-  if (isRealInvoice && accountingMethod === 'accrual' && !isCreditNote && !journalEntryId) {
+  // Fail-closed only when inline booking was supposed to happen: deferred
+  // (#967) and cash-method invoices are legitimately unbooked at this point.
+  if (isRealInvoice && booksInvoicesOnIssue(settings as CompanySettings) && !isCreditNote && !journalEntryId) {
     if (statusFlipped) {
       const { error: rollbackError } = await supabase
         .from('invoices')

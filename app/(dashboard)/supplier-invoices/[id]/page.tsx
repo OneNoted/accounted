@@ -23,6 +23,7 @@ import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
@@ -77,6 +78,7 @@ const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warn
 
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
+  const { settings: companySettings } = useCompanySettings()
   const params = useParams()
   const router = useRouter()
   const { toast } = useToast()
@@ -277,6 +279,24 @@ export default function SupplierInvoiceDetailPage() {
       toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
     } else {
       toast({ title: t('approved_title'), description: t('approved_description') })
+      fetchInvoice()
+    }
+    setIsProcessing(false)
+  }
+
+  // #967: deferred booking: create the registration verifikat afterwards.
+  async function handleBook() {
+    setIsProcessing(true)
+    const res = await fetch(`/api/supplier-invoices/${params.id}/book`, { method: 'POST' })
+    const result = await res.json()
+    if (!res.ok) {
+      toast({ title: t('book_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } else if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+      // Booked, but a follow-up is needed (e.g. periodiseringar failed).
+      toast({ title: t('booked_title'), description: t('booked_with_warnings_description'), variant: 'destructive' })
+      fetchInvoice()
+    } else {
+      toast({ title: t('booked_title'), description: t('booked_description') })
       fetchInvoice()
     }
     setIsProcessing(false)
@@ -824,6 +844,23 @@ export default function SupplierInvoiceDetailPage() {
               >
                 {invoice.registration_journal_entry_id.substring(0, 8)}...
               </Link>
+            </div>
+          ) : companySettings?.accounting_method === 'accrual' &&
+            !invoice.is_credit_note &&
+            ['registered', 'approved', 'overdue'].includes(invoice.status) ? (
+            // #967: registered-without-booking (deferred booking). Ekonomi
+            // books the registration verifikat from here.
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">{t('not_booked_yet')}</span>
+              <Button
+                size="sm"
+                onClick={handleBook}
+                disabled={isProcessing || !canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                {t('book_action')}
+              </Button>
             </div>
           ) : (
             <p className="text-muted-foreground">{t('no_registration_voucher')}</p>

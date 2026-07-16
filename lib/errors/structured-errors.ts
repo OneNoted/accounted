@@ -806,6 +806,41 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikatet skapades, men kopplingen till fakturan måste återställas. Kontakta support.',
     message_en: 'The voucher was created, but its invoice link must be repaired. Contact support.',
   },
+  INVOICE_BOOK_ALREADY_BOOKED: {
+    httpStatus: 400,
+    message_sv: 'Fakturan är redan bokförd.',
+    message_en: 'The invoice is already booked.',
+  },
+  INVOICE_BOOK_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Endast skickade eller förfallna fakturor kan bokföras i efterhand.',
+    message_en: 'Only sent or overdue invoices can be booked afterwards.',
+  },
+  INVOICE_BOOK_NOT_BOOKABLE: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturor och andra dokumenttyper bokförs inte via detta steg.',
+    message_en: 'Credit notes and other document types are not booked through this step.',
+  },
+  INVOICE_BOOK_CASH_METHOD: {
+    httpStatus: 400,
+    message_sv: 'Vid kontantmetoden bokförs fakturan när den betalas.',
+    message_en: 'Under the cash method the invoice is booked when it is paid.',
+  },
+  INVOICE_BOOK_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget öppet räkenskapsår täcker fakturadatumet. Skapa räkenskapsåret först.',
+    message_en: 'No open fiscal period covers the invoice date. Create the fiscal year first.',
+  },
+  INVOICE_BOOK_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Fakturan bokfördes samtidigt av en annan begäran. Ladda om sidan.',
+    message_en: 'The invoice was booked concurrently by another request. Reload the page.',
+  },
+  INVOICE_BOOK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturan kunde inte bokföras.',
+    message_en: 'Failed to book the invoice.',
+  },
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
     message_sv:
@@ -983,6 +1018,41 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Kunde inte godkänna leverantörsfakturan.',
     message_en: 'Failed to update supplier invoice status to approved.',
+  },
+  SI_BOOK_ALREADY_BOOKED: {
+    httpStatus: 400,
+    message_sv: 'Leverantörsfakturan är redan bokförd.',
+    message_en: 'The supplier invoice is already booked.',
+  },
+  SI_BOOK_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Endast registrerade, godkända eller förfallna fakturor kan bokföras i efterhand.',
+    message_en: 'Only registered, approved or overdue invoices can be booked afterwards.',
+  },
+  SI_BOOK_NOT_BOOKABLE: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturor bokförs inte via detta steg.',
+    message_en: 'Credit notes are not booked through this step.',
+  },
+  SI_BOOK_CASH_METHOD: {
+    httpStatus: 400,
+    message_sv: 'Vid kontantmetoden bokförs fakturan när den betalas.',
+    message_en: 'Under the cash method the invoice is booked when it is paid.',
+  },
+  SI_BOOK_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget öppet räkenskapsår täcker fakturadatumet. Skapa räkenskapsåret först.',
+    message_en: 'No open fiscal period covers the invoice date. Create the fiscal year first.',
+  },
+  SI_BOOK_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Leverantörsfakturan bokfördes samtidigt av en annan begäran. Ladda om sidan.',
+    message_en: 'The supplier invoice was booked concurrently by another request. Reload the page.',
+  },
+  SI_BOOK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Leverantörsfakturan kunde inte bokföras.',
+    message_en: 'Failed to book the supplier invoice.',
   },
   PO_THREE_WAY_MATCH_FAILED: {
     httpStatus: 422,

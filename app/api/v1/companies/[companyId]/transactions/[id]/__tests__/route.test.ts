@@ -28,12 +28,13 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 // Engine stubs: happy-path returns reusable across cases.
-const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, findMissingAccountsMock } = vi.hoisted(() => ({
+const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, createSupplierInvCashJE, findMissingAccountsMock } = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
   createInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-invpmt' }),
   createInvCashJE: vi.fn().mockResolvedValue({ id: 'je-invcash' }),
   createSupplierInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-sipmt' }),
+  createSupplierInvCashJE: vi.fn().mockResolvedValue({ id: 'je-sicash' }),
   // Default: no missing accounts. Per-case overrides simulate the
   // template-references-inactive-account bug or a race where deactivation
   // happened between our validation and the engine's resolveAccountIds.
@@ -52,7 +53,7 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 }))
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoicePaymentEntry: createSupplierInvPmtJE,
-  createSupplierInvoiceCashEntry: vi.fn().mockResolvedValue({ id: 'je-sicash' }),
+  createSupplierInvoiceCashEntry: createSupplierInvCashJE,
 }))
 vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
@@ -1118,6 +1119,194 @@ describe('POST :id/match-supplier-invoice', () => {
       // Engine and invoice/transaction updates must NOT run: the match stays
       // retryable rather than posting a payment against a dead account.
       expect(createSupplierInvPmtJE).not.toHaveBeenCalled()
+    })
+  })
+
+  // Regression for #1000: the FX and cash-method branches were left on the
+  // entry generators' internal 1930 default when the pure-SEK path was fixed
+  // (#986). A foreign-currency match, or a kontantmetoden match, settling
+  // from a non-primary account (e.g. a EUR account on 1940) was still
+  // misbooked to 1930.
+  describe('settlement account resolution (FX and cash-method branches)', () => {
+    function fxTables(cashAccountId: string | null) {
+      return {
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            amount: -2400,
+            date: '2026-05-12',
+            currency: 'SEK',
+            amount_sek: null,
+            supplier_invoice_id: null,
+            journal_entry_id: null,
+            cash_account_id: cashAccountId,
+          },
+          error: null,
+        },
+        supplier_invoices: [
+          {
+            data: {
+              id: SI_ID,
+              status: 'approved',
+              total: 225,
+              paid_amount: 0,
+              remaining_amount: 225,
+              currency: 'EUR',
+              exchange_rate: 10.6254,
+              supplier: { name: 'Acme GmbH', supplier_type: 'eu_business' },
+              items: [],
+            },
+            error: null,
+          },
+          { data: [{ id: SI_ID }], error: null },
+        ],
+        company_settings: { data: { accounting_method: 'accrual' }, error: null },
+        cash_accounts: { data: { ledger_account: '1940' }, error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }
+    }
+
+    function cashMethodTables(cashAccountId: string | null) {
+      return {
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            amount: -5000,
+            date: '2026-05-12',
+            currency: 'SEK',
+            amount_sek: null,
+            supplier_invoice_id: null,
+            journal_entry_id: null,
+            cash_account_id: cashAccountId,
+          },
+          error: null,
+        },
+        supplier_invoices: [
+          {
+            data: {
+              id: SI_ID,
+              status: 'approved',
+              total: 5000,
+              paid_amount: 0,
+              remaining_amount: 5000,
+              currency: 'SEK',
+              exchange_rate: null,
+              supplier: { name: 'Acme', supplier_type: 'swedish_business' },
+              items: [],
+            },
+            error: null,
+          },
+          { data: [{ id: SI_ID }], error: null },
+        ],
+        company_settings: { data: { accounting_method: 'cash' }, error: null },
+        cash_accounts: { data: { ledger_account: '1940' }, error: null },
+        supplier_invoice_payments: { data: null, error: null },
+      }
+    }
+
+    it('FX branch: credits the transaction\'s own linked non-1930 account', async () => {
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(fxTables('ca-1940')))
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(200)
+      expect(createSupplierInvPmtJE).toHaveBeenCalledTimes(1)
+      const args = createSupplierInvPmtJE.mock.calls[0]
+      // Confirm we exercised the FX branch: 225 EUR @ 10.6254 booked as
+      // 2390.72 SEK, bank paid 2400 SEK -> loss of 9.28.
+      expect(args[4]).toBeCloseTo(2390.72, 2)
+      expect(args[6]).toBeCloseTo(-9.28, 2)
+      expect(args[8]).toBe('1940')
+    })
+
+    it('FX branch: falls back to 1930 when the transaction has no linked cash account', async () => {
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(fxTables(null)))
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(200)
+      expect(createSupplierInvPmtJE.mock.calls[0][8]).toBe('1930')
+    })
+
+    it('cash-method branch: credits the transaction\'s own linked non-1930 account', async () => {
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(cashMethodTables('ca-1940')))
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(200)
+      expect(createSupplierInvCashJE).toHaveBeenCalledTimes(1)
+      expect(createSupplierInvPmtJE).not.toHaveBeenCalled()
+      const args = createSupplierInvCashJE.mock.calls[0]
+      expect(args[8]).toBe('1940')
+      // Pure SEK settlement: no settledBankSek override.
+      expect(args[9]).toBeUndefined()
+    })
+
+    it('cash-method branch: falls back to 1930 when the transaction has no linked cash account', async () => {
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(cashMethodTables(null)))
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(200)
+      expect(createSupplierInvCashJE.mock.calls[0][8]).toBe('1930')
+    })
+
+    it('cash-method branch: rejects with ACCOUNTS_NOT_IN_CHART when the resolved account is deactivated', async () => {
+      // The chart pre-validation guard must cover the branches that now
+      // consume paymentAccount, not only the pure-SEK accrual path.
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(cashMethodTables('ca-1940')))
+      findMissingAccountsMock.mockResolvedValueOnce(['1940'])
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(createSupplierInvCashJE).not.toHaveBeenCalled()
+    })
+
+    it('does NOT storno an existing conflicting JE when chart validation rejects the request', async () => {
+      // Regression: the chart pre-validation must run BEFORE the
+      // conflicting-categorization storno. Otherwise a request that is
+      // ultimately rejected with ACCOUNTS_NOT_IN_CHART would first reverse
+      // the transaction's posted categorization entry: an irreversible side
+      // effect on a failed request.
+      const tables = cashMethodTables('ca-1940')
+      ;(tables.transactions.data as { journal_entry_id: string | null }).journal_entry_id = JE_ID
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(tables))
+      findMissingAccountsMock.mockResolvedValueOnce(['1940'])
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(reverseEntryMock).not.toHaveBeenCalled()
+      expect(createSupplierInvCashJE).not.toHaveBeenCalled()
     })
   })
 })

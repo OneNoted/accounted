@@ -12,8 +12,13 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
+import {
+  autoCorrectionDescription,
+  correctionDescriptionForSubmit,
+} from '@/components/bookkeeping/correction-entry-description'
 import { nextLineDescriptionForAccountChange } from '@/components/bookkeeping/correction-line-description'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -49,6 +54,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [accountsStatus, setAccountsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [lines, setLines] = useState<CorrectionLine[]>([])
+  const [description, setDescription] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const activeAccounts = useMemo(
@@ -79,6 +85,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           line_description: l.line_description || '',
         }))
       )
+      // Pre-fill the verifikationstext with the same auto text the server
+      // would generate; only a user edit is sent along (see handleSubmit).
+      setDescription(autoCorrectionDescription(entry.description))
       void fetchAccounts()
     }
   }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -163,7 +172,12 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       const res = await fetch(`/api/bookkeeping/journal-entries/${entry.id}/correct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lines: apiLines }),
+        body: JSON.stringify({
+          lines: apiLines,
+          // Only sent when the user changed the auto prefill: the server
+          // fallback ("Rättelse: <original>") stays the source of truth.
+          description: correctionDescriptionForSubmit(description, entry.description),
+        }),
       })
 
       const result = await res.json()
@@ -232,6 +246,23 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
         {/* Live diff: original | storno | correction | förändring */}
         <CorrectionPreview originalLines={originalLines} correctedLines={lines} />
+
+        {/* Verifikationstext for the new (corrected) entry. Pre-filled with
+            the auto text; editable so a header named after the wrong account
+            is not echoed on the correction (issue #1031). */}
+        <div className="space-y-1">
+          <Label htmlFor="correction-description">Verifikationstext</Label>
+          <Input
+            id="correction-description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={autoCorrectionDescription(entry.description)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Texten på den nya verifikationen. Ändra den om originalets beskrivning inte längre
+            stämmer, till exempel när rättelsen byter konto.
+          </p>
+        </div>
 
         {/* Corrected lines (editable) */}
         <div className="space-y-2">
