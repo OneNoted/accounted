@@ -14,7 +14,8 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     vat_registered: true,
     pays_salaries: false,
     fiscal_year_start_month: 1,
-    tax_turnover_over_40m: false,
+    vat_taxable_base_over_40m: false,
+    employer_turnover_over_40m: false,
     vat_has_eu_trade: false,
     vat_filing_method: 'electronic',
     periodisk_sammanstallning_enabled: false,
@@ -35,11 +36,20 @@ describe('VAT filing deadlines', () => {
   it('uses the following month for monthly filers above SEK 40 million', () => {
     const dates = getConfig('moms_monthly').generateDates(2026, makeSettings({
       moms_period: 'monthly',
-      tax_turnover_over_40m: true,
+      vat_taxable_base_over_40m: true,
     }))
 
     expect(dates[0]).toMatchObject({ day: 26, month: 1, year: 2026, period: '2026-01' })
     expect(dates[10]).toMatchObject({ day: 27, month: 11, year: 2026, period: '2026-11' })
+  })
+
+  it('does not use employer turnover to choose the VAT deadline', () => {
+    const dates = getConfig('moms_monthly').generateDates(2026, makeSettings({
+      moms_period: 'monthly',
+      employer_turnover_over_40m: true,
+    }))
+
+    expect(dates[0]).toMatchObject({ day: 12, month: 2, year: 2026, period: '2026-01' })
   })
 
   it('uses May, August, November and February for quarterly VAT', () => {
@@ -83,9 +93,18 @@ describe('monthly tax and employer deadlines', () => {
   it('uses the 26th for AGI above SEK 40 million', () => {
     const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
       pays_salaries: true,
-      tax_turnover_over_40m: true,
+      employer_turnover_over_40m: true,
     }))
     expect(dates.every((date) => date.day === 26)).toBe(true)
+  })
+
+  it('does not use the VAT taxable base to choose the AGI deadline', () => {
+    const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
+      pays_salaries: true,
+      vat_taxable_base_over_40m: true,
+    }))
+
+    expect(dates[0].day).toBe(12)
   })
 })
 

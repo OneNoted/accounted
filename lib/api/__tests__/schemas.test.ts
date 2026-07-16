@@ -1360,7 +1360,8 @@ describe('UpdateSettingsSchema', () => {
 
   it('validates tax deadline filing-profile fields', () => {
     expect(UpdateSettingsSchema.safeParse({
-      tax_turnover_over_40m: true,
+      vat_taxable_base_over_40m: true,
+      employer_turnover_over_40m: true,
       vat_has_eu_trade: true,
       vat_filing_method: 'electronic',
       periodisk_sammanstallning_enabled: true,

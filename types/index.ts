@@ -227,7 +227,8 @@ export interface CompanySettings {
   vat_number: string | null
   moms_period: MomsPeriod | null
   periodisk_sammanstallning_period: 'monthly' | 'quarterly'
-  tax_turnover_over_40m: boolean
+  vat_taxable_base_over_40m: boolean
+  employer_turnover_over_40m: boolean
   vat_has_eu_trade: boolean
   vat_filing_method: TaxFilingMethod
   periodisk_sammanstallning_enabled: boolean

@@ -16,7 +16,8 @@ export interface CompanySettingsForDeadlines {
   vat_registered: boolean
   pays_salaries: boolean
   fiscal_year_start_month: number // 1-12
-  tax_turnover_over_40m: boolean
+  vat_taxable_base_over_40m: boolean
+  employer_turnover_over_40m: boolean
   vat_has_eu_trade: boolean
   vat_filing_method: TaxFilingMethod
   periodisk_sammanstallning_enabled: boolean
@@ -123,10 +124,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     generateDates: (year, settings) => {
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
-        const monthOffset = settings.tax_turnover_over_40m ? 1 : 2
+        const monthOffset = settings.vat_taxable_base_over_40m ? 1 : 2
         const deadlineMonth = (month + monthOffset) % 12
         const deadlineYear = year + Math.floor((month + monthOffset) / 12)
-        const day = settings.tax_turnover_over_40m
+        const day = settings.vat_taxable_base_over_40m
           ? (deadlineMonth === 11 ? 27 : 26)
           : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
         instances.push({
@@ -210,7 +211,7 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
       for (let month = 0; month < 12; month++) {
         const deadlineMonth = (month + 1) % 12
         const deadlineYear = month === 11 ? year + 1 : year
-        const day = settings.tax_turnover_over_40m
+        const day = settings.employer_turnover_over_40m
           ? 26
           : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
         instances.push({

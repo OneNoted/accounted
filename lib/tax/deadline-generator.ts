@@ -25,7 +25,8 @@ export const TAX_RELEVANT_FIELDS = [
   'vat_registered',
   'pays_salaries',
   'fiscal_year_start_month',
-  'tax_turnover_over_40m',
+  'vat_taxable_base_over_40m',
+  'employer_turnover_over_40m',
   'vat_has_eu_trade',
   'vat_filing_method',
   'periodisk_sammanstallning_enabled',
@@ -34,7 +35,7 @@ export const TAX_RELEVANT_FIELDS = [
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, tax_turnover_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
+  'company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, vat_taxable_base_over_40m, employer_turnover_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
 
 /**
  * Check if any tax-relevant fields changed
@@ -69,7 +70,8 @@ export function toDeadlineSettings(
     vat_registered: settings.vat_registered ?? false,
     pays_salaries: settings.pays_salaries ?? false,
     fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
-    tax_turnover_over_40m: settings.tax_turnover_over_40m ?? false,
+    vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m ?? false,
+    employer_turnover_over_40m: settings.employer_turnover_over_40m ?? false,
     vat_has_eu_trade: settings.vat_has_eu_trade ?? false,
     vat_filing_method: settings.vat_filing_method ?? 'electronic',
     periodisk_sammanstallning_enabled: settings.periodisk_sammanstallning_enabled ?? false,
@@ -314,14 +316,72 @@ interface DeadlineSettingsRow extends Partial<CompanySettingsForDeadlines> {
 interface UpcomingDeadlineCompanyRow {
   id: string
   company_id: string
+  tax_deadline_type: string | null
+  tax_period: string | null
+}
+
+function deadlineIdentity(type: string | null, period: string | null): string {
+  return `${type}:${period}`
+}
+
+export function getExpectedUpcomingDeadlineKeys(
+  settings: CompanySettingsForDeadlines,
+  years: number[] = [],
+  fromDate: Date = new Date(),
+): Set<string> {
+  if (years.length === 0) {
+    const currentYear = fromDate.getFullYear()
+    years = [currentYear, currentYear + 1]
+  }
+
+  const today = new Date(fromDate)
+  today.setHours(0, 0, 0, 0)
+  const keys = new Set<string>()
+
+  for (const config of getApplicableDeadlineConfigs(settings)) {
+    for (const year of years) {
+      for (const instance of config.generateDates(year, settings)) {
+        const adjustedDate = adjustDeadlineToNextBankingDay(
+          new Date(instance.year, instance.month, instance.day),
+        )
+        if (adjustedDate >= today) {
+          keys.add(deadlineIdentity(config.type, instance.period))
+        }
+      }
+    }
+  }
+
+  return keys
 }
 
 export function findSettingsMissingUpcomingDeadlines(
   settingsRows: DeadlineSettingsRow[],
   upcomingDeadlineRows: UpcomingDeadlineCompanyRow[],
+  years: number[] = [],
+  fromDate: Date = new Date(),
 ): DeadlineSettingsRow[] {
-  const companiesWithDeadlines = new Set(upcomingDeadlineRows.map((row) => row.company_id))
-  return settingsRows.filter((settings) => !companiesWithDeadlines.has(settings.company_id))
+  const actualKeysByCompany = new Map<string, Set<string>>()
+  for (const row of upcomingDeadlineRows) {
+    const keys = actualKeysByCompany.get(row.company_id) ?? new Set<string>()
+    keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period))
+    actualKeysByCompany.set(row.company_id, keys)
+  }
+
+  return settingsRows.filter((settings) => {
+    try {
+      const expectedKeys = getExpectedUpcomingDeadlineKeys(
+        toDeadlineSettings(settings),
+        years,
+        fromDate,
+      )
+      const actualKeys = actualKeysByCompany.get(settings.company_id) ?? new Set<string>()
+      return Array.from(expectedKeys).some((key) => !actualKeys.has(key))
+    } catch {
+      // Include malformed settings so the repair loop logs the company-specific
+      // generation error without aborting recovery for every other company.
+      return true
+    }
+  })
 }
 
 async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<DeadlineSettingsRow[]> {
@@ -376,7 +436,7 @@ export async function backfillMissingTaxDeadlines(
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
       supabase
         .from('deadlines')
-        .select('id, company_id')
+        .select('id, company_id, tax_deadline_type, tax_period')
         .eq('source', 'system')
         .eq('deadline_type', 'tax')
         .gte('due_date', today)

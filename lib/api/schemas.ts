@@ -1434,7 +1434,8 @@ export const UpdateSettingsSchema = z.object({
     .nullable()
     .optional(),
   moms_period: MomsPeriodSchema.nullable().optional(),
-  tax_turnover_over_40m: z.boolean().optional(),
+  vat_taxable_base_over_40m: z.boolean().optional(),
+  employer_turnover_over_40m: z.boolean().optional(),
   vat_has_eu_trade: z.boolean().optional(),
   vat_filing_method: TaxFilingMethodSchema.optional(),
   periodisk_sammanstallning_enabled: z.boolean().optional(),

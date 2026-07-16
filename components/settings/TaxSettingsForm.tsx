@@ -18,7 +18,12 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
   const [paysSalaries, setPaysSalaries] = useState(settings.pays_salaries ?? false)
   const [momsPeriod, setMomsPeriod] = useState(settings.moms_period || '')
-  const [turnoverOver40m, setTurnoverOver40m] = useState(settings.tax_turnover_over_40m ?? false)
+  const [vatTaxableBaseOver40m, setVatTaxableBaseOver40m] = useState(
+    settings.vat_taxable_base_over_40m ?? false,
+  )
+  const [employerTurnoverOver40m, setEmployerTurnoverOver40m] = useState(
+    settings.employer_turnover_over_40m ?? false,
+  )
   const [hasEuTrade, setHasEuTrade] = useState(settings.vat_has_eu_trade ?? false)
   const [psEnabled, setPsEnabled] = useState(settings.periodisk_sammanstallning_enabled ?? false)
 
@@ -76,7 +81,7 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
               onCheckedChange={(value) => {
                 const checked = value === true
                 setVatRegistered(checked)
-                if (checked && turnoverOver40m) setMomsPeriod('monthly')
+                if (checked && vatTaxableBaseOver40m) setMomsPeriod('monthly')
               }}
             />
             <input type="hidden" name="vat_registered" value={vatRegistered ? 'true' : 'false'} />
@@ -115,13 +120,42 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
-                    <SelectItem value="quarterly">{t('period_quarterly')}</SelectItem>
-                    <SelectItem value="yearly">{t('period_yearly')}</SelectItem>
+                    <SelectItem value="quarterly" disabled={vatTaxableBaseOver40m}>
+                      {t('period_quarterly')}
+                    </SelectItem>
+                    <SelectItem value="yearly" disabled={vatTaxableBaseOver40m}>
+                      {t('period_yearly')}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
                   {t('moms_period_help')}
                 </p>
+              </div>
+
+              <div className="flex items-start space-x-3">
+                <Checkbox
+                  id="vat_taxable_base_over_40m"
+                  checked={vatTaxableBaseOver40m}
+                  onCheckedChange={(value) => {
+                    const checked = value === true
+                    setVatTaxableBaseOver40m(checked)
+                    if (checked) setMomsPeriod('monthly')
+                  }}
+                />
+                <input
+                  type="hidden"
+                  name="vat_taxable_base_over_40m"
+                  value={vatTaxableBaseOver40m ? 'true' : 'false'}
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="vat_taxable_base_over_40m" className="cursor-pointer">
+                    {t('vat_taxable_base_over_40m_label')}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {t('vat_taxable_base_over_40m_help')}
+                  </p>
+                </div>
               </div>
 
               <div className="flex items-start space-x-3">
@@ -223,30 +257,6 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             </div>
           )}
 
-          <div className="flex items-start space-x-3">
-            <Checkbox
-              id="tax_turnover_over_40m"
-              checked={turnoverOver40m}
-              onCheckedChange={(value) => {
-                const checked = value === true
-                setTurnoverOver40m(checked)
-                if (checked && vatRegistered) setMomsPeriod('monthly')
-              }}
-            />
-            <input
-              type="hidden"
-              name="tax_turnover_over_40m"
-              value={turnoverOver40m ? 'true' : 'false'}
-            />
-            <div className="space-y-1">
-              <Label htmlFor="tax_turnover_over_40m" className="cursor-pointer">
-                {t('tax_turnover_over_40m_label')}
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {t('tax_turnover_over_40m_help')}
-              </p>
-            </div>
-          </div>
         </div>
       </section>
 
@@ -343,6 +353,29 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             </p>
           </div>
         </div>
+
+        {paysSalaries && (
+          <div className="flex items-start space-x-3 pl-7">
+            <Checkbox
+              id="employer_turnover_over_40m"
+              checked={employerTurnoverOver40m}
+              onCheckedChange={(value) => setEmployerTurnoverOver40m(value === true)}
+            />
+            <input
+              type="hidden"
+              name="employer_turnover_over_40m"
+              value={employerTurnoverOver40m ? 'true' : 'false'}
+            />
+            <div className="space-y-1">
+              <Label htmlFor="employer_turnover_over_40m" className="cursor-pointer">
+                {t('employer_turnover_over_40m_label')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t('employer_turnover_over_40m_help')}
+              </p>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Preliminary tax */}

@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   findSettingsMissingUpcomingDeadlines,
   generateTaxDeadlinesForUser,
+  getExpectedUpcomingDeadlineKeys,
 } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
@@ -13,7 +14,8 @@ const SETTINGS: CompanySettingsForDeadlines = {
   vat_registered: true,
   pays_salaries: true,
   fiscal_year_start_month: 1,
-  tax_turnover_over_40m: false,
+  vat_taxable_base_over_40m: false,
+  employer_turnover_over_40m: false,
   vat_has_eu_trade: false,
   vat_filing_method: 'electronic',
   periodisk_sammanstallning_enabled: false,
@@ -151,14 +153,52 @@ describe('generateTaxDeadlinesForUser', () => {
 })
 
 describe('findSettingsMissingUpcomingDeadlines', () => {
-  it('returns only companies without a future system deadline', () => {
-    const settings = [
-      { company_id: 'company-1', entity_type: 'aktiebolag' as const },
-      { company_id: 'company-2', entity_type: 'enskild_firma' as const },
-    ]
+  const fromDate = new Date(2030, 0, 1)
+  const years = [2030]
 
-    expect(findSettingsMissingUpcomingDeadlines(settings, [
-      { id: 'deadline-1', company_id: 'company-1' },
-    ])).toEqual([settings[1]])
+  function rowsFor(companyId: string, keys: Set<string>) {
+    return Array.from(keys, (key, index) => {
+      const [taxDeadlineType, taxPeriod] = key.split(':')
+      return {
+        id: `${companyId}-${index}`,
+        company_id: companyId,
+        tax_deadline_type: taxDeadlineType,
+        tax_period: taxPeriod,
+      }
+    })
+  }
+
+  it('returns only companies missing at least one expected obligation', () => {
+    const settings = [
+      { company_id: 'company-1', ...SETTINGS },
+      { company_id: 'company-2', ...SETTINGS },
+    ]
+    const completeRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+    )
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      completeRows,
+      years,
+      fromDate,
+    )).toEqual([settings[1]])
+  })
+
+  it('repairs a company that has F-tax deadlines but is missing VAT deadlines', () => {
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const expectedKeys = getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate)
+    const fTaxRows = rowsFor(
+      'company-1',
+      new Set(Array.from(expectedKeys).filter((key) => key.startsWith('f_skatt:'))),
+    )
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      fTaxRows,
+      years,
+      fromDate,
+    )).toEqual(settings)
   })
 })

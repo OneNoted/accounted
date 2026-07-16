@@ -26,7 +26,14 @@ const deadlineMocks = vi.hoisted(() => ({
 vi.mock('@/lib/tax/deadline-generator', () => ({
   DEADLINE_SETTINGS_SELECT: 'company_id, entity_type, moms_period',
   hasTaxRelevantFields: vi.fn((body: Record<string, unknown>) =>
-    ['entity_type', 'moms_period', 'f_skatt', 'vat_registered'].some((field) => field in body)),
+    [
+      'entity_type',
+      'moms_period',
+      'f_skatt',
+      'vat_registered',
+      'vat_taxable_base_over_40m',
+      'employer_turnover_over_40m',
+    ].some((field) => field in body)),
   regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
   toDeadlineSettings: vi.fn((settings: Record<string, unknown>) => settings),
 }))
@@ -188,26 +195,52 @@ describe('PUT /api/settings', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects quarterly VAT when taxable turnover is above SEK 40 million', async () => {
+  it('rejects quarterly VAT when the VAT taxable base is above SEK 40 million', async () => {
     enqueue({
       data: {
         entity_type: 'aktiebolag',
         vat_registered: true,
         vat_number: 'SE556012579001',
         moms_period: 'quarterly',
-        tax_turnover_over_40m: false,
+        vat_taxable_base_over_40m: false,
         onboarding_complete: true,
       },
     })
 
     const request = createMockRequest('/api/settings', {
       method: 'PUT',
-      body: { tax_turnover_over_40m: true },
+      body: { vat_taxable_base_over_40m: true },
     })
     const response = await PUT(request, { params: Promise.resolve({}) })
 
     expect(response.status).toBe(400)
     expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows employer turnover above SEK 40 million with quarterly VAT', async () => {
+    const settings = {
+      company_id: 'company-1',
+      entity_type: 'aktiebolag',
+      vat_registered: true,
+      vat_number: 'SE556012579001',
+      moms_period: 'quarterly',
+      vat_taxable_base_over_40m: false,
+      employer_turnover_over_40m: true,
+      onboarding_complete: true,
+    }
+    enqueueMany([
+      { data: { ...settings, employer_turnover_over_40m: false } },
+      { data: settings },
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { employer_turnover_over_40m: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(200)
+    expect(deadlineMocks.regenerate).toHaveBeenCalledOnce()
   })
 
   it('returns 404 when the settings row does not exist', async () => {

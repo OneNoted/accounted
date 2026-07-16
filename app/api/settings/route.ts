@@ -130,9 +130,9 @@ export const PUT = withRouteContext(
       }
     }
 
-    const effectiveTurnoverOver40m =
-      body.tax_turnover_over_40m ?? oldSettings?.tax_turnover_over_40m ?? false
-    if (effectiveVatRegistered && effectiveTurnoverOver40m && effectiveMomsPeriod !== 'monthly') {
+    const effectiveVatTaxableBaseOver40m =
+      body.vat_taxable_base_over_40m ?? oldSettings?.vat_taxable_base_over_40m ?? false
+    if (effectiveVatRegistered && effectiveVatTaxableBaseOver40m && effectiveMomsPeriod !== 'monthly') {
       return NextResponse.json(
         { error: 'Företag med beskattningsunderlag över 40 miljoner kronor måste redovisa moms varje månad.' },
         { status: 400 },
