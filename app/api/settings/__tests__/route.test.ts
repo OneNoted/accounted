@@ -23,23 +23,16 @@ const deadlineMocks = vi.hoisted(() => ({
   regenerate: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/tax/deadline-generator', () => ({
-  DEADLINE_SETTINGS_SELECT: 'company_id, entity_type, moms_period',
-  hasTaxRelevantFields: vi.fn((body: Record<string, unknown>) =>
-    [
-      'entity_type',
-      'moms_period',
-      'f_skatt',
-      'vat_registered',
-      'vat_taxable_base_over_40m',
-      'vat_has_eu_trade',
-    ].some((field) => field in body)),
-  shouldRegenerateTaxDeadlines: vi.fn(
-    (taxFieldsInBody: boolean, count: number) => taxFieldsInBody || count === 0,
-  ),
-  regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
-  toDeadlineSettings: vi.fn((settings: Record<string, unknown>) => settings),
-}))
+// Mock only the function that writes to the database. The field detector,
+// settings normalizer, and regeneration predicate stay real so these tests
+// fail if a new tax-relevant field stops triggering regeneration.
+vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/tax/deadline-generator')>()
+  return {
+    ...actual,
+    regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
+  }
+})
 
 import { PUT } from '../route'
 import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
@@ -194,15 +187,76 @@ describe('PUT /api/settings', () => {
       { data: null, count: 0 }, // no system deadlines -> self-heal generation
     ])
 
+    // A save with NO tax-relevant field: only the zero-count self-heal path
+    // can trigger regeneration here.
     const request = createMockRequest('/api/settings', {
       method: 'PUT',
-      body: { f_skatt: true },
+      body: { company_name: 'Self Heal AB' },
     })
     const response = await PUT(request, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
     expect(vi.mocked(regenerateTaxDeadlinesForUser)).toHaveBeenCalledOnce()
+  })
+
+  it('clears VAT-dependent flags when VAT registration is turned off', async () => {
+    const settings = {
+      company_id: 'company-1',
+      entity_type: 'aktiebolag',
+      vat_registered: true,
+      vat_number: 'SE556012579001',
+      moms_period: 'quarterly',
+      vat_taxable_base_over_40m: false,
+      vat_has_eu_trade: true,
+      periodisk_sammanstallning_enabled: true,
+      onboarding_complete: true,
+    }
+    enqueueMany([
+      { data: settings },
+      {
+        data: {
+          ...settings,
+          id: 's1',
+          vat_registered: false,
+          vat_has_eu_trade: false,
+          periodisk_sammanstallning_enabled: false,
+        },
+      },
+    ])
+
+    // Without the coercion this request 400s: the stored PS flag stays
+    // effective while registration is being switched off.
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { vat_registered: false },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(deadlineMocks.regenerate).toHaveBeenCalledOnce()
+  })
+
+  it('still rejects explicitly enabling the EU sales list without EU trade', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        vat_registered: true,
+        vat_number: 'SE556012579001',
+        moms_period: 'quarterly',
+        vat_has_eu_trade: false,
+        onboarding_complete: true,
+      },
+    })
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { periodisk_sammanstallning_enabled: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
   })
 
   it('does not regenerate tax deadlines when the company already has some', async () => {

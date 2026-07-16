@@ -57,6 +57,10 @@ function getAnnualVatDeadline(
   fiscalYearEndYear: number,
   settings: CompanySettingsForDeadlines,
 ): { day: number; month: number; year: number } {
+  // Enskild firma (calendar year only, BFL 3 kap.): without EU trade the
+  // annual momsdeklaration follows the income tax return (12 May); with EU
+  // trade it is due 26 February (26 kap. 33-33a §§ SFL, Skatteverket's
+  // published helårsmoms schedule).
   if (settings.entity_type === 'enskild_firma') {
     return settings.vat_has_eu_trade
       ? { day: 26, month: 1, year: fiscalYearEndYear + 1 }
@@ -202,7 +206,8 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
   // The filing day is keyed to the VAT taxable base, not a separate employer
   // measure (SFL 26 kap.): above SEK 40M the whole skattedeklaration (AGI and
   // VAT) is due the 26th of the following month; otherwise the 12th (17th in
-  // January and August). Employers without VAT reporting always use the 12th.
+  // January and August). Employers without VAT reporting follow the same
+  // 12th/17th small-company schedule.
   {
     type: 'arbetsgivardeklaration',
     titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
@@ -249,6 +254,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
         const deadlineMonth = (month + 1) % 12
         const deadlineYear = month === 11 ? year + 1 : year
         instances.push({
+          // Deliberately January-only: the 17 August exception applies to the
+          // small-company (below SEK 40M) schedule. Storföretag payment dates
+          // are the 12th every month except January (62 kap. 3 § SFL and
+          // Skatteverket's published storföretag calendar).
           day: deadlineMonth === 0 ? 17 : 12,
           month: deadlineMonth,
           year: deadlineYear,

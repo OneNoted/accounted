@@ -156,7 +156,7 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
   const fromDate = new Date(2030, 0, 1)
   const years = [2030]
 
-  function rowsFor(companyId: string, keys: Set<string>) {
+  function rowsFor(companyId: string, keys: Set<string>, isCompleted = false) {
     return Array.from(keys, (key, index) => {
       const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
       return {
@@ -165,6 +165,7 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
         tax_deadline_type: taxDeadlineType,
         tax_period: taxPeriod,
         due_date: dueDate,
+        is_completed: isCompleted,
       }
     })
   }
@@ -213,6 +214,43 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
     expect(findSettingsMissingUpcomingDeadlines(
       settings,
       staleRows,
+      years,
+      fromDate,
+    )).toEqual(settings)
+  })
+
+  it('treats a completed obligation as satisfied even with a superseded due date', () => {
+    // A filed (is_completed) row keeps its old statutory date. The generator
+    // never replaces completed rows, so flagging it by date would make the
+    // repair loop re-run for this company every day without converging.
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const completedStaleRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+      true,
+    ).map((row) => ({ ...row, due_date: '2029-01-15' }))
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      completedStaleRows,
+      years,
+      fromDate,
+    )).toEqual([])
+  })
+
+  it('still repairs missing pending obligations when other obligations are completed', () => {
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const expectedKeys = getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate)
+    // Only the F-tax obligations exist (completed); everything else is missing.
+    const completedFTaxRows = rowsFor(
+      'company-1',
+      new Set(Array.from(expectedKeys).filter((key) => key.startsWith('f_skatt:'))),
+      true,
+    )
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      completedFTaxRows,
       years,
       fromDate,
     )).toEqual(settings)

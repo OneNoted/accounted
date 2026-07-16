@@ -57,13 +57,24 @@ export function TaxSettingsContent() {
       vat_taxable_base_over_40m:
         vatRegistered && formData.get('vat_taxable_base_over_40m') === 'true',
       vat_has_eu_trade: vatRegistered && formData.get('vat_has_eu_trade') === 'true',
-      vat_filing_method: (formData.get('vat_filing_method') as string) || 'electronic',
+      // The filing-method and PS selects are conditionally rendered: when a
+      // control is unmounted its FormData key is absent, and defaulting would
+      // silently overwrite the saved preference. Fall back to the stored
+      // value first, then the default.
+      vat_filing_method:
+        (formData.get('vat_filing_method') as string) ||
+        settings?.vat_filing_method ||
+        'electronic',
       periodisk_sammanstallning_enabled:
         vatRegistered && formData.get('periodisk_sammanstallning_enabled') === 'true',
       periodisk_sammanstallning_period:
-        (formData.get('periodisk_sammanstallning_period') as string) || 'monthly',
+        (formData.get('periodisk_sammanstallning_period') as string) ||
+        settings?.periodisk_sammanstallning_period ||
+        'monthly',
       periodisk_sammanstallning_filing_method:
-        (formData.get('periodisk_sammanstallning_filing_method') as string) || 'electronic',
+        (formData.get('periodisk_sammanstallning_filing_method') as string) ||
+        settings?.periodisk_sammanstallning_filing_method ||
+        'electronic',
       tax_contact_name: (formData.get('tax_contact_name') as string) || null,
       tax_contact_phone: (formData.get('tax_contact_phone') as string) || null,
       tax_contact_email: (formData.get('tax_contact_email') as string) || null,

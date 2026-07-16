@@ -1750,7 +1750,7 @@
     "periodisk_enabled_label": "Lämnar periodisk sammanställning",
     "periodisk_enabled_help": "Gäller vid momsfri försäljning av varor eller vissa tjänster till momsregistrerade företag i andra EU-länder.",
     "periodisk_label": "Period för periodisk sammanställning",
-    "periodisk_help": "Varuförsäljning till EU ska normalt rapporteras månadsvis (35 kap. 2 § SFL). Kvartal kräver tillstånd från Skatteverket och gäller endast tjänsteförsäljning.",
+    "periodisk_help": "Varuförsäljning till EU rapporteras normalt månadsvis (35 kap. 2 § SFL). Enbart tjänsteförsäljning rapporteras kvartalsvis som standard; kvartalsrapportering av varuförsäljning kräver beslut från Skatteverket.",
     "periodisk_filing_method_label": "Inlämningssätt",
     "periodisk_filing_method_help": "Digital inlämning har normalt den 25:e som sista dag, pappersblankett den 20:e.",
     "tax_contact_heading": "Kontaktperson för skatteärenden",

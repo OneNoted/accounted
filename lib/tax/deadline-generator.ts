@@ -129,15 +129,20 @@ export async function generateTaxDeadlinesForUser(
   const todayIso = formatDateISO(today)
   const endDate = `${Math.max(...years) + 1}-12-31`
 
-  // Completed future deadlines represent real filing progress. Preserve them
-  // and do not create a second pending row for the same obligation.
+  // Completed deadlines represent real filing progress. Preserve them and do
+  // not create a second pending row for the same obligation. The window starts
+  // a year before the earliest generated year, NOT today: a completed row can
+  // carry a superseded due date that already passed while the current
+  // statutory date is still ahead, and filtering on today would resurrect a
+  // pending row for an obligation the user already filed.
+  const completedFloor = `${Math.min(...years) - 1}-01-01`
   const { data: completedRows, error: completedRowsError } = await supabase
     .from('deadlines')
     .select('tax_deadline_type, tax_period')
     .eq('company_id', companyId)
     .eq('source', 'system')
     .eq('is_completed', true)
-    .gte('due_date', todayIso)
+    .gte('due_date', completedFloor)
 
   if (completedRowsError) {
     log.error('Error fetching completed deadlines:', completedRowsError)
@@ -339,6 +344,7 @@ interface UpcomingDeadlineCompanyRow {
   tax_deadline_type: string | null
   tax_period: string | null
   due_date: string | null
+  is_completed: boolean | null
 }
 
 // The due date is part of the identity: rows created by older schedule logic
@@ -350,6 +356,15 @@ function deadlineIdentity(
   dueDate: string | null,
 ): string {
   return `${type}:${period}:${dueDate}`
+}
+
+// Completed rows use the looser type:period identity (no due date): a filed
+// obligation is satisfied even when its stored date comes from a superseded
+// schedule, and the generator never replaces completed rows, so flagging them
+// by date would make the repair loop re-run for the same company every day
+// without ever converging.
+function completedIdentity(type: string | null, period: string | null): string {
+  return `${type}:${period}`
 }
 
 export function getExpectedUpcomingDeadlineKeys(
@@ -389,10 +404,17 @@ export function findSettingsMissingUpcomingDeadlines(
   fromDate: Date = new Date(),
 ): DeadlineSettingsRow[] {
   const actualKeysByCompany = new Map<string, Set<string>>()
+  const completedKeysByCompany = new Map<string, Set<string>>()
   for (const row of upcomingDeadlineRows) {
     const keys = actualKeysByCompany.get(row.company_id) ?? new Set<string>()
     keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date))
     actualKeysByCompany.set(row.company_id, keys)
+
+    if (row.is_completed) {
+      const completed = completedKeysByCompany.get(row.company_id) ?? new Set<string>()
+      completed.add(completedIdentity(row.tax_deadline_type, row.tax_period))
+      completedKeysByCompany.set(row.company_id, completed)
+    }
   }
 
   return settingsRows.filter((settings) => {
@@ -403,7 +425,14 @@ export function findSettingsMissingUpcomingDeadlines(
         fromDate,
       )
       const actualKeys = actualKeysByCompany.get(settings.company_id) ?? new Set<string>()
-      return Array.from(expectedKeys).some((key) => !actualKeys.has(key))
+      const completedKeys = completedKeysByCompany.get(settings.company_id) ?? new Set<string>()
+      return Array.from(expectedKeys).some((key) => {
+        if (actualKeys.has(key)) return false
+        // key is `${type}:${period}:${dueDate}`; strip the date to compare
+        // against the completed set (periods never contain a colon).
+        const typeAndPeriod = key.slice(0, key.lastIndexOf(':'))
+        return !completedKeys.has(typeAndPeriod)
+      })
     } catch {
       // Include malformed settings so the repair loop logs the company-specific
       // generation error without aborting recovery for every other company.
@@ -461,16 +490,21 @@ export async function generateNewYearDeadlines(
 export async function backfillMissingTaxDeadlines(
   supabase: SupabaseClient,
 ): Promise<{ companiesScanned: number; companiesRepaired: number; totalCreated: number }> {
-  const today = formatDateISO(new Date())
+  // Window starts a year back, not today: completed rows with a superseded
+  // (already passed) due date must still count as satisfied, otherwise the
+  // repair loop flags the company forever while the generator (correctly)
+  // refuses to recreate a filed obligation. Matches the generator's own
+  // completed-row floor.
+  const pastFloor = `${new Date().getFullYear() - 1}-01-01`
   const [allSettings, upcomingDeadlineRows] = await Promise.all([
     fetchAllDeadlineSettings(supabase),
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
       supabase
         .from('deadlines')
-        .select('id, company_id, tax_deadline_type, tax_period, due_date')
+        .select('id, company_id, tax_deadline_type, tax_period, due_date, is_completed')
         .eq('source', 'system')
         .eq('deadline_type', 'tax')
-        .gte('due_date', today)
+        .gte('due_date', pastFloor)
         .order('id', { ascending: true })
         .range(from, to),
     ),

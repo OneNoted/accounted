@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DeadlineList } from '@/components/deadlines/DeadlineList'
@@ -35,25 +36,49 @@ export default function DeadlinesPage() {
     try {
       const today = new Date().toISOString().split('T')[0]
 
-      const [deadlinesRes, customersRes, overdueRes] = await Promise.all([
-        supabase.from('deadlines').select('*, customer:customers(name)').eq('company_id', companyId).order('due_date', { ascending: true }),
-        supabase.from('customers').select('id, name').eq('company_id', companyId).order('name', { ascending: true }),
-        supabase.from('invoices').select('total_sek, total').eq('company_id', companyId).in('status', ['sent', 'unpaid']).lt('due_date', today),
+      // fetchAllRows: PostgREST silently caps plain selects at 1000 rows,
+      // which would truncate the deadline list and undercount overdue
+      // invoices for large companies. The secondary .order('id') gives the
+      // stable total order paging requires.
+      const [deadlineRows, customerRows, overdueRows] = await Promise.all([
+        fetchAllRows<Deadline>(({ from, to }) =>
+          supabase
+            .from('deadlines')
+            .select('*, customer:customers(name)')
+            .eq('company_id', companyId)
+            .order('due_date', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+        fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+          supabase
+            .from('customers')
+            .select('id, name')
+            .eq('company_id', companyId)
+            .order('name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+        fetchAllRows<{ total_sek: number | null; total: number | null }>(({ from, to }) =>
+          supabase
+            .from('invoices')
+            .select('total_sek, total')
+            .eq('company_id', companyId)
+            .in('status', ['sent', 'unpaid'])
+            .lt('due_date', today)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
       ])
 
-      if (deadlinesRes.error) throw deadlinesRes.error
-      if (customersRes.error) throw customersRes.error
-      if (overdueRes.error) throw overdueRes.error
-
-      const overdueCount = overdueRes.data?.length || 0
-      const overdueTotal = (overdueRes.data || []).reduce(
+      const overdueTotal = overdueRows.reduce(
         (sum, inv) => sum + (inv.total_sek || inv.total || 0),
         0
       )
 
-      setDeadlines(deadlinesRes.data || [])
-      setCustomers(customersRes.data || [])
-      setOverdueInvoices({ count: overdueCount, total: overdueTotal })
+      setDeadlines(deadlineRows)
+      setCustomers(customerRows)
+      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal })
     } catch {
       toast({
         title: t('load_failed_title'),

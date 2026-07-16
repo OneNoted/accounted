@@ -42,7 +42,7 @@ export const GET = withRouteContext(
 
 export const PUT = withRouteContext(
   'settings.update',
-  async (request, { supabase, companyId }) => {
+  async (request, { supabase, companyId, log }) => {
     // Fetch current settings to check for tax-relevant changes
     const { data: oldSettings } = await supabase
       .from('company_settings')
@@ -110,6 +110,20 @@ export const PUT = withRouteContext(
           { status: 400 },
         )
       }
+    }
+
+    // Turning VAT registration off retires the VAT-dependent flags, and
+    // dropping EU trade retires the EU sales list: stale true values would
+    // otherwise block the save below or silently resurrect wrong deadlines
+    // when registration is re-enabled later. Same coherence rule as the
+    // 20260717070000 migration and the tax settings form.
+    if (body.vat_registered === false) {
+      body.vat_taxable_base_over_40m = false
+      body.vat_has_eu_trade = false
+      body.periodisk_sammanstallning_enabled = false
+    }
+    if (body.vat_has_eu_trade === false) {
+      body.periodisk_sammanstallning_enabled = false
     }
 
     // Validate: VAT-registered must have VAT number (ML 11 kap. 8§) and moms period (SFL 26 kap.)
@@ -181,6 +195,7 @@ export const PUT = withRouteContext(
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .eq('source', 'system')
+        .eq('deadline_type', 'tax')
       // Fail safe: on a count error, assume deadlines already exist so we do
       // NOT delete+regenerate on a transient failure (regeneration would reset
       // the status of pending rows). A non-zero placeholder keeps the
@@ -191,9 +206,9 @@ export const PUT = withRouteContext(
     if (shouldRegenerateTaxDeadlines(taxFieldsInBody, existingSystemDeadlineCount)) {
       try {
         await regenerateTaxDeadlinesForUser(supabase, companyId, toDeadlineSettings(data))
-        console.log('Tax deadlines regenerated after settings change')
+        log.info('tax deadlines regenerated after settings change')
       } catch (err) {
-        console.error('Failed to regenerate tax deadlines:', err)
+        log.error('failed to regenerate tax deadlines', err as Error)
         // Don't fail the settings update if deadline generation fails
       }
     }
