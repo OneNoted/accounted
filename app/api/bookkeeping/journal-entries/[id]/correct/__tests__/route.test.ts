@@ -113,7 +113,50 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     expect(status).toBe(200)
     expect(body.data.reversal).toEqual(reversal)
     expect(body.data.corrected).toEqual(corrected)
-    expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines)
+    expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
+      description: undefined,
+    })
+  })
+
+  it('threads an optional description through to correctEntry (issue #1031)', async () => {
+    const reversal = makeJournalEntry({ id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' })
+    const corrected = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'entry-1', source_type: 'correction' })
+    mockCorrectEntry.mockResolvedValue({ reversal, corrected })
+
+    const lines = [
+      { account_number: '2893', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+      method: 'POST',
+      body: { lines, description: 'Rättelse: Skulder till närstående personer, kortfristig del' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
+      description: 'Rättelse: Skulder till närstående personer, kortfristig del',
+    })
+  })
+
+  it('returns 400 when description is blank', async () => {
+    const lines = [
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+    ]
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+      method: 'POST',
+      body: { lines, description: '   ' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe('Validation failed')
+    expect(mockCorrectEntry).not.toHaveBeenCalled()
   })
 
   it('maps an unbalanced-correction engine error to the canonical envelope (400)', async () => {

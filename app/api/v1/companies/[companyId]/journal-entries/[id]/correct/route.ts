@@ -6,9 +6,11 @@
  * posted with the new lines. All three remain in the verifikationsserie,
  * linked via reverses_id, reversed_by_id, and correction_of_id.
  *
- * Body: `{ lines: [...] }`: the new balanced lines. The corrected entry
- * inherits entry_date, fiscal_period_id, description, and voucher_series
- * from the original.
+ * Body: `{ lines: [...], description? }`: the new balanced lines. The
+ * corrected entry inherits entry_date, fiscal_period_id, and voucher_series
+ * from the original. Its description defaults to "Rättelse: <original>";
+ * pass `description` to override it (e.g. when the original label named the
+ * wrong account).
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -108,7 +110,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
       })
     }
-    const { lines } = parsed.data
+    const { lines, description } = parsed.data
 
     const balance = validateBalance(lines)
     if (!balance.valid) {
@@ -178,6 +180,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.userId,
         entryId,
         lines,
+        { description },
       )
       return ok(
         {

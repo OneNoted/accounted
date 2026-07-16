@@ -2212,6 +2212,31 @@ describe('CorrectJournalEntrySchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  it('accepts an optional description and trims it', () => {
+    const result = CorrectJournalEntrySchema.safeParse({
+      description: '  Rättelse: Skulder till närstående personer, kortfristig del  ',
+      lines: [
+        validJournalEntryLine({ account_number: '6200', debit_amount: 500, credit_amount: 0 }),
+        validJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 500 }),
+      ],
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.description).toBe('Rättelse: Skulder till närstående personer, kortfristig del')
+    }
+  })
+
+  it('rejects a blank description (omit it to use the server fallback)', () => {
+    const result = CorrectJournalEntrySchema.safeParse({
+      description: '   ',
+      lines: [
+        validJournalEntryLine({ account_number: '6200', debit_amount: 500, credit_amount: 0 }),
+        validJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 500 }),
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
 })
 
 // ============================================================
