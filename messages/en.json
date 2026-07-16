@@ -4363,6 +4363,8 @@
     "revenue_account_hint": "Leave empty to derive the account automatically from the VAT rate.",
     "cost_price_label": "Cost price",
     "cost_price_hint": "Margin display only, never posted.",
+    "currency_label": "Currency",
+    "currency_hint": "Pre-fills a new invoice's currency when the article is added.",
     "ean_label": "EAN/barcode",
     "ean_placeholder": "e.g. 7350000000000",
     "housework_label": "ROT/RUT",

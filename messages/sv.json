@@ -4363,6 +4363,8 @@
     "revenue_account_hint": "Lämna tomt för att härleda kontot automatiskt utifrån momsen.",
     "cost_price_label": "Inköpspris",
     "cost_price_hint": "Endast för marginalberäkning, bokförs aldrig.",
+    "currency_label": "Valuta",
+    "currency_hint": "Förifyller en ny fakturas valuta när artikeln läggs till.",
     "ean_label": "EAN/streckkod",
     "ean_placeholder": "t.ex. 7350000000000",
     "housework_label": "ROT/RUT",
