@@ -287,6 +287,43 @@ describe('correctEntry', () => {
     expect(result.corrected).toBeDefined()
   })
 
+  it('uses a caller-supplied description for the corrected entry (issue #1031)', async () => {
+    setupResults()
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+      description: 'Rättelse: Skulder till närstående personer, kortfristig del',
+    })
+
+    const entryInserts = inserts.filter((i) => i.table === 'journal_entries')
+    expect(entryInserts).toHaveLength(2)
+    const corrected = entryInserts[1].payload as { source_type: string; description: string }
+    expect(corrected.source_type).toBe('correction')
+    expect(corrected.description).toBe('Rättelse: Skulder till närstående personer, kortfristig del')
+  })
+
+  it('falls back to "Rättelse: <original>" when no description is supplied', async () => {
+    setupResults()
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const entryInserts = inserts.filter((i) => i.table === 'journal_entries')
+    const corrected = entryInserts[1].payload as { source_type: string; description: string }
+    expect(corrected.source_type).toBe('correction')
+    expect(corrected.description).toBe('Rättelse: Test purchase')
+  })
+
+  it('falls back to the auto text when the supplied description is blank', async () => {
+    setupResults()
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+      description: '   ',
+    })
+
+    const entryInserts = inserts.filter((i) => i.table === 'journal_entries')
+    const corrected = entryInserts[1].payload as { description: string }
+    expect(corrected.description).toBe('Rättelse: Test purchase')
+  })
+
   it('accepts a source_type=correction entry as the original (chained correction, BFL 5 kap. 5 §)', async () => {
     // The user just corrected entry A → got correction C. They now want to
     // correct C. Service must not care about source_type of the original:

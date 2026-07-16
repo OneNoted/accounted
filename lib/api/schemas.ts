@@ -910,6 +910,10 @@ export const CreateJournalEntrySchema = z.object({
 })
 
 export const CorrectJournalEntrySchema = z.object({
+  // Optional verifikationstext for the corrected entry. When omitted the
+  // server falls back to "Rättelse: <original description>"; supplying it lets
+  // the user replace a header that echoed the wrong account's label (#1031).
+  description: z.string().trim().min(1, 'Description cannot be empty').optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),
 })
 

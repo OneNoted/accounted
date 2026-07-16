@@ -130,6 +130,13 @@ export async function correctEntry(
      * the small TOCTOU window a second independent read would open.
      */
     preloadedOriginal?: OriginalWithLines
+    /**
+     * Verifikationstext for the corrected entry. Defaults to
+     * "Rättelse: <original description>". Supplying it lets a user who
+     * corrects the account BECAUSE the original label was wrong avoid the
+     * stale label echoing in the correction header (issue #1031).
+     */
+    description?: string
   }
 ): Promise<{ reversal: JournalEntry; corrected: JournalEntry; documentRelinkError?: string }> {
   // Validate the corrected lines are balanced
@@ -340,7 +347,9 @@ export async function correctEntry(
         voucher_number: correctedVoucherNumber,
         voucher_series: original.voucher_series || 'A',
         entry_date: correctedDate,
-        description: `Rättelse: ${original.description}`,
+        // A caller-supplied verifikationstext wins; blank falls back to the
+        // canonical auto text so the header never ends up empty.
+        description: options?.description?.trim() || `Rättelse: ${original.description}`,
         source_type: 'correction',
         correction_of_id: originalEntryId,
         status: 'draft',
