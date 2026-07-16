@@ -2045,3 +2045,125 @@ describe('parseCSVLine: unclosed quote handling', () => {
     expect(fields).toEqual(['2024-01-15', 'SPOTIFY AB', '-99,00'])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Wise (TransferWise) multi-currency transaction history
+// ---------------------------------------------------------------------------
+
+const WISE_HEADER =
+  'ID,Status,Direction,"Created on","Finished on","Source fee amount","Source fee currency","Target fee amount","Target fee currency","Source name","Source amount (after fees)","Source currency","Target name","Target amount (after fees)","Target currency","Exchange rate",Reference,Batch,"Created by",Category,Note'
+
+const WISE_CSV = [
+  WISE_HEADER,
+  'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Bluedot Impact Ltd",2500.0,USD,"Aligned Intelligence AB",2500.0,USD,1,Facilitation,,,"Money added",',
+  'TRANSFER-2214309703,COMPLETED,IN,"2026-06-26 20:53:33","2026-06-26 20:54:14",2.20,SEK,,,"Aligned Intelligence AB",200.0,SEK,"Aligned Intelligence AB",200.0,SEK,1.0,,,"Peter Alexander Reinthal","Money added",',
+  'PLAN_ORDER-28688820,COMPLETED,OUT,"2026-06-24 06:13:45","2026-06-24 06:41:51",,,,,,520.00,SEK,TransferWise,520.00,SEK,1.00000000,28688820,,"Peter Alexander Reinthal",General,',
+  'TRANSFER-2208605608,COMPLETED,IN,"2026-06-24 06:13:45","2026-06-24 06:41:50",0.00,SEK,,,"Aligned Intelligence AB",520.0,SEK,"Aligned Intelligence AB",520.0,SEK,1.0,invoice-28688820,,"Peter Alexander Reinthal","Money added",',
+].join('\n')
+
+describe('Wise format', () => {
+  it('auto-detects the Wise header', () => {
+    const format = detectFileFormat(WISE_CSV, 'transactionhistory.csv')
+    expect(format?.id).toBe('wise')
+  })
+
+  const byId = (txs: ParsedBankTransaction[], id: string) => txs.find((t) => t.raw_line === id)
+
+  it('signs IN as income and OUT as expense, on the moved-side currency', () => {
+    const result = parseBankFile(WISE_CSV, 'wise.csv')
+    expect(result.format).toBe('wise')
+
+    const usdIn = byId(result.transactions, 'TRANSFER-2247230173')
+    expect(usdIn).toMatchObject({ amount: 2500, currency: 'USD', date: '2026-07-13' })
+
+    const sekOut = byId(result.transactions, 'PLAN_ORDER-28688820')
+    expect(sekOut).toMatchObject({ amount: -520, currency: 'SEK', date: '2026-06-24' })
+    expect(sekOut?.counterparty).toBe('TransferWise')
+  })
+
+  it('emits a non-zero fee as its own negative "Wise avgift" row', () => {
+    const result = parseBankFile(WISE_CSV, 'wise.csv')
+    const fee = byId(result.transactions, 'TRANSFER-2214309703-fee')
+    expect(fee).toBeDefined()
+    expect(fee?.amount).toBe(-2.2)
+    expect(fee?.currency).toBe('SEK')
+    expect(fee?.description).toMatch(/^Wise avgift/)
+
+    // A 0.00 fee produces no extra row.
+    expect(byId(result.transactions, 'TRANSFER-2208605608-fee')).toBeUndefined()
+    // 4 movements + 1 fee row.
+    expect(result.transactions).toHaveLength(5)
+  })
+
+  it('keys external_id on the stable Wise ID, including fee rows', () => {
+    const result = parseBankFile(WISE_CSV, 'wise.csv')
+    const main = byId(result.transactions, 'TRANSFER-2247230173')!
+    const fee = byId(result.transactions, 'TRANSFER-2214309703-fee')!
+    expect(generateExternalId(main, 'wise', 0)).toBe('wise_TRANSFER-2247230173')
+    expect(generateExternalId(fee, 'wise', 1)).toBe('wise_TRANSFER-2214309703-fee')
+  })
+
+  it('skips rows that are not COMPLETED', () => {
+    const withCancelled = [
+      WISE_HEADER,
+      'TRANSFER-9,CANCELLED,IN,"2026-06-01 10:00:00","2026-06-01 10:00:00",,,,,"X",100.0,SEK,"Y",100.0,SEK,1,,,,General,',
+      'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Bluedot Impact Ltd",2500.0,USD,"Aligned Intelligence AB",2500.0,USD,1,Facilitation,,,"Money added",',
+    ].join('\n')
+    const result = parseBankFile(withCancelled, 'wise.csv')
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].raw_line).toBe('TRANSFER-2247230173')
+    expect(result.stats.skipped_rows).toBe(1)
+  })
+})
+
+describe('Wise format hardening', () => {
+  const row = (over: Partial<Record<string, string>> = {}) => {
+    const f: Record<string, string> = {
+      id: 'TRANSFER-1', status: 'COMPLETED', direction: 'IN',
+      created: '2026-06-01 10:00:00', finished: '2026-06-01 10:00:00',
+      sfeeA: '', sfeeC: '', tfeeA: '', tfeeC: '',
+      sname: 'X', samt: '100.0', scur: 'SEK', tname: 'Y', tamt: '100.0', tcur: 'SEK',
+      rate: '1', ref: '', batch: '', by: '', cat: 'General', note: '', ...over,
+    }
+    return [
+      f.id, f.status, f.direction, `"${f.created}"`, `"${f.finished}"`,
+      f.sfeeA, f.sfeeC, f.tfeeA, f.tfeeC, `"${f.sname}"`, f.samt, f.scur,
+      `"${f.tname}"`, f.tamt, f.tcur, f.rate, f.ref, f.batch, `"${f.by}"`, f.cat, f.note,
+    ].join(',')
+  }
+
+  it('fails hard on an unsupported Direction (e.g. NEUTRAL conversion)', () => {
+    const csv = [WISE_HEADER, row({ id: 'PLAN_ORDER-9', direction: 'NEUTRAL', scur: 'USD', tcur: 'SEK' })].join('\n')
+    expect(() => parseBankFile(csv, 'wise.csv')).toThrow(/unsupported Direction "NEUTRAL"/)
+  })
+
+  it('does not import a row with a blank status', () => {
+    const csv = [WISE_HEADER, row({ status: '' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.stats.skipped_rows).toBe(1)
+  })
+
+  it('rejects a partially numeric amount instead of coercing it', () => {
+    const csv = [WISE_HEADER, row({ samt: '12abc', tamt: '12abc' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.issues.some((iss) => /Invalid amount/.test(iss.message))).toBe(true)
+  })
+
+  it('skips a row with no movement currency rather than defaulting to SEK', () => {
+    const csv = [WISE_HEADER, row({ direction: 'IN', tcur: '' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.issues.some((iss) => /Missing\/invalid currency/.test(iss.message))).toBe(true)
+  })
+
+  it('does not inherit the movement currency for a fee with no currency', () => {
+    const csv = [WISE_HEADER, row({ sfeeA: '2.20', sfeeC: '' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    // Main row still imports; the fee is dropped with a warning, not booked in SEK.
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].raw_line).toBe('TRANSFER-1')
+    expect(result.issues.some((iss) => /no currency/.test(iss.message))).toBe(true)
+  })
+})
