@@ -276,6 +276,8 @@
     "callback_error_title": "The reset link did not work",
     "callback_error_body": "The link has expired or has already been used.",
     "request_new_reset_link": "Request a new reset link",
+    "callback_error_title_signup": "The confirmation link did not work",
+    "callback_error_body_signup": "The link may have expired, already been used, or been opened in a different browser than the one you signed up in. If you have already confirmed your email, sign in below; otherwise you can register again.",
     "bankid_no_account_greeting": "Hi {name}!",
     "bankid_no_account_body": "We did not find an account linked to your BankID. Sign in with email below and then link BankID in settings.",
     "bankid_no_account_create": "Or create a new account",
@@ -509,7 +511,15 @@
     "retry": "Please try again.",
     "overdue_invoices": "{count} overdue invoices",
     "no_system_deadlines_title": "Automatic tax deadlines missing.",
-    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in."
+    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in.",
+    "generate_action": "Generate now",
+    "generate_open_settings": "Open tax settings",
+    "generate_success_title": "Tax deadlines created",
+    "generate_success_description": "{count} deadlines were created from your tax settings.",
+    "generate_none_title": "No deadlines created",
+    "generate_none_description": "No new deadlines to create. Check that your tax settings are filled in if you expected more.",
+    "generate_failed_title": "Could not create deadlines",
+    "generate_failed_description": "Tax deadlines could not be created right now."
   },
   "bureau": {
     "title": "Bureau",

@@ -276,6 +276,8 @@
     "callback_error_title": "Återställningslänken fungerade inte",
     "callback_error_body": "Länken har gått ut eller använts redan.",
     "request_new_reset_link": "Begär en ny återställningslänk",
+    "callback_error_title_signup": "Bekräftelselänken fungerade inte",
+    "callback_error_body_signup": "Länken kan ha upphört, redan använts, eller öppnats i en annan webbläsare än den du registrerade dig i. Har du redan bekräftat din e-post loggar du in nedan, annars kan du registrera dig igen.",
     "bankid_no_account_greeting": "Hej {name}!",
     "bankid_no_account_body": "Vi hittade inget konto kopplat till ditt BankID. Logga in med e-post nedan och koppla sedan BankID i inställningar.",
     "bankid_no_account_create": "Eller skapa ett nytt konto",
@@ -509,7 +511,15 @@
     "retry": "Försök igen.",
     "overdue_invoices": "{count} förfallna fakturor",
     "no_system_deadlines_title": "Automatiska skattedeadlines saknas.",
-    "no_system_deadlines_description": "Deadlines för moms, arbetsgivardeklaration och F-skatt skapas från företagets skatteinställningar — kontrollera att de är ifyllda."
+    "no_system_deadlines_description": "Deadlines för moms, arbetsgivardeklaration och F-skatt skapas från företagets skatteinställningar — kontrollera att de är ifyllda.",
+    "generate_action": "Generera nu",
+    "generate_open_settings": "Öppna skatteinställningar",
+    "generate_success_title": "Skattedeadlines skapade",
+    "generate_success_description": "{count} deadlines skapades från dina skatteinställningar.",
+    "generate_none_title": "Inga deadlines skapades",
+    "generate_none_description": "Inga nya deadlines att skapa. Kontrollera att skatteinställningarna är ifyllda om du väntade dig fler.",
+    "generate_failed_title": "Kunde inte skapa deadlines",
+    "generate_failed_description": "Det gick inte att skapa skattedeadlines just nu."
   },
   "bureau": {
     "title": "Byrå",
