@@ -4,6 +4,11 @@
 // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The supplier
 // invoice form stores rates as decimal fractions (0.25 = 25 %); this list is
 // also the preset dropdown in the form's VAT rate cell.
+// Note on the food rate: livsmedel moved from 12 % to 6 % on 1 April 2026
+// (Prop. 2025/26:55, ML 2023:200), and the reduction is currently legislated
+// to revert after 31 December 2027; 6 % then remains legal (books, transport)
+// but stops being the food rate. This static allow-list cannot express
+// per-category temporal validity, so revisit at the reversion date.
 export const LEGAL_VAT_RATES: readonly number[] = [0.25, 0.12, 0.06, 0]
 
 export function isLegalVatRate(rate: number): boolean {
