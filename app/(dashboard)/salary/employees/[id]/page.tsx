@@ -52,6 +52,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [deactivating, setDeactivating] = useState(false)
   const [employmentType, setEmploymentType] = useState('employee')
   const [salaryType, setSalaryType] = useState('monthly')
   const [vacationRule, setVacationRule] = useState('procentregeln')
@@ -186,6 +187,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   }
 
   async function handleDeactivate() {
+    // In-flight guard: the confirm dialog closes before the DELETE settles,
+    // so a second click would fire a duplicate request.
+    if (deactivating) return
     const ok = await confirmAction({
       title: t('detail_deactivate_confirm_title'),
       description: t('detail_deactivate_confirm'),
@@ -194,10 +198,15 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     })
     if (!ok) return
 
-    const res = await fetch(`/api/salary/employees/${id}`, { method: 'DELETE' })
-    if (res.ok) {
-      toast({ title: t('detail_deactivated') })
-      router.push('/salary/employees')
+    setDeactivating(true)
+    try {
+      const res = await fetch(`/api/salary/employees/${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        toast({ title: t('detail_deactivated') })
+        router.push('/salary/employees')
+      }
+    } finally {
+      setDeactivating(false)
     }
   }
 
@@ -237,7 +246,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
         {canWrite && (
-          <Button variant="outline" size="sm" onClick={handleDeactivate} className="text-destructive">
+          <Button variant="outline" size="sm" onClick={handleDeactivate} disabled={deactivating} className="text-destructive">
             <Trash2 className="mr-2 h-4 w-4" />
             {t('detail_deactivate')}
           </Button>

@@ -35,6 +35,7 @@ export default function RecurringInvoicesPage() {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [runningId, setRunningId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
@@ -134,6 +135,9 @@ export default function RecurringInvoicesPage() {
   }
 
   async function deleteSchedule(s: ScheduleRow) {
+    // In-flight guard: the confirm dialog closes before the DELETE settles,
+    // so a second click would fire a duplicate request.
+    if (deletingId) return
     const ok = await confirmAction({
       title: t('delete_confirm_title'),
       description: t('delete_confirm', { name: s.name }),
@@ -141,12 +145,17 @@ export default function RecurringInvoicesPage() {
       variant: 'destructive',
     })
     if (!ok) return
-    const res = await fetch(`/api/invoices/recurring/${s.id}`, { method: 'DELETE' })
-    if (res.ok) {
-      toast({ title: t('schedule_deleted_title') })
-      fetchSchedules()
-    } else {
-      toast({ title: t('schedule_delete_failed_title'), variant: 'destructive' })
+    setDeletingId(s.id)
+    try {
+      const res = await fetch(`/api/invoices/recurring/${s.id}`, { method: 'DELETE' })
+      if (res.ok) {
+        toast({ title: t('schedule_deleted_title') })
+        fetchSchedules()
+      } else {
+        toast({ title: t('schedule_delete_failed_title'), variant: 'destructive' })
+      }
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -268,6 +277,7 @@ export default function RecurringInvoicesPage() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              disabled={deletingId !== null}
                               onClick={() => deleteSchedule(s)}
                             >
                               {t('delete')}
