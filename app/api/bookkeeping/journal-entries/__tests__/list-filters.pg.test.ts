@@ -26,6 +26,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     voucherNumber: number
     description: string
     voucherSeries?: string
+    entryDate?: string
     reversesId?: string
     correctionOfId?: string
     withLines?: boolean
@@ -35,7 +36,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
           entry_date, description, source_type, status, reverses_id, correction_of_id)
-       VALUES ($1,$2,$3,$4,$5,$11,'2026-06-01',$6,$7,$8,$9,$10)`,
+       VALUES ($1,$2,$3,$4,$5,$11,$12,$6,$7,$8,$9,$10)`,
       [
         id,
         p.userId,
@@ -48,6 +49,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
         p.reversesId ?? null,
         p.correctionOfId ?? null,
         p.voucherSeries ?? 'A',
+        p.entryDate ?? '2026-06-01',
       ],
     )
     if (p.withLines) await insertBalancedLines(id)
@@ -63,15 +65,16 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
       collapse?: boolean
       series?: string | null
       limit?: number
+      sortDate?: 'asc' | 'desc'
     } = {},
   ) {
     const { rows } = await getPool().query<{
-      entry: { id: string; voucher_series: string }
+      entry: { id: string; voucher_series: string; voucher_number: number }
       total_count: string
     }>(
       `SELECT entry, total_count
          FROM list_fiscal_period_entries_with_related(
-           $1, $2, true, $3, NULL, NULL, 'desc', $6, 0, $4, $5, $7)`,
+           $1, $2, true, $3, NULL, NULL, $8, $6, 0, $4, $5, $7)`,
       [
         companyId,
         periodId,
@@ -80,6 +83,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
         opts.collapse ?? false,
         opts.limit ?? 100,
         opts.series ?? null,
+        opts.sortDate ?? 'desc',
       ],
     )
     return rows
@@ -148,5 +152,35 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     const firstPage = await callRpc(companyId, fiscalPeriodId, { series: 'B', limit: 2 })
     expect(firstPage).toHaveLength(2)
     expect(Number(firstPage[0]!.total_count)).toBe(3)
+  })
+
+  it('tiebreaks same-date vouchers in the date-sort direction (#972)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    // The exact scenario from #972: several days carry more than one voucher.
+    const spec: Array<[number, string]> = [
+      [4, '2026-06-01'],
+      [5, '2026-06-07'],
+      [6, '2026-06-07'],
+      [7, '2026-06-07'],
+      [8, '2026-06-08'],
+      [9, '2026-06-09'],
+      [10, '2026-06-10'],
+      [11, '2026-06-10'],
+      [12, '2026-06-10'],
+      [13, '2026-06-11'],
+    ]
+    for (const [n, entryDate] of spec) {
+      await insertEntry({ userId, companyId, fiscalPeriodId, status: 'posted', sourceType: 'manual', voucherNumber: n, entryDate, withLines: true, description: `A${n}` })
+    }
+
+    // Date-descending (the default list view): same-date vouchers must also
+    // descend, so the whole column reads 13..4 with no zig-zag inside a day.
+    const desc = await callRpc(companyId, fiscalPeriodId, { sortDate: 'desc' })
+    expect(desc.map((r) => r.entry.voucher_number)).toEqual([13, 12, 11, 10, 9, 8, 7, 6, 5, 4])
+
+    // Date-ascending: fully chronological registration order.
+    const asc = await callRpc(companyId, fiscalPeriodId, { sortDate: 'asc' })
+    expect(asc.map((r) => r.entry.voucher_number)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
   })
 })

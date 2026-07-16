@@ -109,8 +109,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       .order('voucher_series', { ascending: voucherAscending })
       .order('voucher_number', { ascending: voucherAscending })
   } else if (sortDate === 'asc' || sortDate === 'desc' || sortBy === 'date_asc' || sortBy === 'date_desc') {
+    // Tiebreak same-date vouchers in the SAME direction as the date sort, and
+    // by series before number so the order matches the RPC path (#972).
     query = query
       .order('entry_date', { ascending: dateAscending })
+      .order('voucher_series', { ascending: dateAscending })
       .order('voucher_number', { ascending: dateAscending })
   } else {
     query = query
