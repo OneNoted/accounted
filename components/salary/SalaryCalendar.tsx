@@ -30,6 +30,10 @@ import {
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -123,6 +127,7 @@ export function SalaryCalendar({
 }: SalaryCalendarProps) {
   const t = useTranslations('salary_calendar')
   const locale = useLocale()
+  const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
   const dateLocale = locale === 'en' ? enUS : sv
   const isHourly = salaryType === 'hourly'
   const periodStartDate = useMemo(() => parseISO(periodStart), [periodStart])
@@ -277,7 +282,13 @@ export function SalaryCalendar({
 
   const handleBulkDelete = async () => {
     if (selected.size === 0 || readOnly) return
-    if (!confirm(t('confirm_bulk_delete', { count: selected.size }))) return
+    const ok = await confirmAction({
+      title: t('confirm_bulk_delete_title'),
+      description: t('confirm_bulk_delete', { count: selected.size }),
+      confirmLabel: t('delete'),
+      variant: 'destructive',
+    })
+    if (!ok) return
     setDeleting(true)
     setError(null)
     try {
@@ -557,6 +568,8 @@ export function SalaryCalendar({
           }}
         />
       )}
+
+      <DestructiveConfirmDialog {...dialogProps} />
     </div>
   )
 }
