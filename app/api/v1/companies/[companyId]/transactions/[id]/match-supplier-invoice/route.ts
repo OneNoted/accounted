@@ -151,6 +151,41 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Credit the cash account THIS transaction actually belongs to, never a
+    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
+    // only source of truth for which bank account a matched transaction
+    // settled from (mirrors the dashboard route's #985 fix). Threaded through
+    // every booking branch below (pure-SEK accrual, FX, and cash-method);
+    // customLines specify their own accounts directly (#1000).
+    const paymentAccount = await resolveSettlementAccount(
+      ctx.supabase,
+      ctx.companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
+
+    // Guard the resolved account against the chart (mirrors the categorize
+    // routes): an inactive cash_accounts.ledger_account would otherwise reach
+    // the engine as a generic MATCH_SI_RECORD_PAYMENT_FAILED instead of
+    // ACCOUNTS_NOT_IN_CHART. Gated on !customLines: custom lines specify their
+    // own accounts directly; every other branch consumes paymentAccount.
+    // This MUST run before the conflicting-JE storno below: a request rejected
+    // here must leave no trace, and reversing the existing categorization JE
+    // is an irreversible side effect (posted vouchers are immutable).
+    if (!customLines) {
+      const missingAccounts = await findUnresolvableAccounts(
+        ctx.supabase,
+        ctx.companyId!,
+        [paymentAccount],
+      )
+      if (missingAccounts.length > 0) {
+        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
+    }
+
     // Storno any conflicting auto-categorization JE before booking the
     // payment. Mirrors the match-invoice path. Without this, an earlier
     // :categorize of the same transaction (e.g. as expense_office with a
@@ -221,43 +256,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .single()
     const accountingMethod = settings?.accounting_method || 'accrual'
 
-    // Credit the cash account THIS transaction actually belongs to, never a
-    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
-    // only source of truth for which bank account a matched transaction
-    // settled from (mirrors the dashboard route's #985 fix). Threaded through
-    // every booking branch below (pure-SEK accrual, FX, and cash-method);
-    // customLines specify their own accounts directly (#1000).
-    const paymentAccount = await resolveSettlementAccount(
-      ctx.supabase,
-      ctx.companyId!,
-      transaction.cash_account_id,
-      txLog,
-    )
-
     // Route on the supplier invoice's actual booking state. An invoice
     // booked at receipt (registration_journal_entry_id set) must clear
     // 2440 regardless of the company's current setting.
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
-
-    // Guard the resolved account against the chart (mirrors the categorize
-    // routes): an inactive cash_accounts.ledger_account would otherwise reach
-    // the engine as a generic MATCH_SI_RECORD_PAYMENT_FAILED instead of
-    // ACCOUNTS_NOT_IN_CHART. Gated on !customLines: custom lines specify their
-    // own accounts directly; every other branch consumes paymentAccount.
-    if (!customLines) {
-      const missingAccounts = await findUnresolvableAccounts(
-        ctx.supabase,
-        ctx.companyId!,
-        [paymentAccount],
-      )
-      if (missingAccounts.length > 0) {
-        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
-        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
-          requestId: ctx.requestId,
-        })
-      }
-    }
 
     // Full settlement = the bank amount pays off the whole remaining balance.
     // Cross-currency always settles the remaining (paymentAmountInvoiceCurrency

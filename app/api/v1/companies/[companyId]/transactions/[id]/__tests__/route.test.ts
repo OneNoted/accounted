@@ -1285,5 +1285,28 @@ describe('POST :id/match-supplier-invoice', () => {
       expect((await res.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
       expect(createSupplierInvCashJE).not.toHaveBeenCalled()
     })
+
+    it('does NOT storno an existing conflicting JE when chart validation rejects the request', async () => {
+      // Regression: the chart pre-validation must run BEFORE the
+      // conflicting-categorization storno. Otherwise a request that is
+      // ultimately rejected with ACCOUNTS_NOT_IN_CHART would first reverse
+      // the transaction's posted categorization entry: an irreversible side
+      // effect on a failed request.
+      const tables = cashMethodTables('ca-1940')
+      ;(tables.transactions.data as { journal_entry_id: string | null }).journal_entry_id = JE_ID
+      mockServiceClient.mockReturnValue(makeFlexibleSupabase(tables))
+      findMissingAccountsMock.mockResolvedValueOnce(['1940'])
+      const res = await matchSIPOST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
+          { supplier_invoice_id: SI_ID },
+        ),
+        txParams(TX_ID),
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+      expect(reverseEntryMock).not.toHaveBeenCalled()
+      expect(createSupplierInvCashJE).not.toHaveBeenCalled()
+    })
   })
 })
