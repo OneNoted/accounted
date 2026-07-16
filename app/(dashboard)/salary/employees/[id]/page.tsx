@@ -11,6 +11,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ArrowLeft, Save, Trash2 } from 'lucide-react'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -44,6 +48,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
   const [employee, setEmployee] = useState<Employee | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -181,7 +186,13 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   }
 
   async function handleDeactivate() {
-    if (!confirm(t('detail_deactivate_confirm'))) return
+    const ok = await confirmAction({
+      title: t('detail_deactivate_confirm_title'),
+      description: t('detail_deactivate_confirm'),
+      confirmLabel: t('detail_deactivate'),
+      variant: 'destructive',
+    })
+    if (!ok) return
 
     const res = await fetch(`/api/salary/employees/${id}`, { method: 'DELETE' })
     if (res.ok) {
@@ -484,6 +495,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           </div>
         )}
       </form>
+
+      <DestructiveConfirmDialog {...dialogProps} />
     </div>
   )
 }

@@ -16,6 +16,10 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
@@ -33,6 +37,7 @@ export default function RecurringInvoicesPage() {
   const [runningId, setRunningId] = useState<string | null>(null)
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
   const router = useRouter()
   const searchParams = useSearchParams()
   const t = useTranslations('invoice_recurring')
@@ -129,9 +134,13 @@ export default function RecurringInvoicesPage() {
   }
 
   async function deleteSchedule(s: ScheduleRow) {
-    if (!confirm(t('delete_confirm', { name: s.name }))) {
-      return
-    }
+    const ok = await confirmAction({
+      title: t('delete_confirm_title'),
+      description: t('delete_confirm', { name: s.name }),
+      confirmLabel: t('delete'),
+      variant: 'destructive',
+    })
+    if (!ok) return
     const res = await fetch(`/api/invoices/recurring/${s.id}`, { method: 'DELETE' })
     if (res.ok) {
       toast({ title: t('schedule_deleted_title') })
@@ -297,6 +306,8 @@ export default function RecurringInvoicesPage() {
           fetchSchedules()
         }}
       />
+
+      <DestructiveConfirmDialog {...dialogProps} />
     </div>
   )
 }

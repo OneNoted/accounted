@@ -15,6 +15,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { AlertTriangle, Download, Loader2 } from 'lucide-react'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
@@ -38,6 +42,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('salary_run')
+  const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   const [run, setRun] = useState<RunDetail | null>(null)
   const [availableEmployees, setAvailableEmployees] = useState<Employee[]>([])
@@ -232,7 +237,13 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   async function handleDelete() {
     if (!run) return
     const period = periodLabelOf(run)
-    if (!confirm(t('confirm_delete', { period }))) return
+    const ok = await confirmAction({
+      title: t('confirm_delete_title'),
+      description: t('confirm_delete', { period }),
+      confirmLabel: t('action_delete_draft'),
+      variant: 'destructive',
+    })
+    if (!ok) return
     setActionLoading('delete')
     const res = await fetch(`/api/salary/runs/${id}`, { method: 'DELETE' })
     if (res.ok) {
@@ -293,7 +304,13 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // Remove an employee from a draft run. The DELETE endpoint is draft-only and
   // cascades to the employee's line items.
   async function handleRemoveEmployee(employeeId: string, name: string) {
-    if (!confirm(t('confirm_remove_employee', { name }))) return
+    const ok = await confirmAction({
+      title: t('confirm_remove_employee_title'),
+      description: t('confirm_remove_employee', { name }),
+      confirmLabel: t('remove_sr'),
+      variant: 'destructive',
+    })
+    if (!ok) return
     setActionLoading(`remove-${employeeId}`)
     const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
       method: 'DELETE',
@@ -512,9 +529,15 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   // Advancing a draft to review. For a nollkörning confirm first: an empty
   // declaration is filed to Skatteverket, which should be deliberate.
-  function handleToReview() {
-    if (isNollkorning && !confirm(t('confirm_nollkorning'))) {
-      return
+  async function handleToReview() {
+    if (isNollkorning) {
+      const ok = await confirmAction({
+        title: t('nollkorning_title'),
+        description: t('confirm_nollkorning'),
+        confirmLabel: t('action_to_review'),
+        variant: 'warning',
+      })
+      if (!ok) return
     }
     handleAction('review')
   }
@@ -697,6 +720,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DestructiveConfirmDialog {...dialogProps} />
     </div>
   )
 }
