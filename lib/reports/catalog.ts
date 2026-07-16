@@ -264,7 +264,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     descKey: 'desc_kundreskontra',
     category: 'ledgers',
     params: 'fiscal',
-    exports: ['xlsx'],
+    exports: ['pdf', 'xlsx'],
   },
   {
     slug: 'supplier-ledger',
@@ -272,7 +272,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     descKey: 'desc_supplier_ledger',
     category: 'ledgers',
     params: 'fiscal',
-    exports: ['xlsx'],
+    exports: ['pdf', 'xlsx'],
   },
 
   // --- Avstämning (reconciliation) ---

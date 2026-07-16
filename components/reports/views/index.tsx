@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
@@ -2035,16 +2036,63 @@ interface SupplierLedgerData {
   } | null
 }
 
+// Local calendar date (YYYY-MM-DD) for the reskontra "per datum" default:
+// toISOString() is UTC and rolls the date over an hour early in Sweden.
+function localIsoDate(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+// Shared "Per datum" control + export menu header for the two reskontra views
+// (#1020/#1021): pick an arbitrary as-of date and export PDF/Excel for it.
+function ReskontraToolbar({
+  asOfDate,
+  onAsOfDateChange,
+  inputId,
+  exportBase,
+}: {
+  asOfDate: string
+  onAsOfDateChange: (date: string) => void
+  inputId: string
+  exportBase: string
+}) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="space-y-1">
+        <Label htmlFor={inputId} className="text-xs text-muted-foreground">
+          Per datum
+        </Label>
+        <Input
+          id={inputId}
+          type="date"
+          value={asOfDate}
+          onChange={(e) => {
+            if (e.target.value) onAsOfDateChange(e.target.value)
+          }}
+          className="w-40"
+        />
+      </div>
+      <ReportExportMenu
+        items={[
+          { format: 'pdf', href: `${exportBase}/pdf?as_of_date=${asOfDate}` },
+          { format: 'xlsx', href: `${exportBase}/xlsx?as_of_date=${asOfDate}` },
+        ]}
+      />
+    </div>
+  )
+}
+
 export function SupplierLedgerView({ periodId }: { periodId: string }) {
   const [data, setData] = useState<SupplierLedgerData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [asOfDate, setAsOfDate] = useState(localIsoDate)
 
   const fetchData = async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/reports/supplier-ledger?period_id=${periodId}`)
+      const res = await fetch(`/api/reports/supplier-ledger?period_id=${periodId}&as_of_date=${asOfDate}`)
       const result = await res.json()
       if (result.error) {
         setError(result.error)
@@ -2060,7 +2108,7 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
 
   useEffect(() => {
     if (periodId) fetchData()
-  }, [periodId])
+  }, [periodId, asOfDate])
 
   if (loading) {
     return (
@@ -2097,7 +2145,12 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/supplier-ledger/xlsx?period_id=${periodId}` }]} />
+      <ReskontraToolbar
+        asOfDate={asOfDate}
+        onAsOfDateChange={setAsOfDate}
+        inputId="supplier-ledger-as-of"
+        exportBase="/api/reports/supplier-ledger"
+      />
       {/* Summary cards */}
       <div className="grid md:grid-cols-3 gap-4">
         <Card>
@@ -2815,12 +2868,13 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expandedCustomers, setExpandedCustomers] = useState<Set<string>>(new Set())
+  const [asOfDate, setAsOfDate] = useState(localIsoDate)
 
   const fetchData = async () => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/reports/ar-ledger?period_id=${periodId}`)
+      const res = await fetch(`/api/reports/ar-ledger?period_id=${periodId}&as_of_date=${asOfDate}`)
       const result = await res.json()
       if (result.error) {
         setError(result.error)
@@ -2836,7 +2890,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
 
   useEffect(() => {
     if (periodId) fetchData()
-  }, [periodId])
+  }, [periodId, asOfDate])
 
   const toggleCustomer = (customerId: string) => {
     setExpandedCustomers((prev) => {
@@ -2885,7 +2939,12 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
 
   return (
     <div className="space-y-4">
-      <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/ar-ledger/xlsx?period_id=${periodId}` }]} />
+      <ReskontraToolbar
+        asOfDate={asOfDate}
+        onAsOfDateChange={setAsOfDate}
+        inputId="ar-ledger-as-of"
+        exportBase="/api/reports/ar-ledger"
+      />
       {/* Summary cards */}
       <div className="grid md:grid-cols-3 gap-4">
         <Card>
