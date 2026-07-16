@@ -1358,6 +1358,20 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('validates tax deadline filing-profile fields', () => {
+    expect(UpdateSettingsSchema.safeParse({
+      vat_taxable_base_over_40m: true,
+      vat_has_eu_trade: true,
+      vat_filing_method: 'electronic',
+      periodisk_sammanstallning_enabled: true,
+      periodisk_sammanstallning_filing_method: 'paper',
+    }).success).toBe(true)
+    expect(UpdateSettingsSchema.safeParse({ vat_filing_method: 'fax' }).success).toBe(false)
+    expect(UpdateSettingsSchema.safeParse({
+      periodisk_sammanstallning_filing_method: 'fax',
+    }).success).toBe(false)
+  })
+
   it('rejects invalid email', () => {
     const result = UpdateSettingsSchema.safeParse({ email: 'not-email' })
     expect(result.success).toBe(false)

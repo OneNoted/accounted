@@ -5,6 +5,11 @@ import { setActiveCompany, CompanyContextError } from '@/lib/company/context'
 import { revalidatePath } from 'next/cache'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { normalizeVatNumber, isValidSwedishVatNumber, deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import {
+  regenerateTaxDeadlinesForUser,
+  toDeadlineSettings,
+} from '@/lib/tax/deadline-generator'
+import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 
 /**
@@ -122,14 +127,28 @@ async function createCompanyFromOnboardingImpl(params: {
     return { error: 'Kunde inte skapa företag. Försök igen.' }
   }
 
-  // Helper: roll back the company if a subsequent step fails. Deletes in FK order.
+  // Helper: roll back the company if a subsequent step fails. Deletes in FK
+  // order. Each delete is error-checked so a failed cleanup leaves a trace
+  // instead of silently stranding partial company data behind a generic
+  // "try again" message.
   const rollback = async (reason: string, err: unknown) => {
     console.error(`[createCompanyFromOnboarding] rolling back ${newCompanyId}: ${reason}`, err)
-    await supabase.from('company_settings').delete().eq('company_id', newCompanyId)
-    await supabase.from('fiscal_periods').delete().eq('company_id', newCompanyId)
-    await supabase.from('chart_of_accounts').delete().eq('company_id', newCompanyId)
-    await supabase.from('company_members').delete().eq('company_id', newCompanyId)
-    await supabase.from('companies').delete().eq('id', newCompanyId)
+    const deletions: Array<[table: string, run: () => PromiseLike<{ error: unknown }>]> = [
+      ['company_settings', () => supabase.from('company_settings').delete().eq('company_id', newCompanyId)],
+      ['fiscal_periods', () => supabase.from('fiscal_periods').delete().eq('company_id', newCompanyId)],
+      ['chart_of_accounts', () => supabase.from('chart_of_accounts').delete().eq('company_id', newCompanyId)],
+      ['company_members', () => supabase.from('company_members').delete().eq('company_id', newCompanyId)],
+      ['companies', () => supabase.from('companies').delete().eq('id', newCompanyId)],
+    ]
+    for (const [table, run] of deletions) {
+      const { error: deleteError } = await run()
+      if (deleteError) {
+        console.error(
+          `[createCompanyFromOnboarding] rollback delete failed for ${table} (company ${newCompanyId})`,
+          deleteError,
+        )
+      }
+    }
   }
 
   // Mirror the normalized org_number onto the companies row so future
@@ -237,7 +256,21 @@ async function createCompanyFromOnboardingImpl(params: {
     return { error: 'Kunde inte skapa räkenskapsår. Försök igen.' }
   }
 
-  // 5. Set as active company
+  // 5. Create the automatic tax deadlines while the onboarding data is still
+  // available. Treat this as part of company creation so a new company never
+  // starts in the broken state where valid settings exist without deadlines.
+  try {
+    await regenerateTaxDeadlinesForUser(
+      supabase,
+      newCompanyId,
+      toDeadlineSettings(settingsToSave as Partial<CompanySettingsForDeadlines>),
+    )
+  } catch (deadlineError) {
+    await rollback('tax deadline generation failed', deadlineError)
+    return { error: 'Kunde inte skapa skattedeadlines. Försök igen.' }
+  }
+
+  // 6. Set as active company
   try {
     await setActiveCompany(supabase, user.id, newCompanyId)
   } catch (err) {

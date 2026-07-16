@@ -121,6 +121,7 @@ export type AccountingMethod = 'accrual' | 'cash'
 
 // Moms reporting period
 export type MomsPeriod = 'monthly' | 'quarterly' | 'yearly'
+export type TaxFilingMethod = 'electronic' | 'paper'
 
 // Reconciliation method
 export type ReconciliationMethod = 'auto_exact' | 'auto_date_range' | 'auto_reference' | 'auto_fuzzy' | 'manual'
@@ -226,6 +227,11 @@ export interface CompanySettings {
   vat_number: string | null
   moms_period: MomsPeriod | null
   periodisk_sammanstallning_period: 'monthly' | 'quarterly'
+  vat_taxable_base_over_40m: boolean
+  vat_has_eu_trade: boolean
+  vat_filing_method: TaxFilingMethod
+  periodisk_sammanstallning_enabled: boolean
+  periodisk_sammanstallning_filing_method: TaxFilingMethod
 
   // Tax contact (SKV-filings, periodisk sammanställning, AGI, etc.)
   tax_contact_name: string | null
@@ -2155,6 +2161,7 @@ export type TaxDeadlineType =
   | 'moms_yearly'
   | 'f_skatt'
   | 'arbetsgivardeklaration'
+  | 'skatteinbetalning'
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
   | 'arsredovisning'
@@ -2329,6 +2336,7 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
   moms_yearly: 'Momsdeklaration (år)',
   f_skatt: 'F-skatt',
   arbetsgivardeklaration: 'Arbetsgivardeklaration',
+  skatteinbetalning: 'Skatteinbetalning (storföretag)',
   inkomstdeklaration_ef: 'Inkomstdeklaration EF',
   inkomstdeklaration_ab: 'Inkomstdeklaration AB',
   arsredovisning: 'Årsredovisning',

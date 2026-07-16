@@ -8,6 +8,15 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+const deadlineMocks = vi.hoisted(() => ({
+  regenerate: vi.fn().mockResolvedValue({ created: 1, deleted: 0 }),
+}))
+
+vi.mock('@/lib/tax/deadline-generator', () => ({
+  regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
+  toDeadlineSettings: vi.fn((settings: Record<string, unknown>) => settings),
+}))
+
 // Keep the real CompanyContextError so instanceof checks in switchCompany
 // see the same class the tests throw.
 vi.mock('@/lib/company/context', async (importOriginal) => ({
@@ -83,6 +92,7 @@ function buildSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  deadlineMocks.regenerate.mockResolvedValue({ created: 1, deleted: 0 })
 })
 
 describe('switchCompany', () => {
@@ -256,6 +266,40 @@ describe('createCompanyFromOnboarding: TIC snapshot persistence', () => {
     const payload = snapshotUpdate!.args[0] as Record<string, unknown>
     expect(payload.tic_snapshot).toEqual(ticLookup)
     expect(payload.tic_snapshot_fetched_at).toBeDefined()
+    expect(deadlineMocks.regenerate).toHaveBeenCalledWith(
+      supabase,
+      'new-company-id',
+      expect.objectContaining({ entity_type: 'aktiebolag' }),
+    )
+  })
+
+  it('rolls back company creation when automatic deadlines cannot be created', async () => {
+    const { supabase, calls } = buildSupabase({
+      user: { id: 'user-1' },
+      rpcResults: {
+        create_company_with_owner: { data: 'new-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+    deadlineMocks.regenerate.mockRejectedValueOnce(new Error('deadline insert failed'))
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'team-1',
+      settings: {
+        entity_type: 'aktiebolag',
+        company_name: 'Acme AB',
+      },
+      fiscalPeriod: {
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+        name: 'Räkenskapsår 2026',
+      },
+    })
+
+    expect(result).toEqual({ error: 'Kunde inte skapa skattedeadlines. Försök igen.' })
+    expect(calls).toContainEqual(expect.objectContaining({ table: 'companies', method: 'delete' }))
+    expect(mockSetActiveCompany).not.toHaveBeenCalled()
   })
 
   it('skips the snapshot update when no ticLookup is supplied (manual signup)', async () => {

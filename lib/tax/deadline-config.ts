@@ -3,7 +3,7 @@
  * Based on Skatteverket's official deadline schedule
  */
 
-import type { TaxDeadlineType, EntityType, MomsPeriod } from '@/types'
+import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
 
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
@@ -16,6 +16,12 @@ export interface CompanySettingsForDeadlines {
   vat_registered: boolean
   pays_salaries: boolean
   fiscal_year_start_month: number // 1-12
+  vat_taxable_base_over_40m: boolean
+  vat_has_eu_trade: boolean
+  vat_filing_method: TaxFilingMethod
+  periodisk_sammanstallning_enabled: boolean
+  periodisk_sammanstallning_period: 'monthly' | 'quarterly'
+  periodisk_sammanstallning_filing_method: TaxFilingMethod
 }
 
 // Configuration for a single tax deadline type
@@ -40,6 +46,74 @@ export interface DeadlineInstance {
   periodLabel: string // Human-readable, e.g., "Q1 2025", "januari 2025"
 }
 
+function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear: number): string {
+  return fiscalYearEndMonth === 12
+    ? `${fiscalYearEndYear}`
+    : `${fiscalYearEndYear - 1}/${fiscalYearEndYear}`
+}
+
+function getAnnualVatDeadline(
+  fiscalYearEndMonth: number,
+  fiscalYearEndYear: number,
+  settings: CompanySettingsForDeadlines,
+): { day: number; month: number; year: number } {
+  // Enskild firma (calendar year only, BFL 3 kap.): without EU trade the
+  // annual momsdeklaration follows the income tax return (12 May); with EU
+  // trade it is due 26 February (26 kap. 33-33a §§ SFL, Skatteverket's
+  // published helårsmoms schedule).
+  if (settings.entity_type === 'enskild_firma') {
+    return settings.vat_has_eu_trade
+      ? { day: 26, month: 1, year: fiscalYearEndYear + 1 }
+      : { day: 12, month: 4, year: fiscalYearEndYear + 1 }
+  }
+
+  if (settings.vat_has_eu_trade) {
+    const month = (fiscalYearEndMonth + 1) % 12
+    const year = fiscalYearEndYear + (fiscalYearEndMonth >= 11 ? 1 : 0)
+    // A 26 December due date lands on annandag jul; the banking-day
+    // adjustment moves it to Skatteverket's published 27th (or later).
+    return { day: 26, month, year }
+  }
+
+  const paper = settings.vat_filing_method === 'paper'
+  if (fiscalYearEndMonth <= 4) {
+    return { day: 12, month: paper ? 10 : 11, year: fiscalYearEndYear }
+  }
+  if (fiscalYearEndMonth <= 6) {
+    return paper
+      ? { day: 27, month: 11, year: fiscalYearEndYear }
+      : { day: 17, month: 0, year: fiscalYearEndYear + 1 }
+  }
+  if (fiscalYearEndMonth <= 8) {
+    return { day: 12, month: paper ? 2 : 3, year: fiscalYearEndYear + 1 }
+  }
+  return { day: paper ? 12 : 17, month: paper ? 6 : 7, year: fiscalYearEndYear + 1 }
+}
+
+function generateAnnualVatDates(
+  deadlineYear: number,
+  settings: CompanySettingsForDeadlines,
+): DeadlineInstance[] {
+  const fiscalYearEndMonth = settings.entity_type === 'enskild_firma'
+    ? 12
+    : (settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1)
+  const results: DeadlineInstance[] = []
+
+  for (const fiscalYearEndYear of [deadlineYear - 1, deadlineYear]) {
+    const deadline = getAnnualVatDeadline(fiscalYearEndMonth, fiscalYearEndYear, settings)
+    if (deadline.year !== deadlineYear) continue
+
+    const period = getFiscalYearLabel(fiscalYearEndMonth, fiscalYearEndYear)
+    results.push({
+      ...deadline,
+      period,
+      periodLabel: period,
+    })
+  }
+
+  return results
+}
+
 /**
  * All tax deadline configurations
  */
@@ -52,90 +126,17 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     condition: (s) => s.vat_registered && s.moms_period === 'monthly',
     priority: 'important',
     linkedReportType: 'vat',
-    generateDates: (year) => {
+    generateDates: (year, settings) => {
       const instances: DeadlineInstance[] = []
-      // Due on the 12th of the following month
       for (let month = 0; month < 12; month++) {
-        // Deadline for month X is on 12th of month X+1
-        const deadlineMonth = (month + 1) % 12
-        const deadlineYear = month === 11 ? year + 1 : year
-        instances.push({
-          day: 12,
-          month: deadlineMonth,
-          year: deadlineYear,
-          period: `${year}-${String(month + 1).padStart(2, '0')}`,
-          periodLabel: getMonthLabel(month, year),
-        })
-      }
-      return instances
-    },
-  },
-
-  // Momsdeklaration (quarterly) - e-tjänst deadline (26:e)
-  {
-    type: 'moms_quarterly',
-    titleTemplate: 'Momsdeklaration {periodLabel}',
-    description: 'Momsdeklaration för kvartalsredovisare (e-tjänst)',
-    condition: (s) => s.vat_registered && s.moms_period === 'quarterly',
-    priority: 'important',
-    linkedReportType: 'vat',
-    generateDates: (year) => {
-      // Q1 (Jan-Mar) -> 26 april
-      // Q2 (Apr-Jun) -> 26 juli
-      // Q3 (Jul-Sep) -> 26 oktober
-      // Q4 (Oct-Dec) -> 26 januari next year
-      return [
-        { day: 26, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },   // April
-        { day: 26, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },   // July
-        { day: 26, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },   // October
-        { day: 26, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` }, // January next year
-      ]
-    },
-  },
-
-  // F-skatt (monthly)
-  {
-    type: 'f_skatt',
-    titleTemplate: 'F-skatt {periodLabel}',
-    description: 'Inbetalning av preliminär skatt',
-    condition: (s) => s.f_skatt,
-    priority: 'important',
-    linkedReportType: null,
-    generateDates: (year) => {
-      const instances: DeadlineInstance[] = []
-      // Due on the 17th of each month
-      for (let month = 0; month < 12; month++) {
-        instances.push({
-          day: 17,
-          month,
-          year,
-          period: `${year}-${String(month + 1).padStart(2, '0')}`,
-          periodLabel: getMonthLabel(month, year),
-        })
-      }
-      return instances
-    },
-  },
-
-  // Arbetsgivardeklaration (monthly, any employer with employees: AB or EF)
-  // Per Skatteförfarandelagen: every employer paying salary must file AGI monthly.
-  // Deadline: 12th of following month (17th in Jan/Aug for turnover ≤40 MSEK per agi-filing.md)
-  {
-    type: 'arbetsgivardeklaration',
-    titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
-    description: 'Arbetsgivardeklaration för arbetsgivare med anställda',
-    condition: (s) => s.pays_salaries,
-    priority: 'important',
-    linkedReportType: null,
-    generateDates: (year) => {
-      const instances: DeadlineInstance[] = []
-      // Due on the 12th of the following month
-      // Exception: January (for Dec) and August (for Jul) = 17th for ≤40 MSEK turnover
-      for (let month = 0; month < 12; month++) {
-        const deadlineMonth = (month + 1) % 12
-        const deadlineYear = month === 11 ? year + 1 : year
-        // Jan (deadlineMonth=0) and Aug (deadlineMonth=7) get 17th
-        const day = (deadlineMonth === 0 || deadlineMonth === 7) ? 17 : 12
+        const monthOffset = settings.vat_taxable_base_over_40m ? 1 : 2
+        const deadlineMonth = (month + monthOffset) % 12
+        const deadlineYear = year + Math.floor((month + monthOffset) / 12)
+        // Above SEK 40M the 26th applies year-round; 26 December is annandag
+        // jul, and the banking-day adjustment yields Skatteverket's 27th.
+        const day = settings.vat_taxable_base_over_40m
+          ? 26
+          : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
         instances.push({
           day,
           month: deadlineMonth,
@@ -148,22 +149,152 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Periodisk sammanställning (quarterly, EU sales)
+  // Momsdeklaration (quarterly)
+  {
+    type: 'moms_quarterly',
+    titleTemplate: 'Momsdeklaration {periodLabel}',
+    description: 'Momsdeklaration för kvartalsredovisare',
+    condition: (s) => s.vat_registered && s.moms_period === 'quarterly',
+    priority: 'important',
+    linkedReportType: 'vat',
+    generateDates: (year) => {
+      return [
+        { day: 12, month: 4, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
+        { day: 17, month: 7, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
+        { day: 12, month: 10, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
+        { day: 12, month: 1, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
+      ]
+    },
+  },
+
+  // Momsdeklaration (yearly)
+  {
+    type: 'moms_yearly',
+    titleTemplate: 'Momsdeklaration {periodLabel}',
+    description: 'Momsdeklaration för årsredovisare',
+    condition: (s) => s.vat_registered && s.moms_period === 'yearly',
+    priority: 'important',
+    linkedReportType: 'vat',
+    generateDates: (year, settings) => generateAnnualVatDates(year, settings),
+  },
+
+  // F-skatt (monthly)
+  {
+    type: 'f_skatt',
+    titleTemplate: 'F-skatt {periodLabel}',
+    description: 'Inbetalning av preliminär skatt',
+    condition: (s) => s.f_skatt,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year) => {
+      const instances: DeadlineInstance[] = []
+      for (let month = 0; month < 12; month++) {
+        instances.push({
+          day: month === 0 || month === 7 ? 17 : 12,
+          month,
+          year,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        })
+      }
+      return instances
+    },
+  },
+
+  // Arbetsgivardeklaration (monthly, any employer with employees: AB or EF)
+  // Per Skatteförfarandelagen: every employer paying salary must file AGI monthly.
+  // The filing day is keyed to the VAT taxable base, not a separate employer
+  // measure (SFL 26 kap.): above SEK 40M the whole skattedeklaration (AGI and
+  // VAT) is due the 26th of the following month; otherwise the 12th (17th in
+  // January and August). Employers without VAT reporting follow the same
+  // 12th/17th small-company schedule.
+  {
+    type: 'arbetsgivardeklaration',
+    titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
+    description: 'Arbetsgivardeklaration för arbetsgivare med anställda',
+    condition: (s) => s.pays_salaries,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year, settings) => {
+      const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
+      const instances: DeadlineInstance[] = []
+      for (let month = 0; month < 12; month++) {
+        const deadlineMonth = (month + 1) % 12
+        const deadlineYear = month === 11 ? year + 1 : year
+        const day = storforetag
+          ? 26
+          : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
+        instances.push({
+          day,
+          month: deadlineMonth,
+          year: deadlineYear,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        })
+      }
+      return instances
+    },
+  },
+
+  // Skatteinbetalning (storföretag): companies above the SEK 40M VAT taxable
+  // base file the skattedeklaration on the 26th but must still have deducted
+  // tax and employer contributions paid into skattekontot by the 12th (17th
+  // in January). Without this row the 26th filing date hides a payment
+  // deadline two weeks earlier.
+  {
+    type: 'skatteinbetalning',
+    titleTemplate: 'Betala skatt och arbetsgivaravgifter {periodLabel}',
+    description: 'Inbetalning av avdragen skatt och arbetsgivaravgifter för företag med beskattningsunderlag över 40 miljoner kronor',
+    condition: (s) => s.pays_salaries && s.vat_registered && s.vat_taxable_base_over_40m,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year) => {
+      const instances: DeadlineInstance[] = []
+      for (let month = 0; month < 12; month++) {
+        const deadlineMonth = (month + 1) % 12
+        const deadlineYear = month === 11 ? year + 1 : year
+        instances.push({
+          // Deliberately January-only: the 17 August exception applies to the
+          // small-company (below SEK 40M) schedule. Storföretag payment dates
+          // are the 12th every month except January (62 kap. 3 § SFL and
+          // Skatteverket's published storföretag calendar).
+          day: deadlineMonth === 0 ? 17 : 12,
+          month: deadlineMonth,
+          year: deadlineYear,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        })
+      }
+      return instances
+    },
+  },
+
+  // Periodisk sammanställning (EU sales)
   {
     type: 'periodisk_sammanstallning',
     titleTemplate: 'Periodisk sammanställning {periodLabel}',
     description: 'Periodisk sammanställning för EU-försäljning',
-    condition: (s) => s.vat_registered, // Simplified - in reality depends on EU sales
+    condition: (s) => s.vat_registered && s.periodisk_sammanstallning_enabled,
     priority: 'normal',
     linkedReportType: null,
-    generateDates: (year) => {
-      // Q1 -> 20 april, Q2 -> 20 juli, Q3 -> 20 oktober, Q4 -> 20 januari
-      return [
-        { day: 20, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
-        { day: 20, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
-        { day: 20, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
-        { day: 20, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
-      ]
+    generateDates: (year, settings) => {
+      const day = settings.periodisk_sammanstallning_filing_method === 'paper' ? 20 : 25
+      if (settings.periodisk_sammanstallning_period === 'quarterly') {
+        return [
+          { day, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
+          { day, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
+          { day, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
+          { day, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
+        ]
+      }
+
+      return Array.from({ length: 12 }, (_, month) => ({
+        day,
+        month: (month + 1) % 12,
+        year: month === 11 ? year + 1 : year,
+        period: `${year}-${String(month + 1).padStart(2, '0')}`,
+        periodLabel: getMonthLabel(month, year),
+      }))
     },
   },
 

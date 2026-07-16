@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { didTaxFieldsChange, regenerateTaxDeadlinesForUser, shouldRegenerateTaxDeadlines } from '@/lib/tax/deadline-generator'
+import {
+  DEADLINE_SETTINGS_SELECT,
+  hasTaxRelevantFields,
+  regenerateTaxDeadlinesForUser,
+  shouldRegenerateTaxDeadlines,
+  toDeadlineSettings,
+} from '@/lib/tax/deadline-generator'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 
@@ -36,11 +42,11 @@ export const GET = withRouteContext(
 
 export const PUT = withRouteContext(
   'settings.update',
-  async (request, { supabase, companyId }) => {
+  async (request, { supabase, companyId, log }) => {
     // Fetch current settings to check for tax-relevant changes
     const { data: oldSettings } = await supabase
       .from('company_settings')
-      .select('entity_type, moms_period, f_skatt, vat_registered, vat_number, pays_salaries, fiscal_year_start_month, onboarding_complete, salary_vacation_year_basis, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
+      .select(`${DEADLINE_SETTINGS_SELECT}, vat_number, onboarding_complete, salary_vacation_year_basis, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3`)
       .eq('company_id', companyId)
       .single()
 
@@ -106,8 +112,23 @@ export const PUT = withRouteContext(
       }
     }
 
+    // Turning VAT registration off retires the VAT-dependent flags, and
+    // dropping EU trade retires the EU sales list: stale true values would
+    // otherwise block the save below or silently resurrect wrong deadlines
+    // when registration is re-enabled later. Same coherence rule as the
+    // 20260717070000 migration and the tax settings form.
+    if (body.vat_registered === false) {
+      body.vat_taxable_base_over_40m = false
+      body.vat_has_eu_trade = false
+      body.periodisk_sammanstallning_enabled = false
+    }
+    if (body.vat_has_eu_trade === false) {
+      body.periodisk_sammanstallning_enabled = false
+    }
+
     // Validate: VAT-registered must have VAT number (ML 11 kap. 8§) and moms period (SFL 26 kap.)
     const effectiveVatRegistered = body.vat_registered ?? oldSettings?.vat_registered
+    const effectiveMomsPeriod = body.moms_period ?? oldSettings?.moms_period
     if (effectiveVatRegistered === true) {
       const effectiveVatNumber = body.vat_number ?? oldSettings?.vat_number
       if (!effectiveVatNumber) {
@@ -116,13 +137,33 @@ export const PUT = withRouteContext(
           { status: 400 }
         )
       }
-      const effectiveMomsPeriod = body.moms_period ?? oldSettings?.moms_period
       if (!effectiveMomsPeriod) {
         return NextResponse.json(
           { error: 'Momsperiod krävs när företaget är momsregistrerat (SFL 26 kap.)' },
           { status: 400 }
         )
       }
+    }
+
+    const effectiveVatTaxableBaseOver40m =
+      body.vat_taxable_base_over_40m ?? oldSettings?.vat_taxable_base_over_40m ?? false
+    if (effectiveVatRegistered && effectiveVatTaxableBaseOver40m && effectiveMomsPeriod !== 'monthly') {
+      return NextResponse.json(
+        { error: 'Företag med beskattningsunderlag över 40 miljoner kronor måste redovisa moms varje månad.' },
+        { status: 400 },
+      )
+    }
+
+    const effectivePsEnabled =
+      body.periodisk_sammanstallning_enabled ??
+      oldSettings?.periodisk_sammanstallning_enabled ??
+      false
+    const effectiveEuTrade = body.vat_has_eu_trade ?? oldSettings?.vat_has_eu_trade ?? false
+    if (effectivePsEnabled && (!effectiveVatRegistered || !effectiveEuTrade)) {
+      return NextResponse.json(
+        { error: 'Periodisk sammanställning kräver momsregistrering och EU-handel.' },
+        { status: 400 },
+      )
     }
 
     const { data, error } = await supabase
@@ -139,39 +180,35 @@ export const PUT = withRouteContext(
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    // Regenerate tax deadlines when a tax-relevant field changed OR when the
-    // company has no system-generated deadlines yet. The latter is the common
-    // case: tax settings are filled at onboarding, so a later save with no
-    // tax-field change never triggered generation and the deadlines page stayed
-    // empty even though the settings were "filled in". Backfilling when the set
-    // is empty is safe: there is no existing progress/status to clobber.
-    const taxFieldsChanged = Boolean(oldSettings && didTaxFieldsChange(oldSettings, data))
+    // Regenerate when the save touches tax-relevant fields: the statutory
+    // dates are derived from them, and re-running also repairs rows created
+    // by older schedule logic or lost to an earlier generation failure. The
+    // generator preserves completed rows, so filing progress survives.
+    // Additionally self-heal when the company has no system deadlines at all:
+    // tax settings are filled at onboarding, so an unrelated later save may be
+    // the first chance to backfill an empty set.
+    const taxFieldsInBody = hasTaxRelevantFields(body)
     let existingSystemDeadlineCount = 0
-    if (!taxFieldsChanged) {
+    if (!taxFieldsInBody) {
       const { count, error: countError } = await supabase
         .from('deadlines')
         .select('id', { count: 'exact', head: true })
         .eq('company_id', companyId)
         .eq('source', 'system')
+        .eq('deadline_type', 'tax')
       // Fail safe: on a count error, assume deadlines already exist so we do
       // NOT delete+regenerate on a transient failure (regeneration would reset
-      // is_completed/status). A non-zero placeholder keeps the self-heal off.
+      // the status of pending rows). A non-zero placeholder keeps the
+      // self-heal off.
       existingSystemDeadlineCount = countError ? 1 : (count ?? 0)
     }
 
-    if (shouldRegenerateTaxDeadlines(taxFieldsChanged, existingSystemDeadlineCount)) {
+    if (shouldRegenerateTaxDeadlines(taxFieldsInBody, existingSystemDeadlineCount)) {
       try {
-        await regenerateTaxDeadlinesForUser(supabase, companyId, {
-          entity_type: data.entity_type,
-          moms_period: data.moms_period,
-          f_skatt: data.f_skatt,
-          vat_registered: data.vat_registered,
-          pays_salaries: data.pays_salaries ?? false,
-          fiscal_year_start_month: data.fiscal_year_start_month,
-        })
-        console.log('Tax deadlines regenerated after settings change')
+        await regenerateTaxDeadlinesForUser(supabase, companyId, toDeadlineSettings(data))
+        log.info('tax deadlines regenerated after settings change')
       } catch (err) {
-        console.error('Failed to regenerate tax deadlines:', err)
+        log.error('failed to regenerate tax deadlines', err as Error)
         // Don't fail the settings update if deadline generation fails
       }
     }

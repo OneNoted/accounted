@@ -27,7 +27,11 @@
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 import { createClient } from '@supabase/supabase-js'
-import { generateTaxDeadlinesForUser } from '../lib/tax/deadline-generator'
+import {
+  DEADLINE_SETTINGS_SELECT,
+  generateTaxDeadlinesForUser,
+  toDeadlineSettings,
+} from '../lib/tax/deadline-generator'
 import type { CompanySettingsForDeadlines } from '../lib/tax/deadline-config'
 
 const APPLY = process.argv.includes('--apply')
@@ -45,14 +49,8 @@ const supabase = createClient(supabaseUrl, serviceRoleKey)
 
 const PAGE = 1000
 
-interface SettingsRow {
+interface SettingsRow extends Partial<CompanySettingsForDeadlines> {
   company_id: string
-  entity_type: CompanySettingsForDeadlines['entity_type']
-  moms_period: CompanySettingsForDeadlines['moms_period']
-  f_skatt: boolean
-  vat_registered: boolean
-  pays_salaries: boolean | null
-  fiscal_year_start_month: number
   is_sandbox: boolean | null
 }
 
@@ -62,7 +60,7 @@ async function fetchAllSettings(): Promise<SettingsRow[]> {
   for (;;) {
     const { data, error } = await supabase
       .from('company_settings')
-      .select('company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, is_sandbox')
+      .select(`${DEADLINE_SETTINGS_SELECT}, is_sandbox`)
       .order('company_id', { ascending: true })
       .range(from, from + PAGE - 1)
     if (error) {
@@ -125,14 +123,7 @@ async function main() {
       continue
     }
 
-    const settings: CompanySettingsForDeadlines = {
-      entity_type: s.entity_type,
-      moms_period: s.moms_period,
-      f_skatt: s.f_skatt,
-      vat_registered: s.vat_registered,
-      pays_salaries: s.pays_salaries ?? false,
-      fiscal_year_start_month: s.fiscal_year_start_month,
-    }
+    const settings = toDeadlineSettings(s)
 
     if (DRY_RUN) {
       // In dry-run we cannot cheaply know the row count without inserting, so we

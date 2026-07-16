@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTaxDeadlinesForUser, shouldRegenerateTaxDeadlines } from '../deadline-generator'
+import {
+  findSettingsMissingUpcomingDeadlines,
+  generateTaxDeadlinesForUser,
+  getExpectedUpcomingDeadlineKeys,
+  shouldRegenerateTaxDeadlines,
+} from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
 const SETTINGS: CompanySettingsForDeadlines = {
@@ -10,6 +15,12 @@ const SETTINGS: CompanySettingsForDeadlines = {
   vat_registered: true,
   pays_salaries: true,
   fiscal_year_start_month: 1,
+  vat_taxable_base_over_40m: false,
+  vat_has_eu_trade: false,
+  vat_filing_method: 'electronic',
+  periodisk_sammanstallning_enabled: false,
+  periodisk_sammanstallning_period: 'monthly',
+  periodisk_sammanstallning_filing_method: 'electronic',
 }
 
 // Future year so generated dates are never skipped as "in the past".
@@ -20,12 +31,16 @@ const FUTURE_YEAR = new Date().getFullYear() + 1
  * insert payload, so the tests can assert the insert-first/delete-after
  * ordering that prevents regeneration failures from wiping deadlines.
  */
-function makeRecordingSupabase(opts: { insertError?: { code: string; message: string } } = {}) {
+function makeRecordingSupabase(opts: {
+  insertError?: { code: string; message: string }
+  completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
+} = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
 
   const from = vi.fn(() => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+    let isDelete = false
     const self = () => chain
     chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
       calls.push('insert')
@@ -40,6 +55,7 @@ function makeRecordingSupabase(opts: { insertError?: { code: string; message: st
     })
     chain.delete = vi.fn(() => {
       calls.push('delete')
+      isDelete = true
       return chain
     })
     chain.eq = vi.fn(self)
@@ -49,7 +65,16 @@ function makeRecordingSupabase(opts: { insertError?: { code: string; message: st
       calls.push(`not(${String(args[2]).slice(0, 20)}…)`)
       return chain
     })
-    chain.select = vi.fn(async () => ({ data: [{ id: 'old-1' }, { id: 'old-2' }], error: null }))
+    chain.select = vi.fn(() => {
+      if (isDelete) {
+        return Promise.resolve({ data: [{ id: 'old-1' }, { id: 'old-2' }], error: null })
+      }
+      return chain
+    })
+    chain.then = vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve({
+      data: opts.completedRows ?? [],
+      error: null,
+    }).then(resolve))
     return chain
   })
 
@@ -110,6 +135,125 @@ describe('generateTaxDeadlinesForUser', () => {
 
     expect(calls).toContain('insert')
     expect(calls).not.toContain('delete')
+  })
+
+  it('does not replace a completed future obligation with a new pending row', async () => {
+    const completedPeriod = `${FUTURE_YEAR}-01`
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      completedRows: [{ tax_deadline_type: 'f_skatt', tax_period: completedPeriod }],
+    })
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+
+    expect(getInsertPayload()).not.toContainEqual(expect.objectContaining({
+      tax_deadline_type: 'f_skatt',
+      tax_period: completedPeriod,
+    }))
+  })
+})
+
+describe('findSettingsMissingUpcomingDeadlines', () => {
+  const fromDate = new Date(2030, 0, 1)
+  const years = [2030]
+
+  function rowsFor(companyId: string, keys: Set<string>, isCompleted = false) {
+    return Array.from(keys, (key, index) => {
+      const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
+      return {
+        id: `${companyId}-${index}`,
+        company_id: companyId,
+        tax_deadline_type: taxDeadlineType,
+        tax_period: taxPeriod,
+        due_date: dueDate,
+        is_completed: isCompleted,
+      }
+    })
+  }
+
+  it('returns only companies missing at least one expected obligation', () => {
+    const settings = [
+      { company_id: 'company-1', ...SETTINGS },
+      { company_id: 'company-2', ...SETTINGS },
+    ]
+    const completeRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+    )
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      completeRows,
+      years,
+      fromDate,
+    )).toEqual([settings[1]])
+  })
+
+  it('repairs a company that has F-tax deadlines but is missing VAT deadlines', () => {
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const expectedKeys = getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate)
+    const fTaxRows = rowsFor(
+      'company-1',
+      new Set(Array.from(expectedKeys).filter((key) => key.startsWith('f_skatt:'))),
+    )
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      fTaxRows,
+      years,
+      fromDate,
+    )).toEqual(settings)
+  })
+
+  it('repairs a company whose rows carry dates from a superseded schedule', () => {
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const staleRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+    ).map((row) => ({ ...row, due_date: '2030-12-31' }))
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      staleRows,
+      years,
+      fromDate,
+    )).toEqual(settings)
+  })
+
+  it('treats a completed obligation as satisfied even with a superseded due date', () => {
+    // A filed (is_completed) row keeps its old statutory date. The generator
+    // never replaces completed rows, so flagging it by date would make the
+    // repair loop re-run for this company every day without converging.
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const completedStaleRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+      true,
+    ).map((row) => ({ ...row, due_date: '2029-01-15' }))
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      completedStaleRows,
+      years,
+      fromDate,
+    )).toEqual([])
+  })
+
+  it('still repairs missing pending obligations when other obligations are completed', () => {
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const expectedKeys = getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate)
+    // Only the F-tax obligations exist (completed); everything else is missing.
+    const completedFTaxRows = rowsFor(
+      'company-1',
+      new Set(Array.from(expectedKeys).filter((key) => key.startsWith('f_skatt:'))),
+      true,
+    )
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      completedFTaxRows,
+      years,
+      fromDate,
+    )).toEqual(settings)
   })
 })
 

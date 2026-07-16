@@ -19,13 +19,20 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
-vi.mock('@/lib/tax/deadline-generator', () => ({
-  didTaxFieldsChange: vi.fn().mockReturnValue(false),
-  regenerateTaxDeadlinesForUser: vi.fn().mockResolvedValue(undefined),
-  shouldRegenerateTaxDeadlines: vi.fn(
-    (changed: boolean, count: number) => changed || count === 0,
-  ),
+const deadlineMocks = vi.hoisted(() => ({
+  regenerate: vi.fn().mockResolvedValue(undefined),
 }))
+
+// Mock only the function that writes to the database. The field detector,
+// settings normalizer, and regeneration predicate stay real so these tests
+// fail if a new tax-relevant field stops triggering regeneration.
+vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/tax/deadline-generator')>()
+  return {
+    ...actual,
+    regenerateTaxDeadlinesForUser: deadlineMocks.regenerate,
+  }
+})
 
 import { PUT } from '../route'
 import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
@@ -87,6 +94,37 @@ describe('PUT /api/settings', () => {
 
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  it('regenerates deadlines when unchanged tax settings are saved', async () => {
+    const settings = {
+      company_id: 'company-1',
+      entity_type: 'aktiebolag',
+      moms_period: 'monthly',
+      f_skatt: true,
+      vat_registered: false,
+      pays_salaries: false,
+      fiscal_year_start_month: 1,
+      onboarding_complete: true,
+    }
+    enqueueMany([
+      { data: settings },
+      { data: { id: 's1', ...settings } },
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { f_skatt: true, vat_registered: false },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(200)
+    expect(deadlineMocks.regenerate).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ entity_type: 'aktiebolag', f_skatt: true }),
+    )
   })
 
   it('updates all three reminder thresholds', async () => {
@@ -149,15 +187,76 @@ describe('PUT /api/settings', () => {
       { data: null, count: 0 }, // no system deadlines -> self-heal generation
     ])
 
+    // A save with NO tax-relevant field: only the zero-count self-heal path
+    // can trigger regeneration here.
     const request = createMockRequest('/api/settings', {
       method: 'PUT',
-      body: { f_skatt: true },
+      body: { company_name: 'Self Heal AB' },
     })
     const response = await PUT(request, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
     expect(vi.mocked(regenerateTaxDeadlinesForUser)).toHaveBeenCalledOnce()
+  })
+
+  it('clears VAT-dependent flags when VAT registration is turned off', async () => {
+    const settings = {
+      company_id: 'company-1',
+      entity_type: 'aktiebolag',
+      vat_registered: true,
+      vat_number: 'SE556012579001',
+      moms_period: 'quarterly',
+      vat_taxable_base_over_40m: false,
+      vat_has_eu_trade: true,
+      periodisk_sammanstallning_enabled: true,
+      onboarding_complete: true,
+    }
+    enqueueMany([
+      { data: settings },
+      {
+        data: {
+          ...settings,
+          id: 's1',
+          vat_registered: false,
+          vat_has_eu_trade: false,
+          periodisk_sammanstallning_enabled: false,
+        },
+      },
+    ])
+
+    // Without the coercion this request 400s: the stored PS flag stays
+    // effective while registration is being switched off.
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { vat_registered: false },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(deadlineMocks.regenerate).toHaveBeenCalledOnce()
+  })
+
+  it('still rejects explicitly enabling the EU sales list without EU trade', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        vat_registered: true,
+        vat_number: 'SE556012579001',
+        moms_period: 'quarterly',
+        vat_has_eu_trade: false,
+        onboarding_complete: true,
+      },
+    })
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { periodisk_sammanstallning_enabled: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
   })
 
   it('does not regenerate tax deadlines when the company already has some', async () => {
@@ -200,6 +299,54 @@ describe('PUT /api/settings', () => {
 
     expect(status).toBe(400)
     expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects quarterly VAT when the VAT taxable base is above SEK 40 million', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        vat_registered: true,
+        vat_number: 'SE556012579001',
+        moms_period: 'quarterly',
+        vat_taxable_base_over_40m: false,
+        onboarding_complete: true,
+      },
+    })
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { vat_taxable_base_over_40m: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows EU-trade changes with quarterly VAT and regenerates deadlines', async () => {
+    const settings = {
+      company_id: 'company-1',
+      entity_type: 'aktiebolag',
+      vat_registered: true,
+      vat_number: 'SE556012579001',
+      moms_period: 'quarterly',
+      vat_taxable_base_over_40m: false,
+      vat_has_eu_trade: true,
+      onboarding_complete: true,
+    }
+    enqueueMany([
+      { data: { ...settings, vat_has_eu_trade: false } },
+      { data: settings },
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { vat_has_eu_trade: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(200)
+    expect(deadlineMocks.regenerate).toHaveBeenCalledOnce()
   })
 
   it('returns 404 when the settings row does not exist', async () => {
