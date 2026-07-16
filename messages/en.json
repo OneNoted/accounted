@@ -339,7 +339,15 @@
     "retry": "Please try again.",
     "overdue_invoices": "{count} overdue invoices",
     "no_system_deadlines_title": "Automatic tax deadlines missing.",
-    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in."
+    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in.",
+    "generate_action": "Generate now",
+    "generate_open_settings": "Open tax settings",
+    "generate_success_title": "Tax deadlines created",
+    "generate_success_description": "{count} deadlines were created from your tax settings.",
+    "generate_none_title": "No deadlines created",
+    "generate_none_description": "Fill in the company's tax settings first, and deadlines for VAT, employer declarations and F-tax will be created.",
+    "generate_failed_title": "Could not create deadlines",
+    "generate_failed_description": "Tax deadlines could not be created right now."
   },
   "bureau": {
     "title": "Bureau",
