@@ -125,6 +125,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
+  // #967: register/send without booking; ekonomi books in a separate step.
+  const [deferInvoiceBooking, setDeferInvoiceBooking] = useState(false)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
@@ -220,7 +222,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data.company_id
           ? supabase
               .from('company_settings')
-              .select('ore_rounding, vat_registered, accounting_method, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
+              .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
               .eq('company_id', data.company_id)
               .maybeSingle()
           : Promise.resolve(null),
@@ -256,6 +258,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         setVatRegistered(settings.vat_registered)
       }
       setAccountingMethod(settings?.accounting_method === 'cash' ? 'cash' : 'accrual')
+      setDeferInvoiceBooking(!!settings?.defer_invoice_booking)
       setReminderDays([
         settings?.reminder_days_level_1 ?? 15,
         settings?.reminder_days_level_2 ?? 30,
@@ -271,6 +274,29 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
 
     setIsLoading(false)
+  }
+
+  // #967: deferred booking: create the revenue verifikat afterwards.
+  async function handleBook() {
+    if (!invoice) return
+    setIsUpdating(true)
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/book`, { method: 'POST' })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || t('book_failed_fallback'))
+      }
+      toast({ title: t('booked_title'), description: t('booked_description') })
+      fetchInvoice()
+    } catch (error) {
+      toast({
+        title: t('book_failed_title'),
+        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUpdating(false)
+    }
   }
 
   async function updateStatus(status: InvoiceStatus) {
@@ -532,7 +558,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isCreditNote = !!invoice.credited_invoice_id
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
-    : accountingMethod === 'accrual'
+    : accountingMethod === 'accrual' && !deferInvoiceBooking
+  // #967: sent under deferred booking; ekonomi books the revenue verifikat
+  // from here afterwards.
+  const canBookAfterwards =
+    isRealInvoice &&
+    !isCreditNote &&
+    !invoice.journal_entry_id &&
+    accountingMethod === 'accrual' &&
+    ['sent', 'overdue'].includes(invoice.status)
   const preferredSendMode = getCreditNoteSendMode({
     customerHasEmail,
     isSandbox,
@@ -975,6 +1009,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     {invoice.our_reference.split(',').map((ref) => ref.trim()).join(', ')}
                   </span>
                 </div>
+              )}
+              {canBookAfterwards && (
+                <>
+                  <Separator />
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground text-sm">{t('bookkeeping_label')}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm text-muted-foreground">{t('not_booked_yet')}</span>
+                      {canWrite && (
+                        <Button size="sm" onClick={handleBook} disabled={isUpdating}>
+                          {t('book_action')}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </>
               )}
               {invoice.journal_entry_id && (
                 <>

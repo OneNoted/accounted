@@ -42,12 +42,14 @@ export function BookkeepingSettingsContent() {
     const lockedThrough = (formData.get('bookkeeping_locked_through') as string) || null
     const accountingMethod = (formData.get('accounting_method') as string) || 'accrual'
     const defaultVoucherSeries = (formData.get('default_voucher_series') as string) || 'A'
+    const deferInvoiceBooking = formData.get('defer_invoice_booking') === 'true'
 
     const updates: Record<string, unknown> = {
       bookkeeping_locked_through: lockedThrough,
       auto_lock_period_days: autoLockValue === 'none' ? null : parseInt(autoLockValue),
       accounting_method: accountingMethod,
       default_voucher_series: defaultVoucherSeries,
+      defer_invoice_booking: deferInvoiceBooking,
     }
 
     // Write-through: the booking engine resolves the series from the
@@ -108,6 +110,23 @@ export function BookkeepingSettingsContent() {
             </select>
             <p className="text-xs text-muted-foreground">
               {t('method_help')}
+            </p>
+          </div>
+          {/* #967: register/send without booking; ekonomi books in a separate
+              explicit step. Only meaningful under faktureringsmetoden. */}
+          <div className="space-y-2">
+            <Label htmlFor="defer_invoice_booking">{t('defer_booking_label')}</Label>
+            <select
+              id="defer_invoice_booking"
+              name="defer_invoice_booking"
+              defaultValue={settings.defer_invoice_booking ? 'true' : 'false'}
+              className="flex h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="false">{t('defer_booking_off')}</option>
+              <option value="true">{t('defer_booking_on')}</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {t('defer_booking_help')}
             </p>
           </div>
         </section>

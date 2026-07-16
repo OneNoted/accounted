@@ -227,6 +227,51 @@ describe('POST /api/supplier-invoices', () => {
     expect(mockCreateSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
   })
 
+  it('registers WITHOUT booking when defer_invoice_booking is on (#967)', async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-deferred' })
+
+    // Fetch supplier
+    enqueue({ data: supplier, error: null })
+    // RPC get_next_arrival_number
+    enqueue({ data: 5 })
+    // Insert invoice
+    enqueue({ data: createdInvoice, error: null })
+    // Insert items
+    enqueue({ data: null, error: null })
+    // Fetch company settings: accrual + deferred booking
+    enqueue({ data: { accounting_method: 'accrual', defer_invoice_booking: true }, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-002',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          {
+            description: 'Material',
+            quantity: 10,
+            unit_price: 800,
+            account_number: '4010',
+            vat_rate: 0.25,
+          },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      data: { registration_journal_entry_id: string | null }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toBeTruthy()
+    // No registration verifikat: booking is a separate explicit step.
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+    expect(body.data.registration_journal_entry_id ?? null).toBeNull()
+  })
+
   it('stores an uploaded document and links it to the registration entry', async () => {
     const supplier = makeSupplier({ id: VALID_UUID })
     const createdInvoice = makeSupplierInvoice({ id: 'si-with-document', document_id: DOCUMENT_UUID })

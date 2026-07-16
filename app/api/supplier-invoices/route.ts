@@ -7,6 +7,7 @@ import {
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
@@ -391,11 +392,14 @@ export const POST = withRouteContext(
     // invoked for these (status='paid' from the start).
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method')
+      .select('accounting_method, defer_invoice_booking')
       .eq('company_id', companyId)
       .single()
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
+    // #967: deferred companies register WITHOUT booking; ekonomi books later
+    // via POST /api/supplier-invoices/[id]/book. The invoice then legitimately
+    // sits at registration_journal_entry_id = NULL, like the cash method.
+    const booksOnRegistration = booksInvoicesOnIssue(settings)
     let registrationJournalEntryId: string | null = null
     let paymentJournalEntryId: string | null = null
 
@@ -460,7 +464,7 @@ export const POST = withRouteContext(
           },
         })
       }
-    } else if (accountingMethod === 'accrual') {
+    } else if (booksOnRegistration) {
       try {
         const journalEntry = await createSupplierInvoiceRegistrationEntry(
           supabase,

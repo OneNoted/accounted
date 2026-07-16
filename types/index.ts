@@ -254,6 +254,9 @@ export interface CompanySettings {
 
   // Accounting method
   accounting_method: AccountingMethod
+  // #967: when true (accrual only), registering supplier invoices / sending
+  // customer invoices does NOT book them; booking is a separate explicit step.
+  defer_invoice_booking?: boolean
 
   // Invoice settings
   invoice_prefix: string | null
