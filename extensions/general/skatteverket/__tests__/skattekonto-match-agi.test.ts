@@ -60,6 +60,35 @@ describe('parseAgiPeriod', () => {
   it('rejects implausible years', () => {
     expect(parseAgiPeriod('Arbetsgivardeklaration 199912')).toBeNull()
   })
+
+  it('parses production month-name rows', () => {
+    expect(parseAgiPeriod('Avdragen skatt maj 2026')).toEqual({
+      year: 2026,
+      month: 5,
+    })
+    expect(parseAgiPeriod('Arbetsgivaravgift maj 2026')).toEqual({
+      year: 2026,
+      month: 5,
+    })
+    expect(parseAgiPeriod('ARBETSGIVARAVGIFT December 2026')).toEqual({
+      year: 2026,
+      month: 12,
+    })
+  })
+
+  it('parses the period from production beslut rows', () => {
+    // The 6-digit beslut date must not be mistaken for a YYYYMM period; the
+    // month-name token is the real period.
+    expect(parseAgiPeriod('Beslut 260703 arbetsgivaravgift mars 2026')).toEqual({
+      year: 2026,
+      month: 3,
+    })
+  })
+
+  it('does not treat unrelated month-name rows as AGI periods', () => {
+    expect(parseAgiPeriod('Intäktsränta maj 2026')).toBeNull()
+    expect(parseAgiPeriod('Moms maj 2026')).toBeNull()
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────────

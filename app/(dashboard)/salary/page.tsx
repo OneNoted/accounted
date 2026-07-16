@@ -11,10 +11,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ArrowRight, CalendarClock, HandCoins, Loader2, Plus, UserX, Users } from 'lucide-react'
+import { ArrowRight, CalendarClock, CheckCircle2, HandCoins, Loader2, Plus, UserX, Users } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { VacationBalanceCard } from '@/components/salary/VacationBalanceCard'
+import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
+import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -51,52 +54,88 @@ export default function SalaryPage() {
   const [payDay, setPayDay] = useState(25)
   const [agiDeadline, setAgiDeadline] = useState<{ due_date: string; title: string } | null>(null)
   const [taxPayment, setTaxPayment] = useState<TaxPaymentState | null>(null)
+  // The Skatteverket connection previously worked but now needs re-consent:
+  // the skattekonto sync (which auto-settles the tax card) is paused.
+  const [skvNeedsReconsent, setSkvNeedsReconsent] = useState(false)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
+  const [markingPaid, setMarkingPaid] = useState(false)
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
   const { toast } = useToast()
   const router = useRouter()
   const t = useTranslations('salary')
+  const tp = useTranslations('salary_payments')
 
   const load = useCallback(async () => {
-    const [runsRes, empRes, settingsRes] = await Promise.all([
-      fetch('/api/salary/runs'),
-      fetch('/api/salary/employees'),
-      fetch('/api/settings'),
+    // Everything loads in parallel; the tax-payment fetch is the only
+    // dependent request and chains directly off the runs response instead of
+    // waiting for the whole batch. Was three sequential legs (batch → tax
+    // payment → SKV status), now the longest chain is runs → tax payment.
+    const runsPromise: Promise<SalaryRun[]> = fetch('/api/salary/runs')
+      .then(async res => (res.ok ? (await res.json()).data || [] : []))
+      .catch(() => [])
+
+    // Latest booked run drives the "skatt att betala" card. Resolves to
+    // undefined ("leave state unchanged") when there is no booked run or the
+    // fetch fails, mirroring the old sequential behavior on reloads.
+    const taxPaymentPromise: Promise<TaxPaymentState | null | undefined> = runsPromise
+      .then(async loadedRuns => {
+        const latestBooked = loadedRuns.find(r => r.status === 'booked')
+        if (!latestBooked) return undefined
+        const period = `${latestBooked.period_year}-${String(latestBooked.period_month).padStart(2, '0')}`
+        const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
+        if (!txRes.ok) return undefined
+        return (await txRes.json()).data ?? null
+      })
+      .catch(() => undefined)
+
+    const [loadedRuns, taxPaymentData, empRes, settingsRes, skvStatus] = await Promise.all([
+      runsPromise,
+      taxPaymentPromise,
+      fetch('/api/salary/employees').catch(() => null),
+      fetch('/api/settings').catch(() => null),
+      // Connection health for the tax card hint. Only needs_reconsent counts:
+      // the routine short-lived token expiry is normal and must not nag. Any
+      // failure (extension disabled → 503, network) silently means no hint.
+      fetch('/api/extensions/ext/skatteverket/status')
+        .then(res => (res.ok ? res.json() : null))
+        .catch(() => null),
     ])
 
-    let loadedRuns: SalaryRun[] = []
-    if (runsRes.ok) {
-      const { data } = await runsRes.json()
-      loadedRuns = data || []
-      setRuns(loadedRuns)
-    }
-    if (empRes.ok) {
+    setRuns(loadedRuns)
+    if (taxPaymentData !== undefined) setTaxPayment(taxPaymentData)
+    if (empRes?.ok) {
       const { data } = await empRes.json()
       setEmployees(data || [])
     }
-    if (settingsRes.ok) {
+    if (settingsRes?.ok) {
       const { data } = await settingsRes.json()
       if (typeof data?.salary_pay_day === 'number') setPayDay(data.salary_pay_day)
     }
-
-    // Latest booked run drives the "skatt att betala" card.
-    const latestBooked = loadedRuns.find(r => r.status === 'booked')
-    if (latestBooked) {
-      const period = `${latestBooked.period_year}-${String(latestBooked.period_month).padStart(2, '0')}`
-      const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
-      if (txRes.ok) {
-        const tx = await txRes.json()
-        setTaxPayment(tx.data)
-      }
-    }
+    if (skvStatus) setSkvNeedsReconsent(skvStatus.needsReconsent === true)
 
     setLoading(false)
   }, [])
 
   useEffect(() => {
     load()
+  }, [load])
+
+  // Reload after an in-page Skatteverket reconnect. The raw postMessage from
+  // the BankID popup is only trusted by the component that opened and
+  // source-verified the popup (SkatteverketConnectPanel / AGIPanel); this
+  // page never opens the popup itself, so it consumes the verified rebroadcast
+  // instead. The OAuth callback awaits the skattekonto sync + AGI
+  // auto-settlement before responding, so this refetch already sees fresh
+  // tax-payment state instead of racing a background job.
+  useEffect(() => {
+    function handleConnectionUpdated() {
+      load()
+    }
+    window.addEventListener('skatteverket-connection-updated', handleConnectionUpdated)
+    return () =>
+      window.removeEventListener('skatteverket-connection-updated', handleConnectionUpdated)
   }, [load])
 
   // Next open AGI deadline instance - generated by the tax-deadline engine
@@ -116,6 +155,16 @@ export default function SalaryPage() {
       .maybeSingle()
       .then(({ data }) => setAgiDeadline(data ?? null))
   }, [company])
+
+  // The active run's AGI submission record: lets the hero distinguish
+  // "lämna in till Skatteverket" from "väntar på din BankID-signatur".
+  // Only fetched while a booked run is still unfiled; null otherwise.
+  const activeRun = runs.find(r => r.status !== 'corrected')
+  const { submission: agiSubmission } = useAgiSubmission(
+    activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at
+      ? `${activeRun.period_year}${String(activeRun.period_month).padStart(2, '0')}`
+      : null,
+  )
 
   // One-click run creation: the API seeds all active employees, calculates,
   // and resolves period/pay-date/series defaults from settings.
@@ -145,6 +194,34 @@ export default function SalaryPage() {
       })
     } finally {
       setStarting(false)
+    }
+  }
+
+  // Inline mark-paid on the tax card: same endpoint as TaxPaymentPanel on the
+  // run detail page, for users who paid Skatteverket outside the app.
+  async function markTaxPaid(period: string) {
+    setMarkingPaid(true)
+    try {
+      const res = await fetch(`/api/skatteverket/tax-payments/${period}/mark-paid`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const result = await res.json().catch(() => null)
+        toast({
+          title: tp('tax_mark_paid_failed_title'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({ title: tp('tax_marked_paid') })
+      const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
+      if (txRes.ok) {
+        const tx = await txRes.json()
+        setTaxPayment(tx.data)
+      }
+    } finally {
+      setMarkingPaid(false)
     }
   }
 
@@ -182,7 +259,8 @@ export default function SalaryPage() {
   }
 
   // ── Hero state machine (first match wins) ────────────────────────────────
-  const activeRun = runs.find(r => r.status !== 'corrected')
+  // activeRun is derived above the loading return (the AGI submission hook
+  // needs it before any early return).
   const latestBooked = runs.find(r => r.status === 'booked')
   const periodOf = (r: SalaryRun) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
 
@@ -253,6 +331,19 @@ export default function SalaryPage() {
       }
     }
     if (activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at) {
+      // The underlag may already be at Skatteverket waiting for a BankID
+      // signature: telling the user to "lämna in" something they already
+      // submitted reads as a broken flow. Follow the real filing state.
+      const agiState = deriveAgiFilingState(activeRun, agiSubmission)
+      if (agiState === 'awaiting_signing' || agiState === 'underlag_submitted') {
+        return {
+          kind: 'cta',
+          title: t('hero_agi_signing_title', { period: periodOf(activeRun) }),
+          description: t('hero_agi_signing_description'),
+          label: t('hero_agi_signing_action'),
+          runId: activeRun.id,
+        }
+      }
       return {
         kind: 'cta',
         title: t('hero_agi_title', { period: periodOf(activeRun) }),
@@ -347,7 +438,7 @@ export default function SalaryPage() {
       )}
 
       {/* Attention cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -388,6 +479,30 @@ export default function SalaryPage() {
                     ? t('card_tax_paid', { date: formatDate(taxPayment.tax_paid_at) })
                     : t('card_tax_unpaid', { period: periodOf(latestBooked) })}
                 </p>
+                {!taxPayment?.tax_paid_at && skvNeedsReconsent && (
+                  <Link
+                    href="/settings/tax"
+                    className="mt-1 block text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  >
+                    {t('card_tax_reconnect')}
+                  </Link>
+                )}
+                {!taxPayment?.tax_paid_at && canWrite && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => markTaxPaid(periodOf(latestBooked))}
+                    disabled={markingPaid}
+                  >
+                    {markingPaid ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                    )}
+                    {tp('tax_mark_paid_button')}
+                  </Button>
+                )}
               </>
             ) : (
               <p className="text-sm text-muted-foreground">{t('card_tax_none')}</p>
@@ -418,6 +533,9 @@ export default function SalaryPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Semester (vacation ledger + year close): payroll gap-closure 3.5 */}
+        <VacationBalanceCard canWrite={canWrite} />
       </div>
 
       {/* History */}

@@ -7,6 +7,7 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
+import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 
 ensureInitialized()
 
@@ -26,7 +27,7 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: (data ?? []).map(maskCustomerRow) })
   },
 )
 
@@ -49,6 +50,7 @@ export const POST = withRouteContext(
         company_id: companyId,
         name: body.name,
         customer_type: body.customer_type,
+        customer_number: body.customer_number || null,
         email: body.email,
         phone: body.phone,
         address_line1: body.address_line1,
@@ -58,6 +60,7 @@ export const POST = withRouteContext(
         country: body.country || 'Sweden',
         org_number: body.org_number,
         vat_number: body.vat_number,
+        personal_number: encryptCustomerPersonalNumber(body.personal_number),
         language: body.language || 'sv',
         default_payment_terms: body.default_payment_terms || 30,
         notes: body.notes,
@@ -103,12 +106,13 @@ export const POST = withRouteContext(
       }
     }
 
+    const safeCustomer = maskCustomerRow(data)
     await eventBus.emit({
       type: 'customer.created',
-      payload: { customer: data as Customer, companyId: companyId!, userId: user.id },
+      payload: { customer: safeCustomer as Customer, companyId: companyId!, userId: user.id },
     })
 
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: safeCustomer })
   },
   { requireWrite: true },
 )

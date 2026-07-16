@@ -21,6 +21,10 @@
  *      500 INVOICE_SEND_PDF_RENDER_FAILED, no number burned.
  *   6. ensureInvoiceNumber allocates the F-series number atomically.
  *      Fail → 500 INVOICE_SEND_NUMBER_ASSIGN_FAILED.
+ *   6b. Auto-create an online payment link (extension-provided, e.g. Stripe)
+ *      and persist it on the invoice row. Best-effort: a provider or persist
+ *      failure never blocks the send; it surfaces as a PAYMENT_LINK_FAILED
+ *      warning on the response once the email is delivered.
  *   7. Final PDF render with the real number.
  *   8. Email send via Resend (the email extension). Fail → 502
  *      INVOICE_SEND_PROVIDER_FAILED. The number IS consumed at this point;
@@ -43,7 +47,8 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -57,13 +62,8 @@ import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
-
-// default_dimensions must stay in this projection: the fetched row feeds
-// createInvoiceJournalEntry, which reads the bag off the row — dropping the
-// column here silently untags the revenue JE lines.
-const INVOICE_SEND_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const InvoiceSendResponse = z.object({
   id: z.string().uuid(),
@@ -158,11 +158,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Fetch invoice + customer + items.
+    // Fetch invoice + customer + items. Uses the shared full projections so
+    // the row feeding the PDF/email/journal entry cannot drift from what GET
+    // returns: an earlier hand-rolled list here silently dropped
+    // deduction_total, which made v1-sent ROT/RUT invoices overstate
+    // "Att betala" (default_dimensions must also stay: createInvoiceJournalEntry
+    // reads the bag off this row).
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_SEND_RESPONSE_COLUMNS}, customer:customers(id, name, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account, dimensions)`,
+        `${INVOICE_FULL_COLUMNS}, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -357,6 +362,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const finalInvoiceNumber =
       (numbered as { invoice_number?: string } | null)?.invoice_number ?? typed.invoice_number
+
+    // Step 6b: auto-create an online payment link (extension-provided, e.g.
+    // Stripe) now that the number exists, so the email button and PDF QR
+    // carry it. Failure degrades to a PAYMENT_LINK_FAILED warning: the
+    // faktura is legally valid without a link. The helper mirrors the link
+    // onto the in-memory row only after a successful persist so a link on
+    // the PDF can always be matched back to the row.
+    const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
+      ctx.supabase,
+      ctx.companyId!,
+      ctx.userId,
+      typed as Invoice,
+      ctx.log,
+      {
+        invoiceNumber: finalInvoiceNumber,
+        logPrefix: 'invoices.send: ',
+        logContext: { invoiceId },
+      },
+    )
+
     // Also override `status` to 'sent' on the in-memory copy. The actual DB
     // flip happens at step 9a (after email delivery), but if we render with
     // the stale 'draft' status the customer receives a PDF stamped
@@ -371,6 +396,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     try {
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(settings)
       const swishQrDataUrl = await buildSwishQrDataUrl(settings, renderableInvoice)
+      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -380,6 +406,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           originalInvoiceNumber,
           branding,
           swishQrDataUrl,
+          paymentLinkQrDataUrl,
         }),
       )
     } catch (err) {
@@ -434,6 +461,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // ── POINT OF NO RETURN ────────────────────────────────────────────
     // Email has been delivered. Subsequent failures surface as warnings.
     const warnings: { code: string; message: string }[] = []
+
+    if (paymentLinkFailure) {
+      warnings.push({ code: 'PAYMENT_LINK_FAILED', message: paymentLinkFailure })
+    }
 
     // Step 9a: status flip to 'sent'. The `.eq('status', 'draft')` is an
     // optimistic-lock guard against a concurrent state change between fetch

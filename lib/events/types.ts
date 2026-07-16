@@ -73,6 +73,11 @@ export type CoreEvent =
       userId: string
       companyId: string
     } }
+  // Stripe Connect lifecycle: connect/disconnect are outward-facing consent
+  // transitions (a third party gains/loses access to payment data), so they
+  // land in event_log for the audit trail, mirroring bank_connection.*.
+  | { type: 'stripe.connected'; payload: { connectionId: string; stripeAccountId: string; livemode: boolean; userId: string; companyId: string } }
+  | { type: 'stripe.disconnected'; payload: { connectionId: string; stripeAccountId: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
@@ -82,6 +87,7 @@ export type CoreEvent =
   // Articles (artikelregister)
   | { type: 'article.created'; payload: { article: Article; userId: string; companyId: string } }
   | { type: 'article.updated'; payload: { article: Article; userId: string; companyId: string } }
+  | { type: 'article.deleted'; payload: { articleId: string; userId: string; companyId: string } }
   // Suppliers
   | { type: 'supplier.created'; payload: { supplier: Supplier; userId: string; companyId: string } }
   // Receipts
@@ -169,7 +175,7 @@ export type CoreEvent =
       success: boolean                              // true iff the tool returned without throwing AND was invoked (not denied)
       isError: boolean                              // matches the JSON-RPC tool-result isError flag returned to the client
       errorCode: string | null                      // structured error code from tool-result.toToolError when applicable
-      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
+      errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
       errorMessage: string | null                   // human-readable error message (truncated to 500 chars), null on success.
                                                     // Raw material for clustering real agent failures into curated gotchas:
                                                     // errorCode alone can't distinguish "period locked" from "unbalanced".

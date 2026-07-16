@@ -3,6 +3,8 @@ import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 
 // ============================================================
 // Types
@@ -481,18 +483,20 @@ export async function getReconciliationStatus(
 
   // posted + reversed = the ledger balance, exactly as the trial balance counts
   // it. The .in() filter on the query already excludes draft/cancelled.
-  // Paginated for the same 1000-row-cap reason as the transactions above: a
-  // silently truncated GL side would corrupt gl_1930_balance and the difference.
-  const fetchedLines = await fetchAllRows<GlLineRow>(({ from, to }) => {
-    let glQuery = supabase
-      .from('journal_entry_lines')
-      .select('debit_amount, credit_amount, journal_entries!inner(id, company_id, entry_date, status, source_type)')
-      .eq('account_number', bankAccount)
-      .eq('journal_entries.company_id', companyId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-    if (dateFrom) glQuery = glQuery.gte('journal_entries.entry_date', dateFrom)
-    if (dateTo) glQuery = glQuery.lte('journal_entries.entry_date', dateTo)
-    return glQuery.order('id').range(from, to)
+  // Fetched via the two-step entry-lines helper (entries first, then lines
+  // chunked by entry id, both paginated): a silently truncated GL side would
+  // corrupt gl_1930_balance and the difference. See lib/bookkeeping/entry-lines.ts.
+  const fetchedLines = await fetchEntryLines<GlLineRow>({
+    supabase,
+    entryColumns: 'id, company_id, entry_date, status, source_type',
+    lineColumns: 'debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) => {
+      let glQuery = q.eq('company_id', companyId).in('status', ['posted', 'reversed'])
+      if (dateFrom) glQuery = glQuery.gte('entry_date', dateFrom)
+      if (dateTo) glQuery = glQuery.lte('entry_date', dateTo)
+      return glQuery
+    },
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', bankAccount),
   })
 
   // Floor the window at the most recent opening-balance date on this account
@@ -617,7 +621,11 @@ export async function manualLink(
     return { success: false, error: 'Transaktionen kunde inte hittas.' }
   }
 
-  if (tx.journal_entry_id) {
+  // Only a LIVE (posted) pointer blocks re-linking. A transaction still pointing
+  // at a 'reversed' entry (storno/correction left the link behind) reads as
+  // "utan koppling" in the UI, so it must be re-linkable to another verifikat
+  // (issue #988). The stale pointer is overwritten by the locked UPDATE below.
+  if (tx.journal_entry_id && (await hasLiveJournalEntryLink(supabase, companyId, tx.journal_entry_id))) {
     return { success: false, error: 'Transaktionen är redan kopplad till en verifikation.' }
   }
 
@@ -680,11 +688,14 @@ export async function manualLink(
   // already-matched voucher when the user opts in via "Visa även matchade
   // verifikationer", so this can't happen by accident.
 
-  // Apply link. The .is('journal_entry_id', null) guard re-checks the "not
-  // already linked" precondition inside the write itself: the read above is
-  // advisory, and two concurrent linkers would otherwise silently re-point the
-  // row (same optimistic-lock pattern as lib/transactions/link-journal-entry.ts).
-  const { data: updatedRows, error: updateError } = await supabase
+  // Apply link. The write re-checks the pointer we validated inside the write
+  // itself (the read above is advisory): null for a free row, or the exact
+  // stale 'reversed'-entry id we're detaching from. Locking on the known value
+  // lets the stale-pointer overwrite through while a concurrent re-link becomes
+  // a no-op (0 rows → the "redan kopplad" branch below). Same optimistic-lock
+  // pattern as lib/transactions/link-journal-entry.ts.
+  const previousJournalEntryId = (tx.journal_entry_id as string | null) ?? null
+  const linkUpdate = supabase
     .from('transactions')
     .update({
       journal_entry_id: journalEntryId,
@@ -693,8 +704,10 @@ export async function manualLink(
     })
     .eq('id', transactionId)
     .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-    .select('id')
+  const { data: updatedRows, error: updateError } = await (previousJournalEntryId === null
+    ? linkUpdate.is('journal_entry_id', null)
+    : linkUpdate.eq('journal_entry_id', previousJournalEntryId)
+  ).select('id')
 
   if (updateError) {
     return { success: false, error: 'Kunde inte koppla transaktionen. Försök igen.' }

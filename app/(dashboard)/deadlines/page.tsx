@@ -9,6 +9,7 @@ import { ToastAction } from '@/components/ui/toast'
 import { DeadlineList } from '@/components/deadlines/DeadlineList'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { AlertTriangle, ArrowRight, CalendarClock, Loader2 } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
@@ -242,18 +243,18 @@ export default function DeadlinesPage() {
         <PageHeader title={t('title')} />
         <div className="space-y-3">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="rounded-lg border p-4 animate-pulse">
+            <div key={i} className="rounded-lg border p-4">
               <div className="flex items-center gap-4">
                 <div className="w-12 space-y-1">
-                  <div className="h-5 bg-muted rounded w-8 mx-auto" />
-                  <div className="h-3 bg-muted rounded w-6 mx-auto" />
+                  <Skeleton className="h-5 w-8 mx-auto" />
+                  <Skeleton className="h-3 w-6 mx-auto" />
                 </div>
-                <div className="w-px h-8 bg-muted" />
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-4 bg-muted rounded w-48" />
-                  <div className="h-3 bg-muted rounded w-24" />
+                <Skeleton className="w-px h-8" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-3 w-24" />
                 </div>
-                <div className="h-4 bg-muted rounded w-16" />
+                <Skeleton className="h-4 w-16" />
               </div>
             </div>
           ))}
@@ -307,7 +308,7 @@ export default function DeadlinesPage() {
               <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" />
               <p className="text-sm">
                 <span className="font-medium">{t('overdue_invoices', { count: overdueInvoices.count })}</span>
-                <span className="text-muted-foreground ml-1.5 tabular-nums">
+                <span className="text-muted-foreground ml-2 tabular-nums">
                   {formatCurrency(overdueInvoices.total)}
                 </span>
               </p>

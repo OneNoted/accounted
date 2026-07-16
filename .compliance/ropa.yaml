@@ -8,20 +8,61 @@
 
 processing_activities:
 
+  - id: customer.private_identity
+    name: Personnummer för privatkund
+    purpose: >-
+      Identifiera en privatkund när företagets avtal, fakturering eller
+      kundadministration kräver en entydig identitet. Personnumret får endast
+      sparas på kundtypen privatkund och exponeras endast maskerat i API och UI.
+    lawful_basis: art_6_1_b
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - customer
+    data_categories:
+      - user.government_id
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: customer_relationship_or_7y_if_accounting_record
+      basis: contract_and_bfl_7_kap
+      stored_in:
+        - customers.personal_number
+        - retained_invoice_documents_when_required
+    security_measures:
+      - aes_256_gcm_field_encryption
+      - masked_api_and_ui_output_last4_only
+      - write_role_required
+      - rls_company_scoped
+      - no_full_value_read_endpoint
+
   - id: agi.submit
     name: AGI inlämning till Skatteverket
     purpose: >-
       Lämna in lagstadgad arbetsgivardeklaration på individnivå (AGI) till
       Skatteverket varje månad (Skatteförfarandelagen 26 kap.). Innefattar
-      huvuduppgift (HU) och individuppgifter (IU) per anställd.
+      huvuduppgift (HU) och individuppgifter (IU) per anställd. Skatteverkets
+      kvittens sparas i response_data inklusive signeradAv: personnummer för
+      den som BankID-signerade inlämningen. Ändamålet är bevis för vem som
+      juridiskt undertecknade deklarationen samt behandlingshistorik; BFL
+      5 kap. 6 § och BFNAR 2013:2 kap. 8 kräver att räkenskapsinformationen
+      bevarar den faktiska ingivaren, medan själva inlämningen styrs av SFL.
     lawful_basis: art_6_1_c   # legal obligation
     special_category_basis: null
     controller: gnubok-tenant
     processor: anthropic-na   # software supplier; Skatteverket is recipient, not processor
     data_subjects:
       - employee
+      - company_signatory           # firmatecknare/deklarationsombud (BankID-signerare av kvittensen)
     data_categories:
-      - user.government_id          # personnummer
+      - user.government_id          # personnummer (anställda i IU; signerarens i response_data.signeradAv)
       - user.name
       - user.financial.employment   # gross salary, tax withheld, benefits
       - user.financial.tax          # avgifter, sjuklönekostnad
@@ -37,10 +78,11 @@ processing_activities:
         not applicable; no third-country transfer.
     retention:
       duration: 7y
-      basis: bfl_7_kap   # BFL 7 kap.: räkenskapsinformation
+      basis: bfl_7_kap   # BFL 7 kap. 2 §: räkenskapsinformation
       stored_in:
         - agi_declarations.xml_content
         - agi_declarations.individuppgifter
+        - agi_declarations.response_data   # SKV kvittens incl. signeradAv (signerarens pnr); access via company-membership RLS
         - skatteverket_api_audit_log
     security_measures:
       - encryption_at_rest_supabase

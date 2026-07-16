@@ -258,6 +258,10 @@ export interface CompanySettings {
   // Invoice settings
   invoice_prefix: string | null
   next_invoice_number: number
+  // Starting ankomstnummer for the supplier-invoice (leverantorsfaktura)
+  // series. Acts as a floor: get_next_arrival_number returns
+  // GREATEST(MAX(arrival_number)+1, next_arrival_number). Defaults to 1.
+  next_arrival_number: number
   next_delivery_note_number: number
   invoice_default_days: number
   invoice_default_notes: string | null
@@ -309,6 +313,9 @@ export interface CompanySettings {
 
   // Automation
   send_invoice_reminders: boolean
+  reminder_days_level_1: number
+  reminder_days_level_2: number
+  reminder_days_level_3: number
 
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: boolean
@@ -552,6 +559,10 @@ export interface Customer {
   // Basic info
   name: string
   customer_type: CustomerType
+
+  // User-assigned customer number (kundnummer) shown on invoices.
+  // Free text, no uniqueness enforced in v1.
+  customer_number: string | null
 
   // Contact
   email: string | null
@@ -863,6 +874,20 @@ export interface Invoice {
   your_reference: string | null
   our_reference: string | null
 
+  // Optional online payment link (pasted by the user, e.g. a Stripe Payment
+  // Link). Rendered as a "Betala online" button in the invoice email and as a
+  // QR code + link on the PDF. Never copied to derived documents (credit
+  // notes, conversions, recurring invoices). Optional in TS for pre-migration
+  // fixtures.
+  payment_link_url?: string | null
+  // Stripe Payment Link id (plink_...) when the link above was auto-created by
+  // the Stripe extension; NULL for manually pasted links. Deterministic
+  // matching key for checkout.session.completed events and the handle used to
+  // deactivate the link on credit/paid.
+  stripe_payment_link_id?: string | null
+  // Per-invoice opt-out for automatic payment link creation on send.
+  payment_link_auto?: boolean
+
   // Notes
   notes: string | null
 
@@ -1125,6 +1150,7 @@ export interface TaxRate {
 export interface CreateCustomerInput {
   name: string
   customer_type: CustomerType
+  customer_number?: string | null
   email?: string
   phone?: string
   address_line1?: string
@@ -1134,7 +1160,7 @@ export interface CreateCustomerInput {
   country?: string
   org_number?: string
   vat_number?: string
-  personal_number?: string
+  personal_number?: string | null
   language?: 'sv' | 'en'
   default_payment_terms?: number
   notes?: string
@@ -1206,6 +1232,8 @@ export interface CreateInvoiceInput {
   your_reference?: string
   our_reference?: string
   notes?: string
+  /** Optional https link where the customer can pay online (e.g. a Stripe Payment Link). */
+  payment_link_url?: string
   /** Plaintext personnummer: encrypted server-side before storage. */
   deduction_personnummer?: string
   /** Fastighetsbeteckning. Required when any item carries deduction_type === 'rot'. */
@@ -1367,6 +1395,7 @@ export type JournalEntrySourceType =
   | 'result_appropriation'
   | 'rot_rut_payout'
   | 'vat_settlement'
+  | 'stripe_payout'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -1394,6 +1423,9 @@ export interface BASAccount {
   is_active: boolean
   is_system_account: boolean
   default_vat_code: string | null
+  // Per-account default VAT rate for booking lines (0/0.06/0.12/0.25).
+  // null = no default (line keeps its own rate). Öresavrundning (3740) = 0.
+  default_vat_rate: number | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean
@@ -1583,6 +1615,11 @@ export interface MappingResult {
   vat_lines: VatJournalLine[]
   all_lines_complete?: boolean  // when true, vat_lines contains ALL non-settlement lines
   description: string
+  // Set when a matched counterparty template's learned direction contradicts
+  // the transaction sign (e.g. an incoming refund matching an expense-learned
+  // template). The result is mirrored and review-gated, and must never be
+  // learned back into the template (it would flip the learned accounts).
+  direction_mismatch?: boolean
   // Dimensions bag applied to the business (expense/revenue) lines of the
   // generated entry: from a counterparty template's line pattern or an
   // explicit categorize param (dimensions PR7). Bank/VAT lines stay untagged.
@@ -1619,7 +1656,9 @@ export interface LinePatternEntry {
 // Per-tenant counterparty-based categorization template
 export interface CategorizationTemplate {
   id: string
-  user_id: string
+  // Pre-multi-tenant relic: nullable since 20260711100000 and never written
+  // by the learning path anymore. Scoping is company_id.
+  user_id: string | null
   company_id: string
   counterparty_name: string
   counterparty_aliases: string[]
@@ -1979,6 +2018,17 @@ export type PendingOperationType =
   // Dimensions PR6: bulk retag of posted-line dimensions via the audited
   // retag_line_dimensions RPC (gnubok_tag_journal_lines).
   | 'retag_line_dimensions'
+  // Payroll gap-closure: payslip line edits + absence registration (1.7),
+  // employee master data (1.8; personnummer encrypted at staging), and
+  // cutover opening balances for mid-year migrations (2.4).
+  | 'update_payslip_line'
+  | 'register_absence'
+  | 'create_employee'
+  | 'update_employee'
+  | 'set_employee_opening_balances'
+  // Semesterårsavslut: rolls vacation balances into the next year and may
+  // post a 2920/2940 drift-adjustment verifikation (Phase 3).
+  | 'vacation_year_close'
 export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
@@ -2216,6 +2266,7 @@ export type NotificationType =
   | 'receipt_matched'
   | 'invoice_sent'
   | 'missing_underlag'
+  | 'skv_kvittens'
 
 // Notification log entry
 export interface NotificationLog {
@@ -3429,6 +3480,11 @@ export interface Employee {
   vacation_days_per_year: number
   vacation_days_saved: number
   semestertillagg_rate: number
+  // Arbetsschema-lite: weekly schedule driving the hourly/daily divisors
+  // (173/21 at the defaults). employment_degree keeps prorating base salary;
+  // these ONLY drive divisors.
+  hours_per_week: number
+  workdays_per_week: number
   email: string | null
   phone: string | null
   address_line1: string | null

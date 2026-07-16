@@ -1,4 +1,7 @@
 import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent-bedrock-client')
 
 let cached: AnthropicBedrock | null = null
 
@@ -23,6 +26,29 @@ export function getAnthropic(): AnthropicBedrock {
   const awsRegion = process.env.AWS_REGION || 'eu-north-1'
   const awsAccessKey = process.env.AWS_ACCESS_KEY_ID
   const awsSecretKey = process.env.AWS_SECRET_ACCESS_KEY
+
+  // Startup diagnostic: make a hosted misconfiguration visible in the logs
+  // instead of it surfacing only as an opaque "request ended without sending
+  // any chunks" at stream time. Runs once per cold start (the client is cached).
+  // Never logs a secret: only the region, presence booleans, and the 4-char
+  // access-key-id PREFIX (AKIA = long-term IAM user key; ASIA = STS/temporary
+  // role credential, i.e. a platform-injected one rather than ours).
+  if (!awsAccessKey || !awsSecretKey) {
+    log.error('agent Bedrock credentials not loaded from env', undefined, {
+      region: awsRegion,
+      hasAccessKeyId: !!awsAccessKey,
+      hasSecretAccessKey: !!awsSecretKey,
+      regionFromEnv: !!process.env.AWS_REGION,
+    })
+  } else {
+    log.info('agent Bedrock client init', {
+      region: awsRegion,
+      keyPrefix: awsAccessKey.slice(0, 4),
+      hasSessionToken: !!process.env.AWS_SESSION_TOKEN,
+      regionFromEnv: !!process.env.AWS_REGION,
+    })
+  }
+
   // When both static keys are present, pass them. Otherwise omit them so the
   // SDK falls back to the AWS credential provider chain (instance profile,
   // IRSA, EKS pod identity, ...). The two-overload SDK refuses a mix.

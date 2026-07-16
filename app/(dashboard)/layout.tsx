@@ -7,16 +7,15 @@ import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
 import { RecaptIdentify } from '@/components/RecaptIdentify'
 import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
-import CommandPalette from '@/components/common/CommandPalette'
+import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import { getActiveCompanyId } from '@/lib/company/context'
-import { getCompanyCapabilities } from '@/lib/entitlements/has-capability'
+import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
-import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
 import type { EntityType, CompanyRole, Team } from '@/types'
 
 /**
@@ -90,6 +89,7 @@ export default async function DashboardLayout({
           team,
           isSandbox: false,
           capabilities: [],
+          trialEndsAt: null,
         }}
       >
         <AgentSheetProvider>
@@ -98,8 +98,6 @@ export default async function DashboardLayout({
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
-              uncategorizedTransactionCount={0}
-              pendingOperationsCount={0}
               isSandbox={false}
               extensionNavItems={getExtensionNavItems()}
             />
@@ -130,11 +128,9 @@ export default async function DashboardLayout({
     { data: memberRow },
     { data: allMemberships },
     { data: settings },
-    uncategorizedCount,
-    pendingOpsCount,
     { data: agentProfileIdentity },
     { data: userProfile },
-    capabilities,
+    entitlements,
     { data: allSettingsNames },
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
@@ -145,11 +141,10 @@ export default async function DashboardLayout({
       .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled')
       .eq('company_id', companyId)
       .single(),
-    // Shared worklist predicates (lib/worklist), the badge must show the
-    // same number as every other "att göra" surface. Notably this excludes
-    // is_ignored rows, which the old inline query here did not.
-    countUnbookedTransactions(supabase, companyId),
-    countPendingOperations(supabase, companyId),
+    // Nav badge counts (unbooked transactions, pending operations) are NOT
+    // fetched here anymore: DashboardNav loads them client-side after mount
+    // (lib/hooks/use-worklist-badges) so two head-count queries stop blocking
+    // first paint on every dashboard navigation.
     // Agent identity, name + avatar, surfaced on the FAB and chat
     // surfaces. Null when no agent_profile exists yet (banner CTA path).
     supabase
@@ -161,7 +156,7 @@ export default async function DashboardLayout({
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
     supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
-    getCompanyCapabilities(supabase, companyId),
+    getCompanyEntitlements(supabase, companyId),
     // Current display names for ALL the user's companies (the switcher list).
     // RLS scopes company_settings SELECT to user_company_ids(), so this bare
     // select returns exactly the caller's companies, letting non-active rows
@@ -191,6 +186,7 @@ export default async function DashboardLayout({
       team,
       isSandbox: false,
       capabilities: [],
+      trialEndsAt: null,
     }
 
     return (
@@ -201,8 +197,6 @@ export default async function DashboardLayout({
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
-              uncategorizedTransactionCount={0}
-              pendingOperationsCount={0}
               isSandbox={false}
               extensionNavItems={getExtensionNavItems()}
             />
@@ -281,7 +275,8 @@ export default async function DashboardLayout({
     isTeamMember,
     team,
     isSandbox,
-    capabilities,
+    capabilities: entitlements.capabilities,
+    trialEndsAt: entitlements.trialEndsAt,
   }
 
   return (
@@ -308,8 +303,6 @@ export default async function DashboardLayout({
             entityType={entityType}
             paysSalaries={paysSalaries}
             dimensionsEnabled={dimensionsEnabled}
-            uncategorizedTransactionCount={uncategorizedCount}
-            pendingOperationsCount={pendingOpsCount}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
@@ -319,7 +312,7 @@ export default async function DashboardLayout({
             <MainContainer companyId={companyId}>{children}</MainContainer>
           </main>
           <AgentTrigger />
-          <CommandPalette />
+          <LazyCommandPalette />
           <SettingsHotkey />
           {settingsModal}
         </div>

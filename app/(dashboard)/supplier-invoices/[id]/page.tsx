@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock } from 'lucide-react'
+import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -22,7 +22,8 @@ import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
-import { formatCurrency } from '@/lib/utils'
+import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
 
@@ -54,10 +55,6 @@ interface MarkPaidPreview {
   lines: PreviewLine[]
   invoice_already_booked: boolean
   accounting_method: 'accrual' | 'cash'
-}
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 // A line is periodiserad when both period dates are set: the cost was parked
@@ -433,7 +430,7 @@ export default function SupplierInvoiceDetailPage() {
   )
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-8 max-w-4xl">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
@@ -605,29 +602,29 @@ export default function SupplierInvoiceDetailPage() {
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">{t('net_excl_vat')}</span>
-              <span className="tabular-nums">{formatAmount(invoice.subtotal)} {invoice.currency}</span>
+              <span className="tabular-nums">{formatCurrency(invoice.subtotal, invoice.currency)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">{t('vat_label')}</span>
-              <span className="tabular-nums">{formatAmount(invoice.vat_amount)} {invoice.currency}</span>
+              <span className="tabular-nums">{formatCurrency(invoice.vat_amount, invoice.currency)}</span>
             </div>
             {rounding.applies && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('ore_rounding')}</span>
-                <span className="tabular-nums">{formatAmount(rounding.roundingDelta)} {invoice.currency}</span>
+                <span className="tabular-nums">{formatCurrency(rounding.roundingDelta, invoice.currency)}</span>
               </div>
             )}
             <div className="flex justify-between font-semibold text-base pt-2 border-t">
               <span>{t('total_label')}</span>
-              <span className="tabular-nums">{formatAmount(rounding.displayed)} {invoice.currency}</span>
+              <span className="tabular-nums">{formatCurrency(rounding.displayed, invoice.currency)}</span>
             </div>
             <div className="flex justify-between pt-2">
               <span className="text-muted-foreground">{t('paid_label')}</span>
-              <span className="tabular-nums text-success">{formatAmount(invoice.paid_amount)} {invoice.currency}</span>
+              <span className="tabular-nums text-success">{formatCurrency(invoice.paid_amount, invoice.currency)}</span>
             </div>
             <div className="flex justify-between font-semibold">
               <span>{t('remaining_label')}</span>
-              <span className="tabular-nums">{formatAmount(invoice.remaining_amount)} {invoice.currency}</span>
+              <span className="tabular-nums">{formatCurrency(invoice.remaining_amount, invoice.currency)}</span>
             </div>
           </CardContent>
         </Card>
@@ -692,11 +689,11 @@ export default function SupplierInvoiceDetailPage() {
                     </td>
                     <td className="py-2 text-right">{item.quantity}</td>
                     <td className="py-2">{item.unit}</td>
-                    <td className="py-2 text-right tabular-nums">{formatAmount(item.unit_price)}</td>
+                    <td className="py-2 text-right tabular-nums">{formatCurrency(item.unit_price, invoice.currency)}</td>
                     <td className="py-2"><AccountNumber number={item.account_number} /></td>
                     <td className="py-2 text-right">{Math.round(item.vat_rate * 100)}%</td>
-                    <td className="py-2 text-right tabular-nums">{formatAmount(item.line_total)}</td>
-                    <td className="py-2 text-right tabular-nums">{formatAmount(item.vat_amount)}</td>
+                    <td className="py-2 text-right tabular-nums">{formatCurrency(item.line_total, invoice.currency)}</td>
+                    <td className="py-2 text-right tabular-nums">{formatCurrency(item.vat_amount, invoice.currency)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -720,12 +717,12 @@ export default function SupplierInvoiceDetailPage() {
                   </p>
                 )}
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>{item.quantity} {item.unit} × {formatAmount(item.unit_price)}</span>
-                  <span className="tabular-nums">{formatAmount(item.line_total)} kr</span>
+                  <span>{item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}</span>
+                  <span className="tabular-nums">{formatCurrency(item.line_total, invoice.currency)}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span><AccountNumber number={item.account_number} /> · {t('vat_inline', { rate: Math.round(item.vat_rate * 100) })}</span>
-                  <span className="tabular-nums">{t('vat_amount_inline', { amount: formatAmount(item.vat_amount) })}</span>
+                  <span className="tabular-nums">{t('vat_amount_inline', { amount: formatCurrency(item.vat_amount, invoice.currency) })}</span>
                 </div>
               </div>
             ))}
@@ -755,7 +752,7 @@ export default function SupplierInvoiceDetailPage() {
                   {payments.map((p) => (
                     <tr key={p.id} className="border-b last:border-0">
                       <td className="py-2 tabular-nums">{formatDate(p.payment_date)}</td>
-                      <td className="py-2 text-right tabular-nums">{formatAmount(p.amount)} {p.currency}</td>
+                      <td className="py-2 text-right tabular-nums">{formatCurrency(p.amount, p.currency)}</td>
                       <td className="py-2">
                         {p.journal_entry_id ? (
                           <Link href={`/bookkeeping/${p.journal_entry_id}`} className="text-primary hover:underline font-mono text-xs">
@@ -775,7 +772,7 @@ export default function SupplierInvoiceDetailPage() {
                 <div key={p.id} className="border rounded-lg p-3 space-y-1">
                   <div className="flex items-center justify-between text-sm">
                     <span className="tabular-nums">{formatDate(p.payment_date)}</span>
-                    <span className="font-mono font-medium">{formatAmount(p.amount)} {p.currency}</span>
+                    <span className="font-mono font-medium">{formatCurrency(p.amount, p.currency)}</span>
                   </div>
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     {p.journal_entry_id ? (
@@ -787,6 +784,26 @@ export default function SupplierInvoiceDetailPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {invoice.document_id && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">{t('document_title')}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Paperclip className="h-4 w-4 shrink-0" />
+                <span>{t('document_attached')}</span>
+              </div>
+              <DocumentViewButton
+                documentId={invoice.document_id}
+                label={t('view_document')}
+              />
             </div>
           </CardContent>
         </Card>
@@ -1096,7 +1113,7 @@ export default function SupplierInvoiceDetailPage() {
                     </div>
                   </div>
                   <div className="tabular-nums font-medium">
-                    {formatAmount(Math.abs(c.amount))} {invoice.currency}
+                    {formatCurrency(Math.abs(c.amount), invoice.currency)}
                   </div>
                   <Button
                     variant="outline"

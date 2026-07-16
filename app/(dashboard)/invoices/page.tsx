@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -88,7 +87,8 @@ export default function InvoicesPage() {
   // /invoices/new redirect) opens the same dialog, and the browser back
   // button closes it. No canWrite gate here: like the old /invoices/new page,
   // the editor itself disables submission for viewers.
-  const showNewInvoice = searchParams.has('new')
+  const copyFromId = searchParams.get('copy')
+  const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const closeNewInvoice = () => router.replace('/invoices', { scroll: false })
   const openNewInvoice = () => router.push('/invoices?new=1', { scroll: false })
 
@@ -222,25 +222,8 @@ export default function InvoicesPage() {
             className="pl-10"
           />
         </div>
-        {/* Mobile: dropdown select */}
-        <Select value={activeTab} onValueChange={setActiveTab}>
-          <SelectTrigger className="sm:hidden w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">{t('tab_all')}</SelectItem>
-            <SelectItem value="unpaid">{t('tab_unpaid')}</SelectItem>
-            <SelectItem value="paid">{t('tab_paid')}</SelectItem>
-            <SelectItem value="draft">{t('tab_draft')}</SelectItem>
-            <SelectItem value="proforma">{t('tab_proforma')}</SelectItem>
-            <SelectItem value="delivery_note">{t('tab_delivery_note')}</SelectItem>
-            <SelectItem value="credit">{t('tab_credit')}</SelectItem>
-            <SelectItem value="cancelled">{t('tab_cancelled')}</SelectItem>
-          </SelectContent>
-        </Select>
-        {/* Desktop: tab bar */}
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="hidden sm:block">
-          <TabsList>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="min-w-0">
+          <TabsList className="w-max max-w-full justify-start">
             <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
             <TabsTrigger value="unpaid">{t('tab_unpaid')}</TabsTrigger>
             <TabsTrigger value="paid">{t('tab_paid')}</TabsTrigger>
@@ -395,6 +378,7 @@ export default function InvoicesPage() {
 
       <NewInvoiceDialog
         open={showNewInvoice}
+        copyFromId={copyFromId}
         onOpenChange={(open) => {
           if (!open) closeNewInvoice()
         }}

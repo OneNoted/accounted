@@ -709,17 +709,36 @@ describe('manualLink', () => {
     expect(result.error).toBe('Transaktionen kunde inte hittas.')
   })
 
-  it('rejects when transaction is already linked', async () => {
+  it('rejects when transaction is already linked to a LIVE (posted) entry', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const tx = makeTransaction({ id: 'tx-1', journal_entry_id: 'je-existing' })
 
-    // Transaction found but already linked
+    // Transaction found, still pointing at a live posted verifikat
     enqueue({ data: tx })
+    enqueue({ data: { status: 'posted' } }) // hasLiveJournalEntryLink: prior link is live
 
     const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1')
 
     expect(result.success).toBe(false)
     expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
+  })
+
+  it('re-links a transaction stranded on a reversed entry (#988)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // Still carries a pointer at a status='reversed' entry (storno/correction
+    // left it behind). The UI shows it as "utan koppling", so manualLink must
+    // treat it as free and overwrite the stale pointer.
+    const tx = makeTransaction({ id: 'tx-1', journal_entry_id: 'je-reversed' })
+
+    enqueue({ data: tx }) // tx fetch
+    enqueue({ data: { status: 'reversed' } }) // hasLiveJournalEntryLink: stale link
+    enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } }) // target JE fetch
+    enqueue({ data: [{ debit_amount: 1000, credit_amount: 0, account_number: '1930' }] }) // line on 1930
+    enqueue({ data: [{ id: 'tx-1' }] }) // UPDATE .eq(stale id) → 1 row overwritten
+
+    const result = await manualLink(supabase as never, 'company-1', 'tx-1', 'je-1', 'user-1', '1930')
+
+    expect(result.success).toBe(true)
   })
 
   it('rejects when journal entry has no line on the selected account', async () => {
@@ -1000,10 +1019,18 @@ describe('getReconciliationStatus', () => {
       data: [{ amount: 1000, journal_entry_id: 'je-tx', reconciliation_method: 'auto_exact' }],
     })
     // 2) journal_entry_lines: 50,000 IB debit + 1000 matched debit on 1930
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 50000, credit_amount: 0, journal_entries: { status: 'posted', source_type: 'opening_balance' } },
-        { debit_amount: 1000, credit_amount: 0, journal_entries: { status: 'posted', source_type: 'bank_import' } },
+        { id: 'je-gen1', status: 'posted', source_type: 'opening_balance' },
+        { id: 'je-gen2', status: 'posted', source_type: 'bank_import' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 50000, credit_amount: 0, journal_entry_id: 'je-gen1' },
+        { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-gen2' },
       ],
     })
     // 3) RPC get_unlinked_1930_lines: returns empty (RPC excludes IB after migration)
@@ -1031,10 +1058,18 @@ describe('getReconciliationStatus', () => {
       ],
     })
     // 2) GL lines: 50,000 IB + 1000 booked
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 50000, credit_amount: 0, journal_entries: { status: 'posted', source_type: 'opening_balance' } },
-        { debit_amount: 1000, credit_amount: 0, journal_entries: { status: 'posted', source_type: 'bank_import' } },
+        { id: 'je-gen3', status: 'posted', source_type: 'opening_balance' },
+        { id: 'je-gen4', status: 'posted', source_type: 'bank_import' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 50000, credit_amount: 0, journal_entry_id: 'je-gen3' },
+        { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-gen4' },
       ],
     })
     // 3) RPC: empty
@@ -1054,8 +1089,10 @@ describe('getReconciliationStatus', () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 
     enqueue({ data: [{ amount: 100, journal_entry_id: 'je-1', reconciliation_method: 'auto_exact' }] })
+    // Two-step entry-lines fetch: entries page first, then lines by entry id.
+    enqueue({ data: [{ id: 'je-1', status: 'posted', source_type: 'bank_import' }] })
     enqueue({
-      data: [{ debit_amount: 100, credit_amount: 0, journal_entries: { status: 'posted', source_type: 'bank_import' } }],
+      data: [{ debit_amount: 100, credit_amount: 0, journal_entry_id: 'je-1' }],
     })
     enqueue({ data: [] })
 
@@ -1068,16 +1105,24 @@ describe('getReconciliationStatus', () => {
     expect(status.is_reconciled).toBe(true)
   })
 
-  it('handles array-shaped journal_entries embed (Supabase wide typing)', async () => {
-    // Supabase typings sometimes widen embedded relations to arrays. The
-    // implementation handles both shapes: verify here.
+  it('splits IB from period movement via the reattached parent entry', async () => {
+    // The two-step entry-lines fetch reattaches the parent entry object on
+    // each line under `journal_entries`; entryOf() reads source_type from it
+    // to split the IB summary out of the period movement.
     const { supabase, enqueue } = createQueueMockSupabase()
 
     enqueue({ data: [] })
+    // Two-step entry-lines fetch: entries page first, then lines by entry id.
     enqueue({
       data: [
-        { debit_amount: 1000, credit_amount: 0, journal_entries: [{ status: 'posted', source_type: 'opening_balance' }] },
-        { debit_amount: 200, credit_amount: 0, journal_entries: [{ status: 'posted', source_type: 'bank_import' }] },
+        { id: 'je-ib', status: 'posted', source_type: 'opening_balance' },
+        { id: 'je-mv', status: 'posted', source_type: 'bank_import' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-ib' },
+        { debit_amount: 200, credit_amount: 0, journal_entry_id: 'je-mv' },
       ],
     })
     enqueue({ data: [] })
@@ -1105,11 +1150,19 @@ describe('getReconciliationStatus', () => {
       data: [{ amount: 25000, journal_entry_id: 'je-corr', reconciliation_method: 'manual' }],
     })
     // 2) GL lines on 1930: reversed original (debit 25000), storno (credit
-    //    25000), correction (debit 25000). All three are summed.
+    //    25000), correction (debit 25000). All three are summed. Served via
+    //    the two-step entry-lines fetch: entries page, then lines by entry id.
+    enqueue({
+      data: [
+        { id: 'je-orig', status: 'reversed', source_type: 'bank_transaction' },
+        { id: 'je-storno', status: 'posted', source_type: 'storno' },
+        { id: 'je-corr', status: 'posted', source_type: 'correction' },
+      ],
+    })
     const lines = [
-      { debit_amount: 25000, credit_amount: 0, journal_entries: { id: 'je-orig', status: 'reversed', source_type: 'bank_transaction' } },
-      { debit_amount: 0, credit_amount: 25000, journal_entries: { id: 'je-storno', status: 'posted', source_type: 'storno' } },
-      { debit_amount: 25000, credit_amount: 0, journal_entries: { id: 'je-corr', status: 'posted', source_type: 'correction' } },
+      { debit_amount: 25000, credit_amount: 0, journal_entry_id: 'je-orig' },
+      { debit_amount: 0, credit_amount: 25000, journal_entry_id: 'je-storno' },
+      { debit_amount: 25000, credit_amount: 0, journal_entry_id: 'je-corr' },
     ]
     enqueue({ data: lines })
     // 3) RPC: empty
@@ -1143,11 +1196,20 @@ describe('getReconciliationStatus', () => {
     enqueue({
       data: [{ amount: 25000, journal_entry_id: 'je-corr', reconciliation_method: 'manual' }],
     })
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 24000, credit_amount: 0, journal_entries: { id: 'je-orig', status: 'reversed', source_type: 'bank_transaction' } },
-        { debit_amount: 0, credit_amount: 24000, journal_entries: { id: 'je-storno', status: 'posted', source_type: 'storno' } },
-        { debit_amount: 25000, credit_amount: 0, journal_entries: { id: 'je-corr', status: 'posted', source_type: 'correction' } },
+        { id: 'je-orig', status: 'reversed', source_type: 'bank_transaction' },
+        { id: 'je-storno', status: 'posted', source_type: 'storno' },
+        { id: 'je-corr', status: 'posted', source_type: 'correction' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 24000, credit_amount: 0, journal_entry_id: 'je-orig' },
+        { debit_amount: 0, credit_amount: 24000, journal_entry_id: 'je-storno' },
+        { debit_amount: 25000, credit_amount: 0, journal_entry_id: 'je-corr' },
       ],
     })
     enqueue({ data: [] })
@@ -1173,11 +1235,20 @@ describe('getReconciliationStatus', () => {
     enqueue({
       data: [{ amount: 25000, journal_entry_id: 'je-orig', reconciliation_method: 'manual' }],
     })
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 25000, credit_amount: 0, journal_entries: { id: 'je-orig', status: 'reversed', source_type: 'bank_transaction' } },
-        { debit_amount: 0, credit_amount: 25000, journal_entries: { id: 'je-storno', status: 'posted', source_type: 'storno' } },
-        { debit_amount: 25000, credit_amount: 0, journal_entries: { id: 'je-corr', status: 'posted', source_type: 'correction' } },
+        { id: 'je-orig', status: 'reversed', source_type: 'bank_transaction' },
+        { id: 'je-storno', status: 'posted', source_type: 'storno' },
+        { id: 'je-corr', status: 'posted', source_type: 'correction' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 25000, credit_amount: 0, journal_entry_id: 'je-orig' },
+        { debit_amount: 0, credit_amount: 25000, journal_entry_id: 'je-storno' },
+        { debit_amount: 25000, credit_amount: 0, journal_entry_id: 'je-corr' },
       ],
     })
     enqueue({ data: [] })
@@ -1199,9 +1270,16 @@ describe('getReconciliationStatus', () => {
     const { supabase, enqueue } = createQueueMockSupabase()
 
     enqueue({ data: [] }) // no bank-feed transactions
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 500, credit_amount: 0, journal_entries: { id: 'je-manual', status: 'posted', source_type: 'manual' } },
+        { id: 'je-manual', status: 'posted', source_type: 'manual' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 500, credit_amount: 0, journal_entry_id: 'je-manual' },
       ],
     })
     enqueue({ data: [] })
@@ -1236,12 +1314,22 @@ describe('getReconciliationStatus', () => {
     // 2) GL lines on the account: prior-period movements (6000 + 4000 = 10000,
     //    dated 2025) that net to the IB, the IB itself (10000, dated 2026-01-01),
     //    and the current period's movement (5000, dated 2026).
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 6000, credit_amount: 0, journal_entries: { id: 'je-p1', status: 'posted', source_type: 'import', entry_date: '2025-03-31' } },
-        { debit_amount: 4000, credit_amount: 0, journal_entries: { id: 'je-p2', status: 'posted', source_type: 'import', entry_date: '2025-09-30' } },
-        { debit_amount: 10000, credit_amount: 0, journal_entries: { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' } },
-        { debit_amount: 5000, credit_amount: 0, journal_entries: { id: 'je-c1', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-02-15' } },
+        { id: 'je-p1', status: 'posted', source_type: 'import', entry_date: '2025-03-31' },
+        { id: 'je-p2', status: 'posted', source_type: 'import', entry_date: '2025-09-30' },
+        { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' },
+        { id: 'je-c1', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-02-15' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 6000, credit_amount: 0, journal_entry_id: 'je-p1' },
+        { debit_amount: 4000, credit_amount: 0, journal_entry_id: 'je-p2' },
+        { debit_amount: 10000, credit_amount: 0, journal_entry_id: 'je-ib' },
+        { debit_amount: 5000, credit_amount: 0, journal_entry_id: 'je-c1' },
       ],
     })
     // 3) RPC: empty
@@ -1273,11 +1361,20 @@ describe('getReconciliationStatus', () => {
         { date: '2026-04-10', amount: 3000, journal_entry_id: 'je-c', reconciliation_method: 'manual' },
       ],
     })
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 8000, credit_amount: 0, journal_entries: { id: 'je-p1', status: 'posted', source_type: 'import', entry_date: '2025-05-01' } },
-        { debit_amount: 8000, credit_amount: 0, journal_entries: { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' } },
-        { debit_amount: 3000, credit_amount: 0, journal_entries: { id: 'je-c1', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-04-10' } },
+        { id: 'je-p1', status: 'posted', source_type: 'import', entry_date: '2025-05-01' },
+        { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' },
+        { id: 'je-c1', status: 'posted', source_type: 'bank_transaction', entry_date: '2026-04-10' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 8000, credit_amount: 0, journal_entry_id: 'je-p1' },
+        { debit_amount: 8000, credit_amount: 0, journal_entry_id: 'je-ib' },
+        { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'je-c1' },
       ],
     })
     enqueue({ data: [] })
@@ -1308,11 +1405,20 @@ describe('getReconciliationStatus', () => {
         { date: '2026-03-15', amount: 3000, journal_entry_id: 'je-mar', reconciliation_method: 'manual' },
       ],
     })
+    // Two-step entry-lines fetch: entries page first, then lines by entry id
+    // (parents reattached under journal_entries by the helper).
     enqueue({
       data: [
-        { debit_amount: 9000, credit_amount: 0, journal_entries: { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' } },
-        { debit_amount: 2000, credit_amount: 0, journal_entries: { id: 'je-feb1', status: 'posted', source_type: 'import', entry_date: '2026-02-10' } },
-        { debit_amount: 3000, credit_amount: 0, journal_entries: { id: 'je-mar1', status: 'posted', source_type: 'import', entry_date: '2026-03-15' } },
+        { id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' },
+        { id: 'je-feb1', status: 'posted', source_type: 'import', entry_date: '2026-02-10' },
+        { id: 'je-mar1', status: 'posted', source_type: 'import', entry_date: '2026-03-15' },
+      ],
+    })
+    enqueue({
+      data: [
+        { debit_amount: 9000, credit_amount: 0, journal_entry_id: 'je-ib' },
+        { debit_amount: 2000, credit_amount: 0, journal_entry_id: 'je-feb1' },
+        { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'je-mar1' },
       ],
     })
     enqueue({ data: [] })

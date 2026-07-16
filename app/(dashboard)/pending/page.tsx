@@ -384,11 +384,11 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
       )}
       <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Netto</span>
-        <span className="font-mono tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
         <span className="text-muted-foreground">Moms</span>
-        <span className="font-mono tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
         <span className="font-medium">Totalt</span>
-        <span className="font-mono tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
       </div>
     </div>
   )
@@ -714,20 +714,28 @@ export default function PendingOperationsPage() {
   // in-place) so server-side filtering, sorting, and computed fields stay in
   // sync with whatever the API route returned. The counts endpoint isn't
   // pushed by the same trigger, so we also refresh counts on every change.
+  // Trailing debounce: bulk actions emit one event per row, which previously
+  // stampeded 4 requests per event (list + 3 counts); the burst now collapses
+  // into a single refetch after the last event.
   useEffect(() => {
     const supabase = createClient()
+    let debounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
       .channel('pending_operations:list')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'pending_operations' },
         () => {
-          fetchOperations()
-          fetchAllCounts()
+          if (debounce) clearTimeout(debounce)
+          debounce = setTimeout(() => {
+            fetchOperations()
+            fetchAllCounts()
+          }, 400)
         }
       )
       .subscribe()
     return () => {
+      if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
   }, [fetchOperations, fetchAllCounts])
@@ -944,7 +952,7 @@ export default function PendingOperationsPage() {
   const showFilterDot = sourceFilter !== 'all'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title={t('title')}
         description={t('subtitle')}

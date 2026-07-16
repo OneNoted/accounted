@@ -23,7 +23,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "Mail",
           "dataPattern": "core",
           "description": "Skicka fakturor och påminnelser via e-post",
-          "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser (15/30/45 dagar), och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän.",
+          "longDescription": "Aktiverar e-postfunktioner: skicka fakturor till kunder, automatiska betalningspåminnelser enligt valt schema, och e-postmeddelanden. Kräver ett Resend-konto med verifierad domän.",
           "readsCoreTables": [
                 "invoices",
                 "customers",
@@ -118,6 +118,18 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
                 "document_attachments",
                 "invoice_inbox_items"
           ]
+    },
+    {
+          "slug": "stripe",
+          "name": "Stripe-betalningar",
+          "sector": "general",
+          "category": "operations",
+          "icon": "CreditCard",
+          "dataPattern": "manual",
+          "description": "Betalningslänkar på fakturor och automatisk avprickning via Stripe",
+          "longDescription": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura. Betalningar prickas av mot rätt faktura och Stripe-utbetalningar bokförs med avgifter och moms.",
+          "hasOwnData": true,
+          "subscriptionNotice": "Denna integration kräver ett eget Stripe-konto. Stripes transaktionsavgifter tillkommer enligt ditt avtal med Stripe."
     },
   ],
 }

@@ -31,12 +31,17 @@ import {
   Package,
   Tag,
   Tags,
+  ChevronRight,
   ChevronsUpDown,
+  Clock,
   Sparkles,
   Percent,
   Landmark,
   CalendarClock,
+  CalendarRange,
   FileCheck,
+  FileSpreadsheet,
+  ScrollText,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -56,6 +61,7 @@ import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
+import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
 
@@ -78,8 +84,6 @@ interface DashboardNavProps {
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
   // same mechanism as paysSalaries: fetched by the dashboard layout.
   dimensionsEnabled?: boolean
-  uncategorizedTransactionCount?: number
-  pendingOperationsCount?: number
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -93,6 +97,7 @@ type NavLabelKey =
   | 'dashboard'
   | 'home'
   | 'assistant'
+  | 'agent_knowledge'
   | 'kpi'
   | 'invoice_inbox'
   | 'invoices'
@@ -113,7 +118,10 @@ type NavLabelKey =
   | 'vat_declaration'
   | 'skattekonto'
   | 'deadlines'
+  | 'periodiseringar'
   | 'year_end'
+  | 'annual_report'
+  | 'income_declaration'
   | 'help'
   | 'settings'
 
@@ -151,6 +159,9 @@ interface NavItem {
   // capability. Cosmetic only, the page and API gates are the real
   // enforcement; this just keeps the sidebar honest for non-payers.
   requiredCapability?: CapabilityKey
+  // Statutory surfaces that only exist for one company form (INK2 vs
+  // NE-bilaga, årsredovisning): hidden for the other entity type.
+  entityOnly?: EntityType
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -164,7 +175,6 @@ const navItems: NavItem[] = [
   // Arbeta: everything the user produces. The bookkeeping funnel leads
   // (Bokföring · Underlag · Transaktioner · Granskning: kept as separate
   // rows until the unified workspace lands), then the transactional flows.
-  // Löner: "Beta" badge while we validate the end-to-end salary + AGI flow.
   // employerOnly: shown to aktiebolag and to any employer (pays_salaries), so an
   // enskild firma that hires staff gets payroll. Owner self-payroll stays
   // blocked at the engine/DB layer (EF owner takes egna uttag, not lön). #782
@@ -174,29 +184,39 @@ const navItems: NavItem[] = [
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
-  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true, betaBadge: true },
+  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Analys: read the numbers. KPI stays a separate row until the fused
   // Rapporter surface (nav_ia_redesign §F) is built.
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
+  // "Vad din agent vet" now lives inside Settings (Assistenten -> Kunskap),
+  // reachable via /settings/assistant?view=knowledge, not the top nav.
   // Data: master-data registers + data plumbing. Anställda is a register
   // (you edit an employee rarely, you run payroll monthly), so it lives here
   // while the Löner flow stays in Arbeta.
   { href: '/customers', labelKey: 'customers', icon: Users, group: 'data' },
   { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data' },
   { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data' },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true, betaBadge: true },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true },
   { href: '/assets', labelKey: 'assets', icon: Package, group: 'data' },
   { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data' },
   { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', requiresDimensions: true },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'data' },
   // Skatt & bokslut: everything submitted to the state. Rescues the
   // previously nav-orphaned /skattekonto and /deadlines, and promotes the
-  // VAT declaration out of the report catalog.
+  // VAT declaration out of the report catalog. The year-end chain
+  // (periodiseringar → bokslut → årsredovisning → inkomstdeklaration) is
+  // listed in workflow order; the last two are entity-gated because the
+  // surfaces only exist for one company form (ÅR + INK2 for aktiebolag,
+  // NE-bilaga for enskild firma).
   { href: '/reports/vat-declaration', labelKey: 'vat_declaration', icon: Percent, group: 'skatt' },
   { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
   { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
+  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
   { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
@@ -226,11 +246,11 @@ function accountInitial(name: string | null, email: string | null): string {
   return '?'
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
-  const { company, capabilities } = useCompany()
+  const { company, capabilities, trialEndsAt } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
   // generic Sparkles glyph.
@@ -240,11 +260,36 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [liveUncategorizedTransactionCount, setLiveUncategorizedTransactionCount] = useState(
-    uncategorizedTransactionCount,
-  )
-  const refreshInFlightRef = useRef(false)
-  const refreshQueuedRef = useRef(false)
+  // Badge counts load client-side after mount (and revalidate via the
+  // realtime subscriptions below). They used to arrive as server props, which
+  // put two head-count queries on the critical path of every dashboard
+  // navigation for numbers nobody needs before first paint.
+  const {
+    uncategorized: uncategorizedCount,
+    pendingOperations: pendingOpsCount,
+    refresh: refreshBadges,
+  } = useWorklistBadges(company?.id)
+  // Trial countdown for the sidebar touchpoint. Computed in an effect (not
+  // during render) so server and client markup agree at hydration; an hourly
+  // tick keeps a long-lived tab from showing yesterday's count. The sync
+  // setState is that hydration strategy, not derived-state-in-effect (the
+  // lint only started analyzing this component once the badge-refresh loop
+  // that made the compiler bail was removed).
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null)
+  useEffect(() => {
+    if (!trialEndsAt) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTrialDaysLeft(null)
+      return
+    }
+    const update = () => {
+      const msLeft = new Date(trialEndsAt).getTime() - Date.now()
+      setTrialDaysLeft(msLeft > 0 ? Math.ceil(msLeft / 86_400_000) : null)
+    }
+    update()
+    const id = setInterval(update, 3_600_000)
+    return () => clearInterval(id)
+  }, [trialEndsAt])
 
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
@@ -287,14 +332,29 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     if (href === '/salary') {
       return pathname === '/salary' || pathname.startsWith('/salary/runs')
     }
-    // Bokslut (/bookkeeping/year-end) and Moms (/reports/vat-declaration)
-    // have their own rows under Skatt & bokslut: carve them out of their
-    // parent routes so exactly one row lights up.
+    // Routes with their own rows under Skatt & bokslut (Bokslut, Moms,
+    // Periodiseringar, Årsredovisning, Inkomstdeklaration) are carved out
+    // of their parent routes so exactly one row lights up.
     if (href === '/bookkeeping') {
-      return pathname.startsWith('/bookkeeping') && !pathname.startsWith('/bookkeeping/year-end')
+      return (
+        pathname.startsWith('/bookkeeping') &&
+        !pathname.startsWith('/bookkeeping/year-end') &&
+        !pathname.startsWith('/bookkeeping/periodiseringar')
+      )
+    }
+    if (href === '/bookkeeping/year-end') {
+      return (
+        pathname.startsWith('/bookkeeping/year-end') &&
+        !pathname.startsWith('/bookkeeping/year-end/arsredovisning')
+      )
     }
     if (href === '/reports') {
-      return pathname.startsWith('/reports') && !pathname.startsWith('/reports/vat-declaration')
+      return (
+        pathname.startsWith('/reports') &&
+        !pathname.startsWith('/reports/vat-declaration') &&
+        !pathname.startsWith('/reports/ink2-declaration') &&
+        !pathname.startsWith('/reports/ne-declaration')
+      )
     }
     return pathname.startsWith(href)
   }
@@ -311,43 +371,17 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   useEffect(() => {
     if (!company?.id) return
 
-    let cancelled = false
-
-    const refreshUncategorizedCount = async () => {
-      if (!company?.id || cancelled) return
-      if (refreshInFlightRef.current) {
-        refreshQueuedRef.current = true
-        return
-      }
-
-      refreshInFlightRef.current = true
-      try {
-        do {
-          refreshQueuedRef.current = false
-          const { count, error } = await supabase
-            .from('transactions')
-            .select('id', { count: 'exact', head: true })
-            .eq('company_id', company.id)
-            .is('is_business', null)
-            .eq('is_ignored', false)
-
-          if (error) {
-            console.error('Failed to refresh uncategorized transaction count:', error)
-            break
-          }
-
-          setLiveUncategorizedTransactionCount(count ?? 0)
-        } while (refreshQueuedRef.current && !cancelled)
-      } finally {
-        refreshInFlightRef.current = false
-        refreshQueuedRef.current = false
-      }
+    // Realtime keeps the badges live; a trailing debounce collapses event
+    // bursts (bulk booking / bulk approvals emit one event per row) into a
+    // single SWR revalidation instead of a request stampede.
+    let debounce: ReturnType<typeof setTimeout> | null = null
+    const queueRefresh = () => {
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(() => void refreshBadges(), 400)
     }
 
-    void refreshUncategorizedCount()
-
     const channel = supabase
-      .channel(`dashboard-nav:transactions:${company.id}`)
+      .channel(`dashboard-nav:badges:${company.id}`)
       .on(
         'postgres_changes',
         {
@@ -356,17 +390,25 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           table: 'transactions',
           filter: `company_id=eq.${company.id}`,
         },
-        () => {
-          void refreshUncategorizedCount()
+        queueRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pending_operations',
+          filter: `company_id=eq.${company.id}`,
         },
+        queueRefresh,
       )
       .subscribe()
 
     return () => {
-      cancelled = true
+      if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
-  }, [company?.id, supabase])
+  }, [company?.id, supabase, refreshBadges])
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 
@@ -408,6 +450,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // the active company holds the capability. The page + API gates enforce
     // the paywall; this keeps the sidebar from advertising a dead workspace.
     if (item.requiredCapability && !capabilities.includes(item.requiredCapability)) return false
+    // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
+    // enskild firma; the page for the other form doesn't exist.
+    if (item.entityOnly && item.entityOnly !== entityType) return false
     // Hide the Assistent (/chat) tab until the agent is built: mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).
@@ -551,10 +596,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                             const active = isActive(item.href)
                             const enabled = isItemEnabled(item.href) && !item.comingSoon
                             const badge =
-                              item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                                ? liveUncategorizedTransactionCount
-                                : item.href === '/pending' && pendingOperationsCount > 0
-                                  ? pendingOperationsCount
+                              item.href === '/transactions' && uncategorizedCount > 0
+                                ? uncategorizedCount
+                                : item.href === '/pending' && pendingOpsCount > 0
+                                  ? pendingOpsCount
                                   : null
                             const decorBadge = renderBadge(item, 'sidebar')
                             const content = (
@@ -665,6 +710,26 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             </nav>
           </div>
 
+          {/* Trial countdown touchpoint: the paywall is a lifecycle flow, not
+              a settings page, so trial state stays quietly visible in the
+              chrome instead of only inside Inställningar → Abonnemang.
+              Hidden for sandbox/demo (no checkout) and once any non-trial
+              grant is active (trialEndsAt is null then). */}
+          {!isSandbox && trialDaysLeft !== null && (
+            <div className="flex-shrink-0 px-3 pb-2">
+              <Link
+                href="/settings/billing"
+                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+              >
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate">
+                  {tNav('trial_days_left', { days: trialDaysLeft })}
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </Link>
+            </div>
+          )}
+
           {/* Account popover (bottom-left). Triggered by the signed-in
               user's name + initial. Holds Inställningar, Hjälp, Support,
               Logga ut. CompanySwitcher lives at the top of the sidebar,
@@ -744,8 +809,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)
-            const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-              ? liveUncategorizedTransactionCount
+            const badge = item.href === '/transactions' && uncategorizedCount > 0
+              ? uncategorizedCount
               : null
 
             const content = (
@@ -901,10 +966,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       const Icon = item.icon
                       const active = isActive(item.href)
                       const enabled = isItemEnabled(item.href) && !item.comingSoon
-                      const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                        ? liveUncategorizedTransactionCount
-                        : item.href === '/pending' && pendingOperationsCount > 0
-                          ? pendingOperationsCount
+                      const badge = item.href === '/transactions' && uncategorizedCount > 0
+                        ? uncategorizedCount
+                        : item.href === '/pending' && pendingOpsCount > 0
+                          ? pendingOpsCount
                           : null
                       const decorBadge = renderBadge(item, 'mobile')
                       const content = (
