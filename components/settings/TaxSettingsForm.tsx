@@ -21,9 +21,6 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
   const [vatTaxableBaseOver40m, setVatTaxableBaseOver40m] = useState(
     settings.vat_taxable_base_over_40m ?? false,
   )
-  const [employerTurnoverOver40m, setEmployerTurnoverOver40m] = useState(
-    settings.employer_turnover_over_40m ?? false,
-  )
   const [hasEuTrade, setHasEuTrade] = useState(settings.vat_has_eu_trade ?? false)
   const [psEnabled, setPsEnabled] = useState(settings.periodisk_sammanstallning_enabled ?? false)
 
@@ -353,29 +350,6 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             </p>
           </div>
         </div>
-
-        {paysSalaries && (
-          <div className="flex items-start space-x-3 pl-7">
-            <Checkbox
-              id="employer_turnover_over_40m"
-              checked={employerTurnoverOver40m}
-              onCheckedChange={(value) => setEmployerTurnoverOver40m(value === true)}
-            />
-            <input
-              type="hidden"
-              name="employer_turnover_over_40m"
-              value={employerTurnoverOver40m ? 'true' : 'false'}
-            />
-            <div className="space-y-1">
-              <Label htmlFor="employer_turnover_over_40m" className="cursor-pointer">
-                {t('employer_turnover_over_40m_label')}
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {t('employer_turnover_over_40m_help')}
-              </p>
-            </div>
-          </div>
-        )}
       </section>
 
       {/* Preliminary tax */}

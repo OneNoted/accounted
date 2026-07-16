@@ -178,6 +178,7 @@ function getSwedishTaxTypeLabel(type: string): string {
     moms_yearly: 'Momsdeklaration (år)',
     f_skatt: 'F-skatt',
     arbetsgivardeklaration: 'Arbetsgivardeklaration',
+    skatteinbetalning: 'Skatteinbetalning (storföretag)',
     inkomstdeklaration_ef: 'Inkomstdeklaration EF',
     inkomstdeklaration_ab: 'Inkomstdeklaration AB',
     arsredovisning: 'Årsredovisning',

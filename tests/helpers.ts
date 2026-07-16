@@ -524,7 +524,6 @@ export function makeCompanySettings(
     moms_period: 'quarterly',
     periodisk_sammanstallning_period: 'quarterly',
     vat_taxable_base_over_40m: false,
-    employer_turnover_over_40m: false,
     vat_has_eu_trade: false,
     vat_filing_method: 'electronic',
     periodisk_sammanstallning_enabled: false,

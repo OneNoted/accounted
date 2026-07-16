@@ -15,7 +15,6 @@ const SETTINGS: CompanySettingsForDeadlines = {
   pays_salaries: true,
   fiscal_year_start_month: 1,
   vat_taxable_base_over_40m: false,
-  employer_turnover_over_40m: false,
   vat_has_eu_trade: false,
   vat_filing_method: 'electronic',
   periodisk_sammanstallning_enabled: false,

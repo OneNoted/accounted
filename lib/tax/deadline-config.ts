@@ -17,7 +17,6 @@ export interface CompanySettingsForDeadlines {
   pays_salaries: boolean
   fiscal_year_start_month: number // 1-12
   vat_taxable_base_over_40m: boolean
-  employer_turnover_over_40m: boolean
   vat_has_eu_trade: boolean
   vat_filing_method: TaxFilingMethod
   periodisk_sammanstallning_enabled: boolean
@@ -67,7 +66,9 @@ function getAnnualVatDeadline(
   if (settings.vat_has_eu_trade) {
     const month = (fiscalYearEndMonth + 1) % 12
     const year = fiscalYearEndYear + (fiscalYearEndMonth >= 11 ? 1 : 0)
-    return { day: month === 11 ? 27 : 26, month, year }
+    // A 26 December due date lands on annandag jul; the banking-day
+    // adjustment moves it to Skatteverket's published 27th (or later).
+    return { day: 26, month, year }
   }
 
   const paper = settings.vat_filing_method === 'paper'
@@ -127,8 +128,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
         const monthOffset = settings.vat_taxable_base_over_40m ? 1 : 2
         const deadlineMonth = (month + monthOffset) % 12
         const deadlineYear = year + Math.floor((month + monthOffset) / 12)
+        // Above SEK 40M the 26th applies year-round; 26 December is annandag
+        // jul, and the banking-day adjustment yields Skatteverket's 27th.
         const day = settings.vat_taxable_base_over_40m
-          ? (deadlineMonth === 11 ? 27 : 26)
+          ? 26
           : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
         instances.push({
           day,
@@ -196,7 +199,10 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
 
   // Arbetsgivardeklaration (monthly, any employer with employees: AB or EF)
   // Per Skatteförfarandelagen: every employer paying salary must file AGI monthly.
-  // Deadline: 12th of following month (17th in Jan/Aug for turnover ≤40 MSEK per agi-filing.md)
+  // The filing day is keyed to the VAT taxable base, not a separate employer
+  // measure (SFL 26 kap.): above SEK 40M the whole skattedeklaration (AGI and
+  // VAT) is due the 26th of the following month; otherwise the 12th (17th in
+  // January and August). Employers without VAT reporting always use the 12th.
   {
     type: 'arbetsgivardeklaration',
     titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
@@ -205,17 +211,45 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
+      const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
       const instances: DeadlineInstance[] = []
-      // Due on the 12th of the following month
-      // Exception: January (for Dec) and August (for Jul) = 17th for ≤40 MSEK turnover
       for (let month = 0; month < 12; month++) {
         const deadlineMonth = (month + 1) % 12
         const deadlineYear = month === 11 ? year + 1 : year
-        const day = settings.employer_turnover_over_40m
+        const day = storforetag
           ? 26
           : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
         instances.push({
           day,
+          month: deadlineMonth,
+          year: deadlineYear,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        })
+      }
+      return instances
+    },
+  },
+
+  // Skatteinbetalning (storföretag): companies above the SEK 40M VAT taxable
+  // base file the skattedeklaration on the 26th but must still have deducted
+  // tax and employer contributions paid into skattekontot by the 12th (17th
+  // in January). Without this row the 26th filing date hides a payment
+  // deadline two weeks earlier.
+  {
+    type: 'skatteinbetalning',
+    titleTemplate: 'Betala skatt och arbetsgivaravgifter {periodLabel}',
+    description: 'Inbetalning av avdragen skatt och arbetsgivaravgifter för företag med beskattningsunderlag över 40 miljoner kronor',
+    condition: (s) => s.pays_salaries && s.vat_registered && s.vat_taxable_base_over_40m,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year) => {
+      const instances: DeadlineInstance[] = []
+      for (let month = 0; month < 12; month++) {
+        const deadlineMonth = (month + 1) % 12
+        const deadlineYear = month === 11 ? year + 1 : year
+        instances.push({
+          day: deadlineMonth === 0 ? 17 : 12,
           month: deadlineMonth,
           year: deadlineYear,
           period: `${year}-${String(month + 1).padStart(2, '0')}`,

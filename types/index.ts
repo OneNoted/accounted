@@ -228,7 +228,6 @@ export interface CompanySettings {
   moms_period: MomsPeriod | null
   periodisk_sammanstallning_period: 'monthly' | 'quarterly'
   vat_taxable_base_over_40m: boolean
-  employer_turnover_over_40m: boolean
   vat_has_eu_trade: boolean
   vat_filing_method: TaxFilingMethod
   periodisk_sammanstallning_enabled: boolean
@@ -2155,6 +2154,7 @@ export type TaxDeadlineType =
   | 'moms_yearly'
   | 'f_skatt'
   | 'arbetsgivardeklaration'
+  | 'skatteinbetalning'
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
   | 'arsredovisning'
@@ -2329,6 +2329,7 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
   moms_yearly: 'Momsdeklaration (år)',
   f_skatt: 'F-skatt',
   arbetsgivardeklaration: 'Arbetsgivardeklaration',
+  skatteinbetalning: 'Skatteinbetalning (storföretag)',
   inkomstdeklaration_ef: 'Inkomstdeklaration EF',
   inkomstdeklaration_ab: 'Inkomstdeklaration AB',
   arsredovisning: 'Årsredovisning',

@@ -56,8 +56,6 @@ export function TaxSettingsContent() {
       moms_period: vatRegistered ? ((formData.get('moms_period') as string) || null) : null,
       vat_taxable_base_over_40m:
         vatRegistered && formData.get('vat_taxable_base_over_40m') === 'true',
-      employer_turnover_over_40m:
-        paysSalaries && formData.get('employer_turnover_over_40m') === 'true',
       vat_has_eu_trade: vatRegistered && formData.get('vat_has_eu_trade') === 'true',
       vat_filing_method: (formData.get('vat_filing_method') as string) || 'electronic',
       periodisk_sammanstallning_enabled:

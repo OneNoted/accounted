@@ -15,7 +15,6 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     pays_salaries: false,
     fiscal_year_start_month: 1,
     vat_taxable_base_over_40m: false,
-    employer_turnover_over_40m: false,
     vat_has_eu_trade: false,
     vat_filing_method: 'electronic',
     periodisk_sammanstallning_enabled: false,
@@ -40,16 +39,9 @@ describe('VAT filing deadlines', () => {
     }))
 
     expect(dates[0]).toMatchObject({ day: 26, month: 1, year: 2026, period: '2026-01' })
-    expect(dates[10]).toMatchObject({ day: 27, month: 11, year: 2026, period: '2026-11' })
-  })
-
-  it('does not use employer turnover to choose the VAT deadline', () => {
-    const dates = getConfig('moms_monthly').generateDates(2026, makeSettings({
-      moms_period: 'monthly',
-      employer_turnover_over_40m: true,
-    }))
-
-    expect(dates[0]).toMatchObject({ day: 12, month: 2, year: 2026, period: '2026-01' })
+    // Raw date stays the 26th even in December; the banking-day adjustment
+    // in the generator moves annandag jul to Skatteverket's published 27th.
+    expect(dates[10]).toMatchObject({ day: 26, month: 11, year: 2026, period: '2026-11' })
   })
 
   it('uses May, August, November and February for quarterly VAT', () => {
@@ -90,21 +82,53 @@ describe('monthly tax and employer deadlines', () => {
     expect(dates[7].day).toBe(17)
   })
 
-  it('uses the 26th for AGI above SEK 40 million', () => {
-    const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
-      pays_salaries: true,
-      employer_turnover_over_40m: true,
-    }))
-    expect(dates.every((date) => date.day === 26)).toBe(true)
-  })
-
-  it('does not use the VAT taxable base to choose the AGI deadline', () => {
+  it('uses the 26th for AGI when the VAT taxable base is above SEK 40 million', () => {
     const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
       pays_salaries: true,
       vat_taxable_base_over_40m: true,
     }))
+    expect(dates.every((date) => date.day === 26)).toBe(true)
+  })
 
-    expect(dates[0].day).toBe(12)
+  it('keeps the 12th for AGI when the employer does not report VAT', () => {
+    const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
+      pays_salaries: true,
+      vat_registered: false,
+      vat_taxable_base_over_40m: true,
+    }))
+
+    expect(dates[1].day).toBe(12)
+    expect(dates[11].day).toBe(17) // December salaries are declared 17 January
+  })
+})
+
+describe('storföretag tax payment deadline', () => {
+  const config = getConfig('skatteinbetalning')
+
+  it('applies only to employers reporting VAT above SEK 40 million', () => {
+    expect(config.condition(makeSettings({ pays_salaries: true }))).toBe(false)
+    expect(config.condition(makeSettings({ vat_taxable_base_over_40m: true }))).toBe(false)
+    expect(config.condition(makeSettings({
+      pays_salaries: true,
+      vat_taxable_base_over_40m: true,
+      vat_registered: false,
+    }))).toBe(false)
+    expect(config.condition(makeSettings({
+      pays_salaries: true,
+      vat_taxable_base_over_40m: true,
+    }))).toBe(true)
+  })
+
+  it('is due the 12th of the following month, the 17th in January', () => {
+    const dates = config.generateDates(2026, makeSettings({
+      pays_salaries: true,
+      vat_taxable_base_over_40m: true,
+    }))
+
+    expect(dates).toHaveLength(12)
+    expect(dates[0]).toMatchObject({ day: 12, month: 1, year: 2026, period: '2026-01' })
+    expect(dates[6]).toMatchObject({ day: 12, month: 7, year: 2026, period: '2026-07' })
+    expect(dates[11]).toMatchObject({ day: 17, month: 0, year: 2027, period: '2026-12' })
   })
 })
 

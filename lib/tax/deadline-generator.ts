@@ -26,7 +26,6 @@ export const TAX_RELEVANT_FIELDS = [
   'pays_salaries',
   'fiscal_year_start_month',
   'vat_taxable_base_over_40m',
-  'employer_turnover_over_40m',
   'vat_has_eu_trade',
   'vat_filing_method',
   'periodisk_sammanstallning_enabled',
@@ -35,7 +34,7 @@ export const TAX_RELEVANT_FIELDS = [
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, vat_taxable_base_over_40m, employer_turnover_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
+  'company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
 
 /**
  * Check if any tax-relevant fields changed
@@ -71,7 +70,6 @@ export function toDeadlineSettings(
     pays_salaries: settings.pays_salaries ?? false,
     fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
     vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m ?? false,
-    employer_turnover_over_40m: settings.employer_turnover_over_40m ?? false,
     vat_has_eu_trade: settings.vat_has_eu_trade ?? false,
     vat_filing_method: settings.vat_filing_method ?? 'electronic',
     periodisk_sammanstallning_enabled: settings.periodisk_sammanstallning_enabled ?? false,
@@ -219,6 +217,11 @@ export async function generateTaxDeadlinesForUser(
   // then leaves the previous deadlines intact: the old delete-first order
   // meant any insert failure (like the 23502 user_id regression) wiped the
   // company's tax deadlines without replacing them.
+  //
+  // Not concurrency-safe: two overlapping regenerations (settings save racing
+  // the cron backfill) can each delete the other's freshly inserted rows and
+  // leave the company with fewer rows than expected. Accepted: the daily
+  // backfill cron detects the missing keys and repairs on its next run.
   let newIds: string[] = []
   if (uniqueDeadlines.length > 0) {
     const { data: insertedData, error: insertError } = await supabase
