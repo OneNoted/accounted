@@ -3204,6 +3204,7 @@
     "account_missing_description": "Välj ett bokföringskonto för rad {row}.",
     "illegal_vat_rate_title": "Ogiltig momssats",
     "illegal_vat_rate_description": "Rad {row} har momssats {rate} %. Tillåtna momssatser är 25, 12, 6 eller 0 %.",
+    "rc_account_warning": "Omvänd skattskyldighet: {count, plural, =1 {rad {rows} använder ett konto som börjar på 1 eller 6} other {raderna {rows} använder konton som börjar på 1 eller 6}}. Inköp med omvänd skattskyldighet bokförs normalt på kostnadskonton (4xxx/5xxx). Kontrollera kontovalet.",
     "expense_registered_title": "Utlägg registrerat",
     "invoice_registered_title": "Faktura registrerad",
     "arrival_number_label": "Ankomstnummer: {number}",
