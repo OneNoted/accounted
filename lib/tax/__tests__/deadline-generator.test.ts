@@ -4,6 +4,7 @@ import {
   findSettingsMissingUpcomingDeadlines,
   generateTaxDeadlinesForUser,
   getExpectedUpcomingDeadlineKeys,
+  shouldRegenerateTaxDeadlines,
 } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
@@ -157,12 +158,13 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
 
   function rowsFor(companyId: string, keys: Set<string>) {
     return Array.from(keys, (key, index) => {
-      const [taxDeadlineType, taxPeriod] = key.split(':')
+      const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
       return {
         id: `${companyId}-${index}`,
         company_id: companyId,
         tax_deadline_type: taxDeadlineType,
         tax_period: taxPeriod,
+        due_date: dueDate,
       }
     })
   }
@@ -199,5 +201,37 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
       years,
       fromDate,
     )).toEqual(settings)
+  })
+
+  it('repairs a company whose rows carry dates from a superseded schedule', () => {
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const staleRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+    ).map((row) => ({ ...row, due_date: '2030-12-31' }))
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      staleRows,
+      years,
+      fromDate,
+    )).toEqual(settings)
+  })
+})
+
+describe('shouldRegenerateTaxDeadlines', () => {
+  it('regenerates when a tax-relevant field changed', () => {
+    expect(shouldRegenerateTaxDeadlines(true, 42)).toBe(true)
+  })
+
+  it('regenerates when the company has no system deadlines yet, even with no field change', () => {
+    // The reported bug: settings were filled at onboarding, so a later save with
+    // no tax-field change never generated deadlines and the page stayed empty.
+    expect(shouldRegenerateTaxDeadlines(false, 0)).toBe(true)
+  })
+
+  it('does not regenerate when nothing changed and deadlines already exist', () => {
+    // Avoid clobbering existing status/progress on unrelated settings saves.
+    expect(shouldRegenerateTaxDeadlines(false, 12)).toBe(false)
   })
 })

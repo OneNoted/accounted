@@ -4,6 +4,7 @@ import {
   DEADLINE_SETTINGS_SELECT,
   hasTaxRelevantFields,
   regenerateTaxDeadlinesForUser,
+  shouldRegenerateTaxDeadlines,
   toDeadlineSettings,
 } from '@/lib/tax/deadline-generator'
 import { validateBody } from '@/lib/api/validate'
@@ -165,10 +166,29 @@ export const PUT = withRouteContext(
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    // Every tax-form save regenerates the upcoming set. This also repairs
-    // companies whose settings were already correct but whose deadline rows
-    // were lost by an earlier generation failure.
-    if (hasTaxRelevantFields(body)) {
+    // Regenerate when the save touches tax-relevant fields: the statutory
+    // dates are derived from them, and re-running also repairs rows created
+    // by older schedule logic or lost to an earlier generation failure. The
+    // generator preserves completed rows, so filing progress survives.
+    // Additionally self-heal when the company has no system deadlines at all:
+    // tax settings are filled at onboarding, so an unrelated later save may be
+    // the first chance to backfill an empty set.
+    const taxFieldsInBody = hasTaxRelevantFields(body)
+    let existingSystemDeadlineCount = 0
+    if (!taxFieldsInBody) {
+      const { count, error: countError } = await supabase
+        .from('deadlines')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('source', 'system')
+      // Fail safe: on a count error, assume deadlines already exist so we do
+      // NOT delete+regenerate on a transient failure (regeneration would reset
+      // the status of pending rows). A non-zero placeholder keeps the
+      // self-heal off.
+      existingSystemDeadlineCount = countError ? 1 : (count ?? 0)
+    }
+
+    if (shouldRegenerateTaxDeadlines(taxFieldsInBody, existingSystemDeadlineCount)) {
       try {
         await regenerateTaxDeadlinesForUser(supabase, companyId, toDeadlineSettings(data))
         console.log('Tax deadlines regenerated after settings change')

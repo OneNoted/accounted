@@ -17,6 +17,8 @@ BEGIN
   END IF;
 END
 $reconcile$;
+
 ALTER TABLE public.invoices
   VALIDATE CONSTRAINT invoices_credit_note_not_paid;
+
 NOTIFY pgrst, 'reload schema';

@@ -80,6 +80,23 @@ export function toDeadlineSettings(
 }
 
 /**
+ * Decide whether a settings save should (re)generate tax deadlines.
+ *
+ * Regenerate when a tax-relevant field changed OR when the company has no
+ * system-generated deadlines yet. The second case is the common one: tax
+ * settings are filled at onboarding, so a later save with no tax-field change
+ * used to skip generation entirely and the deadlines page stayed empty even
+ * though the settings were "filled in". Backfilling an empty set is safe: there
+ * is no existing status/progress to clobber.
+ */
+export function shouldRegenerateTaxDeadlines(
+  taxFieldsChanged: boolean,
+  existingSystemDeadlineCount: number
+): boolean {
+  return taxFieldsChanged || existingSystemDeadlineCount === 0
+}
+
+/**
  * Format date to YYYY-MM-DD
  */
 function formatDateISO(date: Date): string {
@@ -321,10 +338,18 @@ interface UpcomingDeadlineCompanyRow {
   company_id: string
   tax_deadline_type: string | null
   tax_period: string | null
+  due_date: string | null
 }
 
-function deadlineIdentity(type: string | null, period: string | null): string {
-  return `${type}:${period}`
+// The due date is part of the identity: rows created by older schedule logic
+// keep their type and period but carry a superseded statutory date, and the
+// repair loop must treat those as missing so they get regenerated.
+function deadlineIdentity(
+  type: string | null,
+  period: string | null,
+  dueDate: string | null,
+): string {
+  return `${type}:${period}:${dueDate}`
 }
 
 export function getExpectedUpcomingDeadlineKeys(
@@ -348,7 +373,7 @@ export function getExpectedUpcomingDeadlineKeys(
           new Date(instance.year, instance.month, instance.day),
         )
         if (adjustedDate >= today) {
-          keys.add(deadlineIdentity(config.type, instance.period))
+          keys.add(deadlineIdentity(config.type, instance.period, formatDateISO(adjustedDate)))
         }
       }
     }
@@ -366,7 +391,7 @@ export function findSettingsMissingUpcomingDeadlines(
   const actualKeysByCompany = new Map<string, Set<string>>()
   for (const row of upcomingDeadlineRows) {
     const keys = actualKeysByCompany.get(row.company_id) ?? new Set<string>()
-    keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period))
+    keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date))
     actualKeysByCompany.set(row.company_id, keys)
   }
 
@@ -387,6 +412,8 @@ export function findSettingsMissingUpcomingDeadlines(
   })
 }
 
+// Paginate: PostgREST silently caps a plain .select() at 1000 rows, which
+// would leave companies beyond the cap without deadlines.
 async function fetchAllDeadlineSettings(supabase: SupabaseClient): Promise<DeadlineSettingsRow[]> {
   return fetchAllRows<DeadlineSettingsRow>(({ from, to }) =>
     supabase
@@ -428,7 +455,8 @@ export async function generateNewYearDeadlines(
 }
 
 /**
- * Repair companies that have settings but no upcoming system tax deadlines.
+ * Repair companies whose upcoming system tax deadlines are missing or carry
+ * dates from superseded schedule logic.
  */
 export async function backfillMissingTaxDeadlines(
   supabase: SupabaseClient,
@@ -439,7 +467,7 @@ export async function backfillMissingTaxDeadlines(
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
       supabase
         .from('deadlines')
-        .select('id, company_id, tax_deadline_type, tax_period')
+        .select('id, company_id, tax_deadline_type, tax_period, due_date')
         .eq('source', 'system')
         .eq('deadline_type', 'tax')
         .gte('due_date', today)
