@@ -39,7 +39,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/transactions/:id/match-supplier-invoice',
   summary: 'Match a negative bank transaction to a supplier invoice.',
   description:
-    'Confirms a supplier invoice payment match. Creates the payment journal entry (accrual: 2440 debit / 1930 credit; cash-method: collapsed registration+payment), updates supplier_invoices, inserts a supplier_invoice_payments row, and links the transaction. Handles FX differences for cross-currency payments (7960 gain / 3960 loss).',
+    'Confirms a supplier invoice payment match. Creates the payment journal entry (accrual: 2440 debit, credit on the transaction\'s own settlement account, 1930 when unlinked; cash-method: collapsed registration+payment), updates supplier_invoices, inserts a supplier_invoice_payments row, and links the transaction. Handles FX differences for cross-currency payments (7960 gain / 3960 loss).',
   useWhen:
     'You have a bank payment and a known open supplier invoice. The transaction must be negative (expense) and unlinked.',
   doNotUseFor:
@@ -224,9 +224,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Credit the cash account THIS transaction actually belongs to, never a
     // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
     // only source of truth for which bank account a matched transaction
-    // settled from (mirrors the dashboard route's #985 fix). Only applied to
-    // the pure-SEK accrual path below; the FX path keeps its pre-existing
-    // internal 1930 default, matching that fix's scope.
+    // settled from (mirrors the dashboard route's #985 fix). Threaded through
+    // every booking branch below (pure-SEK accrual, FX, and cash-method);
+    // customLines specify their own accounts directly (#1000).
     const paymentAccount = await resolveSettlementAccount(
       ctx.supabase,
       ctx.companyId!,
@@ -240,16 +240,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
 
-    // Pure SEK: both legs of the match are SEK, so the payment account
-    // resolved above can safely replace the 1930 default. Kept out of scope
-    // for foreign-currency matches, same as the dashboard route.
-    const isPureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
-
     // Guard the resolved account against the chart (mirrors the categorize
     // routes): an inactive cash_accounts.ledger_account would otherwise reach
     // the engine as a generic MATCH_SI_RECORD_PAYMENT_FAILED instead of
-    // ACCOUNTS_NOT_IN_CHART. Only reachable where the account is actually used.
-    if (isPureSek && !useCashEntry && !customLines) {
+    // ACCOUNTS_NOT_IN_CHART. Gated on !customLines: custom lines specify their
+    // own accounts directly; every other branch consumes paymentAccount.
+    if (!customLines) {
       const missingAccounts = await findUnresolvableAccounts(
         ctx.supabase,
         ctx.companyId!,
@@ -330,9 +326,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           transaction.date,
           invoice.supplier?.supplier_type || 'swedish_business',
           undefined, // supplierName (unchanged default)
-          undefined, // paymentAccount (unchanged default 1930)
-          // Pin a foreign-currency settlement to the payment-date rate so 1930
-          // equals the bank movement. No-op for SEK / same-rate settlements.
+          // Settle from the transaction's own resolved cash account; the
+          // internal 1930 default only stands for unlinked transactions, via
+          // resolveSettlementAccount's own fallback (#1000).
+          paymentAccount,
+          // Pin a foreign-currency settlement to the payment-date rate so the
+          // settlement account equals the bank movement. No-op for SEK /
+          // same-rate settlements.
           exchangeRateDifference !== 0 && fullSettlement ? actualBankSek : undefined,
         )
         if (je) journalEntryId = je.id
@@ -346,10 +346,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           transaction.date,
           exchangeRateDifference !== 0 ? exchangeRateDifference : undefined,
           undefined, // supplierName (unchanged default)
-          // Resolved settlement account, pure-SEK matches only: the FX
-          // branch keeps defaulting internally to 1930, out of scope here
-          // just as it was for the dashboard route's #985 fix.
-          isPureSek ? paymentAccount : undefined,
+          // Resolved settlement account for pure-SEK and FX matches alike:
+          // the internal 1930 default only stands for unlinked transactions,
+          // via resolveSettlementAccount's own fallback (#1000).
+          paymentAccount,
         )
         if (je) journalEntryId = je.id
       }

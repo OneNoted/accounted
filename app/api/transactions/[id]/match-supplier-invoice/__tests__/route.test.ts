@@ -85,7 +85,12 @@ function makeReq() {
 }
 
 function enqueueHappyPath(opts: {
-  transaction: { amount: number; currency: string; amount_sek?: number | null }
+  transaction: {
+    amount: number
+    currency: string
+    amount_sek?: number | null
+    cash_account_id?: string | null
+  }
   invoice: {
     currency: string
     exchange_rate?: number | null
@@ -94,6 +99,9 @@ function enqueueHappyPath(opts: {
     status?: string
   }
   accountingMethod?: string
+  // ledger_account returned by the cash_accounts lookup; only enqueued when
+  // the transaction carries a cash_account_id.
+  cashAccountLedger?: string
 }) {
   // 1. transactions fetch
   enqueue({
@@ -104,6 +112,7 @@ function enqueueHappyPath(opts: {
       currency: opts.transaction.currency,
       amount_sek: opts.transaction.amount_sek ?? null,
       supplier_invoice_id: null,
+      cash_account_id: opts.transaction.cash_account_id ?? null,
       date: '2026-05-12',
     },
     error: null,
@@ -124,11 +133,15 @@ function enqueueHappyPath(opts: {
   })
   // 3. company_settings fetch
   enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
-  // 4. supplier_invoices update (CAS)
+  // 4. cash_accounts lookup (only when the transaction is linked to one)
+  if (opts.transaction.cash_account_id) {
+    enqueue({ data: { ledger_account: opts.cashAccountLedger ?? '1930' }, error: null })
+  }
+  // 5. supplier_invoices update (CAS)
   enqueue({ data: [{ id: SI_UUID }], error: null })
-  // 5. supplier_invoice_payments insert
+  // 6. supplier_invoice_payments insert
   enqueue({ data: null, error: null })
-  // 6. transactions update (link)
+  // 7. transactions update (link)
   enqueue({ data: null, error: null })
 }
 
@@ -359,6 +372,65 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
     expect(status).toBe(500)
     expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account on FX and cash-method branches', () => {
+  // Regression locks for #1000: the FX branch (createSupplierInvoicePaymentEntry)
+  // and cash-method branch (createSupplierInvoiceCashEntry) must receive the
+  // resolved settlement account, not fall back to their internal 1930 default
+  // whenever the transaction is linked to a different cash account.
+  it('FX branch: passes the linked non-1930 account to createSupplierInvoicePaymentEntry', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2400, currency: 'SEK', cash_account_id: 'ca-1940' },
+      invoice: { currency: 'EUR', exchange_rate: 10.6254, remaining_amount: 225 },
+      cashAccountLedger: '1940',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    // Confirm the FX branch actually ran: booked 2390.72, paid 2400 -> loss 9.28.
+    expect(args[6]).toBeCloseTo(-9.28, 2)
+    expect(args[8]).toBe('1940')
+  })
+
+  it('FX branch: falls back to 1930 when the transaction has no linked cash account', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -2400, currency: 'SEK' },
+      invoice: { currency: 'EUR', exchange_rate: 10.6254, remaining_amount: 225 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreatePaymentEntry.mock.calls[0][8]).toBe('1930')
+  })
+
+  it('cash-method branch: passes the linked non-1930 account to createSupplierInvoiceCashEntry', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -500, currency: 'SEK', cash_account_id: 'ca-1940' },
+      invoice: { currency: 'SEK', remaining_amount: 500 },
+      accountingMethod: 'cash',
+      cashAccountLedger: '1940',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    const args = mockCreateCashEntry.mock.calls[0]
+    expect(args[8]).toBe('1940')
+    // Pure SEK settlement: no settledBankSek override.
+    expect(args[9]).toBeUndefined()
+  })
+
+  it('cash-method branch: falls back to 1930 when the transaction has no linked cash account', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -500, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 500 },
+      accountingMethod: 'cash',
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    expect(mockCreateCashEntry.mock.calls[0][8]).toBe('1930')
   })
 })
 
