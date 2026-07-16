@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
+import { fetchPaymentsAsOf, outstandingAsOf, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
 
 export interface SupplierLedgerEntry {
   supplier_id: string
@@ -28,7 +29,12 @@ export interface SupplierLedgerReport {
 }
 
 /**
- * Generate supplier ledger (leverantörsreskontra) with aging analysis
+ * Generate supplier ledger (leverantörsreskontra) with aging analysis.
+ *
+ * With a backdated `asOfDate` the ledger is reconstructed as it stood on that
+ * date: invoices dated on or before it (including ones fully paid since) with
+ * outstanding amounts recomputed from the payment history (#1021). Without an
+ * `asOfDate`, or with today/future, the live open-invoice state is used as-is.
  */
 export async function generateSupplierLedger(
   supabase: SupabaseClient,
@@ -36,21 +42,43 @@ export async function generateSupplierLedger(
   asOfDate?: string
 ): Promise<SupplierLedgerReport> {
   const refDate = asOfDate ? new Date(asOfDate) : new Date()
+  // Backdated reconstruction only for genuinely historical dates: for
+  // today/future the stored open-invoice state IS the as-of state.
+  const isHistorical = !!asOfDate && asOfDate < todayIsoDate()
 
-  // Fetch all unpaid/partially_paid supplier invoices
+  // Fetch the ledger population. Live view: open invoices only. Historical
+  // view: also invoices paid since the as-of date, restricted to invoice
+  // dates on or before it. Disputed/credited/reversed invoices stay excluded,
+  // matching the live view's semantics.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let invoices: any[]
+  let payments: PaymentsAsOf | null = null
   try {
-    invoices = await fetchAllRows(({ from, to }) =>
-      supabase
+    invoices = await fetchAllRows(({ from, to }) => {
+      let query = supabase
         .from('supplier_invoices')
         .select('*, supplier:suppliers(id, name)')
         .eq('company_id', companyId)
-        .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+      query = isHistorical
+        ? query
+            .in('status', ['registered', 'approved', 'partially_paid', 'overdue', 'paid'])
+            .lte('invoice_date', asOfDate!)
+        : query.in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+      return query
         // Stable total order for correct paging (see fetch-all.ts).
         .order('id', { ascending: true })
         .range(from, to)
-    )
+    })
+
+    if (isHistorical) {
+      payments = await fetchPaymentsAsOf(
+        supabase,
+        'supplier_invoice_payments',
+        'supplier_invoice_id',
+        companyId,
+        asOfDate!
+      )
+    }
   } catch {
     return {
       entries: [],
@@ -65,6 +93,7 @@ export async function generateSupplierLedger(
   // Group by supplier and calculate aging
   const bySupplier = new Map<string, SupplierLedgerEntry>()
   let unconvertedFxCount = 0
+  let settledSkipped = 0
 
   for (const inv of invoices) {
     const supplierId = inv.supplier_id
@@ -77,6 +106,21 @@ export async function generateSupplierLedger(
     const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
     if (isFx && !hasRate) {
       unconvertedFxCount += 1
+      continue
+    }
+
+    // Outstanding in invoice currency: live view trusts the stored
+    // remaining_amount; a historical view recomputes it from the payment
+    // history as of the reconstruction date.
+    const liveOutstanding = Number(inv.remaining_amount) || 0
+    const outstandingRaw = payments
+      ? outstandingAsOf(inv, Number(inv.total) || 0, liveOutstanding, payments, asOfDate!)
+      : liveOutstanding
+
+    // Historical view: 'paid' invoices are only fetched to catch ones still
+    // open at the as-of date. One already settled by then adds nothing.
+    if (payments && inv.status === 'paid' && outstandingRaw === 0) {
+      settledSkipped += 1
       continue
     }
 
@@ -96,14 +140,9 @@ export async function generateSupplierLedger(
     const entry = bySupplier.get(supplierId)!
     const dueDate = new Date(inv.due_date)
     const daysOverdue = Math.floor((refDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-    // remaining_amount is stored in invoice currency. The 2440 GL line was posted
-    // in SEK at the invoice-date rate, so we convert here for the reconciliation.
-    const amount = resolveSekAmount(
-      Number(inv.remaining_amount) || 0,
-      null,
-      inv.currency,
-      inv.exchange_rate
-    )
+    // Outstanding is in invoice currency. The 2440 GL line was posted in SEK
+    // at the invoice-date rate, so we convert here for the reconciliation.
+    const amount = resolveSekAmount(outstandingRaw, null, inv.currency, inv.exchange_rate)
 
     if (daysOverdue <= 0) {
       entry.current += amount
@@ -132,7 +171,7 @@ export async function generateSupplierLedger(
     total_outstanding: Math.round(total_outstanding * 100) / 100,
     total_current: Math.round(total_current * 100) / 100,
     total_overdue: Math.round(total_overdue * 100) / 100,
-    unpaid_count: invoices.length,
+    unpaid_count: invoices.length - settledSkipped,
     unconverted_fx_count: unconvertedFxCount,
   }
 }

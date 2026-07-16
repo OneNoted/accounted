@@ -9,7 +9,7 @@ let results: Array<{ data?: unknown; error?: unknown }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'lte', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -445,5 +445,126 @@ describe('generateARLedger', () => {
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
     expect(report.entries[0].customer_name).toBe('Okänd kund')
+  })
+})
+
+describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
+  const invoiceBase = {
+    customer_id: 'cust-a',
+    customer: { id: 'cust-a', name: 'Acme AB' },
+    invoice_date: '2024-05-01',
+    due_date: '2024-06-01',
+    currency: 'SEK',
+  }
+
+  it('reopens an invoice whose payment came after the as-of date', async () => {
+    results = [
+      // Query 1: invoices (historical path also fetches status='paid')
+      {
+        data: [
+          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 5000, paid_amount: 5000, paid_at: '2024-07-01T10:00:00Z', status: 'paid' },
+        ],
+        error: null,
+      },
+      // Query 2: payment rows: the payment is dated after the as-of date
+      {
+        data: [{ invoice_id: 'inv-1', amount: 5000, payment_date: '2024-07-01' }],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].invoices[0].outstanding).toBe(5000)
+    expect(report.entries[0].invoices[0].paid_amount).toBe(0)
+    expect(report.total_outstanding).toBe(5000)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('reduces outstanding by payments made on or before the as-of date only', async () => {
+    results = [
+      {
+        data: [
+          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 10000, paid_amount: 10000, paid_at: '2024-07-05T10:00:00Z', status: 'paid' },
+        ],
+        error: null,
+      },
+      {
+        data: [
+          { invoice_id: 'inv-1', amount: 4000, payment_date: '2024-06-10' },
+          { invoice_id: 'inv-1', amount: 6000, payment_date: '2024-07-05' },
+        ],
+        error: null,
+      },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries[0].invoices[0].paid_amount).toBe(4000)
+    expect(report.entries[0].invoices[0].outstanding).toBe(6000)
+    expect(report.total_outstanding).toBe(6000)
+  })
+
+  it('skips invoices already settled by the as-of date', async () => {
+    results = [
+      {
+        data: [
+          // Settled before the as-of date: must not appear at all.
+          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 1000, paid_amount: 1000, paid_at: '2024-06-01T10:00:00Z', status: 'paid' },
+          // Still open: the only row in the report.
+          { ...invoiceBase, id: 'inv-2', invoice_number: 'F002', total: 2000, paid_amount: 0, status: 'sent' },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].invoices).toHaveLength(1)
+    expect(report.entries[0].invoices[0].invoice_number).toBe('F002')
+    expect(report.total_outstanding).toBe(2000)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('falls back to paid_at for fully paid invoices without payment rows', async () => {
+    results = [
+      {
+        data: [
+          // No payment rows, but paid_at says the payment came after the
+          // as-of date: the invoice was open on that date.
+          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 3000, paid_amount: 3000, paid_at: '2024-08-01T10:00:00Z', status: 'paid' },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries).toHaveLength(1)
+    expect(report.entries[0].invoices[0].outstanding).toBe(3000)
+    expect(report.total_outstanding).toBe(3000)
+  })
+
+  it('keeps stored paid_amount for undateable legacy partial payments', async () => {
+    results = [
+      {
+        data: [
+          // No payment rows and no paid_at: the stored partial amount cannot
+          // be dated, so it is assumed to have stood at the as-of date.
+          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 3000, paid_amount: 1000, status: 'sent' },
+        ],
+        error: null,
+      },
+      { data: [], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
+
+    expect(report.entries[0].invoices[0].outstanding).toBe(2000)
+    expect(report.total_outstanding).toBe(2000)
   })
 })
