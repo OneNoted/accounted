@@ -198,6 +198,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_kpi_report:                  'reports:read',
   gnubok_get_income_statement:            'reports:read',
   gnubok_list_accounts:                   'reports:read',
+  // Kontoplan management: staged reference-data writes
+  gnubok_create_account:                  'bookkeeping:write',
+  gnubok_update_account:                  'bookkeeping:write',
+  // Verifikat annotation (notes-only edit: allowed on posted entries)
+  gnubok_set_voucher_note:                'bookkeeping:write',
   gnubok_get_balance_sheet:               'reports:read',
   gnubok_get_general_ledger:              'reports:read',
   gnubok_query_journal:                   'reports:read',

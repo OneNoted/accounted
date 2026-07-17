@@ -128,6 +128,7 @@ function makeLineRow(opts: {
   credit_amount?: number
   line_description?: string | null
   entry_description?: string
+  entry_notes?: string | null
   voucher_number?: number
   entry_date?: string
 }) {
@@ -147,11 +148,33 @@ function makeLineRow(opts: {
       voucher_series: 'A',
       entry_date: opts.entry_date ?? '2026-03-15',
       description: opts.entry_description ?? '',
+      notes: opts.entry_notes ?? null,
       source_type: 'bank_transaction',
       status: 'posted',
     },
   }
 }
+
+describe('gnubok_query_journal: entry notes (verifikat-anteckningar)', () => {
+  it('surfaces journal_entries.notes as entry_notes on every returned line', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      makeLineRow({ id: 'l1', entry_notes: 'Avser Q1-hyran, se mail 12/3' }),
+      makeLineRow({ id: 'l2' }),
+    ]
+    const supabase = makeChainMock(rows, rows.length)
+
+    const result = (await tool.execute(
+      { accounts: ['4010'] },
+      'company-1', 'user-1', supabase,
+    )) as { lines: Array<{ line_id: string; entry_notes: string | null }> }
+
+    expect(result.lines.find((l) => l.line_id === 'l1')?.entry_notes).toBe(
+      'Avser Q1-hyran, se mail 12/3',
+    )
+    expect(result.lines.find((l) => l.line_id === 'l2')?.entry_notes).toBeNull()
+  })
+})
 
 describe('gnubok_query_journal: execute', () => {
   it('applies amount_min filter and computes totals on the filtered set', async () => {

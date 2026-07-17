@@ -116,9 +116,16 @@ describe('tools/list payload size guard', () => {
     //     the client can target another authorized company without shared
     //     mutable connection state. The repeated property is intentionally
     //     minimal; gnubok_list_companies and initialize instructions explain it.
+    //   * 54K → 56K with kontoplan management + verifikat notes (MCP parity
+    //     requested by an MCP-driven user): staged gnubok_create_account /
+    //     gnubok_update_account (kontoplan reference data, BAS 2026 prefill)
+    //     + gnubok_set_voucher_note (notes-only annotation, trigger-guarded),
+    //     each inlining STAGED_OPERATION_SCHEMA + _meta + company_id routing.
+    //     Descriptions and property prose trimmed first; the remainder is
+    //     wire contract.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(54_000)
+    expect(approxTokens).toBeLessThan(56_000)
   })
 })

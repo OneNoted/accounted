@@ -38,6 +38,7 @@ import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX,
 import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import {
@@ -4946,6 +4947,192 @@ export const tools: McpTool[] = [
     },
   },
 
+  {
+    name: 'gnubok_create_account',
+    title: 'Create Account (Kontoplan)',
+    description: 'Stage a new kontoplan account. BAS 2026 numbers prefill name/type/SRU (overrides win); custom numbers need account_name, account_type, normal_balance. Inactive existing account? Use gnubok_update_account instead.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_number: { type: 'string', description: '4-digit number, e.g. "5410".' },
+        account_name: { type: 'string', description: 'Optional for BAS numbers (prefilled).' },
+        account_type: {
+          type: 'string',
+          enum: ['asset', 'equity', 'liability', 'revenue', 'expense'],
+          description: 'Required for non-BAS numbers.',
+        },
+        normal_balance: {
+          type: 'string',
+          enum: ['debit', 'credit'],
+          description: 'Required for non-BAS numbers.',
+        },
+        description: { type: 'string' },
+        default_vat_code: { type: 'string' },
+        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Fraction (0.25 = 25%).' },
+        sru_code: { type: 'string', description: 'Prefilled for BAS numbers.' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
+        idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
+      },
+      required: ['account_number'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountNumber = String(args.account_number ?? '').trim()
+      if (!/^\d{4}$/.test(accountNumber)) {
+        throw new Error('account_number must be exactly 4 digits, e.g. "5410".')
+      }
+
+      // Fail fast on numbers already in this company's chart so the approver
+      // is never shown a create that would 409 at commit time.
+      const { data: existing, error: existingErr } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number, account_name, is_active')
+        .eq('company_id', companyId)
+        .eq('account_number', accountNumber)
+        .maybeSingle()
+      if (existingErr) throw new Error(`Database error: ${existingErr.message}`)
+      if (existing) {
+        throw new Error(
+          existing.is_active
+            ? `Konto ${accountNumber} (${existing.account_name}) finns redan i kontoplanen. Ändra det med gnubok_update_account.`
+            : `Konto ${accountNumber} (${existing.account_name}) finns men är inaktivt. Aktivera det med gnubok_update_account (is_active=true).`,
+        )
+      }
+
+      // Resolve-don't-guess: BAS 2026 catalog fills the gaps; explicit args win.
+      const ref = getBASReference(accountNumber)
+      const name = String(args.account_name ?? '').trim() || ref?.account_name
+      const accountType = (args.account_type as string | undefined) ?? ref?.account_type
+      const normalBalance = (args.normal_balance as string | undefined) ?? ref?.normal_balance
+      if (!name || !accountType || !normalBalance) {
+        throw new Error(
+          `${accountNumber} is not in the BAS 2026 catalog: account_name, account_type and normal_balance are required for custom accounts.`,
+        )
+      }
+      // Runtime guard (hosts don't always enforce inputSchema enums). The BAS
+      // catalog can legitimately supply 'untaxed_reserves' (21xx).
+      if (!['asset', 'equity', 'liability', 'revenue', 'expense', 'untaxed_reserves'].includes(accountType)) {
+        throw new Error('account_type must be one of: asset, equity, liability, revenue, expense')
+      }
+      if (!['debit', 'credit'].includes(normalBalance)) {
+        throw new Error('normal_balance must be debit or credit')
+      }
+      const vatRate = args.default_vat_rate as number | undefined
+      if (vatRate !== undefined && ![0, 0.06, 0.12, 0.25].includes(vatRate)) {
+        throw new Error('default_vat_rate must be one of 0, 0.06, 0.12, 0.25 (fraction, not percent)')
+      }
+
+      const params: Record<string, unknown> = {
+        account_number: accountNumber,
+        account_name: name,
+        account_type: accountType,
+        normal_balance: normalBalance,
+        plan_type: ref ? 'full_bas' : 'k1',
+        description: String(args.description ?? '').trim() || ref?.description || undefined,
+        default_vat_code: String(args.default_vat_code ?? '').trim() || undefined,
+        default_vat_rate: vatRate,
+        sru_code: String(args.sru_code ?? '').trim() || ref?.sru_code || undefined,
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'create_account',
+        `Nytt konto: ${accountNumber} ${name}`,
+        params,
+        { ...params, source: ref ? 'bas_2026' : 'custom' },
+        actor,
+        {
+          description: 'Once approved, the account is active and can carry voucher lines via gnubok_create_voucher or gnubok_categorize_transaction.',
+          tool: 'gnubok_list_accounts',
+        },
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_update_account',
+    title: 'Update Account (Kontoplan)',
+    description: 'Stage an edit to a kontoplan account: rename, description, default VAT, SRU code, or activate/deactivate via is_active. Stages for approval. Find accounts with gnubok_list_accounts.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        account_number: { type: 'string', description: '4-digit number of the account to update.' },
+        account_name: { type: 'string' },
+        description: { type: 'string' },
+        default_vat_code: { type: 'string' },
+        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Default VAT rate as a fraction (0.25 = 25%).' },
+        sru_code: { type: 'string' },
+        is_active: { type: 'boolean', description: 'false deactivates (hides from pickers, keeps history); true (re)activates.' },
+        dry_run: { type: 'boolean' },
+        idempotency_key: { type: 'string' },
+      },
+      required: ['account_number'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const accountNumber = String(args.account_number ?? '').trim()
+      if (!/^\d{4}$/.test(accountNumber)) {
+        throw new Error('account_number must be exactly 4 digits, e.g. "5410".')
+      }
+
+      const { data: current, error: fetchErr } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number, account_name, description, default_vat_code, default_vat_rate, sru_code, is_active')
+        .eq('company_id', companyId)
+        .eq('account_number', accountNumber)
+        .maybeSingle()
+      if (fetchErr) throw new Error(`Database error: ${fetchErr.message}`)
+      if (!current) {
+        throw new Error(`Konto ${accountNumber} finns inte i kontoplanen. Skapa det med gnubok_create_account.`)
+      }
+
+      const vatRate = args.default_vat_rate as number | undefined
+      if (vatRate !== undefined && ![0, 0.06, 0.12, 0.25].includes(vatRate)) {
+        throw new Error('default_vat_rate must be one of 0, 0.06, 0.12, 0.25 (fraction, not percent)')
+      }
+
+      const params: Record<string, unknown> = { account_number: accountNumber }
+      const changes: Record<string, unknown> = {}
+      for (const key of ['account_name', 'description', 'default_vat_code', 'default_vat_rate', 'sru_code', 'is_active']) {
+        if (args[key] !== undefined) {
+          params[key] = args[key]
+          changes[key] = args[key]
+        }
+      }
+      if (Object.keys(changes).length === 0) {
+        throw new Error('Nothing to update: pass at least one of account_name, description, default_vat_code, default_vat_rate, sru_code, is_active.')
+      }
+
+      return stagePendingOperation(supabase, companyId, userId, 'update_account',
+        `Uppdatera konto ${accountNumber} ${current.account_name}`,
+        params,
+        { account_number: accountNumber, current, changes },
+        actor,
+        undefined,
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        }
+      )
+    },
+  },
+
   // ── Dimensions (kostnadsställe/projekt) ──────────────────────
 
   {
@@ -5822,7 +6009,7 @@ export const tools: McpTool[] = [
       // The dimensions jsonb only rides along when a group needs it: it is
       // the widest column on the line and the aggregate pass fetches ALL rows.
       const dimsSelect = groupByDimension ? ', dimensions' : ''
-      const DISPLAY_SELECT = `id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center${dimsSelect}, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, source_type, status, company_id)`
+      const DISPLAY_SELECT = `id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center${dimsSelect}, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, notes, source_type, status, company_id)`
       // Lean projection for the full-match aggregate pass: only what totals
       // and group buckets need. journal_entries stays embedded (!inner)
       // because the entry-level filters bind to it.
@@ -5891,6 +6078,7 @@ export const tools: McpTool[] = [
           voucher_series: string
           entry_date: string
           description: string
+          notes: string | null
           source_type: string
           status: string
         }
@@ -6072,6 +6260,7 @@ export const tools: McpTool[] = [
           voucher_number: r.journal_entries.voucher_number,
           entry_date: r.journal_entries.entry_date,
           entry_description: r.journal_entries.description,
+          entry_notes: r.journal_entries.notes ?? null,
           source_type: r.journal_entries.source_type,
           status: r.journal_entries.status,
           account_number: r.account_number,
@@ -10862,6 +11051,82 @@ export const tools: McpTool[] = [
         total_gaps: allGaps.length,
         unexplained_gaps: allGaps.filter((g) => !g.explanation).length,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_set_voucher_note',
+    title: 'Set Voucher Note (Anteckning)',
+    description: 'Stage setting, replacing or clearing the internal note (anteckning) on a verifikat. Notes are annotation metadata, editable even on posted entries: bookkeeping fields stay immutable. Read them via gnubok_query_journal (entry_notes).',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        journal_entry_id: { type: 'string', description: 'Verifikat UUID (find via gnubok_query_journal).' },
+        notes: {
+          type: ['string', 'null'],
+          description: 'New note (max 2000 chars), replaces the old one; null or empty clears.',
+        },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
+        idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
+      },
+      required: ['journal_entry_id', 'notes'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase, actor) {
+      const journalEntryId = String(args.journal_entry_id ?? '').trim()
+      if (!journalEntryId) throw new Error('journal_entry_id is required')
+
+      if (args.notes !== null && typeof args.notes !== 'string') {
+        throw new Error('notes must be a string (max 2000 chars) or null to clear the note')
+      }
+      // Whitespace-only → null so the column never stores visually-empty
+      // annotations (same normalisation as the commit-boundary schema).
+      const notes = typeof args.notes === 'string' && args.notes.trim() !== '' ? args.notes : null
+      if (notes !== null && notes.length > 2000) {
+        throw new Error('notes must be 2000 characters or shorter')
+      }
+
+      const { data: entry, error: fetchErr } = await supabase
+        .from('journal_entries')
+        .select('id, voucher_series, voucher_number, entry_date, description, status, notes')
+        .eq('id', journalEntryId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (fetchErr) throw new Error(`Database error: ${fetchErr.message}`)
+      if (!entry) throw new Error('Verifikationen hittades inte.')
+
+      const voucherLabel = entry.voucher_number
+        ? `${entry.voucher_series ?? ''}${entry.voucher_number}`
+        : 'utkast'
+
+      return stagePendingOperation(supabase, companyId, userId, 'set_voucher_note',
+        notes === null
+          ? `Rensa anteckning på verifikat ${voucherLabel}`
+          : `Anteckning på verifikat ${voucherLabel}`,
+        { journal_entry_id: journalEntryId, notes },
+        {
+          journal_entry_id: journalEntryId,
+          voucher: voucherLabel,
+          entry_description: entry.description,
+          entry_status: entry.status,
+          old_notes: entry.notes ?? null,
+          new_notes: notes,
+        },
+        actor,
+        undefined,
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dateForPeriodCheck: entry.entry_date,
+        }
+      )
     },
   },
 
