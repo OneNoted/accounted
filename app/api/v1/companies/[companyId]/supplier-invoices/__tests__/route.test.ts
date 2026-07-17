@@ -436,8 +436,12 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details.attempted_rate).toBe(0.15)
-    expect(body.error.details.allowed_rates).toEqual([0, 0.06, 0.12, 0.25])
+    // Since issue #310 the shared Zod schema rejects non-statutory rates
+    // before the runtime ALLOWED_SV_VAT_RATES guard (kept as defense in
+    // depth), so the details carry Zod issues instead of attempted_rate.
+    const issues = body.error.details.issues as Array<{ field: string; message: string }>
+    expect(issues.some((i) => i.field === 'items.0.vat_rate')).toBe(true)
+    expect(issues.find((i) => i.field === 'items.0.vat_rate')!.message).toMatch(/decimal fraction/)
   })
 
   it('defaults vat_treatment to reverse_charge for eu_business suppliers', async () => {

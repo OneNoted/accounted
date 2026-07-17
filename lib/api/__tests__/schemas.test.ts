@@ -831,6 +831,27 @@ describe('CreateSupplierInvoiceItemSchema', () => {
     }
   })
 
+  it('rejects percent-shaped or non-statutory vat_rate (decimal convention, issue #310)', () => {
+    // 25/12/6 are the percent-integer shape (books 2500 % VAT if accepted),
+    // 0.19 is a foreign decimal rate, 100 is the old max() boundary.
+    for (const rate of [25, 12, 6, 0.19, 100]) {
+      const result = CreateSupplierInvoiceItemSchema.safeParse(
+        validSupplierInvoiceItem({ vat_rate: rate })
+      )
+      expect(result.success).toBe(false)
+    }
+  })
+
+  it('rejects percent-shaped vat_rate with a unit hint in the message', () => {
+    const result = CreateSupplierInvoiceItemSchema.safeParse(
+      validSupplierInvoiceItem({ vat_rate: 25 })
+    )
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toMatch(/decimal fraction/)
+    }
+  })
+
   it('accepts vat_amount up to line_total * vat_rate', () => {
     const result = CreateSupplierInvoiceItemSchema.safeParse(
       validSupplierInvoiceItem({ amount: 5000, vat_rate: 0.25, vat_amount: 1250 })

@@ -41,6 +41,18 @@ const revenueAccount = z
 /** Swedish VAT rate as an integer percent. */
 const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
 
+/**
+ * Swedish VAT rate as a decimal fraction: the supplier-invoice convention.
+ * supplier_invoice_items stores 0.25 for 25 % (DB default 0.25) while
+ * invoice_items stores integer percent (vatRatePercent above); issue #310.
+ * Only statutory rates pass; percent-shaped input (25) is rejected with a
+ * unit hint instead of silently booking 2500 % VAT.
+ */
+const vatRateDecimal = z.union(
+  [z.literal(0), z.literal(0.06), z.literal(0.12), z.literal(0.25)],
+  { error: 'vat_rate is a decimal fraction: 0, 0.06, 0.12 or 0.25 (not percent)' },
+)
+
 /** Time string (HH:MM or HH:MM:SS) */
 const timeString = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, 'Expected HH:MM or HH:MM:SS time format')
 
@@ -754,7 +766,7 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   description: z.string().min(1, 'Item description is required'),
   amount: z.number().optional(),
   account_number: accountNumber,
-  vat_rate: z.number().min(0).max(100).optional(),
+  vat_rate: vatRateDecimal.optional(),
   // Manual VAT override. When provided, the engine books this exact amount to
   // 2641/2645 instead of recomputing line_total × vat_rate. Use for partial-
   // deductible cases (bilförmån 50%, representation 300 kr-tak), foreign-
