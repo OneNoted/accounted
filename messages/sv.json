@@ -523,6 +523,21 @@
     "title": "Alla företag",
     "all_companies": "Alla företag",
     "back_to_company": "Till {name}",
+    "nav": {
+      "companies": "Företag",
+      "team": "Team"
+    },
+    "team": {
+      "you": "du",
+      "invites_disabled": "Teaminbjudningar är inaktiverade. Bjud in medarbetare via respektive företag.",
+      "empty_title": "Inget team ännu",
+      "empty_description": "Ditt team visas här när det har skapats.",
+      "role": {
+        "owner": "Ägare",
+        "admin": "Administratör",
+        "member": "Medlem"
+      }
+    },
     "summary": "{clients} företag · {tasks} att göra · {overdue, plural, =0 {inga försenade} one {# försenad} other {# försenade}}",
     "all_clear": "Allt klart: inga väntande uppgifter i något företag",
     "truncated_notice": "Visar arbetsstatus för de första {count} företagen",

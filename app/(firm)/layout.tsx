@@ -5,6 +5,7 @@ import { ArrowRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { getActiveCompanyId, getCompanyDisplayName } from '@/lib/company/context'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { FirmNav } from '@/components/bureau/FirmNav'
 
 /**
  * Firm-altitude shell: the level ABOVE a single company. Deliberately has no
@@ -41,17 +42,20 @@ export default async function FirmLayout({ children }: { children: React.ReactNo
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border">
-        <div className="max-w-5xl mx-auto px-5 md:px-8 h-14 flex items-center justify-between">
-          <BrandWordmark size="inline" />
-          {activeCompanyName && (
-            <Link
-              href="/"
-              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150"
-            >
-              {t('back_to_company', { name: activeCompanyName })}
-              <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-            </Link>
-          )}
+        <div className="max-w-5xl mx-auto px-5 md:px-8">
+          <div className="h-14 flex items-center justify-between">
+            <BrandWordmark size="inline" />
+            {activeCompanyName && (
+              <Link
+                href="/"
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150"
+              >
+                {t('back_to_company', { name: activeCompanyName })}
+                <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+            )}
+          </div>
+          <FirmNav />
         </div>
       </header>
       <main className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">{children}</main>

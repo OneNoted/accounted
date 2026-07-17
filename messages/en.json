@@ -523,6 +523,21 @@
     "title": "All companies",
     "all_companies": "All companies",
     "back_to_company": "To {name}",
+    "nav": {
+      "companies": "Companies",
+      "team": "Team"
+    },
+    "team": {
+      "you": "you",
+      "invites_disabled": "Team invitations are disabled. Invite colleagues via each company.",
+      "empty_title": "No team yet",
+      "empty_description": "Your team will appear here once it has been created.",
+      "role": {
+        "owner": "Owner",
+        "admin": "Admin",
+        "member": "Member"
+      }
+    },
     "summary": "{clients, plural, one {# company} other {# companies}} · {tasks} to do · {overdue, plural, =0 {none overdue} one {# overdue} other {# overdue}}",
     "all_clear": "All clear: no pending work in any company",
     "truncated_notice": "Showing work status for the first {count} companies",
