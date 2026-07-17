@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { roundOre } from '@/lib/money'
 import type { ProposedDisposition } from '../types'
 
 /** Maximum periodiseringsfond avsättning for aktiebolag: 25 % of skattemässigt
@@ -11,6 +12,37 @@ export const PFOND_AB_RATE_PCT = '25 %'
 /** Mandatory holding period: a fond avsatt år N must be återförd no later
  *  than räkenskapsår N+6 (IL 30 kap 7 §). */
 export const PFOND_MAX_HOLD_YEARS = 6
+
+/**
+ * Schablonintäkt rate on periodiseringsfonder for juridiska personer
+ * (IL 30 kap 6a §): statslåneräntan 30 November of the year preceding the
+ * calendar year in which the beskattningsår ends, floored at 0.5 %. Note:
+ * the rate is the SLR itself, NOT SLR + 1 procentenhet (that formula is
+ * negativ räntefördelning). Keyed by the closing calendar year.
+ */
+const SCHABLONINTAKT_RATE_BY_CLOSING_YEAR: Record<number, number> = {
+  2025: 0.0196, // SLR 2024-11-30 = 1.96 %
+  2026: 0.0255, // SLR 2025-11-30 = 2.55 %
+}
+
+/**
+ * Fail closed for unmapped years: a statutory rate must never be guessed.
+ * The table is an annual maintenance item (Riksbanken publishes the SLR on
+ * 30 November); a missing year surfaces loudly here instead of silently
+ * producing a wrong INK2S 4.6a adjustment. POST callers can still override
+ * the rate per request while the table update lands.
+ */
+export function getSchablonintaktRate(fiscalYear: number): number {
+  const rate = SCHABLONINTAKT_RATE_BY_CLOSING_YEAR[fiscalYear]
+  if (rate === undefined) {
+    throw new Error(
+      `Schablonintäkt rate for fiscal year ${fiscalYear} is not configured. `
+      + 'Add the SLR (30 Nov of the preceding year, floor 0.5 %) to '
+      + 'SCHABLONINTAKT_RATE_BY_CLOSING_YEAR in periodiseringsfond-service.ts.',
+    )
+  }
+  return rate
+}
 
 /**
  * BAS account convention: account = '212' + (fiscalYear % 10). 2020 → '2120',
@@ -30,6 +62,11 @@ export interface ExistingFond {
   cohort_year: number
   /** Current credit balance (positive = liability balance). */
   balance: number
+  /** Credit balance at the START of the fiscal period (beskattningsårets
+   *  ingång). This is the schablonintäkt base per IL 30 kap 6a §: a fond
+   *  avsatt in this year's bokslut has opening 0 and yields none, while a
+   *  fond fully återförd during the year still yields it in full. */
+  opening_balance: number
   /** True if the fond must be returned this year (cohort_year + 6 ≤ closing_year). */
   must_return_this_year: boolean
 }
@@ -42,6 +79,10 @@ export interface PfondAvsattningInput {
   /** Closing year of the fiscal period (e.g. 2025 for FY ending 2025-12-31).
    *  Determines which cohort account to use. */
   fiscalYear: number
+  /** Balance already booked on this year's cohort account (a previous
+   *  avsättning in the same bokslut). Reduces the remaining headroom under
+   *  the 25 % cap so re-running the flow can never double-provision. */
+  alreadyProvisioned?: number
 }
 
 export interface PfondAvsattningComputation {
@@ -52,6 +93,7 @@ export interface PfondAvsattningComputation {
   cohortAccount: string
   cohortYear: number
   cappedToMax: boolean
+  alreadyProvisioned: number
 }
 
 /**
@@ -63,10 +105,14 @@ export interface PfondAvsattningComputation {
 export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposition | null {
   const base = Math.max(0, Math.floor(input.skattemassigtResultatBeforeAvsattning))
   const maxAmount = Math.floor(base * PFOND_AB_RATE)
-  const desiredAmount = Math.max(0, Math.floor(input.desiredAmount ?? maxAmount))
-  const actualAmount = Math.min(desiredAmount, maxAmount)
+  // The 25 % cap applies to the YEAR's total avsättning: anything already
+  // booked on this year's cohort account consumes headroom.
+  const alreadyProvisioned = Math.max(0, Math.floor(input.alreadyProvisioned ?? 0))
+  const headroom = Math.max(0, maxAmount - alreadyProvisioned)
+  const desiredAmount = Math.max(0, Math.floor(input.desiredAmount ?? headroom))
+  const actualAmount = Math.min(desiredAmount, headroom)
   const cohortAccount = getPeriodiseringsfondCohortAccount(input.fiscalYear)
-  const cappedToMax = desiredAmount > maxAmount
+  const cappedToMax = desiredAmount > headroom
 
   if (actualAmount === 0) {
     return null
@@ -80,12 +126,15 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
     cohortAccount,
     cohortYear: input.fiscalYear,
     cappedToMax,
+    alreadyProvisioned,
   }
 
   const warnings: string[] = []
   if (cappedToMax) {
     warnings.push(
-      `Begärt belopp (${desiredAmount} kr) översteg ${PFOND_AB_RATE_PCT}-taket. Avsättningen begränsades till ${maxAmount} kr.`,
+      alreadyProvisioned > 0
+        ? `Begärt belopp (${desiredAmount} kr) översteg kvarvarande utrymme under ${PFOND_AB_RATE_PCT}-taket (${maxAmount} kr, varav ${alreadyProvisioned} kr redan avsatt). Avsättningen begränsades till ${headroom} kr.`
+        : `Begärt belopp (${desiredAmount} kr) översteg ${PFOND_AB_RATE_PCT}-taket. Avsättningen begränsades till ${maxAmount} kr.`,
     )
   }
 
@@ -115,42 +164,72 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
 
 /**
  * List existing periodiseringsfonder by querying the account balance of every
- * 2110-2199 account as of the closing date of the fiscal period. Marks any
- * fond whose cohort_year + 6 ≤ closing_year as `must_return_this_year`.
+ * 2110-2199 account as of the closing date of the fiscal period, plus the
+ * balance at `periodStart` (the schablonintäkt base). Marks any fond whose
+ * cohort_year + 6 ≤ closing_year as `must_return_this_year`. Accounts where
+ * BOTH balances are zero are dropped; a fond fully återförd during the
+ * period is kept (closing 0, opening > 0) so its schablonintäkt survives.
  *
- * Uses the trial-balance pattern: sum debit/credit on each 21xx account from
- * inception through the closing date. Result is positive when the credit
- * balance exceeds debits (the normal state of a liability account).
+ * When the period has an opening-balance entry (created by year-end closing
+ * of the previous period, dated at period_start), that entry ALREADY carries
+ * the accumulated 21xx balances: opening = the OB entry's lines, closing =
+ * OB + current-period activity, and pre-period entries are ignored (counting
+ * them alongside the OB entry would double every carried fond). Without an
+ * OB entry (first fiscal year, plain SIE history) the balances fall back to
+ * the full history sum, split at period_start.
  */
 export async function listExistingPeriodiseringsfonder(
   supabase: SupabaseClient,
   companyId: string,
   closingDate: string,
+  periodStart: string,
+  openingBalanceEntryId?: string | null,
 ): Promise<ExistingFond[]> {
   const closingYear = parseInt(closingDate.slice(0, 4), 10)
   if (Number.isNaN(closingYear)) {
     throw new Error(`Invalid closing date: ${closingDate}`)
+  }
+  // Full validity parse: '2025-02-31' passes a shape regex but would silently
+  // misclassify every entry in the opening/closing split below.
+  const periodStartParsed = new Date(`${periodStart}T00:00:00Z`)
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(periodStart)
+    || Number.isNaN(periodStartParsed.getTime())
+    || periodStartParsed.toISOString().slice(0, 10) !== periodStart
+  ) {
+    throw new Error(`Invalid period start: ${periodStart}`)
   }
 
   // Sum debit/credit per 21xx account up to and including the closing date.
   // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts): drives
   // the query from journal_entries and paginates, instead of the old
   // journal_entries!inner embed that scanned all tenants' lines and silently
-  // truncated at PostgREST's 1000-row cap.
-  type Row = { account_number: string; debit_amount: number | string | null; credit_amount: number | string | null }
+  // truncated at PostgREST's 1000-row cap. The parent entry_date is attached
+  // per line so opening balances need no second query.
+  type Row = {
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+    journal_entry_id?: string
+    journal_entries?: { entry_date?: string }
+  }
   let data: Row[]
   try {
     data = await fetchEntryLines<Row>({
       supabase,
+      entryColumns: 'id, entry_date',
       lineColumns: 'account_number, debit_amount, credit_amount',
       filterEntries: (q: EntryLinesQuery) =>
         q
           .eq('company_id', companyId)
-          .eq('status', 'posted')
+          // Storno semantics: a reversed entry stays in the ledger and its
+          // storno cancels it. Counting only 'posted' would see the storno's
+          // debit but not the reversed original's credit, producing a
+          // negative phantom balance on the fond account.
+          .in('status', ['posted', 'reversed'])
           .lte('entry_date', closingDate),
       filterLines: (q: EntryLinesQuery) =>
         q.gte('account_number', '2110').lte('account_number', '2199'),
-      attachEntriesAs: null,
     })
   } catch (err) {
     throw new Error(
@@ -158,22 +237,41 @@ export async function listExistingPeriodiseringsfonder(
     )
   }
 
-  const byAccount = new Map<string, number>()
+  const byAccount = new Map<string, { closing: number; opening: number }>()
   for (const row of data) {
-    const balance =
+    const delta =
       (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
-    byAccount.set(row.account_number, (byAccount.get(row.account_number) ?? 0) + balance)
+    const entryDate = row.journal_entries?.entry_date
+    const rec = byAccount.get(row.account_number) ?? { closing: 0, opening: 0 }
+    if (openingBalanceEntryId) {
+      if (row.journal_entry_id === openingBalanceEntryId) {
+        // The OB entry IS the carried balance: opening and closing both.
+        rec.opening += delta
+        rec.closing += delta
+      } else if (typeof entryDate === 'string' && entryDate >= periodStart) {
+        // Current-period activity on top of the carried balance.
+        rec.closing += delta
+      }
+      // Pre-period entries: ignored, their net effect is inside the OB entry.
+    } else {
+      rec.closing += delta
+      if (typeof entryDate === 'string' && entryDate < periodStart) {
+        rec.opening += delta
+      }
+    }
+    byAccount.set(row.account_number, rec)
   }
 
   const fonder: ExistingFond[] = []
-  for (const [accountNumber, balance] of byAccount) {
-    if (Math.abs(balance) < 0.005) continue
+  for (const [accountNumber, { closing, opening }] of byAccount) {
+    if (Math.abs(closing) < 0.005 && Math.abs(opening) < 0.005) continue
     const cohortYear = cohortYearFromAccount(accountNumber)
     if (cohortYear === null) continue
     fonder.push({
       account_number: accountNumber,
       cohort_year: cohortYear,
-      balance: Math.round(balance * 100) / 100,
+      balance: roundOre(closing),
+      opening_balance: roundOre(opening),
       must_return_this_year: cohortYear + PFOND_MAX_HOLD_YEARS <= closingYear,
     })
   }
@@ -211,12 +309,16 @@ export interface PfondAteforingProposal {
 /**
  * Propose periodiseringsfond reversals. Forces reversal of any fond reaching
  * its 6-year limit; offers optional reversal of newer fonder. Also computes
- * the schablonintäkt on the opening balance of all 21xx accounts (per IL 30
- * kap 6a §): caller adds this to taxable result when computing bolagsskatt.
+ * the schablonintäkt on the OPENING balance of all 21xx accounts (per IL 30
+ * kap 6a §: the base is the fond balance at beskattningsårets ingång, so a
+ * fond avsatt in this year's bokslut yields none and a fond fully återförd
+ * during the year still yields it in full): caller adds this to taxable
+ * result when computing bolagsskatt.
  *
- * @param schablonintaktRate Statslåneräntan 30 nov året före, plus 1 pe, min
- *   0.5 %. For income year 2025: ~3.0 %. Caller passes this in because the
- *   rate changes annually and is sourced from Riksbanken.
+ * @param schablonintaktRate Statslåneräntan 30 nov året före det kalenderår
+ *   beskattningsåret går ut, min 0.5 % (IL 30 kap 6a §). Use
+ *   {@link getSchablonintaktRate}; caller passes it in because the rate
+ *   changes annually and can be overridden per request.
  */
 export function proposeAteforing(
   existingFonder: ExistingFond[],
@@ -224,8 +326,8 @@ export function proposeAteforing(
     /** Map from account_number to desired return amount. Omit entries the
      *  user does not want to return (mandatory ones are returned regardless). */
     returns?: Record<string, number>
-    /** Schablonintäkt rate as a decimal (0.03 for 3 %). Applied to opening
-     *  balance of every 21xx account. */
+    /** Schablonintäkt rate as a decimal (0.03 for 3 %). Applied to the
+     *  opening balance of every 21xx account. */
     schablonintaktRate: number
   },
 ): PfondAteforingProposal {
@@ -233,7 +335,15 @@ export function proposeAteforing(
   let schablonintaktAmount = 0
 
   for (const fond of existingFonder) {
-    schablonintaktAmount += fond.balance * options.schablonintaktRate
+    // Schablonintäkt runs on the opening balance regardless of what happens
+    // to the fond during the year.
+    schablonintaktAmount += Math.max(0, fond.opening_balance) * options.schablonintaktRate
+
+    // A fond with no (or negative) closing balance has nothing to return.
+    // Negative balances are a data anomaly (e.g. a debit-only view of a
+    // storno pair); proposing a negative återföring would produce an
+    // uncommittable entry.
+    if (fond.balance <= 0) continue
 
     const desiredReturn = options.returns?.[fond.account_number] ?? 0
     const isMandatory = fond.must_return_this_year
@@ -241,7 +351,7 @@ export function proposeAteforing(
       ? fond.balance // forced full reversal
       : Math.min(Math.max(0, Math.floor(desiredReturn)), fond.balance)
 
-    if (returnAmount === 0) continue
+    if (returnAmount <= 0) continue
 
     const warnings: string[] = []
     if (isMandatory) {
