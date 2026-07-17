@@ -486,6 +486,82 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(items[0].vat_amount).toBe(0)
   })
 
+  it('normalizes percent-shaped staged vat_rate (25) to the decimal convention on insert (issue #310)', async () => {
+    let capturedItems: unknown = null
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const originalFrom = supabase.from
+    ;(supabase as { from: unknown }).from = vi.fn().mockImplementation((table: string) => {
+      if (table === 'supplier_invoice_items') {
+        return {
+          insert: (rows: unknown) => {
+            capturedItems = rows
+            return Promise.resolve({ data: null, error: null })
+          },
+        }
+      }
+      return (originalFrom as (t: string) => unknown)(table)
+    })
+
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' },
+      error: null,
+    })
+    enqueue({ data: 42, error: null }) // arrival number
+    enqueue({
+      data: makeSupplierInvoice({ id: 'inv-pct', supplier_invoice_number: 'INV-100' }),
+      error: null,
+    })
+    // supplier_invoice_items.insert handled by the override above
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // cash: skips the JE
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp()
+    op.params = {
+      ...(op.params as Record<string, unknown>),
+      items: [
+        {
+          line_number: 1,
+          description: 'Konsulttjänst',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 1000,
+          line_total: 1000,
+          account_number: '6530',
+          // Percent-shaped: staged before the issue #310 fix. Inserting 25
+          // as-is would book 2500 % VAT via groupVatByRate downstream.
+          vat_rate: 25,
+          vat_amount: 250,
+        },
+        {
+          line_number: 2,
+          description: 'Utländsk tjänst',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 500,
+          line_total: 500,
+          account_number: '4531',
+          // Foreign decimal rate: outside the statutory set, snaps to 0.
+          vat_rate: 0.19,
+          vat_amount: 0,
+        },
+      ],
+    }
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const items = capturedItems as Array<{ vat_rate: number; vat_amount: number }>
+    expect(items[0].vat_rate).toBe(0.25)
+    expect(items[0].vat_amount).toBe(250)
+    expect(items[1].vat_rate).toBe(0)
+  })
+
   it('JE-failure rollback deletes items BEFORE the parent invoice (FK ordering)', async () => {
     // The parent has line items at this point: the rollback must reverse
     // insertion order or the FK on supplier_invoice_items blocks the parent

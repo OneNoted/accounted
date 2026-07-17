@@ -6,7 +6,6 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('year-end-service')
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { lockPeriod, closePeriod, createNextPeriod, findNextPeriod } from './period-service'
 import { generateResultAppropriation } from './result-appropriation-service'
 import {
@@ -310,10 +309,6 @@ export async function previewYearEndClosing(
       ? 'Eget kapital'
       : 'Årets resultat'
 
-  // Get income statement for net result
-  const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
-  const netResult = incomeStatement.net_result
-
   // Get trial balance for individual account balances in class 3-8
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
   const resultAccounts = rows.filter(
@@ -361,6 +356,16 @@ export async function previewYearEndClosing(
   // If negative (loss): debit to equity (2099/2010)
   const totalClosingDebit = closingLines.reduce((sum, l) => sum + l.debit_amount, 0)
   const totalClosingCredit = closingLines.reduce((sum, l) => sum + l.credit_amount, 0)
+
+  // netResult must equal, by construction, the signed amount transferred to the
+  // closing account (2099/2010) by the balancing line below: positive = credit
+  // = vinst, negative = debit = forlust. It is deliberately NOT taken from
+  // generateIncomeStatement: that report excludes source_type='year_end'
+  // entries, and bokslut-flow entries (annual depreciation, dispositioner)
+  // carry that tag, so the income-statement figure misses them and the
+  // summary card would mismatch the bokslutsverifikation table (issue #766).
+  const netResult = roundOre(totalClosingDebit - totalClosingCredit)
+
   const balancingAmount = roundOre(Math.abs(totalClosingDebit - totalClosingCredit))
 
   if (balancingAmount > ORE_TOLERANCE) {

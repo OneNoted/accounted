@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { getErrorMessage } from '../get-error-message'
+import {
+  AccountsNotInChartError,
+  BookkeepingDatabaseError,
+  CannotReverseStornoError,
+  JournalEntryNotBalancedError,
+} from '@/lib/bookkeeping/errors'
 
 describe('getErrorMessage: typed bookkeeping error codes', () => {
   it('ACCOUNTS_NOT_IN_CHART → lists accounts to activate', () => {
@@ -92,6 +98,57 @@ describe('getErrorMessage: typed bookkeeping error codes', () => {
       },
     })
     expect(msg).toBe('Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.')
+  })
+})
+
+describe('getErrorMessage: typed bookkeeping Error instances (issue #337)', () => {
+  it('JournalEntryNotBalancedError instance → rich Swedish amount message', () => {
+    const msg = getErrorMessage(new JournalEntryNotBalancedError(100, 80), { context: 'transaction' })
+    expect(msg).toContain('balanserar inte')
+    expect(msg).toMatch(/100/)
+    expect(msg).toMatch(/80/)
+    expect(msg).not.toContain('Journal entry is not balanced')
+  })
+
+  it('BookkeepingDatabaseError instance → Swedish, never the raw constraint string', () => {
+    const msg = getErrorMessage(
+      new BookkeepingDatabaseError(
+        'commit_entry',
+        'new row for relation "journal_entries" violates check constraint "check_balanced"',
+      ),
+      { context: 'transaction' },
+    )
+    expect(msg).toBe('Verifikationen kunde inte sparas. Försök igen.')
+    expect(msg).not.toContain('check constraint')
+    expect(msg).not.toContain('Database operation')
+  })
+
+  it('BookkeepingDatabaseError instance wrapping a period-lock trigger → specific Swedish message', () => {
+    const msg = getErrorMessage(
+      new BookkeepingDatabaseError('commit_entry', 'Cannot create entry in locked/closed fiscal period'),
+    )
+    expect(msg).toBe('Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.')
+  })
+
+  it('AccountsNotInChartError instance → Swedish account-activation message', () => {
+    const msg = getErrorMessage(new AccountsNotInChartError(['1930']))
+    expect(msg).toBe('Följande konton behöver aktiveras: 1930')
+  })
+
+  it('CannotReverseStornoError instance → registry Swedish message (no dynamic branch)', () => {
+    const msg = getErrorMessage(new CannotReverseStornoError('reversal'))
+    expect(msg).toBe('En stornering eller rättelse kan inte stornas.')
+    expect(msg).not.toContain('Cannot reverse')
+  })
+
+  it('locale "en" on a typed instance → registry English message', () => {
+    const msg = getErrorMessage(new CannotReverseStornoError('reversal'), { locale: 'en' })
+    expect(msg).toBe('A storno or correction entry cannot be reversed.')
+  })
+
+  it('regression: plain-object bare envelope with a Swedish message passes through unchanged', () => {
+    const msg = getErrorMessage({ code: 'SOME_CODE', message: 'Kunde inte hantera fakturan. Försök igen.' })
+    expect(msg).toBe('Kunde inte hantera fakturan. Försök igen.')
   })
 })
 

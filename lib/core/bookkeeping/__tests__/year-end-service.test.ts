@@ -407,8 +407,10 @@ describe('previewYearEndClosing', () => {
       { data: { period_end: '2024-12-31' }, error: null },
     ]
 
+    // Deliberately different from the trial-balance-derived result: netResult
+    // must NOT come from the income statement anymore (issue #766).
     vi.mocked(generateIncomeStatement).mockResolvedValue({
-      net_result: 150000,
+      net_result: 999,
     } as never)
 
     vi.mocked(generateTrialBalance).mockResolvedValue({
@@ -426,10 +428,62 @@ describe('previewYearEndClosing', () => {
     const preview = await previewYearEndClosing(supabase as never, 'company-1', 'user-1', 'fp-1')
 
     expect(preview.netResult).toBe(150000)
+    expect(generateIncomeStatement).not.toHaveBeenCalled()
     expect(preview.closingAccount).toBe('2099')
     expect(preview.closingAccountName).toBe('Årets resultat')
     expect(preview.closingLines.length).toBeGreaterThanOrEqual(3)
     expect(preview.resultAccountSummary).toHaveLength(3)
+
+    // Profit: the 2099 line is a credit equal to netResult.
+    const closingLine2099 = preview.closingLines.find((l) => l.account_number === '2099')
+    expect(closingLine2099).toBeDefined()
+    expect(closingLine2099?.debit_amount).toBe(0)
+    expect(closingLine2099?.credit_amount).toBe(preview.netResult)
+  })
+
+  it('includes year_end-tagged depreciation in netResult and matches the 2099 line (issue #766)', async () => {
+    results = [
+      // 0: fetch company_settings (.single)
+      { data: { entity_type: 'aktiebolag' }, error: null },
+      // 1: fetch fiscal period for closing date (.single)
+      { data: { period_end: '2024-12-31' }, error: null },
+    ]
+
+    // Old behavior took netResult from the income statement, which excludes
+    // source_type='year_end' entries: it would have reported the
+    // pre-depreciation loss of 10 000. The mock returns that stale value to
+    // prove the service no longer uses it.
+    vi.mocked(generateIncomeStatement).mockResolvedValue({
+      net_result: -10000,
+    } as never)
+
+    // Trial balance WITHOUT excludeYearEndClosing sees the bokslut-flow
+    // depreciation verifikat (78xx, source_type='year_end').
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [
+        { account_number: '3001', account_name: 'Tjänsteintäkter', account_class: 3, closing_debit: 0, closing_credit: 90000 },
+        { account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 100000, closing_credit: 0 },
+        { account_number: '7832', account_name: 'Avskrivningar inventarier', account_class: 7, closing_debit: 2000, closing_credit: 0 },
+      ],
+      isBalanced: true,
+      totalDebit: 102000,
+      totalCredit: 90000,
+    } as never)
+
+    const supabase = makeClient()
+    const preview = await previewYearEndClosing(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    // Loss including depreciation: 90 000 - 100 000 - 2 000 = -12 000,
+    // not the pre-depreciation -10 000.
+    expect(preview.netResult).toBe(-12000)
+
+    // The summary figure equals the signed amount on the 2099 balancing line:
+    // a loss is a debit to 2099.
+    const closingLine2099 = preview.closingLines.find((l) => l.account_number === '2099')
+    expect(closingLine2099).toBeDefined()
+    expect(closingLine2099?.debit_amount).toBe(12000)
+    expect(closingLine2099?.credit_amount).toBe(0)
+    expect(preview.netResult).toBe(-(closingLine2099?.debit_amount ?? NaN))
   })
 
   it('uses 2010 for EF entity type', async () => {
