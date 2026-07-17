@@ -525,7 +525,26 @@
     "back_to_company": "To {name}",
     "nav": {
       "companies": "Companies",
+      "review": "Review",
       "team": "Team"
+    },
+    "review": {
+      "summary": "{items} to review · {high} high risk · {clients, plural, one {# company} other {# companies}}",
+      "all_clear": "Nothing awaiting review",
+      "count": "{count} to review",
+      "oldest": "oldest {date}",
+      "overflow": "+{count} more",
+      "risk": {
+        "high": "High risk",
+        "medium": "Medium",
+        "low": "Low"
+      },
+      "actor": {
+        "user": "User",
+        "api_key": "Agent",
+        "mcp_oauth": "Agent",
+        "cron": "Automation"
+      }
     },
     "team": {
       "you": "you",

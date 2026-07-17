@@ -525,7 +525,26 @@
     "back_to_company": "Till {name}",
     "nav": {
       "companies": "Företag",
+      "review": "Granskning",
       "team": "Team"
+    },
+    "review": {
+      "summary": "{items} att granska · {high} hög risk · {clients, plural, one {# företag} other {# företag}}",
+      "all_clear": "Inget väntar på granskning",
+      "count": "{count} att granska",
+      "oldest": "äldsta {date}",
+      "overflow": "+{count} till",
+      "risk": {
+        "high": "Hög risk",
+        "medium": "Medel",
+        "low": "Låg"
+      },
+      "actor": {
+        "user": "Användare",
+        "api_key": "Agent",
+        "mcp_oauth": "Agent",
+        "cron": "Automatik"
+      }
     },
     "team": {
       "you": "du",

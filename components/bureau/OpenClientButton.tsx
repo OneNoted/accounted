@@ -29,12 +29,15 @@ export function OpenClientButton({
   companyId,
   name,
   worklist,
+  target,
   className,
   buttonClassName,
 }: {
   companyId: string
   name: string
   worklist?: WorklistCounts | null
+  /** Landing route after the switch; defaults to Hem. */
+  target?: string
   className?: string
   buttonClassName?: string
 }) {
@@ -73,7 +76,7 @@ export function OpenClientButton({
       disabled={pending}
       aria-busy={pending}
       aria-label={t('action.open_aria', { name })}
-      onClick={() => handleOpen()}
+      onClick={() => handleOpen(target)}
       className={cn(categories.length > 0 && 'flex-1 rounded-r-none border-r-0', buttonClassName)}
     >
       {pending ? (

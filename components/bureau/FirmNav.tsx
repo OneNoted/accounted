@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 
 const TABS = [
   { href: '/companies', key: 'companies' },
+  { href: '/review', key: 'review' },
   { href: '/team', key: 'team' },
 ] as const
 
