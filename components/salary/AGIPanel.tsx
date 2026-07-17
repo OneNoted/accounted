@@ -150,6 +150,11 @@ export function AGIPanel(props: AGIPanelProps) {
   const [success, setSuccess] = useState<string | null>(null)
   const [chain, setChain] = useState<ChainProgress | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  // True while an OAuth tab opened from this panel is still alive. Disables
+  // the connect buttons so a second click cannot start a parallel flow: each
+  // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
+  // parallel flow guarantees a CSRF failure for whichever tab finishes last.
+  const [connecting, setConnecting] = useState(false)
 
   // "2026-06" for user-facing copy; the period prop is compact YYYYMM.
   const prettyPeriod = `${period.slice(0, 4)}-${period.slice(4)}`
@@ -213,9 +218,26 @@ export function AGIPanel(props: AGIPanelProps) {
     fetchStatus()
   }, [fetchStatus])
 
-  // Handle of the OAuth popup opened by handleConnect: used to verify the
-  // sender identity of incoming postMessages.
+  // Handle of the OAuth tab opened by handleConnect: used to verify the
+  // sender identity of incoming postMessages and to detect abandonment.
   const popupRef = useRef<Window | null>(null)
+  const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const delayedRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const stopWatchingOauthTab = useCallback(() => {
+    if (watchTimerRef.current) {
+      clearInterval(watchTimerRef.current)
+      watchTimerRef.current = null
+    }
+    setConnecting(false)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (watchTimerRef.current) clearInterval(watchTimerRef.current)
+      if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+    }
+  }, [])
 
   // Listen for OAuth completion from the BankID popup. When the popup posts
   // back a success/error message we re-fetch status so the panel flips from
@@ -228,6 +250,7 @@ export function AGIPanel(props: AGIPanelProps) {
       // same-origin scripts.
       if (!popupRef.current || event.source !== popupRef.current) return
       if (event.data?.type === 'skatteverket-oauth-success') {
+        stopWatchingOauthTab()
         setError(null)
         setSuccess(t('oauth_success'))
         fetchStatus()
@@ -235,7 +258,18 @@ export function AGIPanel(props: AGIPanelProps) {
         // consumers (e.g. the salary page) can react without trusting raw
         // postMessage.
         window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+        // The post-connect refresh (skattekonto sync, AGI settle, token
+        // health) now runs server-side AFTER the callback responds, so the
+        // status fetched above predates it. Refetch once more when it has
+        // plausibly settled so synced data and health flags show up
+        // without a manual reload.
+        if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+        delayedRefetchRef.current = setTimeout(() => {
+          fetchStatus()
+          window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+        }, 15_000)
       } else if (event.data?.type === 'skatteverket-oauth-error') {
+        stopWatchingOauthTab()
         const reason =
           typeof event.data.reason === 'string' && event.data.reason
             ? event.data.reason
@@ -245,7 +279,7 @@ export function AGIPanel(props: AGIPanelProps) {
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [fetchStatus, t])
+  }, [fetchStatus, stopWatchingOauthTab, t])
 
   // Drop a stale "AGI-XML saknas" error once the run's AGI is (re)generated.
   // That error is set when "Skicka in underlag" runs before the XML exists; if
@@ -400,32 +434,40 @@ export function AGIPanel(props: AGIPanelProps) {
   }, [fetchStatus, onRefreshSubmission, t])
 
   const handleConnect = () => {
-    // Open the BankID OAuth flow in a centered popup. The callback page
+    // Open the BankID OAuth flow in a NEW TAB, not a popup. The old 600x750
+    // popup could not fit Skatteverket's consent page: the approve button
+    // sat below the fold and users got stranded mid-consent. A tab gets the
+    // full viewport (and behaves natively on mobile). The callback page
     // detects `window.opener` and posts back a `skatteverket-oauth-success`
     // (or `-error`) message, then closes itself: see the postMessage
-    // listener below. `return_to` is still passed so the popup-less fallback
-    // path (e.g. popup blockers) lands on the salary run page rather than
-    // the default /reports tab.
+    // listener below. `return_to` is still passed so the tab-blocked
+    // fallback path lands on the salary run page rather than the default
+    // /reports tab.
     const returnTo = typeof window !== 'undefined'
       ? window.location.pathname + window.location.search
       : ''
     const url = `/api/extensions/ext/skatteverket/authorize${
       returnTo ? `?return_to=${encodeURIComponent(returnTo)}` : ''
     }`
-    const w = 600
-    const h = 750
-    const left = window.screenX + (window.outerWidth - w) / 2
-    const top = window.screenY + (window.outerHeight - h) / 2
-    const popup = window.open(
-      url,
-      'skatteverket-oauth',
-      `width=${w},height=${h},left=${left},top=${top}`,
-    )
-    popupRef.current = popup
-    if (!popup) {
-      // Popup blocked: fall back to a full-page navigation.
+    const tab = window.open(url, '_blank')
+    popupRef.current = tab
+    if (!tab) {
+      // Tab blocked: fall back to a full-page navigation.
       window.location.href = url
+      return
     }
+    setConnecting(true)
+    // Detect abandonment: if the tab goes away without posting a message
+    // (closed manually, stranded on Skatteverket's side), re-enable the
+    // buttons and refresh status. This also fires after a successful
+    // self-close; the extra status fetch is harmless.
+    if (watchTimerRef.current) clearInterval(watchTimerRef.current)
+    watchTimerRef.current = setInterval(() => {
+      if (popupRef.current?.closed) {
+        stopWatchingOauthTab()
+        fetchStatus()
+      }
+    }, 1000)
   }
 
   /**
@@ -803,9 +845,9 @@ export function AGIPanel(props: AGIPanelProps) {
             {t('connect_description')}
           </p>
           {!readOnly && (
-            <Button onClick={handleConnect}>
+            <Button onClick={handleConnect} disabled={connecting}>
               <Link2 className="mr-2 h-4 w-4" />
-              {t('connect_button')}
+              {connecting ? t('connect_waiting') : t('connect_button')}
             </Button>
           )}
         </CardContent>
@@ -911,9 +953,9 @@ export function AGIPanel(props: AGIPanelProps) {
             <p className="mt-1 text-xs text-muted-foreground">
               {t('expired_banner_description')}
             </p>
-            <Button size="sm" variant="outline" className="mt-2" onClick={handleConnect}>
+            <Button size="sm" variant="outline" className="mt-2" onClick={handleConnect} disabled={connecting}>
               <Link2 className="mr-1.5 h-3.5 w-3.5" />
-              {t('reconnect_button')}
+              {connecting ? t('connect_waiting') : t('reconnect_button')}
             </Button>
           </div>
         )}
@@ -1076,9 +1118,9 @@ export function AGIPanel(props: AGIPanelProps) {
               {error}
               {sessionExpired && !readOnly && (
                 <div className="mt-2">
-                  <Button size="sm" variant="outline" onClick={handleConnect}>
+                  <Button size="sm" variant="outline" onClick={handleConnect} disabled={connecting}>
                     <Link2 className="mr-1.5 h-3.5 w-3.5" />
-                    {t('reconnect_button')}
+                    {connecting ? t('connect_waiting') : t('reconnect_button')}
                   </Button>
                 </div>
               )}
