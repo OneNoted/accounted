@@ -520,13 +520,14 @@
     "generate_failed_description": "Tax deadlines could not be created right now."
   },
   "bureau": {
-    "title": "Bureau",
-    "all_clients": "All clients",
-    "summary": "{clients, plural, one {# client} other {# clients}} · {tasks} to do · {overdue, plural, =0 {none overdue} one {# overdue} other {# overdue}}",
-    "all_clear": "All clear – no pending work for any client",
-    "truncated_notice": "Showing work status for the first {count} clients",
+    "title": "All companies",
+    "all_companies": "All companies",
+    "back_to_company": "To {name}",
+    "summary": "{clients, plural, one {# company} other {# companies}} · {tasks} to do · {overdue, plural, =0 {none overdue} one {# overdue} other {# overdue}}",
+    "all_clear": "All clear – no pending work in any company",
+    "truncated_notice": "Showing work status for the first {count} companies",
     "col": {
-      "client": "Client",
+      "company": "Company",
       "status": "Status",
       "todo": "To do",
       "deadline": "Next deadline",
@@ -563,8 +564,8 @@
       "open_aria": "Open {name}"
     },
     "empty": {
-      "title": "No client companies yet",
-      "description": "The bureau view appears once you have access to at least two companies. Add or connect more companies to see all clients in one place.",
+      "title": "No companies to show yet",
+      "description": "This overview appears once you have access to at least two companies. Add or connect more companies to see everything in one place.",
       "action": "Add company"
     }
   },

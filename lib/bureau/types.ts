@@ -1,8 +1,11 @@
 /**
- * Bureau cockpit ("/byra"): the cross-company client roster for accountants
- * managing several companies. Read-only aggregation over lib/worklist,
+ * Cross-company roster ("/companies", the firm-altitude "Alla företag"
+ * surface) for anyone who is a member of several companies: bureaus, holding
+ * structures, serial founders. Read-only aggregation over lib/worklist,
  * deadlines and fiscal-period state; writes always happen by switching into
- * the client company (see components/bureau/OpenClientButton.tsx).
+ * the client company (see components/bureau/OpenClientButton.tsx). The
+ * byrå-branded version of this surface arrives later behind a team-scoped
+ * capability; this module is its substrate, hence the lib/bureau name.
  */
 
 import type { WorklistCounts } from '@/lib/worklist'

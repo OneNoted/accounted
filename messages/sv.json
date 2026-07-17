@@ -520,13 +520,14 @@
     "generate_failed_description": "Det gick inte att skapa skattedeadlines just nu."
   },
   "bureau": {
-    "title": "Byrå",
-    "all_clients": "Alla klienter",
-    "summary": "{clients, plural, one {# klient} other {# klienter}} · {tasks} att göra · {overdue, plural, =0 {inga försenade} one {# försenad} other {# försenade}}",
-    "all_clear": "Allt klart – inga väntande uppgifter hos någon klient",
-    "truncated_notice": "Visar arbetsstatus för de första {count} klienterna",
+    "title": "Alla företag",
+    "all_companies": "Alla företag",
+    "back_to_company": "Till {name}",
+    "summary": "{clients} företag · {tasks} att göra · {overdue, plural, =0 {inga försenade} one {# försenad} other {# försenade}}",
+    "all_clear": "Allt klart – inga väntande uppgifter i något företag",
+    "truncated_notice": "Visar arbetsstatus för de första {count} företagen",
     "col": {
-      "client": "Klient",
+      "company": "Företag",
       "status": "Status",
       "todo": "Att göra",
       "deadline": "Nästa deadline",
@@ -563,8 +564,8 @@
       "open_aria": "Öppna {name}"
     },
     "empty": {
-      "title": "Inga klientbolag ännu",
-      "description": "Byråvyn visas när du har tillgång till minst två bolag. Lägg till eller anslut fler bolag för att se alla klienter samlade.",
+      "title": "Inga företag att visa ännu",
+      "description": "Översikten visas när du har tillgång till minst två företag. Lägg till eller anslut fler företag för att se allt samlat.",
       "action": "Lägg till företag"
     }
   },

@@ -149,7 +149,7 @@ export interface BureauPageData {
 /**
  * The composed cockpit read: membership gate (user client, RLS on) followed
  * by the aggregation (service client, filtered to the gated set). The only
- * public entry point for the /byra page.
+ * public entry point for the /companies page.
  */
 export async function getBureauPageData(
   supabase: SupabaseClient,

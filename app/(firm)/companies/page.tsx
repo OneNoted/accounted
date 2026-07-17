@@ -3,7 +3,6 @@ import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
 import { Building2 } from 'lucide-react'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
-import { getActiveCompanyId } from '@/lib/company/context'
 import { getBureauPageData, MAX_FANOUT_CLIENTS } from '@/lib/bureau'
 import { PageHeader } from '@/components/ui/page-header'
 import { Card, CardContent } from '@/components/ui/card'
@@ -17,28 +16,19 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 /**
- * Byrå cockpit: read-only, urgency-sorted roster of every client company the
- * accountant is a member of, with jump-in. Writes always happen inside the
- * client company after switching. Entry point is the "Alla klienter" row in
- * CompanySwitcher; this page re-derives the same gate server-side.
+ * "Alla företag": read-only, urgency-sorted roster of every company the user
+ * is a member of, with jump-in. Useful to any multi-company user (bureaus,
+ * holding structures, serial founders); the byrå-branded version of this
+ * surface arrives later behind a team-scoped capability. Writes always
+ * happen inside a company after switching. Entry point is the "Alla företag"
+ * row in CompanySwitcher; the (firm) layout owns auth + the sandbox gate.
  */
-export default async function ByraPage() {
+export default async function CompaniesOverviewPage() {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) redirect('/login')
-
-  // Sandbox hides the byrå plane (dev_docs/nav_ia_redesign.md).
-  const activeCompanyId = await getActiveCompanyId(supabase, user.id)
-  if (activeCompanyId) {
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('is_sandbox')
-      .eq('company_id', activeCompanyId)
-      .maybeSingle()
-    if (settings?.is_sandbox) redirect('/')
-  }
 
   const t = await getTranslations('bureau')
 

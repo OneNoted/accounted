@@ -100,9 +100,10 @@ export default function CompanySwitcher() {
   // Always allow opening the dropdown (to show "Lägg till företag")
   const hasMultiple = companies.length > 1
 
-  // Byrå plane entry: only meaningful with 2+ live companies, hidden in
-  // sandbox. Mirrors the server-side gate on /byra (lib/bureau/gate.ts).
-  const showAllClients =
+  // Firm-altitude entry ("Alla företag"): only meaningful with 2+ live
+  // companies, hidden in sandbox. Mirrors the server-side gate on /companies
+  // (lib/bureau/gate.ts).
+  const showAllCompanies =
     !isSandbox && companies.filter(({ company: c }) => !c.archived_at).length >= 2
 
   // No companies yet: show a direct "Lägg till företag" link instead of
@@ -188,15 +189,15 @@ export default function CompanySwitcher() {
             </>
           )}
 
-          {showAllClients && (
+          {showAllCompanies && (
             <div className="border-t border-border/40 mt-1 pt-1 px-1">
               <Link
-                href="/byra"
+                href="/companies"
                 onClick={() => setOpen(false)}
                 className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-md transition-colors md:whitespace-nowrap"
               >
                 <Building2 className="h-3.5 w-3.5" />
-                {tb('all_clients')}
+                {tb('all_companies')}
                 <ArrowRight className="h-3 w-3 ml-auto text-muted-foreground/50" />
               </Link>
             </div>

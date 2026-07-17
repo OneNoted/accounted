@@ -134,7 +134,7 @@ export function ClientRosterTable({
             <caption className="sr-only">{t('title')}</caption>
             <TableHeader>
               <TableRow>
-                <TableHead>{t('col.client')}</TableHead>
+                <TableHead>{t('col.company')}</TableHead>
                 <TableHead>{t('col.status')}</TableHead>
                 <TableHead className="text-right">{t('col.todo')}</TableHead>
                 <TableHead>{t('col.deadline')}</TableHead>
