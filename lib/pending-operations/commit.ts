@@ -19,6 +19,7 @@ import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/t
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { validateVatNumber } from '@/lib/vat/vies-client'
+import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
@@ -2419,7 +2420,10 @@ async function commitCreateSupplierInvoiceFromInbox(
   // 20-24 / 48 instead of double-counting input VAT into 2641. Tampered
   // params can't smuggle non-zero VAT into the items table.
   const itemInserts = rawItems.map((item, idx) => {
-    const vatRate = reverseCharge ? 0 : (typeof item.vat_rate === 'number' && Number.isFinite(item.vat_rate) ? item.vat_rate : 0)
+    // Normalize percent-shaped rates (25 -> 0.25) and snap to the statutory
+    // set: rows staged before the issue #310 fix (or tampered params) carry
+    // percent integers, and inserting one books 2500 % VAT downstream.
+    const vatRate = reverseCharge ? 0 : (typeof item.vat_rate === 'number' ? normalizeVatRateToDecimal(item.vat_rate) : 0)
     const vatAmt = reverseCharge ? 0 : (typeof item.vat_amount === 'number' && Number.isFinite(item.vat_amount) ? item.vat_amount : 0)
     return {
       supplier_invoice_id: invoice.id,
