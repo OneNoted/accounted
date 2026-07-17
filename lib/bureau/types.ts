@@ -56,7 +56,7 @@ export interface BureauPeriodStatus {
 }
 
 export interface BureauClientRow extends ResolvedBureauClient {
-  /** null = counts unresolved (timeout/truncation), rendered as "–", never 0. */
+  /** null = counts unresolved (timeout/truncation), rendered as "-", never 0. */
   worklist: WorklistCounts | null
   nextDeadline: BureauDeadline | null
   periodStatus: BureauPeriodStatus | null

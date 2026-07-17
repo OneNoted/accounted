@@ -97,7 +97,10 @@ export async function getBureauOverview(
   const inScopeIds = inScope.map((c) => c.companyId)
 
   const deadlineAt = Date.now() + globalDeadlineMs
-  const [worklists, deadlines, periods] = await Promise.all([
+  // The bulk queries get the same global budget as the fan-out: a hung
+  // deadline/period fetch degrades those columns instead of holding the
+  // whole page render open until the route's maxDuration kills it.
+  const [worklists, deadlinesResult, periodsResult] = await Promise.all([
     mapWithConcurrency(inScopeIds, concurrency, async (companyId) => {
       const remaining = deadlineAt - Date.now()
       if (remaining <= 0) return null
@@ -106,9 +109,11 @@ export async function getBureauOverview(
         Math.min(perClientTimeoutMs, remaining),
       )
     }),
-    getBulkNextDeadlines(service, inScopeIds, today),
-    getBulkPeriodStatus(service, inScopeIds, today),
+    withTimeout(getBulkNextDeadlines(service, inScopeIds, today), globalDeadlineMs),
+    withTimeout(getBulkPeriodStatus(service, inScopeIds, today), globalDeadlineMs),
   ])
+  const deadlines = deadlinesResult ?? new Map<string, BureauClientRow['nextDeadline']>()
+  const periods = periodsResult ?? new Map<string, BureauClientRow['periodStatus']>()
 
   const worklistByCompany = new Map<string, WorklistCounts | null>()
   inScopeIds.forEach((id, i) => worklistByCompany.set(id, worklists[i]))

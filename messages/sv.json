@@ -524,7 +524,7 @@
     "all_companies": "Alla företag",
     "back_to_company": "Till {name}",
     "summary": "{clients} företag · {tasks} att göra · {overdue, plural, =0 {inga försenade} one {# försenad} other {# försenade}}",
-    "all_clear": "Allt klart – inga väntande uppgifter i något företag",
+    "all_clear": "Allt klart: inga väntande uppgifter i något företag",
     "truncated_notice": "Visar arbetsstatus för de första {count} företagen",
     "col": {
       "company": "Företag",

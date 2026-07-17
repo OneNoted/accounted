@@ -30,16 +30,23 @@ export function OpenClientButton({
 
   async function handleOpen() {
     setPending(true)
-    const result = await switchCompany(companyId)
-    if (result.error) {
+    try {
+      const result = await switchCompany(companyId)
+      if (result.error) {
+        setPending(false)
+        toast({
+          title: ts(result.error === 'not_member' ? 'error_no_access' : 'error_switch_failed'),
+          variant: 'destructive',
+        })
+        return
+      }
+      performCompanySwitch(companyId)
+    } catch {
+      // Server-action transport failure (network, server error): the action
+      // itself returns error codes, so anything thrown is infrastructure.
       setPending(false)
-      toast({
-        title: ts(result.error === 'not_member' ? 'error_no_access' : 'error_switch_failed'),
-        variant: 'destructive',
-      })
-      return
+      toast({ title: ts('error_switch_failed'), variant: 'destructive' })
     }
-    performCompanySwitch(companyId)
   }
 
   return (

@@ -68,10 +68,24 @@ function StatusCell({ status }: { status: BureauRowStatus }) {
   return <Badge variant={STATUS_VARIANTS[status]}>{t(`status.${status}`)}</Badge>
 }
 
+function DeadlineCell({ row }: { row: BureauClientRow }) {
+  if (!row.nextDeadline) {
+    return <span className="text-sm text-muted-foreground">-</span>
+  }
+  return (
+    <>
+      <span className="text-sm tabular-nums">{formatDate(row.nextDeadline.dueDate)}</span>
+      <p className="text-xs text-muted-foreground truncate max-w-[180px]">
+        {row.nextDeadline.title}
+      </p>
+    </>
+  )
+}
+
 function PeriodCell({ row }: { row: BureauClientRow }) {
   const t = useTranslations('bureau')
   const period = row.periodStatus
-  if (!period) return <span className="text-sm text-muted-foreground">–</span>
+  if (!period) return <span className="text-sm text-muted-foreground">-</span>
   // bookkeeping_locked_through is the informative month-close signal; the
   // period enum alone reads "Öppen" on virtually every row (periods are
   // whole fiscal years).
@@ -155,16 +169,23 @@ export function ClientRosterTable({
                         {t(`entity.${row.entityType}`)}
                       </p>
                     </TableCell>
-                    {worklist === null ? (
-                      <TableCell colSpan={4} className="text-sm text-muted-foreground italic">
-                        {failed.has(row.companyId) ? t('row_error') : '–'}
-                      </TableCell>
-                    ) : (
-                      <>
-                        <TableCell>
-                          <StatusCell status={status} />
-                        </TableCell>
-                        <TableCell className="text-right">
+                    {/* Each data source degrades independently: a counts
+                        timeout must not hide a deadline or period that DID
+                        resolve. Status stays valid when deadline-derived. */}
+                    <TableCell>
+                      {worklist === null && status === 'klart' ? (
+                        <span className="text-sm text-muted-foreground">-</span>
+                      ) : (
+                        <StatusCell status={status} />
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {worklist === null ? (
+                        <span className="text-sm text-muted-foreground italic">
+                          {failed.has(row.companyId) ? t('row_error') : '-'}
+                        </span>
+                      ) : (
+                        <>
                           <span className="font-display text-base tabular-nums">
                             {worklist.total}
                           </span>
@@ -173,26 +194,15 @@ export function ClientRosterTable({
                               {breakdown}
                             </p>
                           )}
-                        </TableCell>
-                        <TableCell>
-                          {row.nextDeadline ? (
-                            <>
-                              <span className="text-sm tabular-nums">
-                                {formatDate(row.nextDeadline.dueDate)}
-                              </span>
-                              <p className="text-xs text-muted-foreground truncate max-w-[180px]">
-                                {row.nextDeadline.title}
-                              </p>
-                            </>
-                          ) : (
-                            <span className="text-sm text-muted-foreground">–</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <PeriodCell row={row} />
-                        </TableCell>
-                      </>
-                    )}
+                        </>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <DeadlineCell row={row} />
+                    </TableCell>
+                    <TableCell>
+                      <PeriodCell row={row} />
+                    </TableCell>
                     <TableCell className="text-right">
                       <OpenClientButton companyId={row.companyId} name={row.name} />
                     </TableCell>
@@ -214,19 +224,19 @@ export function ClientRosterTable({
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium truncate">{row.name}</p>
-                  {worklist !== null && <StatusCell status={status} />}
+                  {!(worklist === null && status === 'klart') && <StatusCell status={status} />}
                 </div>
                 <p className="text-xs text-muted-foreground tabular-nums">
-                  {worklist === null
-                    ? failed.has(row.companyId)
-                      ? t('row_error')
-                      : '–'
-                    : [
-                        `${worklist.total} ${t('col.todo').toLowerCase()}`,
-                        row.nextDeadline ? formatDate(row.nextDeadline.dueDate) : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
+                  {[
+                    worklist === null
+                      ? failed.has(row.companyId)
+                        ? t('row_error')
+                        : '-'
+                      : `${worklist.total} ${t('col.todo').toLowerCase()}`,
+                    row.nextDeadline ? formatDate(row.nextDeadline.dueDate) : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </p>
                 <OpenClientButton
                   companyId={row.companyId}

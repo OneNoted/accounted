@@ -32,8 +32,10 @@ export function isDeadlineOverdue(status: string, dueDate: string, today: string
 /**
  * Earliest actionable incomplete deadline per company, in one query burst.
  * submitted/confirmed deadlines are excluded: they are not the accountant's
- * next action. Soft-fails to an empty map: a broken deadline column must
- * never take down the cockpit page.
+ * next action. Soft-fails: a failed chunk stops the scan but results from
+ * chunks that already resolved are kept (partial data beats none for a
+ * per-company map), and the column degrades rather than taking down the
+ * cockpit page.
  */
 export async function getBulkNextDeadlines(
   supabase: SupabaseClient,

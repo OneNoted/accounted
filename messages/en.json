@@ -524,7 +524,7 @@
     "all_companies": "All companies",
     "back_to_company": "To {name}",
     "summary": "{clients, plural, one {# company} other {# companies}} · {tasks} to do · {overdue, plural, =0 {none overdue} one {# overdue} other {# overdue}}",
-    "all_clear": "All clear – no pending work in any company",
+    "all_clear": "All clear: no pending work in any company",
     "truncated_notice": "Showing work status for the first {count} companies",
     "col": {
       "company": "Company",
