@@ -523,44 +523,51 @@
   },
   "bureau": {
     "title": "Byrå",
-    "subtitle": "Översikt över alla klientbolag du har tillgång till",
-    "section_title": "Byrå-läge",
-    "enable_setting": "Aktivera byrå-läge",
-    "enable_setting_description": "Visar en samlad översikt över alla klientbolag du har tillgång till",
-    "toggle_saved": "Byrå-läge uppdaterat",
-    "toggle_save_failed": "Kunde inte spara byrå-inställning",
-    "tiles": {
-      "clients": "Klienter totalt",
-      "pending": "Väntar på godkännande",
-      "deadlines": "Deadlines denna vecka",
-      "overdue_ar": "Förfallna fakturor"
+    "all_clients": "Alla klienter",
+    "summary": "{clients, plural, one {# klient} other {# klienter}} · {tasks} att göra · {overdue, plural, =0 {inga försenade} one {# försenad} other {# försenade}}",
+    "all_clear": "Allt klart – inga väntande uppgifter hos någon klient",
+    "truncated_notice": "Visar arbetsstatus för de första {count} klienterna",
+    "col": {
+      "client": "Klient",
+      "status": "Status",
+      "todo": "Att göra",
+      "deadline": "Nästa deadline",
+      "period": "Period"
     },
+    "status": {
+      "klart": "Klart",
+      "pagar": "Pågår",
+      "nara_deadline": "Nära deadline",
+      "forsenad": "Försenad"
+    },
+    "period_status": {
+      "open": "Öppen",
+      "locked": "Låst",
+      "closed": "Stängd"
+    },
+    "period_locked_through": "Låst t.o.m. {date}",
+    "entity": {
+      "aktiebolag": "Aktiebolag",
+      "enskild_firma": "Enskild firma"
+    },
+    "cat": {
+      "book_transaction": "att bokföra",
+      "inbox_document": "underlag att hantera",
+      "supplier_invoice_approval": "att attestera",
+      "verifikat_missing_document": "saknar underlag",
+      "overdue_invoice": "förfallna fakturor",
+      "deadline_action": "deadlines",
+      "pending_operations": "att granska"
+    },
+    "row_error": "Kunde inte hämtas",
     "action": {
-      "open": "Öppna"
-    },
-    "pending_label": "Väntande operationer",
-    "deadlines_label": "Kommande deadlines",
-    "no_pending": "Inga väntande operationer",
-    "no_deadlines": "Inga deadlines denna vecka",
-    "show_pending": "Visa pending",
-    "high_risk": "{count} hög risk",
-    "kpi": {
-      "revenue_mtd": "Intäkter MTD",
-      "cash": "Bank/Kassa",
-      "overdue_ar": "Förfallna fakt."
-    },
-    "role": {
-      "owner": "ägare",
-      "admin": "administratör",
-      "member": "medlem",
-      "viewer": "läsare"
-    },
-    "deadline_status": {
-      "overdue": "förfallen"
+      "open": "Öppna",
+      "open_aria": "Öppna {name}"
     },
     "empty": {
       "title": "Inga klientbolag ännu",
-      "description": "När du läggs till som medlem i ett bolag dyker det upp här."
+      "description": "Byråvyn visas när du har tillgång till minst två bolag. Lägg till eller anslut fler bolag för att se alla klienter samlade.",
+      "action": "Lägg till företag"
     }
   },
   "insights": {

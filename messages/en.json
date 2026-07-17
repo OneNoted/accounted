@@ -523,44 +523,51 @@
   },
   "bureau": {
     "title": "Bureau",
-    "subtitle": "Overview of every client company you have access to",
-    "section_title": "Bureau mode",
-    "enable_setting": "Enable bureau mode",
-    "enable_setting_description": "Shows an aggregated overview of every client company you have access to",
-    "toggle_saved": "Bureau mode updated",
-    "toggle_save_failed": "Could not save bureau setting",
-    "tiles": {
-      "clients": "Clients total",
-      "pending": "Awaiting approval",
-      "deadlines": "Deadlines this week",
-      "overdue_ar": "Overdue invoices"
+    "all_clients": "All clients",
+    "summary": "{clients, plural, one {# client} other {# clients}} · {tasks} to do · {overdue, plural, =0 {none overdue} one {# overdue} other {# overdue}}",
+    "all_clear": "All clear – no pending work for any client",
+    "truncated_notice": "Showing work status for the first {count} clients",
+    "col": {
+      "client": "Client",
+      "status": "Status",
+      "todo": "To do",
+      "deadline": "Next deadline",
+      "period": "Period"
     },
+    "status": {
+      "klart": "Done",
+      "pagar": "In progress",
+      "nara_deadline": "Deadline soon",
+      "forsenad": "Overdue"
+    },
+    "period_status": {
+      "open": "Open",
+      "locked": "Locked",
+      "closed": "Closed"
+    },
+    "period_locked_through": "Locked through {date}",
+    "entity": {
+      "aktiebolag": "Limited company",
+      "enskild_firma": "Sole trader"
+    },
+    "cat": {
+      "book_transaction": "to book",
+      "inbox_document": "documents to handle",
+      "supplier_invoice_approval": "to approve",
+      "verifikat_missing_document": "missing documents",
+      "overdue_invoice": "overdue invoices",
+      "deadline_action": "deadlines",
+      "pending_operations": "to review"
+    },
+    "row_error": "Could not be loaded",
     "action": {
-      "open": "Open"
-    },
-    "pending_label": "Pending operations",
-    "deadlines_label": "Upcoming deadlines",
-    "no_pending": "No pending operations",
-    "no_deadlines": "No deadlines this week",
-    "show_pending": "Show pending",
-    "high_risk": "{count} high risk",
-    "kpi": {
-      "revenue_mtd": "Revenue MTD",
-      "cash": "Cash",
-      "overdue_ar": "Overdue AR"
-    },
-    "role": {
-      "owner": "owner",
-      "admin": "admin",
-      "member": "member",
-      "viewer": "viewer"
-    },
-    "deadline_status": {
-      "overdue": "overdue"
+      "open": "Open",
+      "open_aria": "Open {name}"
     },
     "empty": {
       "title": "No client companies yet",
-      "description": "Once you are added to a company it will appear here."
+      "description": "The bureau view appears once you have access to at least two companies. Add or connect more companies to see all clients in one place.",
+      "action": "Add company"
     }
   },
   "insights": {
