@@ -37,6 +37,7 @@ import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
@@ -8111,16 +8112,31 @@ export const tools: McpTool[] = [
       const lineItems = lineItemsExt.map((li, idx) => {
         const lineNumber = idx + 1
         const dimensions = resolvedDimBags[idx + 1]
+        const lineTotal = Number(li.line_total ?? li.lineTotal ?? li.amount) || 0
+        // The AI extraction contract (ExtractionSchema) carries vatRate as a
+        // percent integer (25, 12, 6) while supplier_invoice_items stores a
+        // decimal fraction (0.25): normalize at this boundary or vat_rate 25
+        // books 2500 % VAT downstream (issue #310). Foreign rates (19, 20)
+        // map to 0 per the extraction contract: the strict Swedish allowlist
+        // applies when converting to a supplier invoice.
+        const vatRate = normalizeVatRateToDecimal(li.vat_rate ?? li.vatRate)
+        // Real extractions carry no per-line VAT amount: derive it from the
+        // normalized rate so the staged header vat_amount (summed below) is
+        // honest instead of 0, which would gate the whole 2641 posting off.
+        const rawVatAmount = li.vat_amount ?? li.vatAmount
+        const vatAmount = rawVatAmount == null
+          ? roundOre(lineTotal * vatRate)
+          : Number(rawVatAmount) || 0
         return {
           line_number: lineNumber,
           description: (li.description as string) ?? `Position ${lineNumber}`,
           quantity: Number(li.quantity) || 1,
           unit: (li.unit as string) ?? 'st',
           unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
-          line_total: Number(li.line_total ?? li.lineTotal ?? li.amount) || 0,
+          line_total: lineTotal,
           account_number: lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
-          vat_rate: Number(li.vat_rate ?? li.vatRate) || 0,
-          vat_amount: Number(li.vat_amount ?? li.vatAmount) || 0,
+          vat_rate: vatRate,
+          vat_amount: vatAmount,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }
       })

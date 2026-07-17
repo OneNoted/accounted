@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   LEGAL_VAT_RATES,
   isLegalVatRate,
+  normalizeVatRateToDecimal,
   findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
@@ -27,6 +28,34 @@ describe('isLegalVatRate', () => {
     expect(isLegalVatRate(12 / 100)).toBe(true)
     expect(isLegalVatRate(6 / 100)).toBe(true)
     expect(isLegalVatRate(25 / 100)).toBe(true)
+  })
+})
+
+describe('normalizeVatRateToDecimal', () => {
+  it.each([
+    [25, 0.25],
+    [12, 0.12],
+    [6, 0.06],
+  ])('converts percent-integer %s to decimal %s', (percent, decimal) => {
+    expect(normalizeVatRateToDecimal(percent)).toBe(decimal)
+  })
+
+  it.each([0, 0.06, 0.12, 0.25])('passes already-decimal %s through unchanged', (rate) => {
+    expect(normalizeVatRateToDecimal(rate)).toBe(rate)
+  })
+
+  it.each([19, 20, 0.19, 0.2, 1, 100, -0.25, -25])(
+    'maps non-statutory rate %s to 0 (strict Swedish allowlist)',
+    (rate) => {
+      expect(normalizeVatRateToDecimal(rate)).toBe(0)
+    },
+  )
+
+  it('maps missing or non-finite input to 0', () => {
+    expect(normalizeVatRateToDecimal(null)).toBe(0)
+    expect(normalizeVatRateToDecimal(undefined)).toBe(0)
+    expect(normalizeVatRateToDecimal(Number.NaN)).toBe(0)
+    expect(normalizeVatRateToDecimal(Number.POSITIVE_INFINITY)).toBe(0)
   })
 })
 
