@@ -344,6 +344,7 @@ export default function ArticleDetailPage({
             onSubmit={handleUpdate}
             isLoading={isUpdating}
             initialData={{
+              article_number: article.article_number || undefined,
               name: article.name,
               name_en: article.name_en || undefined,
               type: article.type,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -101,6 +101,10 @@ export default function SkattekontoPage() {
         setNotConnected(true)
         return
       }
+      // A non-401 response proves a connection now exists: clear a stale
+      // not-connected state so a reload after connecting (in another tab or
+      // via the visibility refetch below) actually flips the page over.
+      setNotConnected(false)
 
       // A non-auth failure must NOT fall through to the "inget saldo hämtat
       // ännu"-tomvy — that reads as "not configured" when the truth is "the
@@ -126,6 +130,30 @@ export default function SkattekontoPage() {
 
   useEffect(() => {
     void reload()
+  }, [reload])
+
+  // Auto-recover from the "inte anslutet" empty state when the user returns
+  // to this tab: the connect flow lives in Inställningar (often completed in
+  // another tab or after a mobile BankID app-switch), so no in-window signal
+  // can reach this page. Only fires while notConnected is showing: a routine
+  // tab switch on a healthy page must not flash the loading state. Throttled
+  // so rapid tab toggling doesn't hammer the API.
+  const notConnectedRef = useRef(false)
+  useEffect(() => {
+    notConnectedRef.current = notConnected
+  }, [notConnected])
+  const lastVisibilityReloadRef = useRef(0)
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return
+      if (!notConnectedRef.current) return
+      const now = Date.now()
+      if (now - lastVisibilityReloadRef.current < 5_000) return
+      lastVisibilityReloadRef.current = now
+      void reload()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
   }, [reload])
 
   async function syncNow() {

@@ -18,7 +18,7 @@ export const API_KEY_SCOPES = {
   'suppliers:read':     { label: 'Leverantörer: läs',   description: 'Lista leverantörer och leverantörsfakturor, hitta verifikat-kandidater (3 verktyg)' },
   'suppliers:write':    { label: 'Leverantörer: skriv', description: 'Skapa leverantörer; godkänn, kreditera, betal-länka och hantera leverantörsfakturor (6 verktyg)' },
   'reports:read':       { label: 'Rapporter: läs',      description: 'Kontoplan, huvudbok, balansräkning, resultaträkning, moms, KPI, reskontra, perioder, bankavstämning, SIE-export (12 verktyg)' },
-  'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar' },
+  'bookkeeping:write':  { label: 'Bokföring: skriv',    description: 'Stänga/låsa perioder, ingående balans, bokslut, SIE-import, voucher-gap-förklaringar, kontoplan (skapa/ändra konton), verifikat-anteckningar' },
   'payroll:read':       { label: 'Löner: läs',          description: 'Lista anställda, lönekörningar, lönejournal (3 verktyg)' },
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
   // v1 REST API: added Phase 1
@@ -198,6 +198,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_kpi_report:                  'reports:read',
   gnubok_get_income_statement:            'reports:read',
   gnubok_list_accounts:                   'reports:read',
+  // Kontoplan management: staged reference-data writes
+  gnubok_create_account:                  'bookkeeping:write',
+  gnubok_update_account:                  'bookkeeping:write',
+  // Verifikat annotation (notes-only edit: allowed on posted entries)
+  gnubok_set_voucher_note:                'bookkeeping:write',
   gnubok_get_balance_sheet:               'reports:read',
   gnubok_get_general_ledger:              'reports:read',
   gnubok_query_journal:                   'reports:read',

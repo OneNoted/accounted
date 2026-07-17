@@ -1960,6 +1960,9 @@ export type PendingOperationType =
   | 'create_customer'
   | 'create_article'
   | 'update_article'
+  // Kontoplan reference data (gnubok_create_account / gnubok_update_account)
+  | 'create_account'
+  | 'update_account'
   | 'create_supplier'
   | 'create_invoice'
   | 'mark_invoice_paid'
@@ -2002,6 +2005,9 @@ export type PendingOperationType =
   | 'correct_entry'
   // Pure makulering (storno) of a posted entry: agent-native API plan item 38
   | 'reverse_entry'
+  // Notes-only annotation on a verifikat: the immutability trigger's carve-out
+  // (migration 20260608120000) makes this legal even on posted entries.
+  | 'set_voucher_note'
   // Bokslut: planenlig avskrivning (one journal entry per asset)
   | 'post_annual_depreciation'
   // Payroll: salary run creation + AGI declaration

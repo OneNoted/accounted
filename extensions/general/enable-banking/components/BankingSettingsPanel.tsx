@@ -62,6 +62,34 @@ export default function BankingSettingsPanel() {
     }
   }, [])
 
+  // Latest-ref so the visibility listener below (subscribed once) always
+  // calls the current render's fetchConnections, which closes over company
+  // context that may resolve after mount.
+  const fetchConnectionsRef = useRef(fetchConnections)
+  useEffect(() => {
+    fetchConnectionsRef.current = fetchConnections
+  })
+
+  // Safety net for completion signals that never reach this tab: a mobile
+  // BankID app-switch can land the bank's redirect in a different browser
+  // tab, the user can close the finalize page before its redirect, and a
+  // bfcache-restored page shows a pre-connection snapshot. Refetch when the
+  // tab regains visibility (background refresh, no spinner: fetchConnections
+  // only blanks the panel on first load), throttled so rapid tab toggling
+  // doesn't hammer the API.
+  const lastVisibilityFetchRef = useRef(0)
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return
+      const now = Date.now()
+      if (now - lastVisibilityFetchRef.current < 5_000) return
+      lastVisibilityFetchRef.current = now
+      void fetchConnectionsRef.current()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
+
   // Auto-open the picker when the user lands here from the OAuth callback
   // (URL: /settings/banking?select_accounts=<id>). The query param is stripped
   // afterwards so a refresh doesn't keep reopening it.
