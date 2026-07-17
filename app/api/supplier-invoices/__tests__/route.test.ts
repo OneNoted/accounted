@@ -159,6 +159,33 @@ describe('POST /api/supplier-invoices', () => {
     expect(body).toEqual({ error: 'Unauthorized' })
   })
 
+  it('returns 400 when vat_rate is percent-shaped (25 instead of 0.25, issue #310)', async () => {
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'LF-PERCENT',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          // Percent-integer shape: used to be accepted and silently booked
+          // 2500 % VAT (line_total * 25).
+          { description: 'Material', quantity: 1, unit_price: 1000, account_number: '4010', vat_rate: 25 },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      type: string
+      errors: Array<{ field: string; message: string }>
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.type).toBe('validation_error')
+    expect(body.errors.some((e) => e.field === 'items.0.vat_rate')).toBe(true)
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when supplier not found', async () => {
     enqueue({ data: null, error: { message: 'Not found' } })
 

@@ -526,6 +526,90 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect('dimensions' in params.items[0]).toBe(false)
   })
 
+  it('normalizes percent vatRate from the real AI extraction shape and derives per-line vat_amount (issue #310)', async () => {
+    // Real ExtractionSchema output: camelCase keys, vatRate as a percent
+    // integer, and NO per-line VAT amount field. Staging must convert to the
+    // decimal convention of supplier_invoice_items (0.25) and derive the
+    // line's vat_amount, or the committed invoice books 2500 % VAT with a
+    // dishonest header vat_amount of 0.
+    const realExtractionShape = {
+      ...baseExtracted,
+      totals: { subtotal: 1000, vatAmount: 250, total: 1250 },
+      lineItems: [
+        { description: 'Konsulttimmar', quantity: 10, unitPrice: 100, lineTotal: 1000, vatRate: 25, accountSuggestion: null },
+      ],
+    }
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-vat-1',
+        status: 'received',
+        extracted_data: realExtractionShape,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-vat-1',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-vat-1' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as {
+      vat_amount: number
+      items: Array<{ vat_rate: number; vat_amount: number; line_total: number }>
+    }
+    expect(params.items[0].vat_rate).toBe(0.25)
+    expect(params.items[0].vat_amount).toBe(250)
+    expect(params.items[0].line_total).toBe(1000)
+    // Header vat_amount is summed from the derived per-line amounts.
+    expect(params.vat_amount).toBe(250)
+  })
+
+  it('passes already-decimal vat_rate through unchanged and zeroes foreign percent rates', async () => {
+    const mixedRates = {
+      ...baseExtracted,
+      lineItems: [
+        // Already decimal (staged by an agent following the storage convention).
+        { description: 'Svensk tjänst', quantity: 1, unit_price: 1000, line_total: 1000, vat_rate: 0.12, vat_amount: 120 },
+        // Foreign rate (DE 19 %): outside the Swedish statutory set, maps to 0
+        // per the extraction contract.
+        { description: 'Utländsk tjänst', quantity: 1, unitPrice: 500, lineTotal: 500, vatRate: 19 },
+      ],
+    }
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-vat-2',
+        status: 'received',
+        extracted_data: mixedRates,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-vat-2',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-vat-2' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as {
+      vat_amount: number
+      items: Array<{ vat_rate: number; vat_amount: number }>
+    }
+    expect(params.items[0].vat_rate).toBe(0.12)
+    expect(params.items[0].vat_amount).toBe(120)
+    expect(params.items[1].vat_rate).toBe(0)
+    expect(params.items[1].vat_amount).toBe(0)
+    expect(params.vat_amount).toBe(120)
+  })
+
   it('invoice_date_override rescues an inbox item with no extracted invoiceDate', async () => {
     const extractedNoDate = {
       ...baseExtracted,
