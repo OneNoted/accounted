@@ -4,6 +4,8 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
 import { syncSkattekonto } from './skattekonto-sync'
+import { SkatteverketAuthError } from './api-client'
+import { markNeedsReconsent, RECONSENT_ERROR_CODES } from './token-store'
 import { reconcileAgiDeclaration, type PendingAgiDeclaration } from './agi-kvittens-reconcile'
 
 const log = createLogger('skatteverket-post-connect')
@@ -64,6 +66,18 @@ export async function runPostConnectRefresh(
       companyId,
       message: err instanceof Error ? err.message : String(err),
     })
+    // A terminal auth error immediately after a fresh consent means the
+    // just-granted token itself is unusable; in practice MISSING_SCOPE,
+    // when the user skipped a behörighet on SKV's consent page. Persist
+    // the health flag (same mechanism as the crons) so /status reports
+    // needsReconsent and the connect panel can prompt with a specific
+    // "godkänn alla behörigheter" message instead of a silent success.
+    if (
+      err instanceof SkatteverketAuthError &&
+      (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
+    ) {
+      await markNeedsReconsent(supabase, userId, err.code)
+    }
   }
 
   try {

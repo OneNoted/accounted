@@ -45,9 +45,31 @@ function SkatteverketPersonalConnectionCard() {
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
   const [disconnecting, setDisconnecting] = useState(false)
-  // Handle of the OAuth popup opened by startConnect: used to verify the
-  // sender identity of incoming postMessages.
+  // True while an OAuth tab opened from this panel is still alive. Disables
+  // the connect button so a second click cannot start a parallel flow: each
+  // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
+  // parallel flow guarantees a CSRF failure for whichever tab finishes last.
+  const [connecting, setConnecting] = useState(false)
+  // Handle of the OAuth tab opened by startConnect: used to verify the
+  // sender identity of incoming postMessages and to detect abandonment.
   const popupRef = useRef<Window | null>(null)
+  const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const delayedRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const stopWatchingOauthTab = useCallback(() => {
+    if (watchTimerRef.current) {
+      clearInterval(watchTimerRef.current)
+      watchTimerRef.current = null
+    }
+    setConnecting(false)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (watchTimerRef.current) clearInterval(watchTimerRef.current)
+      if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+    }
+  }, [])
 
   // docs: https://www7.skatteverket.se/portal-wapi/open/apier-och-oppna-data/utvecklarportalen/v1/getFile/tjanstebeskrivning-skattekonto-hamta-huvudmans-saldo-och-transaktioner-v101
   const SCOPE_LABELS: Record<string, string> = {
@@ -58,8 +80,12 @@ function SkatteverketPersonalConnectionCard() {
     agd: t('scope_agd'),
   }
 
+  // Only the first load blanks the card to the loading state: later refetches
+  // (postMessage, closed-tab watcher, delayed sync refetch, visibility) update
+  // in the background so the panel doesn't flash on every signal.
+  const hasLoadedRef = useRef(false)
   const loadStatus = useCallback(async () => {
-    setLoading(true)
+    if (!hasLoadedRef.current) setLoading(true)
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/status')
       if (res.status === 503) {
@@ -71,12 +97,31 @@ function SkatteverketPersonalConnectionCard() {
     } catch {
       setStatus({ connected: false })
     } finally {
+      hasLoadedRef.current = true
       setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     loadStatus()
+  }, [loadStatus])
+
+  // Safety net for completion signals that never reach this tab: a mobile
+  // BankID app-switch can land the OAuth return in a different browser tab,
+  // and a bfcache-restored page shows a pre-connection snapshot. Refetch
+  // status whenever the tab regains visibility, throttled so rapid tab
+  // toggling doesn't hammer the API.
+  const lastVisibilityFetchRef = useRef(0)
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== 'visible') return
+      const now = Date.now()
+      if (now - lastVisibilityFetchRef.current < 5_000) return
+      lastVisibilityFetchRef.current = now
+      loadStatus()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
   }, [loadStatus])
 
   // Listen for OAuth completion from the BankID popup (same pattern as
@@ -90,6 +135,7 @@ function SkatteverketPersonalConnectionCard() {
       // same-origin scripts.
       if (!popupRef.current || event.source !== popupRef.current) return
       if (event.data?.type === 'skatteverket-oauth-success') {
+        stopWatchingOauthTab()
         toast({
           title: tOauth('connected_title'),
           description: tOauth('connected_description'),
@@ -99,7 +145,18 @@ function SkatteverketPersonalConnectionCard() {
         // consumers (e.g. the salary page) can react without trusting raw
         // postMessage.
         window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+        // The post-connect refresh (skattekonto sync, AGI settle, token
+        // health) now runs server-side AFTER the callback responds, so the
+        // status fetched above predates it. Refetch once more when it has
+        // plausibly settled so synced data and health flags (e.g.
+        // MISSING_SCOPE) show up without a manual reload.
+        if (delayedRefetchRef.current) clearTimeout(delayedRefetchRef.current)
+        delayedRefetchRef.current = setTimeout(() => {
+          loadStatus()
+          window.dispatchEvent(new CustomEvent('skatteverket-connection-updated'))
+        }, 15_000)
       } else if (event.data?.type === 'skatteverket-oauth-error') {
+        stopWatchingOauthTab()
         toast({
           title: tOauth('connect_failed_title'),
           description:
@@ -112,35 +169,46 @@ function SkatteverketPersonalConnectionCard() {
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [loadStatus, toast, tOauth])
+  }, [loadStatus, stopWatchingOauthTab, toast, tOauth])
 
   function startConnect() {
-    // Open the BankID OAuth flow in a centered popup. The callback page
+    // Open the BankID OAuth flow in a NEW TAB, not a popup. The old 600x750
+    // popup could not fit Skatteverket's consent page: the approve button
+    // sat below the fold and users got stranded mid-consent. A tab gets the
+    // full viewport (and behaves natively on mobile). The callback page
     // detects `window.opener`, posts back a message and closes itself: the
     // settings page never navigates, so browser history stays clean and
     // closing the settings afterwards cannot walk Back into the consumed
     // OAuth chain (the "redirected to Skatteverket again" bug).
     const returnTo = encodeURIComponent('/settings/tax')
     const url = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
-    const w = 600
-    const h = 750
-    const left = window.screenX + (window.outerWidth - w) / 2
-    const top = window.screenY + (window.outerHeight - h) / 2
-    const popup = window.open(
-      url,
-      'skatteverket-oauth',
-      `width=${w},height=${h},left=${left},top=${top}`,
-    )
-    popupRef.current = popup
-    if (!popup) {
-      // Popup blocked: fall back to the full-page flow. The callback then
+    const tab = window.open(url, '_blank')
+    popupRef.current = tab
+    if (!tab) {
+      // Tab blocked: fall back to the full-page flow. The callback then
       // lands on /settings/tax?skv_connected=true, handled by
       // TaxSettingsContent's query-param effect.
       window.location.href = url
+      return
     }
+    setConnecting(true)
+    // Detect abandonment: if the tab goes away without posting a message
+    // (closed manually, stranded on Skatteverket's side), re-enable the
+    // button and refresh status. This also fires after a successful
+    // self-close; the extra status fetch is harmless.
+    if (watchTimerRef.current) clearInterval(watchTimerRef.current)
+    watchTimerRef.current = setInterval(() => {
+      if (popupRef.current?.closed) {
+        stopWatchingOauthTab()
+        loadStatus()
+      }
+    }, 1000)
   }
 
   async function disconnect() {
+    // No disconnect while an OAuth tab is in flight: the callback completing
+    // right after the disconnect would silently recreate the tokens.
+    if (connecting) return
     setDisconnecting(true)
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/disconnect', {
@@ -206,11 +274,11 @@ function SkatteverketPersonalConnectionCard() {
           )}
           <Button
             onClick={startConnect}
-            disabled={status?.disabled || !hasSkatteverket}
+            disabled={status?.disabled || !hasSkatteverket || connecting}
             title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
           >
             <ExternalLink className="mr-2 h-4 w-4" />
-            {t('connect_with_bankid')}
+            {connecting ? t('connect_waiting') : t('connect_with_bankid')}
           </Button>
         </CardContent>
       </Card>
@@ -245,7 +313,14 @@ function SkatteverketPersonalConnectionCard() {
         {status.needsReconsent && (
           <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
             <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-            <p>{t('needs_reconsent_message')}</p>
+            {/* MISSING_SCOPE right after a connect means the user skipped a
+                behörighet on SKV's consent page; tell them exactly that
+                instead of the generic "session expired" prompt. */}
+            <p>
+              {status.lastErrorCode === 'MISSING_SCOPE'
+                ? t('missing_scope_message')
+                : t('needs_reconsent_message')}
+            </p>
           </div>
         )}
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
@@ -306,17 +381,17 @@ function SkatteverketPersonalConnectionCard() {
           {(status.expired || status.needsReconsent || !status.canRefresh || !(scopes.includes('skahmst') || scopes.includes('skattekonto')) || !scopes.includes('agd')) && (
             <Button
               onClick={startConnect}
-              disabled={status.disabled || !hasSkatteverket}
+              disabled={status.disabled || !hasSkatteverket || connecting}
               title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
             >
               <ExternalLink className="mr-2 h-4 w-4" />
-              {t('reconnect')}
+              {connecting ? t('connect_waiting') : t('reconnect')}
             </Button>
           )}
           <Button
             variant="outline"
             onClick={disconnect}
-            disabled={disconnecting}
+            disabled={disconnecting || connecting}
           >
             <ShieldOff className="mr-2 h-4 w-4" />
             {disconnecting ? t('disconnecting') : t('disconnect')}

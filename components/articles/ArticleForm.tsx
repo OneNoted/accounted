@@ -131,6 +131,7 @@ export default function ArticleForm({
   const schema = useMemo(
     () =>
       z.object({
+        article_number: z.string().trim().max(64, t('number_too_long')).optional(),
         name: z.string().min(1, t('name_required')),
         name_en: z.string().optional(),
         type: z.enum(['vara', 'tjanst']),
@@ -161,6 +162,7 @@ export default function ArticleForm({
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
+      article_number: initialData?.article_number || '',
       name: initialData?.name || '',
       name_en: initialData?.name_en || '',
       type: initialData?.type || 'tjanst',
@@ -180,6 +182,7 @@ export default function ArticleForm({
 
   const onFormSubmit = (data: FormData) => {
     onSubmit({
+      article_number: data.article_number?.trim() || null,
       name: data.name,
       name_en: data.name_en || null,
       type: data.type,
@@ -197,24 +200,39 @@ export default function ArticleForm({
 
   return (
     <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-6">
-      {/* Type */}
-      <div className="space-y-2">
-        <Label>{t('type_label')}</Label>
-        <Controller
-          name="type"
-          control={control}
-          render={({ field }) => (
-            <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
-              <SelectTrigger>
-                <SelectValue placeholder={t('type_placeholder')} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="vara">{t('type_vara')}</SelectItem>
-                <SelectItem value="tjanst">{t('type_tjanst')}</SelectItem>
-              </SelectContent>
-            </Select>
+      {/* Type + article number */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label>{t('type_label')}</Label>
+          <Controller
+            name="type"
+            control={control}
+            render={({ field }) => (
+              <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t('type_placeholder')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="vara">{t('type_vara')}</SelectItem>
+                  <SelectItem value="tjanst">{t('type_tjanst')}</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="article_number">{t('number_label')}</Label>
+          <Input
+            id="article_number"
+            className="tabular-nums"
+            {...register('article_number')}
+          />
+          {errors.article_number ? (
+            <p className="text-sm text-destructive">{errors.article_number.message}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t('number_hint')}</p>
           )}
-        />
+        </div>
       </div>
 
       {/* Name */}

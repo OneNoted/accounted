@@ -32,15 +32,35 @@ vi.mock('../lib/agi-kvittens-reconcile', () => ({
   reconcileAgiDeclaration: vi.fn(),
 }))
 
+// Real SkatteverketAuthError shape (message, code) without dragging the full
+// api-client module (and its fetch plumbing) into the test.
+vi.mock('../lib/api-client', () => ({
+  SkatteverketAuthError: class SkatteverketAuthError extends Error {
+    code: string
+    constructor(message: string, code: string) {
+      super(message)
+      this.code = code
+    }
+  },
+}))
+
+vi.mock('../lib/token-store', () => ({
+  markNeedsReconsent: vi.fn().mockResolvedValue(undefined),
+  RECONSENT_ERROR_CODES: ['SESSION_EXPIRED', 'REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'],
+}))
+
 import { runPostConnectRefresh } from '../lib/post-connect-refresh'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { syncSkattekonto } from '../lib/skattekonto-sync'
+import { SkatteverketAuthError } from '../lib/api-client'
+import { markNeedsReconsent } from '../lib/token-store'
 import { reconcileAgiDeclaration } from '../lib/agi-kvittens-reconcile'
 
 const mockCreateExtensionContext = vi.mocked(createExtensionContext)
 const mockHasCapability = vi.mocked(hasCapability)
 const mockSyncSkattekonto = vi.mocked(syncSkattekonto)
+const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
 const mockReconcile = vi.mocked(reconcileAgiDeclaration)
 
 const USER = 'user-1'
@@ -118,6 +138,33 @@ describe('runPostConnectRefresh', () => {
     const result = await runPostConnectRefresh(supabase, USER, COMPANY)
 
     expect(result).toEqual({ synced: false, reconciled: 1 })
+    // A plain network/timeout failure is transient: it must not flag the
+    // freshly granted token as needing re-consent.
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
+  })
+
+  it('persists needs_reconsent when the sync hits a terminal auth error (MISSING_SCOPE)', async () => {
+    mockSyncSkattekonto.mockRejectedValueOnce(
+      new SkatteverketAuthError('The required scopes are not authorized', 'MISSING_SCOPE'),
+    )
+    const supabase = makeSupabase({ data: [] })
+
+    const result = await runPostConnectRefresh(supabase, USER, COMPANY)
+
+    expect(result.synced).toBe(false)
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(supabase, USER, 'MISSING_SCOPE')
+  })
+
+  it('does not persist needs_reconsent for non-terminal auth error codes', async () => {
+    mockSyncSkattekonto.mockRejectedValueOnce(
+      new SkatteverketAuthError('temporary auth hiccup', 'NOT_CONNECTED'),
+    )
+    const supabase = makeSupabase({ data: [] })
+
+    const result = await runPostConnectRefresh(supabase, USER, COMPANY)
+
+    expect(result.synced).toBe(false)
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
   })
 
   it('continues with remaining declarations when one reconcile throws', async () => {

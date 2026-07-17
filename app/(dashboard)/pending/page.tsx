@@ -78,6 +78,8 @@ const OPERATION_LABEL_KEYS: Record<string, string> = {
   create_supplier: 'type_create_supplier',
   create_article: 'type_create_article',
   update_article: 'type_update_article',
+  create_account: 'type_create_account',
+  update_account: 'type_update_account',
   create_dimension_value: 'type_create_dimension_value',
   // Supplier invoices
   create_supplier_invoice_from_inbox: 'type_create_supplier_invoice_from_inbox',
@@ -95,6 +97,7 @@ const OPERATION_LABEL_KEYS: Record<string, string> = {
   link_transaction_journal_entry: 'type_link_transaction_journal_entry',
   uncategorize_transaction: 'type_uncategorize_transaction',
   retag_line_dimensions: 'type_retag_line_dimensions',
+  set_voucher_note: 'type_set_voucher_note',
   // Bulk booking / allocation
   match_batch_allocate: 'type_match_batch_allocate',
   bulk_book_transactions: 'type_bulk_book_transactions',

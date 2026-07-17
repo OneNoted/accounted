@@ -79,6 +79,8 @@ import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/cre
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
+import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
+import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
@@ -381,6 +383,147 @@ async function commitUpdateArticle(
   await eventBus.emit({ type: 'article.updated', payload: { article: data as Article, userId, companyId } })
 
   return { data: { article_id: data.id } }
+}
+
+async function commitCreateAccount(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  // Defense in depth: re-validate the staged params at the commit boundary so
+  // a tampered pending_operations row cannot inject unexpected fields into
+  // chart_of_accounts (ASVS V4.5): mirrors commitCreateArticle.
+  let validated
+  try {
+    validated = CreateAccountParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  // Same row shape as the dashboard create route
+  // (app/api/bookkeeping/accounts/route.ts): class/group/sort_order derive
+  // from the number so the two write paths cannot drift.
+  const { data, error } = await supabase
+    .from('chart_of_accounts')
+    .insert({
+      user_id: userId,
+      company_id: companyId,
+      account_number: validated.account_number,
+      account_name: validated.account_name,
+      account_class: parseInt(validated.account_number[0]),
+      account_group: validated.account_number.substring(0, 2),
+      account_type: validated.account_type,
+      normal_balance: validated.normal_balance,
+      plan_type: validated.plan_type,
+      is_active: true,
+      is_system_account: false,
+      description: validated.description ?? null,
+      default_vat_code: validated.default_vat_code ?? null,
+      default_vat_rate: validated.default_vat_rate ?? null,
+      sru_code: validated.sru_code ?? null,
+      sort_order: parseInt(validated.account_number),
+    })
+    .select('account_number, account_name')
+    .single()
+
+  if (error) {
+    if (error.code === '23505') {
+      return { error: `Kontonummer ${validated.account_number} finns redan i kontoplanen.`, status: 409 }
+    }
+    return { error: error.message, status: 500 }
+  }
+
+  return { data: { account_number: data.account_number, account_name: data.account_name } }
+}
+
+async function commitUpdateAccount(
+  supabase: SupabaseClient,
+  _userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = UpdateAccountParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  const { account_number, ...rest } = validated
+  const updateData: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(rest)) {
+    if (value !== undefined) updateData[key] = value
+  }
+  if (Object.keys(updateData).length === 0) {
+    return { error: 'Inget att uppdatera', status: 400 }
+  }
+
+  const { data, error } = await supabase
+    .from('chart_of_accounts')
+    .update(updateData)
+    .eq('company_id', companyId)
+    .eq('account_number', account_number)
+    .select('account_number, account_name, is_active')
+    .single()
+
+  if (error) {
+    if (error.code === 'PGRST116') return { error: 'Kontot hittades inte', status: 404 }
+    return { error: error.message, status: 500 }
+  }
+
+  return { data: { account_number: data.account_number, account_name: data.account_name, is_active: data.is_active } }
+}
+
+async function commitSetVoucherNote(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = SetVoucherNoteParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
+    }
+    throw err
+  }
+
+  // Notes-only UPDATE: the journal_entries immutability trigger (migration
+  // 20260608120000) allows exactly this on committed entries and raises on
+  // anything else, so no status pre-check is needed here. Period-lock and
+  // company-lock-date triggers still apply and surface as errors.
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .update({ notes: validated.notes })
+    .eq('id', validated.journal_entry_id)
+    .eq('company_id', companyId)
+    .select('id, voucher_series, voucher_number')
+    .maybeSingle()
+
+  if (error) return { error: error.message, status: 400 }
+  // Zero rows = the entry doesn't exist in this company: report it instead
+  // of a phantom success (same contract as the dashboard notes route).
+  if (!data) return { error: 'Verifikationen hittades inte.', status: 404 }
+
+  return {
+    data: {
+      journal_entry_id: data.id,
+      voucher_series: data.voucher_series,
+      voucher_number: data.voucher_number,
+      notes: validated.notes,
+    },
+  }
 }
 
 async function commitCreateSupplier(
@@ -4058,6 +4201,15 @@ async function commitPendingOperationInner(
         break
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'create_account':
+        result = await commitCreateAccount(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_account':
+        result = await commitUpdateAccount(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'set_voucher_note':
+        result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)
         break
       case 'create_dimension_value':
         result = await commitCreateDimensionValue(supabase, userId, companyId, pendingOp.params)

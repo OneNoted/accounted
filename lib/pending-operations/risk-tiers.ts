@@ -32,6 +32,18 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // payment-routing surface. Staged (agents never silently mint reporting
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
+  // Kontoplan reference data: adding an account has no journal impact (a
+  // wrong account only becomes bookable, nothing is booked), and update is
+  // limited to name/description/VAT-default/SRU/is_active: the same surface
+  // update_article covers for articles. No payment routing, no external
+  // side-effects.
+  create_account: 'low',
+  update_account: 'low',
+  // Verifikat notes are annotation metadata, not räkenskapsinformation: the
+  // journal_entries immutability trigger (20260608120000) permits exactly a
+  // notes-only diff on committed entries and rejects anything more, so the
+  // op cannot touch booking data even if tampered with.
+  set_voucher_note: 'low',
 
   // ── Medium: reversible booking ─────────────────────────────────────
   categorize_transaction: 'medium',

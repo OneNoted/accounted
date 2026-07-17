@@ -1,7 +1,7 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import {
   AGIKontrolleraHUSchema,
   AGIKontrolleraIUSchema,
@@ -109,7 +109,8 @@ const log = createLogger('skatteverket')
  *        SKATTEVERKET_AGD_INLAMNING_API_BASE_URL=https://api.skatteverket.se/arbetsgivardeklaration/inlamning/v1
  *        SKATTEVERKET_AGD_PERIOD_API_BASE_URL=https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1
  *        SKATTEVERKET_SKATTEKONTO_API_BASE_URL=https://api.skatteverket.se/beskattning/skattekonto/v2
- *        SKATTEVERKET_OAUTH_BASE_URL=https://oauth2.skatteverket.se/oauth2
+ *        SKATTEVERKET_OAUTH_BASE_URL=https://peroauth2.skatteverket.se/oauth2/v1/per
+ *        (per-flow prod host, verified resolving; oauth2.skatteverket.se does not exist)
  *   8. Verify Sentry alerts on /api/extensions/ext/skatteverket/* 5xx.
  *   9. Verify 7-year retention of `agi_declarations.xml_content` +
  *      `kvittensnummer` (BFL 7 kap.).
@@ -433,35 +434,29 @@ export const skatteverketExtension: Extension = {
             .eq('extension_id', 'skatteverket')
             .in('key', ['oauth_state', 'oauth_return_to', 'oauth_code_verifier'])
 
-          // Refresh Skatteverket-derived data NOW, while the fresh token is
-          // guaranteed alive: SKV per-flow tokens live ~65 minutes, so the
-          // nightly crons usually find them dead and right-after-consent is
-          // the one reliable window for a personal-token fetch. Awaited on
-          // purpose: when the popup closes, the salary/skattekonto pages can
-          // refetch and see synced + auto-settled data instead of racing a
-          // background job. Best-effort: a refresh failure must never fail
-          // the connect that just succeeded.
-          // 30-second deadline: a hung SKV call must not hold the OAuth
-          // callback open. On timeout the refresh keeps running best-effort
-          // (no cancellation); the user still gets the success response.
-          const refreshTimeoutMs = 30000
+          // Refresh Skatteverket-derived data AFTER the response is sent.
+          // Right-after-consent is still the one reliable window for a
+          // personal-token fetch (SKV per-flow tokens live ~65 minutes), but
+          // the sync (skattekonto fetch + AGI auto-settle + kvittens
+          // re-checks) can take tens of seconds. This handler previously
+          // awaited it, which held the redirect open while the popup kept
+          // displaying SKV's already-consumed consent page; users read that
+          // as "I approved and nothing happened". The eager promise +
+          // after() pattern (mirrors the enable-banking finalize page) sends
+          // the success page immediately and keeps the serverless function
+          // alive until the refresh settles; the connect panels do a delayed
+          // status refetch to pick up the synced data. Best-effort: a
+          // refresh failure must never fail the connect that just succeeded.
+          const refreshPromise = runPostConnectRefresh(supabase, user.id, companyId)
+            .then(() => undefined)
+            .catch((refreshErr) => {
+              log.error('post-connect refresh failed', refreshErr, { companyId, userId: user.id })
+            })
           try {
-            let timer: ReturnType<typeof setTimeout> | undefined
-            const timedOut = await Promise.race([
-              runPostConnectRefresh(supabase, user.id, companyId).then(() => false),
-              new Promise<true>((resolve) => {
-                timer = setTimeout(() => resolve(true), refreshTimeoutMs)
-              }),
-            ]).finally(() => clearTimeout(timer))
-            if (timedOut) {
-              log.warn('post-connect refresh timed out', {
-                companyId,
-                userId: user.id,
-                timeoutMs: refreshTimeoutMs,
-              })
-            }
-          } catch (refreshErr) {
-            log.error('post-connect refresh failed', refreshErr, { companyId, userId: user.id })
+            after(() => refreshPromise)
+          } catch {
+            // Outside a request scope (unit tests, plain node server): the
+            // eager promise still drives the refresh to completion.
           }
 
           return respondWithSuccess(successPath)
