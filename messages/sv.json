@@ -2965,9 +2965,11 @@
     "delete_confirm_title": "Ta bort schemat?",
     "run_now": "Skapa faktura nu",
     "run_now_confirm": "Skapa en faktura för \"{name}\" nu? Om schemat har automatiskt utskick skickas den direkt till kunden. Nästa schemalagda körning påverkas inte.",
+    "run_now_confirm_title": "Skapa faktura nu?",
     "run_now_success_title": "Faktura skapad",
     "run_now_failed_title": "Kunde inte skapa faktura",
     "resume_autosend_confirm": "Aktivera \"{name}\" igen? Detta återupptar automatiska månatliga utskick till kunden.",
+    "resume_autosend_confirm_title": "Återuppta automatiska utskick?",
     "send_time": "kl {time}"
   },
   "invoice_recurring_new": {
@@ -4960,6 +4962,7 @@
     "approve_override_confirm": "Godkänn ändå",
     "action_revert": "Tillbaka till utkast",
     "action_unapprove": "Ångra godkännande",
+    "confirm_unapprove_title": "Ångra godkännande?",
     "confirm_unapprove_intro": "Godkännandet återkallas och körningen går tillbaka till granskning.",
     "confirm_unapprove_payment_file": "En betalfil har genererats. Om den redan laddats upp till banken måste betalningen makuleras där — annars betalas de gamla beloppen ut.",
     "confirm_unapprove_payslips": "Lönebesked har redan skickats och behöver skickas om efter ny beräkning.",

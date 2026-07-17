@@ -224,13 +224,19 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // could be sitting at the bank, sent payslips, a generated AGI — so the
   // confirm spells out exactly the ones that apply to this run. The API
   // refuses outright once the AGI has been filed with Skatteverket.
-  function handleUnapprove() {
+  async function handleUnapprove() {
     if (!run) return
     const lines = [t('confirm_unapprove_intro')]
     if (run.payment_file_generated_at) lines.push(t('confirm_unapprove_payment_file'))
     if ((run.payslip_deliveries_summary?.sent ?? 0) > 0) lines.push(t('confirm_unapprove_payslips'))
     if (run.agi_generated_at) lines.push(t('confirm_unapprove_agi'))
-    if (!confirm(lines.join('\n\n'))) return
+    const ok = await confirmAction({
+      title: t('confirm_unapprove_title'),
+      description: lines.join('\n\n'),
+      confirmLabel: t('action_unapprove'),
+      variant: 'warning',
+    })
+    if (!ok) return
     handleAction('unapprove')
   }
 

@@ -4,7 +4,7 @@ import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-paym
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -480,12 +480,9 @@ export const POST = withRouteContext(
       }
       txLog.error('failed to create payment journal entry', err as Error)
       // Other errors are recorded but don't abort the match: the user can
-      // re-book the verifikation manually.
-      if (isBookkeepingError(err)) {
-        journalEntryError = getErrorMessage(err, { context: 'invoice' })
-      } else {
-        journalEntryError = err instanceof Error ? err.message : 'Unknown error'
-      }
+      // re-book the verifikation manually. All errors map to Swedish via
+      // getErrorMessage; the raw message must never reach the user (issue #337).
+      journalEntryError = getErrorMessage(err, { context: 'invoice' })
     }
 
     // Underlag for the payment verifikation: re-attach the invoice PDF that

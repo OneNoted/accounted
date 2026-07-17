@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type { ProposedDisposition } from '../types'
 
 /** Maximum periodiseringsfond avsättning for aktiebolag: 25 % of skattemässigt
@@ -132,25 +133,33 @@ export async function listExistingPeriodiseringsfonder(
   }
 
   // Sum debit/credit per 21xx account up to and including the closing date.
-  // Use the journal_entry_lines table directly: RLS scopes to the company.
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, entry_date, status)',
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts): drives
+  // the query from journal_entries and paginates, instead of the old
+  // journal_entries!inner embed that scanned all tenants' lines and silently
+  // truncated at PostgREST's 1000-row cap.
+  type Row = { account_number: string; debit_amount: number | string | null; credit_amount: number | string | null }
+  let data: Row[]
+  try {
+    data = await fetchEntryLines<Row>({
+      supabase,
+      lineColumns: 'account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .lte('entry_date', closingDate),
+      filterLines: (q: EntryLinesQuery) =>
+        q.gte('account_number', '2110').lte('account_number', '2199'),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
+    throw new Error(
+      `Failed to fetch periodiseringsfond balances: ${err instanceof Error ? err.message : String(err)}`,
     )
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .lte('journal_entries.entry_date', closingDate)
-    .gte('account_number', '2110')
-    .lte('account_number', '2199')
-
-  if (error) {
-    throw new Error(`Failed to fetch periodiseringsfond balances: ${error.message}`)
   }
 
-  type Row = { account_number: string; debit_amount: number | string | null; credit_amount: number | string | null }
   const byAccount = new Map<string, number>()
-  for (const row of (data ?? []) as Row[]) {
+  for (const row of data) {
     const balance =
       (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
     byAccount.set(row.account_number, (byAccount.get(row.account_number) ?? 0) + balance)

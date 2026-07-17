@@ -1048,7 +1048,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBeNull()
-    expect(body.journal_entry_error).toBe('Period locked')
+    // Untyped errors no longer leak their raw English message (issue #337):
+    // they map to the Swedish invoice-context fallback.
+    expect(body.journal_entry_error).toBe('Kunde inte hantera fakturan. Försök igen.')
   })
 
   // ────────────────────────────────────────────────────────────────

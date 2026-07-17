@@ -2965,9 +2965,11 @@
     "delete_confirm_title": "Remove the schedule?",
     "run_now": "Create invoice now",
     "run_now_confirm": "Create an invoice for \"{name}\" now? If the schedule has automatic sending, it is emailed to the customer immediately. The next scheduled run is not affected.",
+    "run_now_confirm_title": "Create invoice now?",
     "run_now_success_title": "Invoice created",
     "run_now_failed_title": "Could not create invoice",
     "resume_autosend_confirm": "Reactivate \"{name}\"? This resumes automatic monthly emails to the customer.",
+    "resume_autosend_confirm_title": "Resume automatic sending?",
     "send_time": "at {time}"
   },
   "invoice_recurring_new": {
@@ -4960,6 +4962,7 @@
     "approve_override_confirm": "Approve anyway",
     "action_revert": "Back to draft",
     "action_unapprove": "Recall approval",
+    "confirm_unapprove_title": "Recall approval?",
     "confirm_unapprove_intro": "The approval is recalled and the run goes back to review.",
     "confirm_unapprove_payment_file": "A payment file has been generated. If it has already been uploaded to the bank, the payment must be cancelled there — otherwise the old amounts will be paid out.",
     "confirm_unapprove_payslips": "Payslips have already been sent and need to be re-sent after recalculation.",
