@@ -111,7 +111,7 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
               <span className="tabular-nums">
                 {factsActiveTotal > facts.length ? t('facts_more', { n: factsActiveTotal - facts.length }) : ''}
               </span>
-              <ManageLink href="/settings/assistant" label={t('facts_manage')} />
+              <ManageLink href="/settings/assistant?view=memory" label={t('facts_manage')} />
             </div>
           </>
         )}
