@@ -19,7 +19,7 @@ import {
   type BureauRowStatus,
 } from '@/lib/bureau/types'
 import { monthLockStates } from '@/lib/bureau/month-lock'
-import { WORKLIST_CATEGORIES, type WorklistCategory } from '@/lib/worklist/types'
+import { rankedWorklistCategories } from '@/lib/bureau/category-routes'
 import { OpenClientButton } from './OpenClientButton'
 
 /**
@@ -51,12 +51,7 @@ function topCategories(
 ): string | null {
   const worklist = row.worklist
   if (!worklist || worklist.total === 0) return null
-  const ranked = WORKLIST_CATEGORIES
-    .filter((c): c is WorklistCategory => c !== 'suggested_match')
-    .map((category) => ({ category, count: worklist.counts[category] ?? 0 }))
-    .filter((entry) => entry.count > 0)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 2)
+  const ranked = rankedWorklistCategories(worklist).slice(0, 2)
   if (ranked.length === 0) return null
   return ranked.map((entry) => `${entry.count} ${t(`cat.${entry.category}`)}`).join(' · ')
 }
@@ -240,7 +235,11 @@ export function ClientRosterTable({
                       <PeriodCell row={row} />
                     </TableCell>
                     <TableCell className="text-right">
-                      <OpenClientButton companyId={row.companyId} name={row.name} />
+                      <OpenClientButton
+                        companyId={row.companyId}
+                        name={row.name}
+                        worklist={worklist}
+                      />
                     </TableCell>
                   </TableRow>
                 )
@@ -277,7 +276,9 @@ export function ClientRosterTable({
                 <OpenClientButton
                   companyId={row.companyId}
                   name={row.name}
-                  className="w-full h-11"
+                  worklist={worklist}
+                  className="w-full"
+                  buttonClassName="h-11"
                 />
               </CardContent>
             </Card>

@@ -561,7 +561,8 @@
     "row_error": "Kunde inte hämtas",
     "action": {
       "open": "Öppna",
-      "open_aria": "Öppna {name}"
+      "open_aria": "Öppna {name}",
+      "open_menu_aria": "Öppna specifik vy i {name}"
     },
     "empty": {
       "title": "Inga företag att visa ännu",

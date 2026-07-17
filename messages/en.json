@@ -561,7 +561,8 @@
     "row_error": "Could not be loaded",
     "action": {
       "open": "Open",
-      "open_aria": "Open {name}"
+      "open_aria": "Open {name}",
+      "open_menu_aria": "Open a specific view in {name}"
     },
     "empty": {
       "title": "No companies to show yet",
