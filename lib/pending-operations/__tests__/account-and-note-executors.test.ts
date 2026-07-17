@@ -52,7 +52,7 @@ describe('commitPendingOperation: create_account', () => {
     account_type: 'expense',
     normal_balance: 'debit',
     plan_type: 'full_bas',
-    sru_code: '7513',
+    sru_code: '7321', // 5410's catalog value (lib/bookkeeping/bas-data)
   }
 
   it('happy path: inserts the account and returns committed', async () => {
@@ -115,6 +115,39 @@ describe('commitPendingOperation: create_account', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/Invalid account_number/)
+  })
+
+  it('rejects an account_type inconsistent with the BAS class digit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: null }) // dispatcher reject update
+
+    // Class 2 is equity/liability/untaxed_reserves; an expense there would
+    // put a P&L account on the balance-sheet side of every report.
+    const op = makePendingOp({
+      params: { ...validParams, account_number: '2999', account_type: 'expense' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/BAS class 2/)
+  })
+
+  it('accepts class 8 revenue and class 2 untaxed_reserves (legal combinations)', async () => {
+    for (const params of [
+      { ...validParams, account_number: '8310', account_name: 'Ränteintäkter', account_type: 'revenue', normal_balance: 'credit' },
+      { ...validParams, account_number: '2150', account_name: 'Ackumulerade överavskrivningar', account_type: 'untaxed_reserves', normal_balance: 'credit' },
+    ]) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' } }) // CAS claim
+      enqueue({ data: { account_number: params.account_number, account_name: params.account_name } }) // insert
+      enqueue({ data: null }) // finalize update
+
+      const op = makePendingOp({ params })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+      expect(result.status).toBe('committed')
+    }
   })
 })
 

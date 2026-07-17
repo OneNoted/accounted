@@ -39,6 +39,7 @@ import type { SkillTier } from './skills'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { accountClassTypeConflict } from '@/lib/pending-operations/schemas/account'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
@@ -4961,8 +4962,8 @@ export const tools: McpTool[] = [
         account_name: { type: 'string', description: 'Optional for BAS numbers (prefilled).' },
         account_type: {
           type: 'string',
-          enum: ['asset', 'equity', 'liability', 'revenue', 'expense'],
-          description: 'Required for non-BAS numbers.',
+          enum: ['asset', 'equity', 'liability', 'revenue', 'expense', 'untaxed_reserves'],
+          description: 'Required for non-BAS numbers. untaxed_reserves only for 21xx (obeskattade reserver).',
         },
         normal_balance: {
           type: 'string',
@@ -4971,7 +4972,7 @@ export const tools: McpTool[] = [
         },
         description: { type: 'string' },
         default_vat_code: { type: 'string' },
-        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Fraction (0.25 = 25%).' },
+        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Fraction (0.25 = 25%). Livsmedel: 0.06 from 2026-04-01 (temporary cut from 0.12, reverts 2027-12-31).' },
         sru_code: { type: 'string', description: 'Prefilled for BAS numbers.' },
         dry_run: { type: 'boolean', description: 'Validate and preview without staging.' },
         idempotency_key: { type: 'string', description: 'Per-operation UUID for safe retries (24h TTL).' },
@@ -5017,14 +5018,18 @@ export const tools: McpTool[] = [
           `${accountNumber} is not in the BAS 2026 catalog: account_name, account_type and normal_balance are required for custom accounts.`,
         )
       }
-      // Runtime guard (hosts don't always enforce inputSchema enums). The BAS
-      // catalog can legitimately supply 'untaxed_reserves' (21xx).
+      // Runtime guard (hosts don't always enforce inputSchema enums).
       if (!['asset', 'equity', 'liability', 'revenue', 'expense', 'untaxed_reserves'].includes(accountType)) {
-        throw new Error('account_type must be one of: asset, equity, liability, revenue, expense')
+        throw new Error('account_type must be one of: asset, equity, liability, revenue, expense, untaxed_reserves')
       }
       if (!['debit', 'credit'].includes(normalBalance)) {
         throw new Error('normal_balance must be debit or credit')
       }
+      // Fail fast on a class/type contradiction (e.g. 2999 + expense): the
+      // commit executor derives account_class from the first digit, so an
+      // inconsistent pair would misclassify balance sheet vs income statement.
+      const classConflict = accountClassTypeConflict(accountNumber, accountType)
+      if (classConflict) throw new Error(classConflict)
       const vatRate = args.default_vat_rate as number | undefined
       if (vatRate !== undefined && ![0, 0.06, 0.12, 0.25].includes(vatRate)) {
         throw new Error('default_vat_rate must be one of 0, 0.06, 0.12, 0.25 (fraction, not percent)')
@@ -5072,7 +5077,7 @@ export const tools: McpTool[] = [
         account_name: { type: 'string' },
         description: { type: 'string' },
         default_vat_code: { type: 'string' },
-        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Default VAT rate as a fraction (0.25 = 25%).' },
+        default_vat_rate: { type: 'number', enum: [0, 0.06, 0.12, 0.25], description: 'Default VAT rate as a fraction (0.25 = 25%). Livsmedel: 0.06 from 2026-04-01 (temporary cut from 0.12, reverts 2027-12-31).' },
         sru_code: { type: 'string' },
         is_active: { type: 'boolean', description: 'false deactivates (hides from pickers, keeps history); true (re)activates.' },
         dry_run: { type: 'boolean' },

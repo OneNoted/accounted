@@ -411,6 +411,9 @@ export function AGIPanel(props: AGIPanelProps) {
   }, [submission?.status, checkKvittens])
 
   const handleDisconnect = useCallback(async () => {
+    // No disconnect while an OAuth tab is in flight: the callback completing
+    // right after the disconnect would silently recreate the tokens.
+    if (connecting) return
     setActionLoading('disconnect')
     setError(null)
     setSuccess(null)
@@ -431,7 +434,7 @@ export function AGIPanel(props: AGIPanelProps) {
     } finally {
       setActionLoading(null)
     }
-  }, [fetchStatus, onRefreshSubmission, t])
+  }, [connecting, fetchStatus, onRefreshSubmission, t])
 
   const handleConnect = () => {
     // Open the BankID OAuth flow in a NEW TAB, not a popup. The old 600x750
@@ -893,7 +896,7 @@ export function AGIPanel(props: AGIPanelProps) {
               <button
                 type="button"
                 onClick={handleDisconnect}
-                disabled={actionLoading === 'disconnect'}
+                disabled={actionLoading === 'disconnect' || connecting}
                 className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:border-destructive/50 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
                 title={t('disconnect_title')}
               >

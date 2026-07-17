@@ -44,17 +44,54 @@ const trimmedName = z.preprocess(
   z.string().min(1, 'Account name is required').max(200),
 )
 
-export const CreateAccountParamsSchema = z.object({
-  account_number: accountNumber,
-  account_name: trimmedName,
-  account_type: accountType,
-  normal_balance: normalBalance,
-  plan_type: z.enum(['k1', 'full_bas']).default('k1'),
-  description: optString(2000),
-  default_vat_code: optString(32),
-  default_vat_rate: defaultVatRate,
-  sru_code: optString(16),
-})
+/**
+ * BAS class (first digit) → account types that may live there, matching the
+ * BAS 2026 catalog in lib/bookkeeping/bas-data. Class 8 legitimately holds
+ * both financial revenue (80xx-83xx) and financial expense (84xx-89xx).
+ * Classes 0 and 9 are free-use per the BAS standard and stay unconstrained.
+ * Without this guard a custom account like 2999+expense would be inserted
+ * with account_class 2, an internally contradictory row that misclassifies
+ * balance sheet vs income statement in every report.
+ */
+const BAS_CLASS_ACCOUNT_TYPES: Record<string, readonly string[]> = {
+  '1': ['asset'],
+  '2': ['equity', 'liability', 'untaxed_reserves'],
+  '3': ['revenue'],
+  '4': ['expense'],
+  '5': ['expense'],
+  '6': ['expense'],
+  '7': ['expense'],
+  '8': ['revenue', 'expense'],
+}
+
+/** Returns an error message when account_type is illegal for the account's BAS class, else null. */
+export function accountClassTypeConflict(
+  accountNumber: string,
+  accountType: string,
+): string | null {
+  const allowed = BAS_CLASS_ACCOUNT_TYPES[accountNumber[0]]
+  if (!allowed || allowed.includes(accountType)) return null
+  return `Account ${accountNumber} is in BAS class ${accountNumber[0]}, which cannot hold account_type '${accountType}' (allowed: ${allowed.join(', ')}).`
+}
+
+export const CreateAccountParamsSchema = z
+  .object({
+    account_number: accountNumber,
+    account_name: trimmedName,
+    account_type: accountType,
+    normal_balance: normalBalance,
+    plan_type: z.enum(['k1', 'full_bas']).default('k1'),
+    description: optString(2000),
+    default_vat_code: optString(32),
+    default_vat_rate: defaultVatRate,
+    sru_code: optString(16),
+  })
+  .superRefine((v, ctx) => {
+    const conflict = accountClassTypeConflict(v.account_number, v.account_type)
+    if (conflict) {
+      ctx.addIssue({ code: 'custom', message: conflict, path: ['account_type'] })
+    }
+  })
 
 export const UpdateAccountParamsSchema = z.object({
   account_number: accountNumber,

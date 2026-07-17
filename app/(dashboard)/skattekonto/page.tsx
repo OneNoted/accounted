@@ -139,7 +139,9 @@ export default function SkattekontoPage() {
   // tab switch on a healthy page must not flash the loading state. Throttled
   // so rapid tab toggling doesn't hammer the API.
   const notConnectedRef = useRef(false)
-  notConnectedRef.current = notConnected
+  useEffect(() => {
+    notConnectedRef.current = notConnected
+  }, [notConnected])
   const lastVisibilityReloadRef = useRef(0)
   useEffect(() => {
     function onVisible() {

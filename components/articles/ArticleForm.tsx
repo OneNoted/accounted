@@ -131,7 +131,7 @@ export default function ArticleForm({
   const schema = useMemo(
     () =>
       z.object({
-        article_number: z.string().max(64, t('number_too_long')).optional(),
+        article_number: z.string().trim().max(64, t('number_too_long')).optional(),
         name: z.string().min(1, t('name_required')),
         name_en: z.string().optional(),
         type: z.enum(['vara', 'tjanst']),

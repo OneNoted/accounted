@@ -16,13 +16,17 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 const createAccount = tools.find((t) => t.name === 'gnubok_create_account')!
 const updateAccount = tools.find((t) => t.name === 'gnubok_update_account')!
 
-/** A 4-digit number guaranteed absent from the BAS 2026 catalog. */
+/**
+ * A 4-digit number guaranteed absent from the BAS 2026 catalog, in classes
+ * 4-7 so the fixture's account_type 'expense' passes the class/type
+ * consistency guard.
+ */
 function findNonBasNumber(): string {
-  for (let n = 1000; n <= 9999; n++) {
+  for (let n = 4000; n <= 7999; n++) {
     const candidate = String(n)
     if (!getBASReference(candidate)) return candidate
   }
-  throw new Error('BAS catalog unexpectedly covers every 4-digit number')
+  throw new Error('BAS catalog unexpectedly covers every 4-digit expense number')
 }
 const NON_BAS_NUMBER = findNonBasNumber()
 
@@ -102,6 +106,22 @@ describe('gnubok_create_account: validation gates', () => {
         'company-1', 'user-1', supabase as never,
       ),
     ).rejects.toThrow(/fraction, not percent/)
+  })
+
+  it('rejects an account_type inconsistent with the BAS class digit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // no existing row
+    await expect(
+      createAccount.execute(
+        { account_number: '2999', account_name: 'Fel', account_type: 'expense', normal_balance: 'debit' },
+        'company-1', 'user-1', supabase as never,
+      ),
+    ).rejects.toThrow(/BAS class 2/)
+  })
+
+  it('exposes untaxed_reserves in the input schema enum (21xx round-trip)', () => {
+    const props = (createAccount.inputSchema as { properties: Record<string, { enum?: string[] }> }).properties
+    expect(props.account_type.enum).toContain('untaxed_reserves')
   })
 })
 
@@ -198,7 +218,7 @@ describe('gnubok_update_account', () => {
         description: null,
         default_vat_code: null,
         default_vat_rate: null,
-        sru_code: '7513',
+        sru_code: '7321', // 5410's catalog value (lib/bookkeeping/bas-data)
         is_active: true,
       },
     })

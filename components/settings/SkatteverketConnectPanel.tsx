@@ -206,6 +206,9 @@ function SkatteverketPersonalConnectionCard() {
   }
 
   async function disconnect() {
+    // No disconnect while an OAuth tab is in flight: the callback completing
+    // right after the disconnect would silently recreate the tokens.
+    if (connecting) return
     setDisconnecting(true)
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/disconnect', {
@@ -388,7 +391,7 @@ function SkatteverketPersonalConnectionCard() {
           <Button
             variant="outline"
             onClick={disconnect}
-            disabled={disconnecting}
+            disabled={disconnecting || connecting}
           >
             <ShieldOff className="mr-2 h-4 w-4" />
             {disconnecting ? t('disconnecting') : t('disconnect')}
