@@ -273,6 +273,28 @@ export function getErrorMessage(
     // of the whole `result`. Pick the English variant when the UI locale is
     // English; otherwise fall back to the Swedish `message`.
     if (typeof obj.code === 'string' && typeof obj.message === 'string' && obj.message.trim()) {
+      // Typed domain exceptions (lib/bookkeeping/errors.ts classes) also match
+      // this shape, but their `message` is raw English (often a DB constraint
+      // string) and must never reach the user verbatim. Normalize the instance
+      // into the structured envelope so the per-code branches below own the
+      // translation. Class fields are enumerable own props, so { ...obj }
+      // carries exactly the details those branches expect (totalDebit,
+      // lockDate, reason, issues, ...), while the non-enumerable Error.message
+      // stays out of details. Plain objects (forwarded inner envelopes,
+      // PostgrestError-shaped literals) keep the passthrough behavior.
+      if (error instanceof Error) {
+        return getErrorMessage(
+          {
+            error: {
+              code: obj.code,
+              message: obj.message,
+              account_numbers: (obj as { accountNumbers?: unknown }).accountNumbers,
+              details: { ...obj },
+            },
+          },
+          options
+        )
+      }
       if (locale === 'en' && typeof obj.message_en === 'string' && obj.message_en.trim()) {
         return obj.message_en
       }
@@ -407,6 +429,13 @@ export function getErrorMessage(
         return structured.message_en
       }
       if (typeof structured.message === 'string' && structured.message.trim()) {
+        // Known codes without a dynamic branch above (e.g. CANNOT_REVERSE_STORNO)
+        // carry raw English engine messages: prefer the registry's Swedish
+        // message so no typed code surfaces English in a Swedish UI.
+        if (locale === 'sv' && typeof structured.code === 'string' && !isSwedishUserMessage(structured.message)) {
+          const entry = getErrorEntry(structured.code)
+          if (entry?.message_sv) return entry.message_sv
+        }
         return structured.message
       }
     }

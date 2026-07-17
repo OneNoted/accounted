@@ -7,6 +7,7 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
+import { JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
@@ -325,7 +326,47 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_created).toBe(false)
-    expect(body.journal_entry_error).toBe('Period locked')
+    // Untyped errors no longer leak their raw English message (issue #337):
+    // they map to the Swedish transaction-context fallback.
+    expect(body.journal_entry_error).toBe('Kunde inte hantera transaktionen. Försök igen.')
+  })
+
+  it('translates typed engine errors to Swedish in journal_entry_error (issue #337)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'Test',
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+
+    mockCreateTransactionJournalEntry.mockRejectedValue(new JournalEntryNotBalancedError(100, 80))
+
+    // Update transaction
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_created: boolean
+      journal_entry_error: string
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_created).toBe(false)
+    expect(body.journal_entry_error).toContain('balanserar inte')
+    expect(body.journal_entry_error).toMatch(/100/)
+    expect(body.journal_entry_error).toMatch(/80/)
+    expect(body.journal_entry_error).not.toContain('not balanced')
+    expect(body.journal_entry_error).not.toContain('check constraint')
   })
 
   it('returns 500 when transaction update fails', async () => {

@@ -18,7 +18,7 @@ import {
   escapeLikePattern,
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
-import { AccountsNotInChartError, accountsNotInChartResponse, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
@@ -640,14 +640,11 @@ export const POST = withRouteContext(
       if (err instanceof AccountsNotInChartError) {
         return accountsNotInChartResponse(err)
       }
-      // Bookkeeping errors map to Swedish via the registry. Other errors get
-      // their raw message: the categorization is preserved either way so the
-      // user can still re-book the verifikation manually.
-      if (isBookkeepingError(err)) {
-        journalEntryError = getErrorMessage(err, { context: 'transaction' })
-      } else {
-        journalEntryError = err instanceof Error ? err.message : 'Unknown error'
-      }
+      // All errors map to Swedish via getErrorMessage: the raw message is
+      // already logged above and must never reach the user verbatim (issue
+      // #337). The categorization is preserved either way so the user can
+      // still re-book the verifikation manually.
+      journalEntryError = getErrorMessage(err, { context: 'transaction' })
     }
 
     // direction_mismatch = a mirrored refund/repayment booking; learning it
