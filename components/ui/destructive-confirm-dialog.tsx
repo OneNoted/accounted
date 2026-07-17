@@ -69,7 +69,12 @@ export function DestructiveConfirmDialog({
             </div>
             <div className="space-y-1">
               <DialogTitle>{title}</DialogTitle>
-              <DialogDescription>{description}</DialogDescription>
+              {/* pre-line so callers can pass newline-separated paragraphs
+                  (e.g. the salary unapprove confirm assembles its copy
+                  dynamically); single-line descriptions render unchanged. */}
+              <DialogDescription className="whitespace-pre-line">
+                {description}
+              </DialogDescription>
             </div>
           </div>
         </DialogHeader>
