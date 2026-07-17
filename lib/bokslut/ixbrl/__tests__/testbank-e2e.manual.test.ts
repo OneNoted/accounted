@@ -34,6 +34,7 @@ describe.skipIf(!enabled)('Bolagsverket testbänk E2E', () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { orgnr: string; namn: string }
     expect(json.orgnr).toBe(ORGNR)
+    expect(json.namn).toBeTruthy()
     console.log('grunduppgifter:', json.namn)
   })
 
@@ -58,5 +59,10 @@ describe.skipIf(!enabled)('Bolagsverket testbänk E2E', () => {
     console.log('kontrollera status:', kontrollRes.status)
     console.log(JSON.stringify(kontrollRes.json, null, 2))
     expect(kontrollRes.status).toBe(200)
+    // kontrollera answers 200 even for invalid documents; the validation
+    // outcome lives in utfall, so acceptance means zero error entries.
+    expect(kontrollRes.json.utfall).toEqual(
+      expect.not.arrayContaining([expect.objectContaining({ typ: 'error' })]),
+    )
   }, 120_000)
 })

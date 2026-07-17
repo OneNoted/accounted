@@ -19,7 +19,8 @@ This skill closes that gap.
    - Evidence of firing: recent `loop/*` branches, PR comments by the loop, `loop:needs-human` labels
      (`gh pr list`, `gh issue list --label loop:needs-human`).
 2. **Report a one-screen status table**: loop, expected cadence, last observed run, verdict (LIVE / DEAD / NEVER RAN).
-3. **Ignite what is dead.** For each non-live loop, in order of preference:
+3. **Ignite what is dead.** For each non-live loop, in order of preference (idempotent: re-list
+   triggers first and enable/repair an existing one before creating; never create a duplicate):
    - Re-create/enable its cloud routine trigger.
    - If cloud is unavailable, schedule a local fallback (`CronCreate` invoking the matching
      `/loop-*` skill) and say clearly that it only runs while this machine is awake.
