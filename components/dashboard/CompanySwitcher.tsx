@@ -7,12 +7,14 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { switchCompany } from '@/lib/company/actions'
+import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, ChevronsUpDown, Plus, Loader2 } from 'lucide-react'
+import { ArrowRight, Building2, Check, ChevronsUpDown, Plus, Loader2 } from 'lucide-react'
 
 export default function CompanySwitcher() {
   const { company, companies, isSandbox } = useCompany()
   const t = useTranslations('company_switcher')
+  const tb = useTranslations('bureau')
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   const [isPending, setIsPending] = useState(false)
@@ -90,28 +92,18 @@ export default function CompanySwitcher() {
       })
       return
     }
-    // Notify every other open tab of the same user so they hard-reload
-    // onto the new company. BroadcastChannel is best-effort: if the
-    // browser doesn't support it (very old) we still hard-reload
-    // ourselves, and other tabs will self-correct via the visibilitychange
-    // / pageshow listeners in CompanyTabSync on their next focus event.
-    if (typeof BroadcastChannel !== 'undefined') {
-      try {
-        const channel = new BroadcastChannel('gnubok-company-switch')
-        channel.postMessage({ companyId })
-        channel.close()
-      } catch {
-        // Ignore: hard reload still happens below
-      }
-    }
-    // Hard navigation: tears down React state, router cache, in-flight
-    // fetches, blob URLs, etc. This is the whole point: nothing from the
-    // previous company can survive the switch.
-    window.location.assign('/')
+    // Broadcast to other tabs + hard navigation; shared with the bureau
+    // roster's OpenClientButton (lib/company/switch-client.ts).
+    performCompanySwitch(companyId)
   }
 
   // Always allow opening the dropdown (to show "Lägg till företag")
   const hasMultiple = companies.length > 1
+
+  // Byrå plane entry: only meaningful with 2+ live companies, hidden in
+  // sandbox. Mirrors the server-side gate on /byra (lib/bureau/gate.ts).
+  const showAllClients =
+    !isSandbox && companies.filter(({ company: c }) => !c.archived_at).length >= 2
 
   // No companies yet: show a direct "Lägg till företag" link instead of
   // the switcher so the user can still create one. Hidden in sandbox mode.
@@ -194,6 +186,20 @@ export default function CompanySwitcher() {
                 ))}
               </div>
             </>
+          )}
+
+          {showAllClients && (
+            <div className="border-t border-border/40 mt-1 pt-1 px-1">
+              <Link
+                href="/byra"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-md transition-colors md:whitespace-nowrap"
+              >
+                <Building2 className="h-3.5 w-3.5" />
+                {tb('all_clients')}
+                <ArrowRight className="h-3 w-3 ml-auto text-muted-foreground/50" />
+              </Link>
+            </div>
           )}
 
           {!isSandbox && (
