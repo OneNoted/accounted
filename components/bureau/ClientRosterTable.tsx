@@ -12,12 +12,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import {
   bureauRowStatus,
   type BureauClientRow,
   type BureauRowStatus,
 } from '@/lib/bureau/types'
+import { monthLockStates } from '@/lib/bureau/month-lock'
 import { WORKLIST_CATEGORIES, type WorklistCategory } from '@/lib/worklist/types'
 import { OpenClientButton } from './OpenClientButton'
 
@@ -82,6 +83,38 @@ function DeadlineCell({ row }: { row: BureauClientRow }) {
   )
 }
 
+/**
+ * Fortnox-style close-progress strip: the trailing 12 months, filled when
+ * the month is behind bookkeeping_locked_through. Achromatic fills (the
+ * strip is structure, not alarm); the text line below carries the exact
+ * date for screen readers and precision.
+ */
+function MonthLockStrip({ lockedThrough }: { lockedThrough: string }) {
+  const t = useTranslations('bureau')
+  // Local date is fine here: the strip is month-granular display only.
+  const today = new Intl.DateTimeFormat('sv-SE').format(new Date())
+  const months = monthLockStates(lockedThrough, today)
+  return (
+    <div
+      className="flex items-center gap-px"
+      role="img"
+      aria-label={t('period_locked_through', { date: formatDate(lockedThrough) })}
+    >
+      {months.map((m) => (
+        <span
+          key={m.month}
+          title={m.month}
+          className={cn(
+            'h-3 w-1 rounded-[1px]',
+            m.locked ? 'bg-foreground/30' : 'bg-muted',
+            m.isCurrent && 'ring-1 ring-border',
+          )}
+        />
+      ))}
+    </div>
+  )
+}
+
 function PeriodCell({ row }: { row: BureauClientRow }) {
   const t = useTranslations('bureau')
   const period = row.periodStatus
@@ -91,9 +124,12 @@ function PeriodCell({ row }: { row: BureauClientRow }) {
   // whole fiscal years).
   if (period.lockedThrough) {
     return (
-      <span className="text-sm text-muted-foreground tabular-nums">
-        {t('period_locked_through', { date: formatDate(period.lockedThrough) })}
-      </span>
+      <div className="space-y-1">
+        <MonthLockStrip lockedThrough={period.lockedThrough} />
+        <p className="text-xs text-muted-foreground tabular-nums">
+          {t('period_locked_through', { date: formatDate(period.lockedThrough) })}
+        </p>
+      </div>
     )
   }
   if (period.status === 'closed') {
