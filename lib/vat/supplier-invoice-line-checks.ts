@@ -1,6 +1,8 @@
 // Pure submit-time checks for supplier invoice line items (issue #863).
 // Kept free of React so the rules can be unit-tested and reused.
 
+import { roundOre } from '@/lib/money'
+
 // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The supplier
 // invoice form stores rates as decimal fractions (0.25 = 25 %); this list is
 // also the preset dropdown in the form's VAT rate cell.
@@ -13,6 +15,25 @@ export const LEGAL_VAT_RATES: readonly number[] = [0.25, 0.12, 0.06, 0]
 
 export function isLegalVatRate(rate: number): boolean {
   return LEGAL_VAT_RATES.includes(rate)
+}
+
+/**
+ * Normalize a VAT rate that may arrive percent-shaped (25, 12, 6: the AI
+ * extraction contract and stale staged pending_operations params) to the
+ * decimal-fraction convention used by supplier_invoice_items (0.25, 0.12,
+ * 0.06); issue #310. Values above 1 are treated as percent and divided by
+ * 100; the result is snapped to the legal Swedish set and anything else
+ * (foreign 19/20, non-finite or missing input) maps to 0, mirroring the
+ * extraction contract: the strict Swedish allowlist applies when converting
+ * to a supplier invoice.
+ */
+export function normalizeVatRateToDecimal(rate: unknown): number {
+  const n = Number(rate)
+  if (!Number.isFinite(n)) return 0
+  // roundOre is 2-decimal rounding: exactly the snap a decimal fraction of an
+  // integer percent needs (25 / 100 must land on the legal-set double).
+  const decimal = roundOre(n > 1 ? n / 100 : n)
+  return isLegalVatRate(decimal) ? decimal : 0
 }
 
 /**

@@ -35,6 +35,7 @@ export default function RecurringInvoicesPage() {
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [runningId, setRunningId] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -81,31 +82,41 @@ export default function RecurringInvoicesPage() {
   }, [])
 
   async function togglePause(s: ScheduleRow) {
+    // In-flight guard: the confirm dialog closes before the PATCH settles,
+    // so a second click would fire a duplicate request.
+    if (togglingId) return
     const next = s.status === 'active' ? 'paused' : 'active'
     // Reactivating an auto-send schedule resumes automatic emails to the
     // customer, so make the user consciously confirm they mean to turn it on.
-    if (
-      next === 'active' &&
-      s.auto_send &&
-      !confirm(t('resume_autosend_confirm', { name: s.name }))
-    ) {
-      return
+    if (next === 'active' && s.auto_send) {
+      const ok = await confirmAction({
+        title: t('resume_autosend_confirm_title'),
+        description: t('resume_autosend_confirm', { name: s.name }),
+        confirmLabel: t('resume'),
+        variant: 'warning',
+      })
+      if (!ok) return
     }
-    const res = await fetch(`/api/invoices/recurring/${s.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: next }),
-    })
-    if (res.ok) {
-      toast({
-        title: next === 'paused' ? t('schedule_paused_title') : t('schedule_resumed_title'),
+    setTogglingId(s.id)
+    try {
+      const res = await fetch(`/api/invoices/recurring/${s.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: next }),
       })
-      fetchSchedules()
-    } else {
-      toast({
-        title: t('schedule_update_failed_title'),
-        variant: 'destructive',
-      })
+      if (res.ok) {
+        toast({
+          title: next === 'paused' ? t('schedule_paused_title') : t('schedule_resumed_title'),
+        })
+        fetchSchedules()
+      } else {
+        toast({
+          title: t('schedule_update_failed_title'),
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -113,7 +124,13 @@ export default function RecurringInvoicesPage() {
     // In-flight guard: a second click while the request runs would create a
     // duplicate invoice for the customer.
     if (runningId) return
-    if (!confirm(t('run_now_confirm', { name: s.name }))) return
+    const ok = await confirmAction({
+      title: t('run_now_confirm_title'),
+      description: t('run_now_confirm', { name: s.name }),
+      confirmLabel: t('run_now'),
+      variant: 'warning',
+    })
+    if (!ok) return
     setRunningId(s.id)
     try {
       const res = await fetch(`/api/invoices/recurring/${s.id}/run`, { method: 'POST' })
@@ -270,6 +287,7 @@ export default function RecurringInvoicesPage() {
                             <Button
                               variant="secondary"
                               size="sm"
+                              disabled={togglingId !== null}
                               onClick={() => togglePause(s)}
                             >
                               {s.status === 'active' ? t('pause') : t('resume')}
