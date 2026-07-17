@@ -26,7 +26,6 @@ import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
 import { LedgerGraph } from './LedgerGraph'
 import { CompetenceCard, FactsCard } from './AgentCompetenceSections'
-import { KnowledgeTabs } from './KnowledgeTabs'
 
 // Swedish VAT (moms) treatment codes stay Swedish in both locales, like BAS
 // account names and momsdeklaration labels (.claude/rules/i18n.md).
@@ -74,7 +73,7 @@ export function AgentKnowledgeView({
     // No bookings yet, but the agent still ships with competence and may
     // already remember facts: show those rather than a dead end.
     return (
-      <>
+      <div className="space-y-8">
         <Card>
           <CardContent className="p-0">
             <EmptyState
@@ -90,7 +89,7 @@ export function AgentKnowledgeView({
           <CompetenceCard competence={competence} />
           <FactsCard competence={competence} />
         </div>
-      </>
+      </div>
     )
   }
 
@@ -110,7 +109,9 @@ export function AgentKnowledgeView({
           ? t('period_yearly')
           : (vat_profile.moms_period ?? t('unknown'))
 
-  // "Regler & profil" tab: user-authored rules + observed VAT + conventions.
+  // "Regler & profil": user-authored rules + observed VAT + conventions.
+  // Rendered inline below the graph; Minne and Kompetens have their own
+  // top-level tabs, so nesting a second tab row here would just duplicate them.
   const configContent = (
     <>
       {explicit_rules.length > 0 && (
@@ -218,24 +219,22 @@ export function AgentKnowledgeView({
     </>
   )
 
-  const tabs = [
-    { value: 'competence', label: t('tab_competence'), content: <CompetenceCard competence={competence} /> },
-    { value: 'memory', label: t('tab_memory'), content: <FactsCard competence={competence} /> },
-    { value: 'config', label: t('tab_config'), content: configContent },
-  ]
-
   return (
-    <>
+    <div className="space-y-8">
       {/* The cinematic hero: a self-contained dark panel with its own header */}
       <LedgerGraph deep={deep} companyName={companyName} />
 
-      {/* Supporting detail, tabbed so it doesn't stack into a long scroll */}
-      <KnowledgeTabs tabs={tabs} />
+      <section className="space-y-4">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {t('tab_config')}
+        </h2>
+        {configContent}
+      </section>
 
       <p className="text-right text-xs text-muted-foreground">
         {t('footer_basis', { entries: meta.coverage.posted_entries_window, date: formatDateLong(meta.computed_at) })}
       </p>
-    </>
+    </div>
   )
 }
 

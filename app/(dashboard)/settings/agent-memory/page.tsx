@@ -4,5 +4,5 @@ import { redirect } from 'next/navigation'
 // links (e.g. AgentChat's "what I remember" affordance) and old bookmarks land
 // in the right place.
 export default function AgentMemorySettingsPage() {
-  redirect('/settings/assistant')
+  redirect('/settings/assistant?view=memory')
 }
