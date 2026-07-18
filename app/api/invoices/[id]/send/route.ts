@@ -50,11 +50,14 @@ export const POST = withRouteContext(
     // but still long BEFORE the email leaves: after delivery the pipeline
     // only degrades to PARTIAL. Same contract as mark-sent.
     let rawBody: unknown
-    try {
-      const text = await request.text()
-      if (text) rawBody = JSON.parse(text)
-    } catch {
-      // Empty / invalid body: fall through to defaults.
+    const bodyText = await request.text()
+    if (bodyText) {
+      try {
+        rawBody = JSON.parse(bodyText)
+      } catch {
+        // Malformed JSON must not silently fall back to generated lines.
+        return NextResponse.json({ error: 'Ogiltig förfrågan' }, { status: 400 })
+      }
     }
 
     // The sandbox must never deliver a real email to a real customer: block

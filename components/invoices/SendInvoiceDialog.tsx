@@ -19,6 +19,7 @@ import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntry
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { createClient } from '@/lib/supabase/client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -60,7 +61,6 @@ export default function SendInvoiceDialog({
   const isCreditRepair = isCreditNote && invoice.status === 'sent'
 
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   const [entityType, setEntityType] = useState<EntityType>('enskild_firma')
   const [periodName, setPeriodName] = useState('')
   const [isInitialized, setIsInitialized] = useState(false)
@@ -75,8 +75,11 @@ export default function SendInvoiceDialog({
   // PaymentBookingDialog). Credit notes keep the read-only preview, as do
   // invoices with periodiserade rows: the server generator defers those to
   // 29xx and creates dissolution schedules, which user-edited lines bypass.
+  // SEK only: the generated path stamps FX metadata (currency, exchange rate)
+  // on the receivable line, which custom lines cannot carry.
   const hasAccrualItems = (invoice.items ?? []).some((item) => itemHasAccrual(item))
-  const editable = !isCreditNote && shouldBookOnIssue && !hasAccrualItems
+  const editable =
+    !isCreditNote && shouldBookOnIssue && !hasAccrualItems && invoice.currency === 'SEK'
 
   useEffect(() => {
     if (!open) {
@@ -139,7 +142,6 @@ export default function SendInvoiceDialog({
         if (cancelled) return
 
         setAccounts(fetchedAccounts)
-        setAccountingMethod(method)
         setEntityType((settingsResult.data?.entity_type as EntityType) || 'enskild_firma')
         setPeriodName(periodResult.data?.name || '')
         setDeferBooking(!!settingsResult.data?.defer_invoice_booking)
@@ -207,8 +209,10 @@ export default function SendInvoiceDialog({
     // the POST while staying visible in the grid; block submit instead.
     let hasOrphanAmounts = false
     for (const line of activeLines) {
-      const debit = parseFloat(line.debit_amount) || 0
-      const credit = parseFloat(line.credit_amount) || 0
+      // Round per line like the server does, so a payload the badge calls
+      // balanced can never be rejected by the route's rounded check.
+      const debit = roundOre(parseFloat(line.debit_amount) || 0)
+      const credit = roundOre(parseFloat(line.credit_amount) || 0)
       if ((debit || credit) && !line.account_number) hasOrphanAmounts = true
       totalDebit += debit
       totalCredit += credit
@@ -333,7 +337,7 @@ export default function SendInvoiceDialog({
               ? shouldBookOnIssue
                 ? t('credit_mark_success_voucher_created')
                 : t('credit_mark_success_no_voucher')
-              : accountingMethod === 'accrual'
+              : shouldBookOnIssue
                 ? t('mark_success_voucher_created')
                 : undefined,
         })
@@ -431,14 +435,21 @@ export default function SendInvoiceDialog({
                           className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
                           onClick={() => removeLine(index)}
                           disabled={editLines.length <= 2}
+                          aria-label={t('remove_row')}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">{t('debit_label')}</Label>
+                          <Label
+                            htmlFor={`send-line-${index}-debit`}
+                            className="text-xs text-muted-foreground"
+                          >
+                            {t('debit_label')}
+                          </Label>
                           <Input
+                            id={`send-line-${index}-debit`}
                             type="number"
                             step="0.01"
                             min="0"
@@ -450,8 +461,14 @@ export default function SendInvoiceDialog({
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">{t('credit_label')}</Label>
+                          <Label
+                            htmlFor={`send-line-${index}-credit`}
+                            className="text-xs text-muted-foreground"
+                          >
+                            {t('credit_label')}
+                          </Label>
                           <Input
+                            id={`send-line-${index}-credit`}
                             type="number"
                             step="0.01"
                             min="0"
@@ -496,6 +513,7 @@ export default function SendInvoiceDialog({
                         value={line.debit_amount}
                         onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
                         className="tabular-nums text-right"
+                        aria-label={t('debit_label')}
                       />
                       <Input
                         type="number"
@@ -505,6 +523,7 @@ export default function SendInvoiceDialog({
                         value={line.credit_amount}
                         onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
                         className="tabular-nums text-right"
+                        aria-label={t('credit_label')}
                       />
                       <Button
                         type="button"
@@ -513,6 +532,7 @@ export default function SendInvoiceDialog({
                         className="h-8 w-8 text-muted-foreground hover:text-destructive"
                         onClick={() => removeLine(index)}
                         disabled={editLines.length <= 2}
+                        aria-label={t('remove_row')}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

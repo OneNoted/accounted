@@ -45,11 +45,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   // here but validate only AFTER the ownership fetch below, so callers never
   // get payload feedback for invoices outside their company.
   let rawBody: unknown
-  try {
-    const text = await request.text()
-    if (text) rawBody = JSON.parse(text)
-  } catch {
-    // Empty / invalid body: fall through to defaults.
+  const bodyText = await request.text()
+  if (bodyText) {
+    try {
+      rawBody = JSON.parse(bodyText)
+    } catch {
+      // Malformed JSON must not silently fall back to generated lines.
+      return NextResponse.json({ error: 'Ogiltig förfrågan' }, { status: 400 })
+    }
   }
 
   // Fetch invoice

@@ -3044,6 +3044,7 @@
     "debit_label": "Debit",
     "credit_label": "Credit",
     "add_row": "Add row",
+    "remove_row": "Remove row",
     "balanced_badge": "Debit = Credit",
     "unbalanced_badge": "Unbalanced ({delta})",
     "voucher_description": "Sales invoice{numberSpace}{customerSuffix}",

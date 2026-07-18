@@ -3044,6 +3044,7 @@
     "debit_label": "Debet",
     "credit_label": "Kredit",
     "add_row": "Lägg till rad",
+    "remove_row": "Ta bort rad",
     "balanced_badge": "Debet = Kredit",
     "unbalanced_badge": "Obalanserad ({delta})",
     "voucher_description": "Försäljning faktura{numberSpace}{customerSuffix}",
