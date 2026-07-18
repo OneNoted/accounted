@@ -12,6 +12,8 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { MarkInvoiceSentSchema } from '@/lib/api/schemas'
+import { roundOre } from '@/lib/money'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -37,8 +39,53 @@ ensureInitialized()
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.mark_sent',
-  async (_request, { supabase, user, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
   const { id } = await params
+
+  // Optional body. Backwards-compat: callers may POST with no body.
+  let customLines:
+    | {
+        account_number: string
+        debit_amount: number
+        credit_amount: number
+        line_description?: string
+        dimensions?: Record<string, string>
+      }[]
+    | undefined
+  let rawBody: unknown
+  try {
+    const text = await request.text()
+    if (text) rawBody = JSON.parse(text)
+  } catch {
+    // Empty / invalid body: fall through to defaults.
+  }
+
+  if (rawBody) {
+    const parsed = MarkInvoiceSentSchema.safeParse(rawBody)
+    if (!parsed.success) {
+      log.warn('mark-sent validation failed', {
+        issueCount: parsed.error.issues.length,
+      })
+      return NextResponse.json(
+        { error: 'Ogiltig förfrågan', details: parsed.error.flatten() },
+        { status: 400 },
+      )
+    }
+    customLines = parsed.data.lines
+  }
+
+  if (customLines) {
+    // Sum per-line öre-rounded amounts: the engine rounds each line before
+    // insert, so raw sums that balance can still book unbalanced otherwise.
+    const totalDebit = customLines.reduce((s, l) => s + roundOre(l.debit_amount), 0)
+    const totalCredit = customLines.reduce((s, l) => s + roundOre(l.credit_amount), 0)
+    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+      return errorResponseFromCode('INVOICE_MARK_SENT_LINES_UNBALANCED', log, {
+        requestId,
+        details: { totalDebit, totalCredit },
+      })
+    }
+  }
 
   // Fetch invoice
   const { data: invoice, error: invoiceError } = await supabase
@@ -183,37 +230,52 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // booking); ekonomi books later via POST /api/invoices/[id]/book, like
     // under kontantmetoden.
     try {
-      const journalEntry = await createInvoiceJournalEntry(
-        supabase,
-        companyId,
-        user.id,
-        invoice as Invoice,
-        entityType,
-        invoice.customer?.name
-      )
+      const journalEntry = customLines
+        ? await createInvoiceJournalEntry(
+            supabase,
+            companyId,
+            user.id,
+            invoice as Invoice,
+            entityType,
+            invoice.customer?.name,
+            { customLines },
+          )
+        : await createInvoiceJournalEntry(
+            supabase,
+            companyId,
+            user.id,
+            invoice as Invoice,
+            entityType,
+            invoice.customer?.name,
+          )
       if (journalEntry) {
         journalEntryId = journalEntry.id
 
         // Periodiserade lines: create schedules + catch-up dissolutions now
         // that the revenue entry exists. Failures are logged, never fatal:
-        // the verifikat is committed.
-        const accrual = await createSchedulesForCustomerInvoice(
-          supabase,
-          companyId,
-          user.id,
-          invoice as Invoice,
-          (invoice.items as InvoiceItem[] | null) ?? [],
-          journalEntry.id,
-          entityType,
-        )
-        if (accrual.failed > 0) {
-          log.error('accrual schedule creation failed on mark-sent', {
-            failed: accrual.failed,
-          })
-          partialFailures.push({
-            step: 'accrual_schedules',
-            reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
-          })
+        // the verifikat is committed. Skipped when the user edited the lines:
+        // the generated 29xx deferral may no longer exist in what was booked,
+        // and a schedule would then dissolve an interim balance that was
+        // never credited. User-edited lines book exactly as reviewed.
+        if (!customLines) {
+          const accrual = await createSchedulesForCustomerInvoice(
+            supabase,
+            companyId,
+            user.id,
+            invoice as Invoice,
+            (invoice.items as InvoiceItem[] | null) ?? [],
+            journalEntry.id,
+            entityType,
+          )
+          if (accrual.failed > 0) {
+            log.error('accrual schedule creation failed on mark-sent', {
+              failed: accrual.failed,
+            })
+            partialFailures.push({
+              step: 'accrual_schedules',
+              reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
+            })
+          }
         }
 
         const { error: linkError } = await supabase

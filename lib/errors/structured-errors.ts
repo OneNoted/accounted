@@ -796,6 +796,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan ändrades av en annan begäran. Ladda om och försök igen.',
     message_en: 'The invoice was changed by another request. Reload and retry.',
   },
+  INVOICE_MARK_SENT_LINES_UNBALANCED: {
+    httpStatus: 400,
+    message_sv: 'Verifikationsraderna är inte balanserade (debet ≠ kredit).',
+    message_en: 'Custom journal lines do not balance.',
+  },
   INVOICE_MARK_SENT_BOOK_FAILED: {
     httpStatus: 500,
     message_sv: 'Fakturan kunde inte bokföras och ligger kvar som utkast.',

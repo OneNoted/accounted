@@ -334,13 +334,36 @@ export async function createInvoiceJournalEntry(
    * verifikation should read "Självfaktura <external number>" rather than
    * "Kundfaktura <our number>", and the number tag must be the counterparty's
    * external number because the row has no own `invoice_number`.
+   *
+   * customLines: user-edited rows from the send dialog. Booked verbatim
+   * (caller validates balance); line generation is skipped entirely.
    */
-  options?: { descriptionPrefix?: string; numberOverride?: string | null }
+  options?: {
+    descriptionPrefix?: string
+    numberOverride?: string | null
+    customLines?: CreateJournalEntryLineInput[]
+  }
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
     return null
+  }
+
+  if (options?.customLines && options.customLines.length > 0) {
+    return createJournalEntry(supabase, companyId, userId, {
+      fiscal_period_id: fiscalPeriodId,
+      entry_date: invoice.invoice_date,
+      description: buildInvoiceDescription(
+        options?.descriptionPrefix ?? 'Kundfaktura',
+        options?.numberOverride ?? invoice.invoice_number,
+        customerName,
+        invoice.id,
+      ),
+      source_type: 'invoice_created',
+      source_id: invoice.id,
+      lines: options.customLines,
+    })
   }
 
   const lines: CreateJournalEntryLineInput[] = []

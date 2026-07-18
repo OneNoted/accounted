@@ -21,6 +21,8 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { MarkInvoiceSentSchema } from '@/lib/api/schemas'
+import { roundOre } from '@/lib/money'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -39,10 +41,57 @@ ensureInitialized()
 
 export const POST = withRouteContext(
   'invoice.send',
-  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ invoiceId: id })
+
+    // Optional body: user-edited issuance lines. Validated up front so a bad
+    // payload 400s BEFORE the email leaves; after delivery the pipeline only
+    // degrades to PARTIAL. Same contract as mark-sent.
+    let customLines:
+      | {
+          account_number: string
+          debit_amount: number
+          credit_amount: number
+          line_description?: string
+          dimensions?: Record<string, string>
+        }[]
+      | undefined
+    let rawBody: unknown
+    try {
+      const text = await request.text()
+      if (text) rawBody = JSON.parse(text)
+    } catch {
+      // Empty / invalid body: fall through to defaults.
+    }
+
+    if (rawBody) {
+      const parsed = MarkInvoiceSentSchema.safeParse(rawBody)
+      if (!parsed.success) {
+        opLog.warn('send validation failed', {
+          issueCount: parsed.error.issues.length,
+        })
+        return NextResponse.json(
+          { error: 'Ogiltig förfrågan', details: parsed.error.flatten() },
+          { status: 400 },
+        )
+      }
+      customLines = parsed.data.lines
+    }
+
+    if (customLines) {
+      // Sum per-line öre-rounded amounts: the engine rounds each line before
+      // insert, so raw sums that balance can still book unbalanced otherwise.
+      const totalDebit = customLines.reduce((s, l) => s + roundOre(l.debit_amount), 0)
+      const totalCredit = customLines.reduce((s, l) => s + roundOre(l.credit_amount), 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return errorResponseFromCode('INVOICE_MARK_SENT_LINES_UNBALANCED', opLog, {
+          requestId,
+          details: { totalDebit, totalCredit },
+        })
+      }
+    }
 
     // The sandbox must never deliver a real email to a real customer: block
     // the entire send pipeline (PDF render + Resend send + status flip).
@@ -363,13 +412,23 @@ export const POST = withRouteContext(
     // journal_entry_id = NULL until then, like under kontantmetoden.
     if (statusFlipped && !isCreditNote && isRealInvoice && booksInvoicesOnIssue(company as CompanySettings)) {
       try {
-        const journalEntry = await createInvoiceJournalEntry(
-          supabase,
-          companyId!,
-          user.id,
-          invoice as Invoice,
-          (company as CompanySettings).entity_type,
-        )
+        const journalEntry = customLines
+          ? await createInvoiceJournalEntry(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as Invoice,
+              (company as CompanySettings).entity_type,
+              undefined,
+              { customLines },
+            )
+          : await createInvoiceJournalEntry(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as Invoice,
+              (company as CompanySettings).entity_type,
+            )
         if (journalEntry) {
           createdJournalEntryId = journalEntry.id
           await supabase
@@ -380,20 +439,24 @@ export const POST = withRouteContext(
           // Periodiserade lines: create their schedules + catch-up
           // dissolutions now that the revenue entry exists. Failures degrade
           // to PARTIAL: the entry is committed and must not be rolled back.
-          const accrual = await createSchedulesForCustomerInvoice(
-            supabase,
-            companyId!,
-            user.id,
-            invoice as Invoice,
-            items,
-            journalEntry.id,
-            (company as CompanySettings).entity_type,
-          )
-          if (accrual.failed > 0) {
-            partialFailures.push({
-              step: 'accrual_schedules',
-              reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
-            })
+          // Skipped for user-edited lines: the generated 29xx deferral may
+          // not exist in what was booked; edited lines book as reviewed.
+          if (!customLines) {
+            const accrual = await createSchedulesForCustomerInvoice(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as Invoice,
+              items,
+              journalEntry.id,
+              (company as CompanySettings).entity_type,
+            )
+            if (accrual.failed > 0) {
+              partialFailures.push({
+                step: 'accrual_schedules',
+                reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
+              })
+            }
           }
         }
       } catch (err) {
