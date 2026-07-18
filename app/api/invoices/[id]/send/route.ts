@@ -21,8 +21,7 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { MarkInvoiceSentSchema } from '@/lib/api/schemas'
-import { roundOre } from '@/lib/money'
+import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -46,51 +45,16 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ invoiceId: id })
 
-    // Optional body: user-edited issuance lines. Validated up front so a bad
-    // payload 400s BEFORE the email leaves; after delivery the pipeline only
-    // degrades to PARTIAL. Same contract as mark-sent.
-    let customLines:
-      | {
-          account_number: string
-          debit_amount: number
-          credit_amount: number
-          line_description?: string
-          dimensions?: Record<string, string>
-        }[]
-      | undefined
+    // Optional body: user-edited issuance lines. Read here; validated after
+    // the ownership fetch below (no payload feedback for foreign invoices)
+    // but still long BEFORE the email leaves: after delivery the pipeline
+    // only degrades to PARTIAL. Same contract as mark-sent.
     let rawBody: unknown
     try {
       const text = await request.text()
       if (text) rawBody = JSON.parse(text)
     } catch {
       // Empty / invalid body: fall through to defaults.
-    }
-
-    if (rawBody) {
-      const parsed = MarkInvoiceSentSchema.safeParse(rawBody)
-      if (!parsed.success) {
-        opLog.warn('send validation failed', {
-          issueCount: parsed.error.issues.length,
-        })
-        return NextResponse.json(
-          { error: 'Ogiltig förfrågan', details: parsed.error.flatten() },
-          { status: 400 },
-        )
-      }
-      customLines = parsed.data.lines
-    }
-
-    if (customLines) {
-      // Sum per-line öre-rounded amounts: the engine rounds each line before
-      // insert, so raw sums that balance can still book unbalanced otherwise.
-      const totalDebit = customLines.reduce((s, l) => s + roundOre(l.debit_amount), 0)
-      const totalCredit = customLines.reduce((s, l) => s + roundOre(l.credit_amount), 0)
-      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-        return errorResponseFromCode('INVOICE_MARK_SENT_LINES_UNBALANCED', opLog, {
-          requestId,
-          details: { totalDebit, totalCredit },
-        })
-      }
     }
 
     // The sandbox must never deliver a real email to a real customer: block
@@ -142,6 +106,34 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
         requestId,
         details: { currentStatus: invoice.status },
+      })
+    }
+
+    const linesResult = parseCustomIssuanceLines(rawBody)
+    if (!linesResult.ok) {
+      if (linesResult.error === 'invalid_body') {
+        opLog.warn('send validation failed')
+        return NextResponse.json(
+          { error: 'Ogiltig förfrågan', details: linesResult.details },
+          { status: 400 },
+        )
+      }
+      return errorResponseFromCode(
+        linesResult.error === 'unbalanced'
+          ? 'INVOICE_MARK_SENT_LINES_UNBALANCED'
+          : 'INVOICE_MARK_SENT_LINES_INVALID',
+        opLog,
+        { requestId, details: linesResult.details },
+      )
+    }
+    const customLines = linesResult.lines
+
+    // Custom lines only apply where send books inline; elsewhere they are
+    // deliberately ignored (documented in MarkInvoiceSentSchema). Logged for
+    // audit visibility instead of vanishing silently.
+    if (customLines && isCreditNote) {
+      opLog.warn('send: custom lines ignored (credit notes book via issueCreditNote)', {
+        lineCount: customLines.length,
       })
     }
 
@@ -410,8 +402,25 @@ export const POST = withRouteContext(
     // #967: deferred companies send WITHOUT booking; ekonomi books later via
     // POST /api/invoices/[id]/book. The invoice then legitimately sits at
     // journal_entry_id = NULL until then, like under kontantmetoden.
+    if (
+      customLines &&
+      !isCreditNote &&
+      (!isRealInvoice || !booksInvoicesOnIssue(company as CompanySettings))
+    ) {
+      opLog.warn('send: custom lines ignored (not on accrual book-at-issue path)', {
+        lineCount: customLines.length,
+      })
+    }
+
     if (statusFlipped && !isCreditNote && isRealInvoice && booksInvoicesOnIssue(company as CompanySettings)) {
       try {
+        if (customLines) {
+          // Audit trail: distinguish user-edited bookings from generated ones.
+          opLog.info('send: booking user-edited custom lines', {
+            userId: user.id,
+            lineCount: customLines.length,
+          })
+        }
         const journalEntry = customLines
           ? await createInvoiceJournalEntry(
               supabase,

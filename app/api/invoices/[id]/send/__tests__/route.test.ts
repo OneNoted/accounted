@@ -613,6 +613,7 @@ describe('POST /api/invoices/[id]/send', () => {
   })
 
   it('returns 400 on malformed lines before any email is sent', async () => {
+    enqueue({ data: invoice, error: null }) // ownership fetch precedes validation
     const request = createMockRequest('/api/invoices/inv-1/send', {
       method: 'POST',
       body: { lines: [{ account_number: 'bad', debit_amount: -1 }] },
@@ -625,6 +626,7 @@ describe('POST /api/invoices/[id]/send', () => {
   })
 
   it('returns 400 on unbalanced lines before any email is sent', async () => {
+    enqueue({ data: invoice, error: null })
     const request = createMockRequest('/api/invoices/inv-1/send', {
       method: 'POST',
       body: {

@@ -12,8 +12,7 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { MarkInvoiceSentSchema } from '@/lib/api/schemas'
-import { roundOre } from '@/lib/money'
+import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -42,49 +41,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   async (request, { supabase, user, companyId, log, requestId }, { params }) => {
   const { id } = await params
 
-  // Optional body. Backwards-compat: callers may POST with no body.
-  let customLines:
-    | {
-        account_number: string
-        debit_amount: number
-        credit_amount: number
-        line_description?: string
-        dimensions?: Record<string, string>
-      }[]
-    | undefined
+  // Optional body. Backwards-compat: callers may POST with no body. Read it
+  // here but validate only AFTER the ownership fetch below, so callers never
+  // get payload feedback for invoices outside their company.
   let rawBody: unknown
   try {
     const text = await request.text()
     if (text) rawBody = JSON.parse(text)
   } catch {
     // Empty / invalid body: fall through to defaults.
-  }
-
-  if (rawBody) {
-    const parsed = MarkInvoiceSentSchema.safeParse(rawBody)
-    if (!parsed.success) {
-      log.warn('mark-sent validation failed', {
-        issueCount: parsed.error.issues.length,
-      })
-      return NextResponse.json(
-        { error: 'Ogiltig förfrågan', details: parsed.error.flatten() },
-        { status: 400 },
-      )
-    }
-    customLines = parsed.data.lines
-  }
-
-  if (customLines) {
-    // Sum per-line öre-rounded amounts: the engine rounds each line before
-    // insert, so raw sums that balance can still book unbalanced otherwise.
-    const totalDebit = customLines.reduce((s, l) => s + roundOre(l.debit_amount), 0)
-    const totalCredit = customLines.reduce((s, l) => s + roundOre(l.credit_amount), 0)
-    if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-      return errorResponseFromCode('INVOICE_MARK_SENT_LINES_UNBALANCED', log, {
-        requestId,
-        details: { totalDebit, totalCredit },
-      })
-    }
   }
 
   // Fetch invoice
@@ -107,6 +72,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   if (isCreditNote && !['draft', 'sent'].includes(invoice.status)) {
     return errorResponseFromCode('INVOICE_MARK_SENT_INVALID_STATUS', log, { requestId })
   }
+
+  const linesResult = parseCustomIssuanceLines(rawBody)
+  if (!linesResult.ok) {
+    if (linesResult.error === 'invalid_body') {
+      log.warn('mark-sent validation failed', { invoiceId: id })
+      return NextResponse.json(
+        { error: 'Ogiltig förfrågan', details: linesResult.details },
+        { status: 400 },
+      )
+    }
+    return errorResponseFromCode(
+      linesResult.error === 'unbalanced'
+        ? 'INVOICE_MARK_SENT_LINES_UNBALANCED'
+        : 'INVOICE_MARK_SENT_LINES_INVALID',
+      log,
+      { requestId, details: linesResult.details },
+    )
+  }
+  const customLines = linesResult.lines
 
   // Assign invoice number now if this draft doesn't have one yet
   try {
@@ -188,6 +172,19 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   let journalEntryId: string | null = null
   const partialFailures: Array<{ step: string; reason: string }> = []
 
+  // Custom lines only apply where mark-sent books inline; elsewhere they are
+  // deliberately ignored (documented in MarkInvoiceSentSchema). Log it so the
+  // mismatch is visible in audit review instead of vanishing silently.
+  if (
+    customLines &&
+    (isCreditNote || !isRealInvoice || !booksInvoicesOnIssue(settings as CompanySettings))
+  ) {
+    log.warn('mark-sent: custom lines ignored (not on accrual book-at-issue path)', {
+      invoiceId: id,
+      lineCount: customLines.length,
+    })
+  }
+
   if (isCreditNote && originalInvoice) {
     const issueResult = await issueCreditNote({
       supabase,
@@ -230,6 +227,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // booking); ekonomi books later via POST /api/invoices/[id]/book, like
     // under kontantmetoden.
     try {
+      if (customLines) {
+        // Audit trail: distinguish user-edited bookings from generated ones.
+        log.info('mark-sent: booking user-edited custom lines', {
+          invoiceId: id,
+          userId: user.id,
+          lineCount: customLines.length,
+        })
+      }
       const journalEntry = customLines
         ? await createInvoiceJournalEntry(
             supabase,

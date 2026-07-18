@@ -801,6 +801,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikationsraderna är inte balanserade (debet ≠ kredit).',
     message_en: 'Custom journal lines do not balance.',
   },
+  INVOICE_MARK_SENT_LINES_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Verifikationsraderna kan inte användas: en rad har både debet och kredit, eller använder ett interimskonto (29xx). Använd periodisering på fakturaraden istället.',
+    message_en: 'Custom journal lines are invalid: a row carries both debit and credit, or uses a 29xx interim account. Use line-level periodisering instead.',
+  },
   INVOICE_MARK_SENT_BOOK_FAILED: {
     httpStatus: 500,
     message_sv: 'Fakturan kunde inte bokföras och ligger kvar som utkast.',

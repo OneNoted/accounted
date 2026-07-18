@@ -383,6 +383,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
   })
 
   it('returns 400 when the body has malformed lines', async () => {
+    enqueue({ data: invoice, error: null }) // ownership fetch precedes validation
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
       method: 'POST',
       body: { lines: [{ account_number: 'not-an-account', debit_amount: -5 }] },
@@ -395,6 +396,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
   })
 
   it('returns 400 when custom lines do not balance', async () => {
+    enqueue({ data: invoice, error: null })
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
       method: 'POST',
       body: {
@@ -409,6 +411,45 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_UNBALANCED')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when a row carries both debit and credit', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1510', debit_amount: 100, credit_amount: 50 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 50 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_INVALID')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when custom lines use a 29xx interim account', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1510', debit_amount: 12500, credit_amount: 0 },
+          { account_number: '2990', debit_amount: 0, credit_amount: 10000 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_INVALID')
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 
