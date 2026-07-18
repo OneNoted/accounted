@@ -668,6 +668,22 @@ export const MarkInvoicePaidSchema = z.object({
   force: z.boolean().optional(),
 })
 
+export const MarkInvoiceSentSchema = z.object({
+  // Optional user-edited issuance lines ("Markera som skickad och bokför").
+  // When present they replace the generated invoice entry verbatim: the route
+  // validates balance and books exactly these lines, and accrual schedules
+  // are NOT created (what the user reviewed is what books). Only honored on
+  // the accrual book-at-issue path; ignored for credit notes, cash-method
+  // and deferred-booking companies, which don't book at mark-sent.
+  lines: z.array(z.object({
+    account_number: accountNumber,
+    debit_amount: nonNegativeAmount.default(0),
+    credit_amount: nonNegativeAmount.default(0),
+    line_description: z.string().optional(),
+    dimensions: DimensionsBagSchema.optional(),
+  })).min(2).optional(),
+})
+
 // ============================================================
 // Customer schemas
 // ============================================================

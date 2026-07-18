@@ -52,6 +52,11 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
     mockCreateInvoiceJournalEntry(...args),
 }))
 
+const mockCreateSchedules = vi.fn()
+vi.mock('@/lib/bookkeeping/accruals/from-invoices', () => ({
+  createSchedulesForCustomerInvoice: (...args: unknown[]) => mockCreateSchedules(...args),
+}))
+
 const mockIssueCreditNote = vi.fn()
 vi.mock('@/lib/invoices/issue-credit-note', () => ({
   issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
@@ -105,6 +110,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
     mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
     mockIssueCreditNote.mockResolvedValue({
       complete: true,
       journalEntryId: 'credit-je-1',
@@ -374,6 +380,121 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(409)
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
     expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when the body has malformed lines', async () => {
+    enqueue({ data: invoice, error: null }) // ownership fetch precedes validation
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: { lines: [{ account_number: 'not-an-account', debit_amount: -5 }] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when custom lines do not balance', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1510', debit_amount: 12500, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 10000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_UNBALANCED')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when a row carries both debit and credit', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1510', debit_amount: 100, credit_amount: 50 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 50 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_INVALID')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when custom lines use a 29xx interim account', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1510', debit_amount: 12500, credit_amount: 0 },
+          { account_number: '2990', debit_amount: 0, credit_amount: 10000 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_INVALID')
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books user-edited lines verbatim via the customLines override', async () => {
+    enqueue({ data: invoice, error: null }) // fetch invoice
+    enqueue({ data: company, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status update
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-10' })
+    enqueue({ data: null, error: null }) // update invoice with journal_entry_id
+
+    const lines = [
+      { account_number: '1510', debit_amount: 12500, credit_amount: 0 },
+      { account_number: '3041', debit_amount: 0, credit_amount: 10000 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+    ]
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', {
+      method: 'POST',
+      body: { lines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_id: string | null
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_id).toBe('je-10')
+    // User-edited lines book exactly as reviewed: no accrual schedules.
+    expect(mockCreateSchedules).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ id: 'inv-1' }),
+      'enskild_firma',
+      customer.name,
+      expect.objectContaining({
+        customLines: [
+          expect.objectContaining({ account_number: '1510', debit_amount: 12500 }),
+          expect.objectContaining({ account_number: '3041', credit_amount: 10000 }),
+          expect.objectContaining({ account_number: '2611', credit_amount: 2500 }),
+        ],
+      })
+    )
   })
 
   it('renders the archived PDF as if already sent (no UTKAST banner)', async () => {

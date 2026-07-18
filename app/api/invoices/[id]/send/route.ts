@@ -21,6 +21,7 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -39,10 +40,25 @@ ensureInitialized()
 
 export const POST = withRouteContext(
   'invoice.send',
-  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ invoiceId: id })
+
+    // Optional body: user-edited issuance lines. Read here; validated after
+    // the ownership fetch below (no payload feedback for foreign invoices)
+    // but still long BEFORE the email leaves: after delivery the pipeline
+    // only degrades to PARTIAL. Same contract as mark-sent.
+    let rawBody: unknown
+    const bodyText = await request.text()
+    if (bodyText) {
+      try {
+        rawBody = JSON.parse(bodyText)
+      } catch {
+        // Malformed JSON must not silently fall back to generated lines.
+        return NextResponse.json({ error: 'Ogiltig förfrågan' }, { status: 400 })
+      }
+    }
 
     // The sandbox must never deliver a real email to a real customer: block
     // the entire send pipeline (PDF render + Resend send + status flip).
@@ -93,6 +109,34 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_ALREADY_SENT', opLog, {
         requestId,
         details: { currentStatus: invoice.status },
+      })
+    }
+
+    const linesResult = parseCustomIssuanceLines(rawBody)
+    if (!linesResult.ok) {
+      if (linesResult.error === 'invalid_body') {
+        opLog.warn('send validation failed')
+        return NextResponse.json(
+          { error: 'Ogiltig förfrågan', details: linesResult.details },
+          { status: 400 },
+        )
+      }
+      return errorResponseFromCode(
+        linesResult.error === 'unbalanced'
+          ? 'INVOICE_MARK_SENT_LINES_UNBALANCED'
+          : 'INVOICE_MARK_SENT_LINES_INVALID',
+        opLog,
+        { requestId, details: linesResult.details },
+      )
+    }
+    const customLines = linesResult.lines
+
+    // Custom lines only apply where send books inline; elsewhere they are
+    // deliberately ignored (documented in MarkInvoiceSentSchema). Logged for
+    // audit visibility instead of vanishing silently.
+    if (customLines && isCreditNote) {
+      opLog.warn('send: custom lines ignored (credit notes book via issueCreditNote)', {
+        lineCount: customLines.length,
       })
     }
 
@@ -361,15 +405,42 @@ export const POST = withRouteContext(
     // #967: deferred companies send WITHOUT booking; ekonomi books later via
     // POST /api/invoices/[id]/book. The invoice then legitimately sits at
     // journal_entry_id = NULL until then, like under kontantmetoden.
+    if (
+      customLines &&
+      !isCreditNote &&
+      (!isRealInvoice || !booksInvoicesOnIssue(company as CompanySettings))
+    ) {
+      opLog.warn('send: custom lines ignored (not on accrual book-at-issue path)', {
+        lineCount: customLines.length,
+      })
+    }
+
     if (statusFlipped && !isCreditNote && isRealInvoice && booksInvoicesOnIssue(company as CompanySettings)) {
       try {
-        const journalEntry = await createInvoiceJournalEntry(
-          supabase,
-          companyId!,
-          user.id,
-          invoice as Invoice,
-          (company as CompanySettings).entity_type,
-        )
+        if (customLines) {
+          // Audit trail: distinguish user-edited bookings from generated ones.
+          opLog.info('send: booking user-edited custom lines', {
+            userId: user.id,
+            lineCount: customLines.length,
+          })
+        }
+        const journalEntry = customLines
+          ? await createInvoiceJournalEntry(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as Invoice,
+              (company as CompanySettings).entity_type,
+              undefined,
+              { customLines },
+            )
+          : await createInvoiceJournalEntry(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as Invoice,
+              (company as CompanySettings).entity_type,
+            )
         if (journalEntry) {
           createdJournalEntryId = journalEntry.id
           await supabase
@@ -380,20 +451,24 @@ export const POST = withRouteContext(
           // Periodiserade lines: create their schedules + catch-up
           // dissolutions now that the revenue entry exists. Failures degrade
           // to PARTIAL: the entry is committed and must not be rolled back.
-          const accrual = await createSchedulesForCustomerInvoice(
-            supabase,
-            companyId!,
-            user.id,
-            invoice as Invoice,
-            items,
-            journalEntry.id,
-            (company as CompanySettings).entity_type,
-          )
-          if (accrual.failed > 0) {
-            partialFailures.push({
-              step: 'accrual_schedules',
-              reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
-            })
+          // Skipped for user-edited lines: the generated 29xx deferral may
+          // not exist in what was booked; edited lines book as reviewed.
+          if (!customLines) {
+            const accrual = await createSchedulesForCustomerInvoice(
+              supabase,
+              companyId!,
+              user.id,
+              invoice as Invoice,
+              items,
+              journalEntry.id,
+              (company as CompanySettings).entity_type,
+            )
+            if (accrual.failed > 0) {
+              partialFailures.push({
+                step: 'accrual_schedules',
+                reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
+              })
+            }
           }
         }
       } catch (err) {
