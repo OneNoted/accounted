@@ -1555,6 +1555,12 @@
     "reminder_days_level_2": "Second reminder (days)",
     "reminder_days_level_3": "Final reminder (days)"
   },
+  "settings_payment_links": {
+    "heading": "Payment link",
+    "enable_label": "Payment link on invoices",
+    "enable_help": "Shows the payment link field in the invoice editor. With Stripe connected, a payment link is created automatically when the invoice is sent.",
+    "toast_save_failed": "Could not save"
+  },
   "settings_pdf_print": {
     "coming_soon": "Coming soon",
     "heading": "Print & PDF",

@@ -8,8 +8,26 @@ import { makeInvoice } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice } from '@/types'
 
-const supabase = {} as SupabaseClient
 const log = { warn: vi.fn() }
+
+// The bridge reads company_settings.invoice_payment_links_enabled before
+// calling the provider: `enabled: null` models a missing settings row.
+function settingsChain(enabled: boolean | null) {
+  const maybeSingle = vi.fn().mockResolvedValue({
+    data: enabled === null ? null : { invoice_payment_links_enabled: enabled },
+    error: null,
+  })
+  const eq = vi.fn().mockReturnValue({ maybeSingle })
+  return { select: vi.fn().mockReturnValue({ eq }) }
+}
+
+function mockClient(enabled: boolean | null = true) {
+  const from = vi.fn((table: string) => {
+    if (table === 'company_settings') return settingsChain(enabled)
+    throw new Error(`unexpected table ${table}`)
+  })
+  return { client: { from } as unknown as SupabaseClient, from }
+}
 
 function eligibleInvoice(overrides: Partial<Invoice> = {}): Invoice {
   return makeInvoice({
@@ -39,10 +57,13 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
   })
 
   it('returns null when no provider extension is registered', async () => {
+    const { client, from } = mockClient()
     const result = await maybeCreatePaymentLinkForInvoice(
-      supabase, 'company-1', 'user-1', eligibleInvoice(), log,
+      client, 'company-1', 'user-1', eligibleInvoice(), log,
     )
     expect(result).toBeNull()
+    // Without a provider the settings query never runs (core build stays DB-free).
+    expect(from).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -54,7 +75,43 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
     const create = vi.fn()
     registerProvider(create)
     const result = await maybeCreatePaymentLinkForInvoice(
-      supabase, 'company-1', 'user-1', eligibleInvoice(overrides as Partial<Invoice>), log,
+      mockClient().client, 'company-1', 'user-1',
+      eligibleInvoice(overrides as Partial<Invoice>), log,
+    )
+    expect(result).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('skips the provider when the company has not enabled payment links', async () => {
+    const create = vi.fn()
+    registerProvider(create)
+    const result = await maybeCreatePaymentLinkForInvoice(
+      mockClient(false).client, 'company-1', 'user-1', eligibleInvoice(), log,
+    )
+    expect(result).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('treats a missing settings row as disabled', async () => {
+    const create = vi.fn()
+    registerProvider(create)
+    const result = await maybeCreatePaymentLinkForInvoice(
+      mockClient(null).client, 'company-1', 'user-1', eligibleInvoice(), log,
+    )
+    expect(result).toBeNull()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('fails closed (no link, no throw) when the settings read throws', async () => {
+    const create = vi.fn()
+    registerProvider(create)
+    const broken = {
+      from: vi.fn(() => {
+        throw new Error('db down')
+      }),
+    } as unknown as SupabaseClient
+    const result = await maybeCreatePaymentLinkForInvoice(
+      broken, 'company-1', 'user-1', eligibleInvoice(), log,
     )
     expect(result).toBeNull()
     expect(create).not.toHaveBeenCalled()
@@ -66,22 +123,23 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
       externalId: 'plink_1',
     })
     registerProvider(create)
+    const { client } = mockClient()
     const invoice = eligibleInvoice()
     const result = await maybeCreatePaymentLinkForInvoice(
-      supabase, 'company-1', 'user-1', invoice, log,
+      client, 'company-1', 'user-1', invoice, log,
     )
     expect(result).toEqual({
       ok: true,
       url: 'https://buy.stripe.com/test_abc',
       externalId: 'plink_1',
     })
-    expect(create).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', invoice)
+    expect(create).toHaveBeenCalledWith(client, 'company-1', 'user-1', invoice)
   })
 
   it('treats a provider null (not eligible) as no link', async () => {
     registerProvider(vi.fn().mockResolvedValue(null))
     const result = await maybeCreatePaymentLinkForInvoice(
-      supabase, 'company-1', 'user-1', eligibleInvoice(), log,
+      mockClient().client, 'company-1', 'user-1', eligibleInvoice(), log,
     )
     expect(result).toBeNull()
   })
@@ -89,7 +147,7 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
   it('never throws: a provider failure becomes { ok: false, reason }', async () => {
     registerProvider(vi.fn().mockRejectedValue(new Error('stripe down')))
     const result = await maybeCreatePaymentLinkForInvoice(
-      supabase, 'company-1', 'user-1', eligibleInvoice(), log,
+      mockClient().client, 'company-1', 'user-1', eligibleInvoice(), log,
     )
     expect(result).toEqual({ ok: false, reason: 'stripe down' })
     expect(log.warn).toHaveBeenCalled()
@@ -97,11 +155,14 @@ describe('maybeCreatePaymentLinkForInvoice', () => {
 })
 
 describe('applyPaymentLinkToInvoice', () => {
-  function mockPersist(error: { message: string } | null) {
+  function mockPersist(error: { message: string } | null, enabled: boolean = true) {
     const eqCompany = vi.fn().mockResolvedValue({ error })
     const eqId = vi.fn().mockReturnValue({ eq: eqCompany })
     const update = vi.fn().mockReturnValue({ eq: eqId })
-    const from = vi.fn().mockReturnValue({ update })
+    const from = vi.fn((table: string) => {
+      if (table === 'company_settings') return settingsChain(enabled)
+      return { update }
+    })
     return { client: { from } as unknown as SupabaseClient, from, update, eqId, eqCompany }
   }
 
@@ -121,6 +182,20 @@ describe('applyPaymentLinkToInvoice', () => {
     )
     expect(result).toEqual({ failure: null })
     expect(persist.from).not.toHaveBeenCalled()
+    expect(invoice.payment_link_url).toBeNull()
+  })
+
+  it('is a no-op when the company has not enabled payment links', async () => {
+    const create = vi.fn()
+    registerProvider(create)
+    const persist = mockPersist(null, false)
+    const invoice = eligibleInvoice()
+    const result = await applyPaymentLinkToInvoice(
+      persist.client, 'company-1', 'user-1', invoice, log,
+    )
+    expect(result).toEqual({ failure: null })
+    expect(create).not.toHaveBeenCalled()
+    expect(persist.update).not.toHaveBeenCalled()
     expect(invoice.payment_link_url).toBeNull()
   })
 
@@ -173,7 +248,7 @@ describe('applyPaymentLinkToInvoice', () => {
       persist.client, 'company-1', 'user-1', invoice, log,
     )
     expect(result).toEqual({ failure: 'stripe down' })
-    expect(persist.from).not.toHaveBeenCalled()
+    expect(persist.update).not.toHaveBeenCalled()
     expect(invoice.payment_link_url).toBeNull()
   })
 

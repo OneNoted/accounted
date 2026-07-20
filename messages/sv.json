@@ -1555,6 +1555,12 @@
     "reminder_days_level_2": "Andra påminnelsen (dagar)",
     "reminder_days_level_3": "Slutlig påminnelse (dagar)"
   },
+  "settings_payment_links": {
+    "heading": "Betalningslänk",
+    "enable_label": "Betalningslänk på fakturor",
+    "enable_help": "Visar betalningslänksfältet i fakturaredigeraren. Med Stripe anslutet skapas en betalningslänk automatiskt när fakturan skickas.",
+    "toast_save_failed": "Kunde inte spara"
+  },
   "settings_pdf_print": {
     "coming_soon": "Kommer snart",
     "heading": "Utskrift & PDF",

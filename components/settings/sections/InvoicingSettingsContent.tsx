@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { BankDetailsForm, validateBankFields } from '@/components/settings/BankDetailsForm'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
+import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
@@ -78,6 +79,11 @@ export function InvoicingSettingsContent() {
           <InvoiceSettingsForm settings={settings} />
         </div>
       </SettingsFormWrapper>
+
+      {/* Payment link opt-in: saves individually via toggle switch */}
+      <div className="border-t border-border pt-8">
+        <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
+      </div>
 
       {/* PDF settings: saves individually via toggle switches */}
       <div className="border-t border-border pt-8">
