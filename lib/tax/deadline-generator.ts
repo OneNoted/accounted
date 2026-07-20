@@ -16,6 +16,45 @@ import {
 import { adjustDeadlineToNextBankingDay } from './swedish-holidays'
 
 /**
+ * Rolling generation horizons. Recurring skattekonto obligations (monthly
+ * and quarterly filings) only generate ~6 months ahead: nobody acts on a
+ * moms deadline 14 months out, and the rows just bury the near-term list.
+ * Annual obligations keep 12 months so year-end planning still gets
+ * warning. The daily backfill cron rolls the window forward: a row is
+ * created once its due date enters the horizon.
+ *
+ * The same cutoff MUST apply in generateTaxDeadlinesForUser and
+ * getExpectedUpcomingDeadlineKeys: if detection expected a row the
+ * generator refuses to create, the nightly cron would regenerate (and
+ * status-reset) the company every day forever.
+ */
+export const RECURRING_HORIZON_DAYS = 183
+export const ANNUAL_HORIZON_DAYS = 365
+
+/** Types on the recurring horizon; anything not listed defaults to annual. */
+const RECURRING_HORIZON_TYPES = new Set<TaxDeadlineType>([
+  'moms_monthly',
+  'moms_quarterly',
+  'f_skatt',
+  'arbetsgivardeklaration',
+  'skatteinbetalning',
+  'periodisk_sammanstallning',
+  'oss_quarterly',
+  'ioss_monthly',
+  'intrastat_monthly',
+  'punktskatt_monthly',
+])
+
+function horizonEndFor(type: TaxDeadlineType, today: Date): Date {
+  const days = RECURRING_HORIZON_TYPES.has(type)
+    ? RECURRING_HORIZON_DAYS
+    : ANNUAL_HORIZON_DAYS
+  const end = new Date(today)
+  end.setDate(end.getDate() + days)
+  return end
+}
+
+/**
  * Fields in company_settings that affect tax deadline generation
  */
 export const TAX_RELEVANT_FIELDS = [
@@ -34,10 +73,17 @@ export const TAX_RELEVANT_FIELDS = [
   'periodisk_sammanstallning_enabled',
   'periodisk_sammanstallning_period',
   'periodisk_sammanstallning_filing_method',
+  'kontrolluppgifter_enabled',
+  'rot_rut_enabled',
+  'oss_enabled',
+  'ioss_enabled',
+  'intrastat_enabled',
+  'punktskatt_enabled',
+  'fyllnadsinbetalning_enabled',
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
+  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled' as const
 
 /**
  * Check if any tax-relevant fields changed
@@ -82,6 +128,14 @@ export function toDeadlineSettings(
     periodisk_sammanstallning_period: settings.periodisk_sammanstallning_period ?? 'monthly',
     periodisk_sammanstallning_filing_method:
       settings.periodisk_sammanstallning_filing_method ?? 'electronic',
+    kontrolluppgifter_enabled: settings.kontrolluppgifter_enabled ?? false,
+    rot_rut_enabled: settings.rot_rut_enabled ?? false,
+    rot_rut_payment_years: settings.rot_rut_payment_years,
+    oss_enabled: settings.oss_enabled ?? false,
+    ioss_enabled: settings.ioss_enabled ?? false,
+    intrastat_enabled: settings.intrastat_enabled ?? false,
+    punktskatt_enabled: settings.punktskatt_enabled ?? false,
+    fyllnadsinbetalning_enabled: settings.fyllnadsinbetalning_enabled ?? false,
   }
 }
 
@@ -127,6 +181,35 @@ export async function generateTaxDeadlinesForUser(
     years = [currentYear, currentYear + 1]
   }
 
+  // The ROT/RUT begäran deadline is data-dependent: a row for year Y only
+  // exists when Y has paid ROT/RUT invoices (Lag 2009:194 8 §, payment
+  // dates). Resolve the payment years here, in the one place that inserts
+  // and deletes rows, so every generation path agrees. Callers that pass
+  // pure settings (backfill detection) leave the field undefined and simply
+  // never expect rot_rut_begaran rows.
+  if (settings.rot_rut_enabled && settings.rot_rut_payment_years === undefined) {
+    const rotRutRows = await fetchAllRows<{ paid_at: string | null }>(({ from, to }) =>
+      supabase
+        .from('invoices')
+        .select('paid_at')
+        .eq('company_id', companyId)
+        .gt('deduction_total', 0)
+        .not('paid_at', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    settings = {
+      ...settings,
+      rot_rut_payment_years: Array.from(
+        new Set(
+          rotRutRows
+            .filter((row) => row.paid_at)
+            .map((row) => Number(String(row.paid_at).slice(0, 4))),
+        ),
+      ),
+    }
+  }
+
   // Get applicable deadline configs based on settings
   const applicableConfigs = getApplicableDeadlineConfigs(settings)
 
@@ -163,6 +246,33 @@ export async function generateTaxDeadlinesForUser(
     ),
   )
 
+  // Manual progress survives regeneration: a replacement row for the same
+  // obligation keeps its in_progress status instead of resetting to
+  // upcoming. This matters with the rolling horizon, where the backfill
+  // cron regenerates a company every time a new row enters the window.
+  const { data: inProgressRows, error: inProgressError } = await supabase
+    .from('deadlines')
+    .select('tax_deadline_type, tax_period, status')
+    .eq('company_id', companyId)
+    .eq('source', 'system')
+    .eq('is_completed', false)
+    .is('dismissed_at', null)
+    .eq('status', 'in_progress')
+
+  if (inProgressError) {
+    log.error('Error fetching in-progress deadlines:', inProgressError)
+    throw inProgressError
+  }
+
+  const inProgressKeys = new Set(
+    (inProgressRows ?? [])
+      .filter((row: { status?: string }) => row.status === 'in_progress')
+      .map(
+        (row: { tax_deadline_type: string | null; tax_period: string | null }) =>
+          `${row.tax_deadline_type}:${row.tax_period}`,
+      ),
+  )
+
   // Generate new deadlines
   const deadlines: Array<{
     company_id: string
@@ -182,6 +292,7 @@ export async function generateTaxDeadlinesForUser(
   }> = []
 
   for (const config of applicableConfigs) {
+    const horizonEnd = horizonEndFor(config.type, today)
     for (const year of years) {
       const instances = config.generateDates(year, settings)
 
@@ -189,12 +300,21 @@ export async function generateTaxDeadlinesForUser(
         // Create the raw deadline date
         const rawDate = new Date(instance.year, instance.month, instance.day)
 
-        // Adjust for banking days (skip weekends and holidays)
-        const adjustedDate = adjustDeadlineToNextBankingDay(rawDate)
+        // Adjust for banking days (skip weekends and holidays). EU-law
+        // deadlines (OSS/IOSS) opt out: their dates stand on weekends.
+        const adjustedDate = config.skipBankingDayAdjustment
+          ? rawDate
+          : adjustDeadlineToNextBankingDay(rawDate)
         const dueDate = formatDateISO(adjustedDate)
 
         // Skip if the deadline is in the past
         if (adjustedDate < today) {
+          continue
+        }
+
+        // Skip rows beyond the rolling horizon; the daily backfill creates
+        // them once they come into view.
+        if (adjustedDate > horizonEnd) {
           continue
         }
 
@@ -203,9 +323,12 @@ export async function generateTaxDeadlinesForUser(
           continue
         }
 
-        // Determine initial status based on days until deadline
+        // Determine initial status based on days until deadline, keeping a
+        // manually set in_progress from the row being replaced.
         const daysUntil = Math.ceil((adjustedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-        const status: DeadlineStatus = daysUntil <= 14 ? 'action_needed' : 'upcoming'
+        const status: DeadlineStatus = inProgressKeys.has(deadlineKey)
+          ? 'in_progress'
+          : daysUntil <= 14 ? 'action_needed' : 'upcoming'
 
         // Generate title from template
         const title = config.titleTemplate.replace('{periodLabel}', instance.periodLabel)
@@ -393,12 +516,16 @@ export function getExpectedUpcomingDeadlineKeys(
   const keys = new Set<string>()
 
   for (const config of getApplicableDeadlineConfigs(settings)) {
+    const horizonEnd = horizonEndFor(config.type, today)
     for (const year of years) {
       for (const instance of config.generateDates(year, settings)) {
-        const adjustedDate = adjustDeadlineToNextBankingDay(
-          new Date(instance.year, instance.month, instance.day),
-        )
-        if (adjustedDate >= today) {
+        const rawDate = new Date(instance.year, instance.month, instance.day)
+        const adjustedDate = config.skipBankingDayAdjustment
+          ? rawDate
+          : adjustDeadlineToNextBankingDay(rawDate)
+        // Same window as the generator: past rows and rows beyond the
+        // rolling horizon are never expected.
+        if (adjustedDate >= today && adjustedDate <= horizonEnd) {
           keys.add(deadlineIdentity(config.type, instance.period, formatDateISO(adjustedDate)))
         }
       }

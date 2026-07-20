@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  ANNUAL_HORIZON_DAYS,
+  RECURRING_HORIZON_DAYS,
   findSettingsMissingUpcomingDeadlines,
   generateTaxDeadlinesForUser,
   getExpectedUpcomingDeadlineKeys,
@@ -24,10 +26,28 @@ const SETTINGS: CompanySettingsForDeadlines = {
   periodisk_sammanstallning_enabled: false,
   periodisk_sammanstallning_period: 'monthly',
   periodisk_sammanstallning_filing_method: 'electronic',
+  kontrolluppgifter_enabled: false,
+  rot_rut_enabled: false,
+  oss_enabled: false,
+  ioss_enabled: false,
+  intrastat_enabled: false,
+  punktskatt_enabled: false,
+  fyllnadsinbetalning_enabled: false,
 }
 
-// Future year so generated dates are never skipped as "in the past".
-const FUTURE_YEAR = new Date().getFullYear() + 1
+// Current + next year (the generator's own default): with the rolling
+// horizon, rows only generate within ~6-12 months of today, so a
+// next-year-only window would be empty for most of the year.
+const CURRENT_YEAR = new Date().getFullYear()
+const GEN_YEARS = [CURRENT_YEAR, CURRENT_YEAR + 1]
+
+/** Period string for next month (YYYY-MM): always inside the horizon. */
+function nextMonthPeriod(): string {
+  const d = new Date()
+  d.setDate(1)
+  d.setMonth(d.getMonth() + 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
 
 /**
  * Recording mock: captures the order of insert/delete operations and the
@@ -37,6 +57,7 @@ const FUTURE_YEAR = new Date().getFullYear() + 1
 function makeRecordingSupabase(opts: {
   insertError?: { code: string; message: string }
   completedRows?: Array<{ tax_deadline_type: string; tax_period: string }>
+  inProgressRows?: Array<{ tax_deadline_type: string; tax_period: string; status: string }>
 } = {}) {
   const calls: string[] = []
   let insertPayload: Array<Record<string, unknown>> | null = null
@@ -44,6 +65,7 @@ function makeRecordingSupabase(opts: {
   const from = vi.fn(() => {
     const chain: Record<string, ReturnType<typeof vi.fn>> = {}
     let isDelete = false
+    let isInProgressQuery = false
     const self = () => chain
     chain.insert = vi.fn((rows: Array<Record<string, unknown>>) => {
       calls.push('insert')
@@ -61,7 +83,10 @@ function makeRecordingSupabase(opts: {
       isDelete = true
       return chain
     })
-    chain.eq = vi.fn(self)
+    chain.eq = vi.fn((...args: unknown[]) => {
+      if (args[0] === 'status' && args[1] === 'in_progress') isInProgressQuery = true
+      return chain
+    })
     chain.or = vi.fn(self)
     chain.is = vi.fn(self)
     chain.gte = vi.fn(self)
@@ -77,7 +102,7 @@ function makeRecordingSupabase(opts: {
       return chain
     })
     chain.then = vi.fn((resolve: (value: unknown) => unknown) => Promise.resolve({
-      data: opts.completedRows ?? [],
+      data: isInProgressQuery ? (opts.inProgressRows ?? []) : (opts.completedRows ?? []),
       error: null,
     }).then(resolve))
     return chain
@@ -98,7 +123,7 @@ describe('generateTaxDeadlinesForUser', () => {
   it('inserts replacement rows before deleting the old set', async () => {
     const { supabase, calls } = makeRecordingSupabase()
 
-    const result = await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+    const result = await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
 
     expect(calls[0]).toBe('insert')
     expect(calls[1]).toBe('delete')
@@ -109,7 +134,7 @@ describe('generateTaxDeadlinesForUser', () => {
   it('excludes the newly inserted rows from the delete', async () => {
     const { supabase, calls } = makeRecordingSupabase()
 
-    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
 
     expect(calls.some((c) => c.startsWith('not('))).toBe(true)
   })
@@ -117,7 +142,7 @@ describe('generateTaxDeadlinesForUser', () => {
   it('builds rows owned by company_id, without a user_id field', async () => {
     const { supabase, getInsertPayload } = makeRecordingSupabase()
 
-    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
 
     const rows = getInsertPayload()
     expect(rows).not.toBeNull()
@@ -129,13 +154,41 @@ describe('generateTaxDeadlinesForUser', () => {
     }
   })
 
+  it('caps generation at the rolling horizon (6 months recurring, 12 months annual)', async () => {
+    const { supabase, getInsertPayload } = makeRecordingSupabase()
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+
+    const rows = getInsertPayload()
+    expect(rows).not.toBeNull()
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const daysOut = (dueDate: string) =>
+      Math.round((new Date(`${dueDate}T00:00:00`).getTime() - today.getTime()) / 86_400_000)
+
+    const recurring = new Set([
+      'moms_monthly', 'moms_quarterly', 'f_skatt',
+      'arbetsgivardeklaration', 'skatteinbetalning', 'periodisk_sammanstallning',
+    ])
+    for (const row of rows!) {
+      const limit = recurring.has(row.tax_deadline_type as string)
+        ? RECURRING_HORIZON_DAYS
+        : ANNUAL_HORIZON_DAYS
+      expect(daysOut(row.due_date as string)).toBeLessThanOrEqual(limit)
+    }
+    // The old 17-month window is gone: nothing sits beyond a year out.
+    expect(rows!.every((row) => daysOut(row.due_date as string) <= ANNUAL_HORIZON_DAYS)).toBe(true)
+    // But the near-term rows are all there (monthly settings → rows exist).
+    expect(rows!.length).toBeGreaterThan(0)
+  })
+
   it('does not delete existing deadlines when the insert fails', async () => {
     const { supabase, calls } = makeRecordingSupabase({
       insertError: { code: '23502', message: 'null value in column "user_id"' },
     })
 
     await expect(
-      generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+      generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
     ).rejects.toMatchObject({ code: '23502' })
 
     expect(calls).toContain('insert')
@@ -143,17 +196,62 @@ describe('generateTaxDeadlinesForUser', () => {
   })
 
   it('does not replace a completed future obligation with a new pending row', async () => {
-    const completedPeriod = `${FUTURE_YEAR}-01`
+    const completedPeriod = nextMonthPeriod()
     const { supabase, getInsertPayload } = makeRecordingSupabase({
       completedRows: [{ tax_deadline_type: 'f_skatt', tax_period: completedPeriod }],
     })
 
-    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, [FUTURE_YEAR])
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
 
     expect(getInsertPayload()).not.toContainEqual(expect.objectContaining({
       tax_deadline_type: 'f_skatt',
       tax_period: completedPeriod,
     }))
+  })
+
+  it('keeps a manually set in_progress status on the replacement row', async () => {
+    const period = nextMonthPeriod()
+    const { supabase, getInsertPayload } = makeRecordingSupabase({
+      inProgressRows: [
+        { tax_deadline_type: 'f_skatt', tax_period: period, status: 'in_progress' },
+      ],
+    })
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', SETTINGS, GEN_YEARS)
+
+    const replaced = getInsertPayload()!.find(
+      (row) => row.tax_deadline_type === 'f_skatt' && row.tax_period === period,
+    )
+    expect(replaced).toBeDefined()
+    expect(replaced!.status).toBe('in_progress')
+    // Other rows keep the computed status.
+    const other = getInsertPayload()!.find(
+      (row) => row.tax_deadline_type === 'f_skatt' && row.tax_period !== period,
+    )
+    expect(other?.status).not.toBe('in_progress')
+  })
+})
+
+describe('getExpectedUpcomingDeadlineKeys: banking-day handling', () => {
+  it('keeps EU-law deadlines (IOSS) on the raw date even when it is a Sunday', () => {
+    // 2030-03-31 (IOSS for February 2030) is a Sunday; the banking-day
+    // adjustment would move it to 2030-04-01, but EU deadlines stand.
+    const keys = getExpectedUpcomingDeadlineKeys(
+      { ...SETTINGS, ioss_enabled: true },
+      [2030],
+      new Date(2030, 0, 1),
+    )
+    expect(keys.has('ioss_monthly:2030-02:2030-03-31')).toBe(true)
+    expect(keys.has('ioss_monthly:2030-02:2030-04-01')).toBe(false)
+  })
+
+  it('still shifts ordinary Skatteverket deadlines to the next banking day', () => {
+    // 12 January 2030 is a Saturday; the January f-skatt date is the 17th
+    // (a Thursday) so use February: 12 Feb 2030 is a Tuesday. Take May
+    // instead: 2030-05-12 is a Sunday → shifted to Monday 2030-05-13.
+    const keys = getExpectedUpcomingDeadlineKeys(SETTINGS, [2030], new Date(2030, 0, 1))
+    expect(keys.has('f_skatt:2030-05:2030-05-13')).toBe(true)
+    expect(keys.has('f_skatt:2030-05:2030-05-12')).toBe(false)
   })
 })
 

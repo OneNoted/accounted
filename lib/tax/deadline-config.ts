@@ -4,6 +4,7 @@
  */
 
 import type { TaxDeadlineType, EntityType, MomsPeriod, TaxFilingMethod } from '@/types'
+import { isBankingDay } from './swedish-holidays'
 
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
@@ -27,6 +28,21 @@ export interface CompanySettingsForDeadlines {
   periodisk_sammanstallning_enabled: boolean
   periodisk_sammanstallning_period: 'monthly' | 'quarterly'
   periodisk_sammanstallning_filing_method: TaxFilingMethod
+  kontrolluppgifter_enabled: boolean
+  rot_rut_enabled: boolean
+  oss_enabled: boolean
+  ioss_enabled: boolean
+  intrastat_enabled: boolean
+  punktskatt_enabled: boolean
+  fyllnadsinbetalning_enabled: boolean
+  /**
+   * Derived, NOT a company_settings column: distinct years with paid ROT/RUT
+   * invoices. Populated by the generator from the invoices table (a begäran
+   * deadline for year Y only exists when Y actually has ROT/RUT payments,
+   * Lag 2009:194 8 §). Undefined in pure-settings contexts (backfill
+   * detection), where rot_rut_begaran rows are simply never expected.
+   */
+  rot_rut_payment_years?: number[]
 }
 
 // Configuration for a single tax deadline type
@@ -40,6 +56,12 @@ export interface TaxDeadlineConfig {
   generateDates: (year: number, settings: CompanySettingsForDeadlines) => DeadlineInstance[]
   // Link to report type for navigation
   linkedReportType: string | null
+  /**
+   * EU-law deadlines (OSS/IOSS) do not move to the next banking day: the
+   * last day of the month stands even on weekends and holidays. Also set
+   * for dates that are already computed as banking days (Intrastat).
+   */
+  skipBankingDayAdjustment?: boolean
 }
 
 // A specific instance of a deadline
@@ -49,6 +71,25 @@ export interface DeadlineInstance {
   year: number
   period: string   // e.g., "2025-Q1", "2025-01", "2025"
   periodLabel: string // Human-readable, e.g., "Q1 2025", "januari 2025"
+}
+
+/**
+ * Day-of-month of the nth Swedish banking day in a month (1-based n).
+ * Used for Intrastat, whose SCB reporting dates follow the ~10th working
+ * day of the month after the reference month.
+ */
+function nthBankingDayOfMonth(year: number, month: number, n: number): number {
+  let count = 0
+  for (let day = 1; day <= 31; day++) {
+    const date = new Date(year, month, day)
+    if (date.getMonth() !== month) break
+    if (isBankingDay(date)) {
+      count++
+      if (count === n) return day
+    }
+  }
+  // A month always has more than 10 banking days; never reached.
+  return 28
 }
 
 function getFiscalYearLabel(fiscalYearEndMonth: number, fiscalYearEndYear: number): string {
@@ -317,6 +358,212 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
         period: `${year}-${String(month + 1).padStart(2, '0')}`,
         periodLabel: getMonthLabel(month, year),
       }))
+    },
+  },
+
+  // OSS (unionsordningen): quarterly declaration for B2C distance sales
+  // above the EUR 10 000 threshold, filed in Skatteverket's OSS portal
+  // (ML 22 kap., Art. 369f VAT directive). Due the last day of the month
+  // after the quarter. EU-law deadline: it does NOT move to the next
+  // banking day; a Sunday 31st stands.
+  {
+    type: 'oss_quarterly',
+    titleTemplate: 'OSS-deklaration {periodLabel}',
+    description: 'OSS-deklaration (unionsordningen) för EU-försäljning till konsumenter',
+    condition: (s) => s.vat_registered && s.oss_enabled,
+    priority: 'important',
+    linkedReportType: null,
+    skipBankingDayAdjustment: true,
+    generateDates: (year) => [
+      { day: 30, month: 3, year, period: `${year}-Q1`, periodLabel: `Q1 ${year}` },
+      { day: 31, month: 6, year, period: `${year}-Q2`, periodLabel: `Q2 ${year}` },
+      { day: 31, month: 9, year, period: `${year}-Q3`, periodLabel: `Q3 ${year}` },
+      { day: 31, month: 0, year: year + 1, period: `${year}-Q4`, periodLabel: `Q4 ${year}` },
+    ],
+  },
+
+  // IOSS (importordningen): monthly declaration for distance sales of
+  // imported low-value goods (Art. 369s VAT directive). Due the last day
+  // of the following month; same EU no-shift rule as OSS.
+  {
+    type: 'ioss_monthly',
+    titleTemplate: 'IOSS-deklaration {periodLabel}',
+    description: 'IOSS-deklaration (importordningen) för distansförsäljning av importerade varor',
+    condition: (s) => s.vat_registered && s.ioss_enabled,
+    priority: 'important',
+    linkedReportType: null,
+    skipBankingDayAdjustment: true,
+    generateDates: (year) =>
+      Array.from({ length: 12 }, (_, month) => {
+        const deadlineYear = month === 11 ? year + 1 : year
+        const deadlineMonth = (month + 1) % 12
+        // Last day of the month after the reference month.
+        const day = new Date(deadlineYear, deadlineMonth + 1, 0).getDate()
+        return {
+          day,
+          month: deadlineMonth,
+          year: deadlineYear,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        }
+      }),
+  },
+
+  // Intrastat: SCB's monthly trade-in-goods report for companies above the
+  // arrival/dispatch thresholds. SCB publishes exact dates yearly; they
+  // follow the ~10th working day of the month after the reference month,
+  // which is what we compute. Already a banking day, so no adjustment.
+  {
+    type: 'intrastat_monthly',
+    titleTemplate: 'Intrastat {periodLabel}',
+    description: 'Intrastat-rapport till SCB för varuhandel inom EU',
+    condition: (s) => s.vat_registered && s.intrastat_enabled,
+    priority: 'normal',
+    linkedReportType: null,
+    skipBankingDayAdjustment: true,
+    generateDates: (year) =>
+      Array.from({ length: 12 }, (_, month) => {
+        const deadlineYear = month === 11 ? year + 1 : year
+        const deadlineMonth = (month + 1) % 12
+        return {
+          day: nthBankingDayOfMonth(deadlineYear, deadlineMonth, 10),
+          month: deadlineMonth,
+          year: deadlineYear,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        }
+      }),
+  },
+
+  // Punktskattedeklaration (monthly): excise duties follow the ordinary
+  // skattedeklaration schedule (SFL 26 kap.): the 12th of the following
+  // month (17th in January and August), the 26th for storföretag.
+  {
+    type: 'punktskatt_monthly',
+    titleTemplate: 'Punktskattedeklaration {periodLabel}',
+    description: 'Punktskattedeklaration för punktskattepliktiga företag',
+    condition: (s) => s.punktskatt_enabled,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year, settings) => {
+      const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
+      const instances: DeadlineInstance[] = []
+      for (let month = 0; month < 12; month++) {
+        const deadlineMonth = (month + 1) % 12
+        const deadlineYear = month === 11 ? year + 1 : year
+        const day = storforetag
+          ? 26
+          : (deadlineMonth === 0 || deadlineMonth === 7 ? 17 : 12)
+        instances.push({
+          day,
+          month: deadlineMonth,
+          year: deadlineYear,
+          period: `${year}-${String(month + 1).padStart(2, '0')}`,
+          periodLabel: getMonthLabel(month, year),
+        })
+      }
+      return instances
+    },
+  },
+
+  // Fyllnadsinbetalning: extra preliminary tax payments that stop
+  // kostnadsränta on the coming kvarskatt (SFL 62 kap. 8 §, 65 kap.).
+  // Parts over 30 000 kr must be on skattekontot by the 12th of the second
+  // month after the beskattningsår ends (12 Feb for calendar years); the
+  // remainder by the 3rd of the fifth month (3 May). Both dates are
+  // generated since the app cannot know the kvarskatt amount; the labels
+  // say which part each date covers.
+  {
+    type: 'fyllnadsinbetalning',
+    titleTemplate: 'Fyllnadsinbetalning {periodLabel}',
+    description: 'Extra inbetalning av preliminärskatt för att undvika kostnadsränta',
+    condition: (s) => s.fyllnadsinbetalning_enabled,
+    priority: 'normal',
+    linkedReportType: null,
+    generateDates: (year, settings) => {
+      const fyEndMonth = settings.entity_type === 'enskild_firma'
+        ? 12
+        : (settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1)
+      const results: DeadlineInstance[] = []
+      for (const fyEndYear of [year - 1, year]) {
+        const fyLabel = getFiscalYearLabel(fyEndMonth, fyEndYear)
+        // fyEndMonth is 1-indexed; (fyEndMonth - 1 + n) is the 0-indexed
+        // month n months after FY end, counted from fyEndYear's January.
+        // 12th of the second month after FY end (amounts over 30 000 kr):
+        // February for a calendar fiscal year.
+        const over = {
+          day: 12,
+          month: (fyEndMonth + 1) % 12,
+          year: fyEndYear + Math.floor((fyEndMonth + 1) / 12),
+        }
+        if (over.year === year) {
+          results.push({
+            ...over,
+            period: `${fyLabel}-over30k`,
+            periodLabel: `belopp över 30 000 kr, beskattningsår ${fyLabel}`,
+          })
+        }
+        // 3rd of the fifth month after FY end (the remainder): May for a
+        // calendar fiscal year.
+        const rest = {
+          day: 3,
+          month: (fyEndMonth + 4) % 12,
+          year: fyEndYear + Math.floor((fyEndMonth + 4) / 12),
+        }
+        if (rest.year === year) {
+          results.push({
+            ...rest,
+            period: `${fyLabel}-rest`,
+            periodLabel: `resterande belopp, beskattningsår ${fyLabel}`,
+          })
+        }
+      }
+      return results
+    },
+  },
+
+  // Kontrolluppgifter (KU10/KU20/KU31): annual income statements to
+  // Skatteverket, due 31 January after the income year (SFL 24 kap. 1 §).
+  // KU31 (utdelning) is never covered by the monthly AGI, so a fåmansbolag
+  // paying utdelning must file it separately even when all salaries are
+  // AGI-reported. Opt-in: the user confirms the flag in tax settings, where
+  // a ledger-derived signal (2898 utdelning, 2393/2893 ägarlån) suggests it.
+  {
+    type: 'kontrolluppgifter',
+    titleTemplate: 'Kontrolluppgifter {periodLabel}',
+    description: 'Kontrolluppgifter (KU10/KU20/KU31) till Skatteverket',
+    condition: (s) => s.kontrolluppgifter_enabled,
+    priority: 'important',
+    linkedReportType: null,
+    generateDates: (year) => {
+      // Due 31 January for the previous income year (always calendar year:
+      // kontrolluppgifter follow the income year, not the räkenskapsår).
+      return [
+        { day: 31, month: 0, year, period: `${year - 1}`, periodLabel: `${year - 1}` },
+      ]
+    },
+  },
+
+  // ROT/RUT begäran om utbetalning: the payout request for deductions given
+  // during year Y must reach Skatteverket by 31 January of year Y+1
+  // (Lag 2009:194 8 §). Missing the date forfeits the payout on account
+  // 1513, so this is the one deadline where lateness costs the principal,
+  // not a fee. Keyed on PAYMENT years (buyer paid), never invoice dates:
+  // rows only exist for years present in rot_rut_payment_years.
+  {
+    type: 'rot_rut_begaran',
+    titleTemplate: 'ROT/RUT-begäran om utbetalning {periodLabel}',
+    description: 'Begäran om utbetalning för ROT/RUT-avdrag till Skatteverket',
+    condition: (s) => s.rot_rut_enabled,
+    priority: 'critical',
+    linkedReportType: null,
+    generateDates: (year, settings) => {
+      if (!(settings.rot_rut_payment_years ?? []).includes(year - 1)) {
+        return []
+      }
+      return [
+        { day: 31, month: 0, year, period: `${year - 1}`, periodLabel: `${year - 1}` },
+      ]
     },
   },
 

@@ -235,6 +235,20 @@ export interface CompanySettings {
   vat_filing_method: TaxFilingMethod
   periodisk_sammanstallning_enabled: boolean
   periodisk_sammanstallning_filing_method: TaxFilingMethod
+  // Annual kontrolluppgifter (KU10/KU20/KU31) reminder, due 31 January.
+  kontrolluppgifter_enabled: boolean
+  // ROT/RUT begäran om utbetalning reminder, due 31 January after the
+  // payment year (Lag 2009:194 8 §). Rows are only generated for years
+  // that actually have paid ROT/RUT invoices.
+  rot_rut_enabled: boolean
+  // Long-tail deadlines, explicit opt-in only ("Fler deadlines" in tax
+  // settings). OSS/IOSS are EU-law deadlines that never move to the next
+  // banking day.
+  oss_enabled: boolean
+  ioss_enabled: boolean
+  intrastat_enabled: boolean
+  punktskatt_enabled: boolean
+  fyllnadsinbetalning_enabled: boolean
 
   // Tax contact (SKV-filings, periodisk sammanställning, AGI, etc.)
   tax_contact_name: string | null
@@ -2176,6 +2190,13 @@ export type TaxDeadlineType =
   | 'arsredovisning'
   | 'arsstamma'
   | 'periodisk_sammanstallning'
+  | 'kontrolluppgifter'
+  | 'rot_rut_begaran'
+  | 'oss_quarterly'
+  | 'ioss_monthly'
+  | 'intrastat_monthly'
+  | 'punktskatt_monthly'
+  | 'fyllnadsinbetalning'
 
 // Deadline status workflow
 export type DeadlineStatus =
@@ -2293,6 +2314,7 @@ export type NotificationType =
   | 'invoice_sent'
   | 'missing_underlag'
   | 'skv_kvittens'
+  | 'skv_connection_expired'
 
 // Notification log entry
 export interface NotificationLog {
@@ -2353,7 +2375,14 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
   inkomstdeklaration_ab: 'Inkomstdeklaration AB',
   arsredovisning: 'Årsredovisning',
   arsstamma: 'Årsstämma',
-  periodisk_sammanstallning: 'Periodisk sammanställning'
+  periodisk_sammanstallning: 'Periodisk sammanställning',
+  kontrolluppgifter: 'Kontrolluppgifter (KU)',
+  rot_rut_begaran: 'ROT/RUT-begäran om utbetalning',
+  oss_quarterly: 'OSS-deklaration',
+  ioss_monthly: 'IOSS-deklaration',
+  intrastat_monthly: 'Intrastat',
+  punktskatt_monthly: 'Punktskattedeklaration',
+  fyllnadsinbetalning: 'Fyllnadsinbetalning'
 }
 
 // ============================================================
