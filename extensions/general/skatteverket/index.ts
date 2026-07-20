@@ -47,6 +47,7 @@ import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYN
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
 import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
+import { handleSkattekontoConnectionExpired } from './lib/connection-expired-notification'
 import {
   findMatchCandidates,
   findMatchSuggestionsBulk,
@@ -957,8 +958,9 @@ export const skatteverketExtension: Extension = {
             periodType?: VatPeriodType
             year?: number
             period?: number
+            fiscalPeriodId?: string
           }
-          const { periodType, year, period } = body
+          const { periodType, year, period, fiscalPeriodId } = body
           if (!periodType || !year || !period) {
             return NextResponse.json(
               { error: 'Saknar obligatoriska fält: periodType, year, period' },
@@ -968,7 +970,7 @@ export const skatteverketExtension: Extension = {
 
           const result = await submitVatDeclarationChain(
             ctx,
-            { periodType, year, period },
+            { periodType, year, period, fiscalPeriodId },
             { validate: true }
           )
 
@@ -2213,6 +2215,10 @@ export const skatteverketExtension: Extension = {
       eventType: 'skattekonto.drift_detected',
       handler: handleSkattekontoDriftDetected,
     },
+    {
+      eventType: 'skattekonto.connection.expired',
+      handler: handleSkattekontoConnectionExpired,
+    },
   ],
 
   // Registry-resolved commit services for the MCP submit tools. The core
@@ -2241,17 +2247,18 @@ async function parseDeclarationRequest(
   ctx: ExtensionContext
 ): Promise<VatDeclarationPrep> {
   const body = await request.json()
-  const { periodType, year, period } = body as {
+  const { periodType, year, period, fiscalPeriodId } = body as {
     periodType: VatPeriodType
     year: number
     period: number
+    fiscalPeriodId?: string
   }
 
   if (!periodType || !year || !period) {
     throw new Error('Saknar obligatoriska fält: periodType, year, period')
   }
 
-  return buildMomsuppgift(ctx.supabase, ctx.companyId, { periodType, year, period })
+  return buildMomsuppgift(ctx.supabase, ctx.companyId, { periodType, year, period, fiscalPeriodId })
 }
 
 /**
@@ -2456,12 +2463,13 @@ async function commitSubmitVatDeclaration(
   const periodType = params.period_type as VatPeriodType
   const year = params.year as number
   const period = params.period as number
+  const fiscalPeriodId = params.fiscal_period_id as string | undefined
   const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')
 
   try {
     // The staged figures were already reviewed at approval time, so the
     // chain starts at the utkast write (no kontrollera pre-step here).
-    const result = await submitVatDeclarationChain(ctx, { periodType, year, period })
+    const result = await submitVatDeclarationChain(ctx, { periodType, year, period, fiscalPeriodId })
     if (!result.ok) {
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: result.httpStatus,

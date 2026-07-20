@@ -1334,8 +1334,11 @@ export function VatDeclarationView() {
   const [period, setPeriod] = useState(currentQuarter)
   // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar
   // year — picked inline in yearly mode. Monthly/quarterly are calendar
-  // periods and need no fiscal year.
+  // periods and need no fiscal year. The period's end date rides along so
+  // the Skatteverket panel can target the FY-end month (broken fiscal years
+  // do not end in December).
   const [fiscalPeriodId, setFiscalPeriodId] = useState('')
+  const [fiscalPeriodEnd, setFiscalPeriodEnd] = useState<string | null>(null)
   // Latest fetch outcome, tagged with the fetch key it was requested under.
   // loading / error / data are all derived by comparing that tag with the
   // current key, so the fetch effect never sets state synchronously.
@@ -1565,7 +1568,10 @@ export function VatDeclarationView() {
               // calendar year.
               <FiscalYearSelector
                 value={fiscalPeriodId || null}
-                onChange={(id) => setFiscalPeriodId(id || '')}
+                onChange={(id, fp) => {
+                  setFiscalPeriodId(id || '')
+                  setFiscalPeriodEnd(fp?.period_end ?? null)
+                }}
                 includeAllOption={false}
                 hideFuturePeriods
               />
@@ -1913,6 +1919,15 @@ export function VatDeclarationView() {
           periodType={periodType}
           year={year}
           period={period}
+          fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+          fiscalYearEnd={
+            isYearly && fiscalPeriodEnd
+              ? {
+                  year: Number(fiscalPeriodEnd.slice(0, 4)),
+                  month: Number(fiscalPeriodEnd.slice(5, 7)),
+                }
+              : undefined
+          }
           hasData={data !== null}
           localBlocked={checksBlocked}
         />

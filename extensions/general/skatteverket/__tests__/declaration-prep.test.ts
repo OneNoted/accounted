@@ -10,8 +10,10 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { VatDeclarationRutor } from '@/types'
 
 const mockCalculateVatDeclaration = vi.fn()
+const mockResolvePeriodDates = vi.fn()
 vi.mock('@/lib/reports/vat-declaration', () => ({
   calculateVatDeclaration: (...a: unknown[]) => mockCalculateVatDeclaration(...a),
+  resolvePeriodDates: (...a: unknown[]) => mockResolvePeriodDates(...a),
 }))
 
 import { buildMomsuppgift, buildAgiUnderlag, resolveRedovisare } from '../lib/declaration-prep'
@@ -66,7 +68,47 @@ describe('buildMomsuppgift', () => {
     expect(result.momsuppgift.momsForsaljningUtgaendeHog).toBe(250)
     expect(result.momsuppgift.ingaendeMomsAvdrag).toBe(100)
     expect(result.momsuppgift.summaMoms).toBe(150)
-    expect(mockCalculateVatDeclaration).toHaveBeenCalledWith(expect.anything(), 'company-1', 'monthly', 2025, 3)
+    expect(mockCalculateVatDeclaration).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'monthly', 2025, 3, 'accrual', { fiscalPeriodId: undefined },
+    )
+    // Sub-annual periods are calendar periods: no fiscal-period lookup.
+    expect(mockResolvePeriodDates).not.toHaveBeenCalled()
+  })
+
+  it('targets the FY-end month for a broken-FY yearly filer (SFL 26 kap 10-11 §§)', async () => {
+    mockCalculateVatDeclaration.mockResolvedValue({ rutor: zeroRutor() })
+    // Räkenskapsår 2025-07-01 → 2026-06-30: redovisningsperiod is 202606, not 202612.
+    mockResolvePeriodDates.mockResolvedValue({ start: '2025-07-01', end: '2026-06-30' })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5560000000', entity_type: 'aktiebolag' } }) // resolveRedovisare
+
+    const result = await buildMomsuppgift(supabase as never, 'company-1', {
+      periodType: 'yearly', year: 2026, period: 1, fiscalPeriodId: 'fp-1',
+    })
+
+    expect(result.redovisningsperiod).toBe('202606')
+    expect(mockResolvePeriodDates).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'yearly', 2026, 1, 'fp-1',
+    )
+    // The figures must describe the same räkenskapsår as the period id.
+    expect(mockCalculateVatDeclaration).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'fp-1' },
+    )
+  })
+
+  it('keeps the calendar-year fallback for yearly without a fiscal period', async () => {
+    mockCalculateVatDeclaration.mockResolvedValue({ rutor: zeroRutor() })
+    mockResolvePeriodDates.mockResolvedValue({ start: '2025-01-01', end: '2025-12-31' })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '5560000000', entity_type: 'aktiebolag' } })
+
+    const result = await buildMomsuppgift(supabase as never, 'company-1', {
+      periodType: 'yearly', year: 2025, period: 1,
+    })
+
+    expect(result.redovisningsperiod).toBe('202512')
   })
 })
 

@@ -28,6 +28,8 @@ export interface VatSubmitChainParams {
   periodType: VatPeriodType
   year: number
   period: number
+  /** Räkenskapsår for helårsmoms: broken FYs end in their own month, not December. */
+  fiscalPeriodId?: string
 }
 
 export type VatSubmitChainResult =
