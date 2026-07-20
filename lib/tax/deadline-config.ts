@@ -13,8 +13,13 @@ export interface CompanySettingsForDeadlines {
   entity_type: EntityType
   moms_period: MomsPeriod | null
   f_skatt: boolean
+  preliminary_tax_monthly: number | null
   vat_registered: boolean
   pays_salaries: boolean
+  // null = never attested; the generator falls back to pays_salaries so
+  // rows saved before the registration flag existed keep their deadlines.
+  employer_registered: boolean | null
+  employer_seasonal: boolean
   fiscal_year_start_month: number // 1-12
   vat_taxable_base_over_40m: boolean
   vat_has_eu_trade: boolean
@@ -178,19 +183,28 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     generateDates: (year, settings) => generateAnnualVatDates(year, settings),
   },
 
-  // F-skatt (monthly)
+  // Debiterad preliminärskatt (monthly payment). Gated on the debited amount,
+  // NOT on F-skatt approval: approval is a status with no recurring duty, and
+  // Skatteverket debits nothing below 2 400 kr/år (SFL 55 kap. 2 §). The
+  // monthly payment obligation exists only while an amount > 0 is debited
+  // (SFL 62 kap. 4-5 §§).
   {
     type: 'f_skatt',
-    titleTemplate: 'F-skatt {periodLabel}',
-    description: 'Inbetalning av preliminär skatt',
-    condition: (s) => s.f_skatt,
+    titleTemplate: 'Betala preliminärskatt {periodLabel}',
+    description: 'Inbetalning av debiterad preliminärskatt',
+    condition: (s) => (s.preliminary_tax_monthly ?? 0) > 0,
     priority: 'important',
     linkedReportType: null,
-    generateDates: (year) => {
+    generateDates: (year, settings) => {
+      // Small-company förfallodagar are the 12th, with the 17th in January
+      // and August; storföretag (VAT taxable base over SEK 40M) keep the
+      // 12th in August, January-only 17th (62 kap. 3-4 §§ SFL and
+      // Skatteverket's published storföretag calendar).
+      const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
         instances.push({
-          day: month === 0 || month === 7 ? 17 : 12,
+          day: month === 0 || (month === 7 && !storforetag) ? 17 : 12,
           month,
           year,
           period: `${year}-${String(month + 1).padStart(2, '0')}`,
@@ -201,8 +215,14 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Arbetsgivardeklaration (monthly, any employer with employees: AB or EF)
-  // Per Skatteförfarandelagen: every employer paying salary must file AGI monthly.
+  // Arbetsgivardeklaration (monthly). A REGISTERED employer must file AGI
+  // every month, including nil months (SFL 26 kap. 3 §): the gate is
+  // registration, not whether salaries were paid, with pays_salaries as a
+  // fallback for settings saved before the registration flag existed.
+  // Säsongsregistrerade employers file only for months with payments plus a
+  // December nil declaration when nothing was paid all year, so they get
+  // only the December-period row; payment months are handled by the salary
+  // flow itself.
   // The filing day is keyed to the VAT taxable base, not a separate employer
   // measure (SFL 26 kap.): above SEK 40M the whole skattedeklaration (AGI and
   // VAT) is due the 26th of the following month; otherwise the 12th (17th in
@@ -211,14 +231,15 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
   {
     type: 'arbetsgivardeklaration',
     titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
-    description: 'Arbetsgivardeklaration för arbetsgivare med anställda',
-    condition: (s) => s.pays_salaries,
+    description: 'Arbetsgivardeklaration för registrerade arbetsgivare',
+    condition: (s) => s.employer_registered ?? s.pays_salaries,
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
       const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
+        if (settings.employer_seasonal && month !== 11) continue
         const deadlineMonth = (month + 1) % 12
         const deadlineYear = month === 11 ? year + 1 : year
         const day = storforetag
@@ -245,7 +266,8 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'skatteinbetalning',
     titleTemplate: 'Betala skatt och arbetsgivaravgifter {periodLabel}',
     description: 'Inbetalning av avdragen skatt och arbetsgivaravgifter för företag med beskattningsunderlag över 40 miljoner kronor',
-    condition: (s) => s.pays_salaries && s.vat_registered && s.vat_taxable_base_over_40m,
+    condition: (s) =>
+      (s.employer_registered ?? s.pays_salaries) && s.vat_registered && s.vat_taxable_base_over_40m,
     priority: 'important',
     linkedReportType: null,
     generateDates: (year) => {
@@ -419,28 +441,42 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Bokslut (AB) - 31 mars for calendar year
+  // Årsstämma (AB): within 6 months of FY end per ABL 7 kap. 10 §. Replaces
+  // the former non-statutory 'bokslut' milestone (3 months had no legal
+  // basis). The stämma gates the årsredovisning chain: the AR is presented
+  // and adopted there, and the Bolagsverket filing (arsredovisning row,
+  // 7 months) requires the adopted AR.
   {
-    type: 'bokslut',
-    titleTemplate: 'Bokslut räkenskapsår {periodLabel}',
-    description: 'Bokslut för aktiebolag',
+    type: 'arsstamma',
+    titleTemplate: 'Årsstämma räkenskapsår {periodLabel}',
+    description: 'Årsstämma för aktiebolag (senast sex månader efter räkenskapsårets utgång)',
     condition: (s) => s.entity_type === 'aktiebolag',
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
-      // For calendar year, December 31 is fiscal year end, deadline March 31
-      if (settings.fiscal_year_start_month === 1) {
-        return [
-          { day: 31, month: 2, year, period: `${year - 1}`, periodLabel: `${year - 1}` }, // March
-        ]
+      // FY end month (1-indexed)
+      const fyEndMonth = settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1
+
+      // Last day of (FY end month + 6). Swedish fiscal years always end on
+      // the last day of a calendar month (BFL 3 kap.), so this equals the
+      // statutory six-month limit.
+      const results: DeadlineInstance[] = []
+      for (const endYr of [year - 1, year]) {
+        const dlMonth0 = ((fyEndMonth - 1) + 6) % 12
+        const dlYear = (fyEndMonth - 1) + 6 >= 12 ? endYr + 1 : endYr
+        if (dlYear === year) {
+          const lastDay = new Date(dlYear, dlMonth0 + 1, 0).getDate()
+          const periodLabel = fyEndMonth === 12 ? `${endYr}` : `${endYr - 1}/${endYr}`
+          results.push({
+            day: lastDay,
+            month: dlMonth0,
+            year: dlYear,
+            period: periodLabel,
+            periodLabel,
+          })
+        }
       }
-      // For non-calendar fiscal years, 3 months after year end
-      const fiscalYearEnd = settings.fiscal_year_start_month - 1
-      const deadlineMonth = (fiscalYearEnd + 3) % 12
-      const deadlineYear = deadlineMonth < fiscalYearEnd ? year + 1 : year
-      return [
-        { day: 31, month: deadlineMonth, year: deadlineYear, period: `${year - 1}/${year}`, periodLabel: `${year - 1}/${year}` },
-      ]
+      return results
     },
   },
 ]

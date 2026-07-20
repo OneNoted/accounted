@@ -71,6 +71,11 @@ vi.mock('@/lib/invoices/issue-credit-note', () => ({
   issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
 }))
 
+const mockCreateSchedules = vi.fn()
+vi.mock('@/lib/bookkeeping/accruals/from-invoices', () => ({
+  createSchedulesForCustomerInvoice: (...args: unknown[]) => mockCreateSchedules(...args),
+}))
+
 // The sandbox guard issues a company_settings query at the top of the route;
 // short-circuit it in tests since the queued mock-supabase is shaped for the
 // route's existing fetch chain, not an extra pre-flight read.
@@ -118,6 +123,7 @@ describe('POST /api/invoices/[id]/send', () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
     mockIsConfigured.mockReturnValue(true)
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
+    mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
     mockIssueCreditNote.mockResolvedValue({
       complete: true,
       journalEntryId: 'credit-je-1',
@@ -604,6 +610,80 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(status).toBe(502)
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_PROVIDER_FAILED')
     expect((body.error as unknown as { details?: { retryable?: boolean } }).details?.retryable).toBe(true)
+  })
+
+  it('returns 400 on malformed lines before any email is sent', async () => {
+    enqueue({ data: invoice, error: null }) // ownership fetch precedes validation
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { lines: [{ account_number: 'bad', debit_amount: -1 }] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 on unbalanced lines before any email is sent', async () => {
+    enqueue({ data: invoice, error: null })
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '1510', debit_amount: 100, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 90 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_LINES_UNBALANCED')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('books user-edited lines verbatim and skips accrual schedules', async () => {
+    enqueue({ data: invoice, error: null }) // fetch invoice
+    enqueue({ data: company, error: null }) // settings
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-lines' })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-20' })
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status flip
+    enqueue({ data: null, error: null }) // journal_entry_id link
+
+    const lines = [
+      { account_number: '1510', debit_amount: 12500, credit_amount: 0 },
+      { account_number: '3041', debit_amount: 0, credit_amount: 10000 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+    ]
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { lines },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    // User-edited lines book exactly as reviewed: no accrual schedules.
+    expect(mockCreateSchedules).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ id: 'inv-1' }),
+      'enskild_firma',
+      undefined,
+      expect.objectContaining({
+        customLines: [
+          expect.objectContaining({ account_number: '1510', debit_amount: 12500 }),
+          expect.objectContaining({ account_number: '3041', credit_amount: 10000 }),
+          expect.objectContaining({ account_number: '2611', credit_amount: 2500 }),
+        ],
+      })
+    )
   })
 
   it('renders the final PDF as if already sent (no UTKAST banner)', async () => {

@@ -12,6 +12,7 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -37,8 +38,22 @@ ensureInitialized()
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.mark_sent',
-  async (_request, { supabase, user, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
   const { id } = await params
+
+  // Optional body. Backwards-compat: callers may POST with no body. Read it
+  // here but validate only AFTER the ownership fetch below, so callers never
+  // get payload feedback for invoices outside their company.
+  let rawBody: unknown
+  const bodyText = await request.text()
+  if (bodyText) {
+    try {
+      rawBody = JSON.parse(bodyText)
+    } catch {
+      // Malformed JSON must not silently fall back to generated lines.
+      return NextResponse.json({ error: 'Ogiltig förfrågan' }, { status: 400 })
+    }
+  }
 
   // Fetch invoice
   const { data: invoice, error: invoiceError } = await supabase
@@ -60,6 +75,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   if (isCreditNote && !['draft', 'sent'].includes(invoice.status)) {
     return errorResponseFromCode('INVOICE_MARK_SENT_INVALID_STATUS', log, { requestId })
   }
+
+  const linesResult = parseCustomIssuanceLines(rawBody)
+  if (!linesResult.ok) {
+    if (linesResult.error === 'invalid_body') {
+      log.warn('mark-sent validation failed', { invoiceId: id })
+      return NextResponse.json(
+        { error: 'Ogiltig förfrågan', details: linesResult.details },
+        { status: 400 },
+      )
+    }
+    return errorResponseFromCode(
+      linesResult.error === 'unbalanced'
+        ? 'INVOICE_MARK_SENT_LINES_UNBALANCED'
+        : 'INVOICE_MARK_SENT_LINES_INVALID',
+      log,
+      { requestId, details: linesResult.details },
+    )
+  }
+  const customLines = linesResult.lines
 
   // Assign invoice number now if this draft doesn't have one yet
   try {
@@ -141,6 +175,19 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   let journalEntryId: string | null = null
   const partialFailures: Array<{ step: string; reason: string }> = []
 
+  // Custom lines only apply where mark-sent books inline; elsewhere they are
+  // deliberately ignored (documented in MarkInvoiceSentSchema). Log it so the
+  // mismatch is visible in audit review instead of vanishing silently.
+  if (
+    customLines &&
+    (isCreditNote || !isRealInvoice || !booksInvoicesOnIssue(settings as CompanySettings))
+  ) {
+    log.warn('mark-sent: custom lines ignored (not on accrual book-at-issue path)', {
+      invoiceId: id,
+      lineCount: customLines.length,
+    })
+  }
+
   if (isCreditNote && originalInvoice) {
     const issueResult = await issueCreditNote({
       supabase,
@@ -183,37 +230,60 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // booking); ekonomi books later via POST /api/invoices/[id]/book, like
     // under kontantmetoden.
     try {
-      const journalEntry = await createInvoiceJournalEntry(
-        supabase,
-        companyId,
-        user.id,
-        invoice as Invoice,
-        entityType,
-        invoice.customer?.name
-      )
+      if (customLines) {
+        // Audit trail: distinguish user-edited bookings from generated ones.
+        log.info('mark-sent: booking user-edited custom lines', {
+          invoiceId: id,
+          userId: user.id,
+          lineCount: customLines.length,
+        })
+      }
+      const journalEntry = customLines
+        ? await createInvoiceJournalEntry(
+            supabase,
+            companyId,
+            user.id,
+            invoice as Invoice,
+            entityType,
+            invoice.customer?.name,
+            { customLines },
+          )
+        : await createInvoiceJournalEntry(
+            supabase,
+            companyId,
+            user.id,
+            invoice as Invoice,
+            entityType,
+            invoice.customer?.name,
+          )
       if (journalEntry) {
         journalEntryId = journalEntry.id
 
         // Periodiserade lines: create schedules + catch-up dissolutions now
         // that the revenue entry exists. Failures are logged, never fatal:
-        // the verifikat is committed.
-        const accrual = await createSchedulesForCustomerInvoice(
-          supabase,
-          companyId,
-          user.id,
-          invoice as Invoice,
-          (invoice.items as InvoiceItem[] | null) ?? [],
-          journalEntry.id,
-          entityType,
-        )
-        if (accrual.failed > 0) {
-          log.error('accrual schedule creation failed on mark-sent', {
-            failed: accrual.failed,
-          })
-          partialFailures.push({
-            step: 'accrual_schedules',
-            reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
-          })
+        // the verifikat is committed. Skipped when the user edited the lines:
+        // the generated 29xx deferral may no longer exist in what was booked,
+        // and a schedule would then dissolve an interim balance that was
+        // never credited. User-edited lines book exactly as reviewed.
+        if (!customLines) {
+          const accrual = await createSchedulesForCustomerInvoice(
+            supabase,
+            companyId,
+            user.id,
+            invoice as Invoice,
+            (invoice.items as InvoiceItem[] | null) ?? [],
+            journalEntry.id,
+            entityType,
+          )
+          if (accrual.failed > 0) {
+            log.error('accrual schedule creation failed on mark-sent', {
+              failed: accrual.failed,
+            })
+            partialFailures.push({
+              step: 'accrual_schedules',
+              reason: `${accrual.failed} periodisering(ar) kunde inte skapas`,
+            })
+          }
         }
 
         const { error: linkError } = await supabase

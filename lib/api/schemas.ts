@@ -260,8 +260,8 @@ export const TaxDeadlineTypeSchema = z.enum([
   'inkomstdeklaration_ef',
   'inkomstdeklaration_ab',
   'arsredovisning',
+  'arsstamma',
   'periodisk_sammanstallning',
-  'bokslut',
 ])
 
 export const DeadlineSourceSchema = z.enum(['system', 'user'])
@@ -666,6 +666,22 @@ export const MarkInvoicePaidSchema = z.object({
   // none of them are this payment. v1 callers must use a fresh
   // Idempotency-Key on the retry: the original is body-hash bound.
   force: z.boolean().optional(),
+})
+
+export const MarkInvoiceSentSchema = z.object({
+  // Optional user-edited issuance lines ("Markera som skickad och bokför").
+  // When present they replace the generated invoice entry verbatim: the route
+  // validates balance and books exactly these lines, and accrual schedules
+  // are NOT created (what the user reviewed is what books). Only honored on
+  // the accrual book-at-issue path; ignored for credit notes, cash-method
+  // and deferred-booking companies, which don't book at mark-sent.
+  lines: z.array(z.object({
+    account_number: accountNumber,
+    debit_amount: nonNegativeAmount.default(0),
+    credit_amount: nonNegativeAmount.default(0),
+    line_description: z.string().optional(),
+    dimensions: DimensionsBagSchema.optional(),
+  })).min(2).optional(),
 })
 
 // ============================================================
@@ -1467,6 +1483,8 @@ export const UpdateSettingsSchema = z.object({
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),
   fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
   preliminary_tax_monthly: z.number().nullable().optional(),
+  employer_registered: z.boolean().nullable().optional(),
+  employer_seasonal: z.boolean().optional(),
   bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').optional(),
   clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').optional().or(z.literal('')),
   account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),

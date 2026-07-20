@@ -11,17 +11,24 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
+import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { createClient } from '@/lib/supabase/client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
-import { Loader2, Mail, Send } from 'lucide-react'
-import type { Invoice, InvoiceItem, Customer, EntityType } from '@/types'
+import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
+import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import type { Invoice, InvoiceItem, Customer, EntityType, BASAccount } from '@/types'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -54,11 +61,25 @@ export default function SendInvoiceDialog({
   const isCreditRepair = isCreditNote && invoice.status === 'sent'
 
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
   const [entityType, setEntityType] = useState<EntityType>('enskild_firma')
   const [periodName, setPeriodName] = useState('')
   const [isInitialized, setIsInitialized] = useState(false)
   const [shouldBookOnIssue, setShouldBookOnIssue] = useState(true)
+  const [deferBooking, setDeferBooking] = useState(false)
+  const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const [editLines, setEditLines] = useState<FormLine[]>([])
+  const [hasEdited, setHasEdited] = useState(false)
+
+  // The accrual book-at-issue path (both email send and manual mark-sent)
+  // lets the user adjust the proposed lines before booking (same editor as
+  // PaymentBookingDialog). Credit notes keep the read-only preview, as do
+  // invoices with periodiserade rows: the server generator defers those to
+  // 29xx and creates dissolution schedules, which user-edited lines bypass.
+  // SEK only: the generated path stamps FX metadata (currency, exchange rate)
+  // on the receivable line, which custom lines cannot carry.
+  const hasAccrualItems = (invoice.items ?? []).some((item) => itemHasAccrual(item))
+  const editable =
+    !isCreditNote && shouldBookOnIssue && !hasAccrualItems && invoice.currency === 'SEK'
 
   useEffect(() => {
     if (!open) {
@@ -75,15 +96,15 @@ export default function SendInvoiceDialog({
         const [settingsResult, periodResult, originalResult] = await Promise.all([
           supabase
             .from('company_settings')
-            .select('accounting_method, entity_type')
+            .select('accounting_method, entity_type, defer_invoice_booking')
             .eq('company_id', company.id)
             .maybeSingle(),
           supabase
             .from('fiscal_periods')
             .select('name')
             .eq('company_id', company.id)
-            .lte('start_date', invoice.invoice_date)
-            .gte('end_date', invoice.invoice_date)
+            .lte('period_start', invoice.invoice_date)
+            .gte('period_end', invoice.invoice_date)
             .maybeSingle(),
           invoice.credited_invoice_id
             ? supabase
@@ -102,14 +123,29 @@ export default function SendInvoiceDialog({
         if (cancelled) return
 
         const method = (settingsResult.data?.accounting_method || 'accrual') as 'accrual' | 'cash'
-        setAccountingMethod(method)
+        // #967: deferred companies mark-sent WITHOUT booking; ekonomi books
+        // later via a separate step, so neither preview nor editor applies.
+        const bookOnIssue = invoice.credited_invoice_id && originalResult.data
+          ? creditNoteNeedsJournalEntry(method, originalResult.data)
+          : method === 'accrual' && !settingsResult.data?.defer_invoice_booking
+
+        // Line editing needs the chart of accounts; only the accrual
+        // book-at-issue path renders the editor, so skip the fetch elsewhere.
+        let fetchedAccounts: BASAccount[] = []
+        if (!invoice.credited_invoice_id && bookOnIssue && !hasAccrualItems) {
+          const accountsRes = await fetch('/api/bookkeeping/accounts')
+          if (!accountsRes.ok) throw new Error(t('load_chart_failed'))
+          const accountsData = await accountsRes.json()
+          fetchedAccounts = accountsData.data || []
+        }
+
+        if (cancelled) return
+
+        setAccounts(fetchedAccounts)
         setEntityType((settingsResult.data?.entity_type as EntityType) || 'enskild_firma')
         setPeriodName(periodResult.data?.name || '')
-        setShouldBookOnIssue(
-          invoice.credited_invoice_id && originalResult.data
-            ? creditNoteNeedsJournalEntry(method, originalResult.data)
-            : method === 'accrual',
-        )
+        setDeferBooking(!!settingsResult.data?.defer_invoice_booking)
+        setShouldBookOnIssue(bookOnIssue)
         setIsInitialized(true)
       } catch (err) {
         if (cancelled) return
@@ -149,17 +185,76 @@ export default function SendInvoiceDialog({
     })
   }, [isInitialized, shouldBookOnIssue, entityType, invoice])
 
-  const { totalDebit, totalCredit } = useMemo(() => {
+  // Seed the editable grid from the proposal once per open; edits must not be
+  // clobbered by re-renders, so proposedLines is deliberately not a dependency.
+  useEffect(() => {
+    if (!open) {
+      setEditLines([])
+      setHasEdited(false)
+      return
+    }
+    if (isInitialized && editable) {
+      setEditLines(proposedLines.map((line) => ({ ...line })))
+      setHasEdited(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isInitialized, editable])
+
+  const activeLines = editable ? editLines : proposedLines
+
+  const { totalDebit, totalCredit, isBalanced, hasOrphanAmounts } = useMemo(() => {
     let totalDebit = 0
     let totalCredit = 0
-    for (const line of proposedLines) {
-      totalDebit += parseFloat(line.debit_amount) || 0
-      totalCredit += parseFloat(line.credit_amount) || 0
+    // A row carrying an amount but no account would be silently dropped from
+    // the POST while staying visible in the grid; block submit instead.
+    let hasOrphanAmounts = false
+    for (const line of activeLines) {
+      // Round per line like the server does, so a payload the badge calls
+      // balanced can never be rejected by the route's rounded check.
+      const debit = roundOre(parseFloat(line.debit_amount) || 0)
+      const credit = roundOre(parseFloat(line.credit_amount) || 0)
+      if ((debit || credit) && !line.account_number) hasOrphanAmounts = true
+      totalDebit += debit
+      totalCredit += credit
     }
-    return { totalDebit, totalCredit }
-  }, [proposedLines])
+    const isBalanced = Math.round((totalDebit - totalCredit) * 100) === 0 && totalDebit > 0
+    return { totalDebit, totalCredit, isBalanced, hasOrphanAmounts }
+  }, [activeLines])
+
+  const updateLine = (index: number, field: keyof FormLine, value: string) => {
+    setHasEdited(true)
+    setEditLines((prev) => {
+      const next = [...prev]
+      const updated = { ...next[index], [field]: value }
+
+      // Debit/credit exclusion: clear the other when one is entered
+      if (field === 'debit_amount' && value) {
+        updated.credit_amount = ''
+      } else if (field === 'credit_amount' && value) {
+        updated.debit_amount = ''
+      }
+
+      next[index] = updated
+      return next
+    })
+  }
+
+  const addLine = () => {
+    setHasEdited(true)
+    setEditLines((prev) => [
+      ...prev,
+      { account_number: '', debit_amount: '', credit_amount: '', line_description: '' },
+    ])
+  }
+
+  const removeLine = (index: number) => {
+    if (editLines.length <= 2) return
+    setHasEdited(true)
+    setEditLines((prev) => prev.filter((_, i) => i !== index))
+  }
 
   const handleConfirm = async () => {
+    if (editable && (!isBalanced || hasOrphanAmounts)) return
     setIsSubmitting(true)
 
     try {
@@ -167,7 +262,33 @@ export default function SendInvoiceDialog({
         ? `/api/invoices/${invoice.id}/send`
         : `/api/invoices/${invoice.id}/mark-sent`
 
-      const response = await fetch(url, { method: 'POST' })
+      // Untouched proposal: send no body so the server generates the entry
+      // itself (per-item revenue accounts, dimensions, FX metadata). Only
+      // actual edits override the generator.
+      const apiLines = editable && hasEdited
+        ? editLines
+            .filter((l) => l.account_number && (parseFloat(l.debit_amount) || parseFloat(l.credit_amount)))
+            .map((l) => ({
+              account_number: l.account_number,
+              debit_amount: parseFloat(l.debit_amount) || 0,
+              credit_amount: parseFloat(l.credit_amount) || 0,
+              line_description: l.line_description || undefined,
+              dimensions:
+                l.dimensions && Object.keys(l.dimensions).length > 0
+                  ? l.dimensions
+                  : undefined,
+            }))
+        : undefined
+
+      const response = await fetch(url, {
+        method: 'POST',
+        ...(apiLines
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ lines: apiLines }),
+            }
+          : {}),
+      })
 
       if (!response.ok) {
         throw new Error(await getResponseErrorMessage(response, 'invoice', locale))
@@ -216,7 +337,7 @@ export default function SendInvoiceDialog({
               ? shouldBookOnIssue
                 ? t('credit_mark_success_voucher_created')
                 : t('credit_mark_success_no_voucher')
-              : accountingMethod === 'accrual'
+              : shouldBookOnIssue
                 ? t('mark_success_voucher_created')
                 : undefined,
         })
@@ -289,7 +410,162 @@ export default function SendInvoiceDialog({
                 eller använd &laquo;Markera som skickad&raquo;.
               </div>
             )}
-            {showJournalPreview ? (
+            {showJournalPreview && editable ? (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  {t('journal_edit_intro')}
+                </p>
+
+                {/* Mobile card layout */}
+                <div className="sm:hidden space-y-3">
+                  {editLines.map((line, index) => (
+                    <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1">
+                          <AccountCombobox
+                            value={line.account_number}
+                            accounts={accounts}
+                            onChange={(val) => updateLine(index, 'account_number', val)}
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
+                          onClick={() => removeLine(index)}
+                          disabled={editLines.length <= 2}
+                          aria-label={t('remove_row')}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label
+                            htmlFor={`send-line-${index}-debit`}
+                            className="text-xs text-muted-foreground"
+                          >
+                            {t('debit_label')}
+                          </Label>
+                          <Input
+                            id={`send-line-${index}-debit`}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0,00"
+                            value={line.debit_amount}
+                            onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                            className="tabular-nums text-right"
+                            inputMode="decimal"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label
+                            htmlFor={`send-line-${index}-credit`}
+                            className="text-xs text-muted-foreground"
+                          >
+                            {t('credit_label')}
+                          </Label>
+                          <Input
+                            id={`send-line-${index}-credit`}
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="0,00"
+                            value={line.credit_amount}
+                            onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                            className="tabular-nums text-right"
+                            inputMode="decimal"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <Button type="button" variant="outline" size="sm" onClick={addLine} className="w-full">
+                    <Plus className="mr-1 h-3.5 w-3.5" /> {t('add_row')}
+                  </Button>
+                </div>
+
+                {/* Desktop table layout */}
+                <div className="hidden sm:block space-y-2">
+                  <div className="grid grid-cols-[1fr_120px_120px_32px] gap-2 text-xs font-medium text-muted-foreground px-1">
+                    <span>{t('account_label')}</span>
+                    <span className="text-right">{t('debit_label')}</span>
+                    <span className="text-right">{t('credit_label')}</span>
+                    <span />
+                  </div>
+
+                  {editLines.map((line, index) => (
+                    <div key={index} className="grid grid-cols-[1fr_120px_120px_32px] gap-2 items-start">
+                      <div className="min-w-0">
+                        <AccountCombobox
+                          value={line.account_number}
+                          accounts={accounts}
+                          onChange={(val) => updateLine(index, 'account_number', val)}
+                        />
+                      </div>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0,00"
+                        value={line.debit_amount}
+                        onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                        className="tabular-nums text-right"
+                        aria-label={t('debit_label')}
+                      />
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        placeholder="0,00"
+                        value={line.credit_amount}
+                        onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                        className="tabular-nums text-right"
+                        aria-label={t('credit_label')}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => removeLine(index)}
+                        disabled={editLines.length <= 2}
+                        aria-label={t('remove_row')}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={addLine}
+                    className="text-muted-foreground"
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    {t('add_row')}
+                  </Button>
+                </div>
+
+                {/* Balance indicator */}
+                <div className="flex items-center justify-between border-t pt-3">
+                  {isBalanced ? (
+                    <Badge variant="success">{t('balanced_badge')}</Badge>
+                  ) : (
+                    <Badge variant="destructive">
+                      {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
+                    </Badge>
+                  )}
+                  <div className="text-sm text-muted-foreground tabular-nums">
+                    {formatCurrency(totalDebit)} / {formatCurrency(totalCredit)}
+                  </div>
+                </div>
+              </>
+            ) : showJournalPreview ? (
               <>
                 <p className="text-sm text-muted-foreground">
                   {t('journal_preview_intro')}
@@ -311,7 +587,13 @@ export default function SendInvoiceDialog({
             ) : (
               <p className="text-sm text-muted-foreground">
                 {!shouldBookOnIssue
-                  ? t(isCreditNote ? 'explain_credit_cash' : 'explain_cash')
+                  ? t(
+                      isCreditNote
+                        ? 'explain_credit_cash'
+                        : deferBooking
+                          ? 'explain_deferred'
+                          : 'explain_cash',
+                    )
                   : mode === 'email'
                     ? t('explain_email', { email: invoice.customer.email ?? '' })
                     : t('explain_manual')}
@@ -331,7 +613,7 @@ export default function SendInvoiceDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={isSubmitting || !isInitialized || (mode === 'email' && (isSandbox || !canEmail))}
+            disabled={isSubmitting || !isInitialized || (editable && (!isBalanced || hasOrphanAmounts)) || (mode === 'email' && (isSandbox || !canEmail))}
             className="w-full sm:w-auto min-h-11"
             title={
               mode === 'email' && isSandbox
