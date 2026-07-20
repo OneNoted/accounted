@@ -598,6 +598,7 @@ export function makeCompanySettings(
     invoice_header_text: null,
     invoice_footer_text: null,
     invoice_email_texts: null,
+    invoice_payment_links_enabled: false,
     send_invoice_reminders: true,
     reminder_days_level_1: 15,
     reminder_days_level_2: 30,
