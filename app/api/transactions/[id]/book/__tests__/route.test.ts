@@ -175,7 +175,10 @@ describe('POST /api/transactions/[id]/book', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Entry is not balanced')
+    // Untyped engine errors map to the Swedish context fallback; the raw
+    // English message must never reach the response field (issue #337).
+    expect(body.error).toBe('Kunde inte hantera transaktionen. Försök igen.')
+    expect(body.error).not.toContain('not balanced')
   })
 
   it('creates journal entry and links to transaction (happy path)', async () => {

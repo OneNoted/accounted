@@ -199,6 +199,14 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Endast bokförda verifikationer kan rättas.',
     message_en: 'Only posted entries can be corrected.',
   },
+  CANNOT_EDIT_NON_DRAFT: {
+    httpStatus: 409,
+    message_sv: 'Endast utkast kan redigeras. Bokförda verifikationer rättas med storno.',
+    message_en: 'Only draft entries can be edited; posted entries are immutable and are corrected with storno.',
+    remediation: {
+      description: 'Use the correction (storno) flow to change a posted entry instead of editing it.',
+    },
+  },
   ENTRY_ALREADY_REVERSED: {
     httpStatus: 409,
     message_sv:
@@ -224,6 +232,17 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     remediation: {
       description:
         'Create the missing dimension value in the register (or re-activate the archived value), then retry. Only companies with dimensions enabled are validated; each issue in details.issues carries sie_dim_no, code and reason (unknown_dimension | unknown_value | archived_value).',
+    },
+  },
+  MANDATORY_DIMENSION_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Ett eller flera konton kräver en dimension (t.ex. projekt eller kostnadsställe). Välj värden innan bokföring.',
+    message_en:
+      'One or more accounts require a dimension value. details.violations lists each account_number, sie_dim_no and dimension_name.',
+    remediation: {
+      description:
+        'Tag every listed line with the required dimension value, then retry the commit.',
     },
   },
   BOOKKEEPING_DATABASE_ERROR: {
@@ -2751,6 +2770,13 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
     message_en:
       'No Bolagsverket event subscription exists for this company yet. One is created on the first submission.',
   },
+  ARSREDOVISNING_REGISTERED: {
+    httpStatus: 409,
+    message_sv:
+      'Årsredovisningen för räkenskapsåret är registrerad hos Bolagsverket och texterna kan inte längre ändras.',
+    message_en:
+      'The årsredovisning for this fiscal period has been registered with Bolagsverket; its narrative texts can no longer be edited.',
+  },
 }
 
 const ASSETS: Record<string, StructuredErrorEntry> = {
@@ -2833,6 +2859,30 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Node.js / undici network system codes. These surface when an outbound call
+// (email provider, Riksbanken, Skatteverket, a DB socket) fails at the
+// network layer and the raw Error bubbles up with its `code` intact.
+// Registered so they translate to a Swedish transient message instead of
+// leaking strings like "connect ECONNREFUSED 10.0.0.1:443" (#337 follow-up).
+// ─────────────────────────────────────────────────────────────────
+
+const NETWORK_TRANSIENT_ENTRY: StructuredErrorEntry = {
+  httpStatus: 503,
+  message_sv: 'Kunde inte nå en extern tjänst. Försök igen om en stund.',
+  message_en: 'An upstream network call failed. Retry the same request after a short backoff.',
+  retryable: true,
+}
+
+const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
+  ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
+  ECONNRESET: NETWORK_TRANSIENT_ENTRY,
+  ETIMEDOUT: NETWORK_TRANSIENT_ENTRY,
+  ENOTFOUND: NETWORK_TRANSIENT_ENTRY,
+  EAI_AGAIN: NETWORK_TRANSIENT_ENTRY,
+  EPIPE: NETWORK_TRANSIENT_ENTRY,
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
@@ -2876,6 +2926,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...NODE_SYSTEM,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

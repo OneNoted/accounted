@@ -150,7 +150,8 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)
-    expect(body.error).toBe('db connection lost')
+    // Raw Supabase messages never reach the response field (issue #337).
+    expect(body.error).toBe('Åtgärderna kunde inte hämtas. Försök igen.')
   })
 
   it('reports per-item not-found as failed without calling commit', async () => {
@@ -170,7 +171,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
 
     expect(status).toBe(200)
     expect(body.data.results).toEqual([
-      { id: VALID_ID_1, status: 'failed', error: 'Operation not found' },
+      { id: VALID_ID_1, status: 'failed', error: 'Åtgärden kunde inte hittas.' },
     ])
     expect(body.data.summary).toEqual({
       total: 1,
@@ -204,7 +205,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
 
     expect(status).toBe(200)
     expect(body.data.results).toEqual([
-      { id: VALID_ID_1, status: 'skipped', error: 'Already committed' },
+      { id: VALID_ID_1, status: 'skipped', error: 'Redan hanterad (committed)' },
       {
         id: VALID_ID_2,
         status: 'skipped',
@@ -296,8 +297,9 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     }>(response)
 
     expect(status).toBe(200)
+    // English executor message → Swedish HTTP-409 fallback (issue #337).
     expect(body.data.results).toEqual([
-      { id: VALID_ID_1, status: 'rejected', error: 'Resource already deleted' },
+      { id: VALID_ID_1, status: 'rejected', error: 'En konflikt uppstod. Ladda om sidan och försök igen.' },
     ])
     expect(body.data.summary).toEqual({
       total: 1,
@@ -341,12 +343,14 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     }>(response)
 
     expect(status).toBe(200)
+    // English executor strings map to the status-appropriate Swedish
+    // fallbacks; skip/not-found strings are now Swedish at the source (#337).
     expect(body.data.results).toEqual([
       { id: VALID_ID_1, status: 'committed' },
-      { id: VALID_ID_2, status: 'failed', error: 'boom' },
-      { id: VALID_ID_3, status: 'skipped', error: 'Already rejected' },
-      { id: VALID_ID_4, status: 'rejected', error: 'gone' },
-      { id: VALID_ID_5, status: 'failed', error: 'Operation not found' },
+      { id: VALID_ID_2, status: 'failed', error: 'Ett oväntat serverfel uppstod. Försök igen senare.' },
+      { id: VALID_ID_3, status: 'skipped', error: 'Redan hanterad (rejected)' },
+      { id: VALID_ID_4, status: 'rejected', error: 'Resursen kunde inte hittas.' },
+      { id: VALID_ID_5, status: 'failed', error: 'Åtgärden kunde inte hittas.' },
     ])
     expect(body.data.summary).toEqual({
       total: 5,

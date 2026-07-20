@@ -38,6 +38,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
 import {
   ClipboardCheck,
@@ -754,7 +755,10 @@ export default function PendingOperationsPage() {
     try {
       const res = await fetch(`/api/pending-operations/${selectedOp.id}/commit`, { method: 'POST' })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Misslyckades')
+      // getErrorMessage handles both `{ error: string }` and the structured
+      // `{ error: { code, message } }` envelope (the latter would otherwise
+      // toast "[object Object]") and never surfaces raw English.
+      if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
       toast({ title: 'Godkänd', description: selectedOp.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
@@ -780,7 +784,7 @@ export default function PendingOperationsPage() {
         body: JSON.stringify({ ids }),
       })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Misslyckades')
+      if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
 
       const summary = json.data?.summary as
         | { committed: number; failed: number; skipped: number; rejected: number }
@@ -841,7 +845,7 @@ export default function PendingOperationsPage() {
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
-        throw new Error(json.error || 'Misslyckades')
+        throw new Error(getErrorMessage(json, { statusCode: res.status }))
       }
       toast({ title: 'Avvisad', description: rejectOp.title })
       setRejectOp(null)

@@ -3,13 +3,14 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
 ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.commit',
-  async (_request, { supabase, user, companyId }, { params }) => {
+  async (_request, { supabase, user, companyId, log }, { params }) => {
     const { id } = await params
 
     const { data: op, error: fetchError } = await supabase
@@ -48,9 +49,19 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         )
         if (structured) return structured
       }
+      // The executor's error strings mix Swedish user messages with raw
+      // Supabase/Zod English; the pending page toasts this field verbatim, so
+      // map it here. Swedish passes through untouched, English falls to the
+      // status-appropriate Swedish fallback (issue #337). Raw stays in logs.
+      const status = result.http_status ?? 500
+      log.warn('pending operation commit failed', {
+        operationId: id,
+        rawError: result.error,
+        status,
+      })
       return NextResponse.json(
-        { error: result.error },
-        { status: result.http_status ?? 500 }
+        { error: getErrorMessage(result.error ?? null, { statusCode: status }) },
+        { status }
       )
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)

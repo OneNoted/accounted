@@ -179,7 +179,8 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)
-    expect(body.error).toBe('DB error')
+    // Raw Supabase messages never reach the response field (issue #337).
+    expect(body.error).toBe('Verifikationerna kunde inte hämtas. Försök igen.')
   })
 })
 
@@ -255,6 +256,7 @@ describe('POST /api/bookkeeping/journal-entries', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Unbalanced entry')
+    // Untyped engine errors map to the Swedish context fallback (issue #337).
+    expect(body.error).toBe('Kunde inte hantera verifikationen. Försök igen.')
   })
 })

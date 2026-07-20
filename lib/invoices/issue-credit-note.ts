@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
 import type { AccountingMethod, CreditNote, EntityType } from '@/types'
 
@@ -39,8 +40,15 @@ export interface IssueCreditNoteResult {
   failures: CreditNoteIssueFailure[]
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Okänt fel'
+/**
+ * Failure reasons land in the `partial_failures` response field, which is
+ * user-visible: map through getErrorMessage so typed engine errors translate
+ * and untyped ones fall to the Swedish context fallback instead of leaking
+ * the raw message (issue #337). The raw error is always logged at the call
+ * site before this runs.
+ */
+function failureReason(error: unknown): string {
+  return getErrorMessage(error, { context: 'invoice' })
 }
 
 /**
@@ -171,7 +179,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
         log.error('failed to create or recover credit note journal entry on issue', error, {
           creditNoteId: creditNote.id,
         })
-        failures.push({ step: 'journal_entry', reason: errorMessage(error) })
+        failures.push({ step: 'journal_entry', reason: failureReason(error) })
       }
     }
 
@@ -201,7 +209,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
         })
         failures.push({
           step: 'journal_link',
-          reason: linkError?.message ?? 'Kreditfakturan kunde inte kopplas till verifikatet.',
+          reason: 'Kreditfakturan kunde inte kopplas till verifikatet.',
         })
         return { complete: false, journalEntryId, journalEntryRequired, repairRequired: true, failures }
       }
@@ -226,7 +234,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
         }
       } catch (error) {
         log.warn('failed to cancel accrual schedules for credited invoice', error)
-        failures.push({ step: 'accrual_schedules', reason: errorMessage(error) })
+        failures.push({ step: 'accrual_schedules', reason: failureReason(error) })
       }
 
       if (failures.length > 0) {
@@ -252,7 +260,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
       })
       failures.push({
         step: 'original_status',
-        reason: originalStatusError?.message ?? 'Originalfakturan kunde inte markeras som krediterad.',
+        reason: 'Originalfakturan kunde inte markeras som krediterad.',
       })
       return {
         complete: false,

@@ -20,7 +20,7 @@
 import { formatCurrency } from '@/lib/utils'
 // Pure module (no next/server): safe for the client bundles this file lives in.
 import { formatDimensionValidationIssues } from '@/lib/bookkeeping/dimension-errors'
-import { getErrorEntry } from './structured-errors'
+import { getErrorEntry, hasErrorEntry } from './structured-errors'
 
 type ErrorContext =
   | 'invoice'
@@ -138,6 +138,10 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     /timed out after \d+m?s/i,
     'Anslutningen mot tjänsten tog för lång tid. Försök igen.',
   ],
+  [
+    /already has a journal entry/i,
+    'Transaktionen är redan bokförd. Ångra kategoriseringen om du vill ändra den.',
+  ],
 ]
 
 /**
@@ -178,7 +182,7 @@ function isSwedishUserMessage(message: string): boolean {
     /session/i,
     /förfrågan/i,
     /obligatorisk/i,
-    /bokföringen är låst/i,
+    /är låst/i,
     /fält/i,
     /värde/i,
     /felaktig/i,
@@ -283,22 +287,32 @@ export function getErrorMessage(
       // stays out of details. Plain objects (forwarded inner envelopes,
       // PostgrestError-shaped literals) keep the passthrough behavior.
       if (error instanceof Error) {
-        return getErrorMessage(
-          {
-            error: {
-              code: obj.code,
-              message: obj.message,
-              account_numbers: (obj as { accountNumbers?: unknown }).accountNumbers,
-              details: { ...obj },
+        // Only recurse when the registry knows the code: the structured
+        // branches then own the translation. An unknown code (a Node system
+        // error like ECONNREFUSED, a Postgres SQLSTATE on a wrapped Error, a
+        // stray third-party code) would fall out of the structured path with
+        // its raw English message, so instead fall through to the plain
+        // handling below: Postgres map, known patterns, Swedish check, and
+        // finally the status/context/generic fallbacks.
+        if (hasErrorEntry(obj.code)) {
+          return getErrorMessage(
+            {
+              error: {
+                code: obj.code,
+                message: obj.message,
+                account_numbers: (obj as { accountNumbers?: unknown }).accountNumbers,
+                details: { ...obj },
+              },
             },
-          },
-          options
-        )
+            options
+          )
+        }
+      } else {
+        if (locale === 'en' && typeof obj.message_en === 'string' && obj.message_en.trim()) {
+          return obj.message_en
+        }
+        return obj.message
       }
-      if (locale === 'en' && typeof obj.message_en === 'string' && obj.message_en.trim()) {
-        return obj.message_en
-      }
-      return obj.message
     }
 
     // Structured application error: { error: { code, message, message_en?, ... } }
