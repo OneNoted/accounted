@@ -113,19 +113,37 @@ export const POST = withRouteContext(
     try {
       // Verify the fiscal period belongs to the authenticated company before
       // writing: defense-in-depth alongside RLS, gives a cleaner 404 than
-      // the RLS rejection envelope. Also refuse mutations on locked/closed
-      // periods (BFL 5 kap 5 §, räkenskapsinformation immutability).
+      // the RLS rejection envelope.
+      //
+      // Deliberately NOT gated on the bookkeeping period lock: the narrative
+      // is årsredovisning document text (ÅRL 6 kap.), not räkenskapsinformation
+      // in the journal, and the normal flow closes the period BEFORE the
+      // årsredovisning is written. The document freezes when it is filed:
+      // a Bolagsverket submission registered for this period makes the text
+      // read-only (what was uploaded is already immutable via the
+      // arsredovisning_submissions trigger + stored document).
       const { data: period } = await supabase
         .from('fiscal_periods')
-        .select('id, is_closed, locked_at, closing_entry_id')
+        .select('id')
         .eq('id', id)
         .eq('company_id', companyId)
         .maybeSingle()
       if (!period) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
       }
-      if (period.is_closed || period.locked_at || period.closing_entry_id) {
-        return errorResponseFromCode('PERIOD_LOCKED', log, { requestId })
+      const { data: registered, error: registeredError } = await supabase
+        .from('arsredovisning_submissions')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', id)
+        .eq('status', 'registrerad')
+        .limit(1)
+        .maybeSingle()
+      if (registeredError) {
+        throw new Error(`Failed to check submission status: ${registeredError.message}`)
+      }
+      if (registered) {
+        return errorResponseFromCode('ARSREDOVISNING_REGISTERED', log, { requestId })
       }
       const data = await upsertNarrative(supabase, companyId, user.id, id, validation.data)
       return NextResponse.json({ data })
