@@ -762,7 +762,7 @@ export default function PendingOperationsPage() {
     setIsCommitting(true)
     try {
       const res = await fetch(`/api/pending-operations/${selectedOp.id}/commit`, { method: 'POST' })
-      const json = await res.json()
+      const json = await res.json().catch(() => ({}))
       // getErrorMessage handles both `{ error: string }` and the structured
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
@@ -791,7 +791,7 @@ export default function PendingOperationsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids }),
       })
-      const json = await res.json()
+      const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
 
       const summary = json.data?.summary as

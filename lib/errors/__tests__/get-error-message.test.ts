@@ -181,8 +181,9 @@ describe('getErrorMessage: unknown-code Error instances never leak raw text (#33
       code: 'ECONNREFUSED',
     })
     const msg = getErrorMessage(err, { locale: 'en' })
-    expect(msg).toContain('upstream network call failed')
-    expect(msg).not.toContain('127.0.0.1')
+    expect(msg).toBe(
+      'An upstream network call failed. Retry the same request after a short backoff.'
+    )
   })
 
   it('Error with an unregistered code and English message → context fallback, not raw', () => {

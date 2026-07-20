@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { Deadline } from '@/types'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -49,6 +50,7 @@ interface DeadlineGroupCardProps {
  * own "Markera klar" confirmation. Visual language mirrors DeadlineCard.
  */
 export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroupCardProps) {
+  const t = useTranslations('deadlines')
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
   const confirmRef = useRef<HTMLDivElement>(null)
 
@@ -95,14 +97,14 @@ export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroup
           {/* Group content */}
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-2">
-              <p className="text-sm font-medium">Skattekonto</p>
+              <p className="text-sm font-medium">{t('group_skattekonto_title')}</p>
               <span
                 className={cn(
                   'text-[11px] flex-shrink-0',
                   overdue ? 'text-destructive font-medium' : 'text-muted-foreground/60',
                 )}
               >
-                {deadlines.length} deadlines samma dag
+                {t('group_same_day', { count: deadlines.length })}
               </span>
             </div>
 
@@ -129,7 +131,7 @@ export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroup
                       confirmingId && 'invisible',
                     )}
                   >
-                    Markera klar
+                    {t('group_mark_done')}
                   </button>
                   {onEdit && !confirmingId && (
                     <Pencil className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 transition-colors flex-shrink-0" />
@@ -151,9 +153,12 @@ export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroup
             {confirming && (
               <div className="border-t px-4 py-3 flex items-center justify-between gap-4">
                 <p className="text-sm text-muted-foreground">
-                  Markera{' '}
-                  <span className="font-medium text-foreground">{confirming.title}</span> som
-                  klar?
+                  {t.rich('group_confirm_question', {
+                    title: confirming.title,
+                    hl: (chunks) => (
+                      <span className="font-medium text-foreground">{chunks}</span>
+                    ),
+                  })}
                 </p>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <Button
@@ -162,7 +167,7 @@ export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroup
                     className="h-8 px-3 text-xs"
                     onClick={() => setConfirmingId(null)}
                   >
-                    Avbryt
+                    {t('group_cancel')}
                   </Button>
                   <Button
                     size="sm"
@@ -173,7 +178,7 @@ export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroup
                     }}
                   >
                     <Check className="h-3.5 w-3.5 mr-1.5" />
-                    Bekräfta
+                    {t('group_confirm')}
                   </Button>
                 </div>
               </div>

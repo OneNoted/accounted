@@ -15,6 +15,14 @@ interface BulkCommitItemResult {
   error?: string
 }
 
+// Swedish display labels for already-handled operations; the raw enum values
+// are English and must not reach the user-visible per-item error strings.
+const STATUS_LABELS_SV: Record<string, string> = {
+  committing: 'godkänns just nu',
+  committed: 'godkänd',
+  rejected: 'avvisad',
+}
+
 export const POST = withRouteContext(
   'pending_operation.bulk_commit',
   async (request, { user, supabase, companyId, log }) => {
@@ -46,7 +54,11 @@ export const POST = withRouteContext(
         continue
       }
       if (op.status !== 'pending') {
-        results.push({ id, status: 'skipped', error: `Redan hanterad (${op.status})` })
+        results.push({
+          id,
+          status: 'skipped',
+          error: `Redan hanterad (${STATUS_LABELS_SV[op.status] ?? op.status})`,
+        })
         continue
       }
       if (op.risk_level === 'high') {

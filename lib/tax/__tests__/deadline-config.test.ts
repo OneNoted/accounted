@@ -293,6 +293,12 @@ describe('long-tail opt-in deadlines', () => {
     ])
   })
 
+  it('IOSS: opt-in alone controls the deadline (Art. 369s does not require Swedish VAT registration)', () => {
+    const config = getConfig('ioss_monthly')
+    expect(config.condition(makeSettings({ ioss_enabled: true, vat_registered: false }))).toBe(true)
+    expect(config.condition(makeSettings({ ioss_enabled: false }))).toBe(false)
+  })
+
   it('IOSS: monthly, last day of the following month, no banking-day shift', () => {
     const config = getConfig('ioss_monthly')
     expect(config.skipBankingDayAdjustment).toBe(true)

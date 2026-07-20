@@ -131,6 +131,10 @@ export const POST = withRouteContext(
       if (!period) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
       }
+      // Only 'registrerad' freezes the text. 'avslutad' (case closed WITHOUT
+      // registration, e.g. withdrawn or rejected) deliberately stays
+      // editable: the document was never registered at Bolagsverket and a
+      // refiling needs amendable narrative text.
       const { data: registered, error: registeredError } = await supabase
         .from('arsredovisning_submissions')
         .select('id')

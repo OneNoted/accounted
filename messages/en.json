@@ -523,7 +523,13 @@
     "generate_none_title": "No deadlines created",
     "generate_none_description": "No new deadlines to create. Check that your tax settings are filled in if you expected more.",
     "generate_failed_title": "Could not create deadlines",
-    "generate_failed_description": "Tax deadlines could not be created right now."
+    "generate_failed_description": "Tax deadlines could not be created right now.",
+    "group_skattekonto_title": "Skattekonto",
+    "group_same_day": "{count} deadlines on the same day",
+    "group_mark_done": "Mark as done",
+    "group_confirm_question": "Mark <hl>{title}</hl> as done?",
+    "group_cancel": "Cancel",
+    "group_confirm": "Confirm"
   },
   "bureau": {
     "title": "Bureau",

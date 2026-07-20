@@ -26,14 +26,21 @@ const LOOKBACK_MONTHS = 15
  */
 export const GET = withRouteContext(
   'settings.ku_signal',
-  async (_request, { supabase, companyId }) => {
+  async (_request, { supabase, companyId, log }) => {
     // Kontrolluppgifter for utdelning/ägarlån only exist for aktiebolag; an
     // enskild firma has no shareholder to report on.
-    const { data: settings } = await supabase
+    const { data: settings, error: settingsError } = await supabase
       .from('company_settings')
       .select('entity_type')
       .eq('company_id', companyId)
       .maybeSingle()
+    if (settingsError) {
+      // Best-effort signal: treat as "no signal" but keep the failure
+      // observable for forensics.
+      log.warn('ku-signal: company_settings lookup failed', {
+        code: settingsError.code,
+      })
+    }
 
     if (settings?.entity_type !== 'aktiebolag') {
       return NextResponse.json({ data: { has_ku_signal: false } })

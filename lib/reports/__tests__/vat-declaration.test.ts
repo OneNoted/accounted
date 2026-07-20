@@ -9,7 +9,7 @@ let results: Array<{ data?: unknown; error?: unknown }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'neq', 'in', 'gte', 'lte', 'lt', 'or', 'not', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'neq', 'in', 'gte', 'lte', 'lt', 'or', 'not', 'order', 'range', 'limit']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -865,6 +865,9 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
     // Customer screenshot scenario (simplified): 3001 + 2610 booked with the
     // correct VAT amount on the parent account. Before the fix, ruta10 read 0
     // and ruta49 incorrectly showed a refund.
+    // Yearly without fiscalPeriodId now looks up the räkenskapsår ending in
+    // the year first; no fiscal period rows → calendar fallback.
+    results = [{ data: null, error: null }]
     seedLedger([
       { account_number: '3001', debit_amount: 0, credit_amount: 21600 },
       { account_number: '2610', debit_amount: 0, credit_amount: 9768 },
@@ -914,6 +917,38 @@ describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
 
     const result = await calculateVatDeclaration(
       supabase, 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'missing' },
+    )
+
+    expect(result.period.start).toBe('2026-01-01')
+    expect(result.period.end).toBe('2026-12-31')
+  })
+
+  it('resolves the räkenskapsår ending in the year for yearly WITHOUT a fiscalPeriodId', async () => {
+    // Broken FY 2025-07-01 → 2026-06-30: a yearly submission for 2026 with no
+    // explicit fiscal period (e.g. before the FY selector populated) must
+    // still target the actual räkenskapsår, not calendar 2026
+    // (SFL 26 kap 10-11 §§).
+    results = [
+      { data: { period_start: '2025-07-01', period_end: '2026-06-30' }, error: null },
+    ]
+    seedLedger([])
+
+    const result = await calculateVatDeclaration(
+      supabase, 'company-1', 'yearly', 2026, 1, 'accrual',
+    )
+
+    expect(result.period.start).toBe('2025-07-01')
+    expect(result.period.end).toBe('2026-06-30')
+  })
+
+  it('falls back to the calendar year for yearly without a fiscalPeriodId when no fiscal period exists', async () => {
+    results = [
+      { data: null, error: null }, // no fiscal period ending in 2026
+    ]
+    seedLedger([])
+
+    const result = await calculateVatDeclaration(
+      supabase, 'company-1', 'yearly', 2026, 1, 'accrual',
     )
 
     expect(result.period.start).toBe('2026-01-01')

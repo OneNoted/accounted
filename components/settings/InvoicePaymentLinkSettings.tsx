@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
@@ -20,8 +20,10 @@ interface InvoicePaymentLinkSettingsProps {
 export function InvoicePaymentLinkSettings({ settings, onUpdate }: InvoicePaymentLinkSettingsProps) {
   const t = useTranslations('settings_payment_links')
   const { toast } = useToast()
+  const [isSaving, setIsSaving] = useState(false)
 
   const saveToggle = useCallback(async (value: boolean) => {
+    setIsSaving(true)
     try {
       const response = await fetch('/api/settings', {
         method: 'PUT',
@@ -32,6 +34,8 @@ export function InvoicePaymentLinkSettings({ settings, onUpdate }: InvoicePaymen
       onUpdate({ invoice_payment_links_enabled: value })
     } catch {
       toast({ title: t('toast_save_failed'), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
     }
   }, [onUpdate, toast, t])
 
@@ -49,6 +53,7 @@ export function InvoicePaymentLinkSettings({ settings, onUpdate }: InvoicePaymen
         <Switch
           checked={settings.invoice_payment_links_enabled ?? false}
           onCheckedChange={saveToggle}
+          disabled={isSaving}
           aria-label={t('enable_label')}
         />
       </div>

@@ -1067,6 +1067,7 @@ async function fetchPeriodAuditEntries(
         .select('id')
         .eq('company_id', companyId)
         .eq('fiscal_period_id', period.id)
+        .in('status', ['posted', 'reversed'])
         // Stable total order for correct paging (see fetch-all.ts).
         .order('id', { ascending: true })
         .range(from, to)

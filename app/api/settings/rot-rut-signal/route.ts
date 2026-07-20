@@ -13,14 +13,18 @@ import { withRouteContext } from '@/lib/api/with-route-context'
  */
 export const GET = withRouteContext(
   'settings.rot_rut_signal',
-  async (_request, { supabase, companyId }) => {
+  async (_request, { supabase, companyId, log }) => {
     const { count, error } = await supabase
       .from('invoices')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .gt('deduction_total', 0)
 
-    // Best-effort signal: on error just hide the suggestion.
+    // Best-effort signal: on error just hide the suggestion, but keep the
+    // failure observable for forensics.
+    if (error) {
+      log.warn('rot-rut-signal: invoice count failed', { code: error.code })
+    }
     const hasRotRut = !error && (count ?? 0) > 0
     return NextResponse.json({ data: { has_rot_rut: hasRotRut } })
   },

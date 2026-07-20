@@ -384,12 +384,14 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
 
   // IOSS (importordningen): monthly declaration for distance sales of
   // imported low-value goods (Art. 369s VAT directive). Due the last day
-  // of the following month; same EU no-shift rule as OSS.
+  // of the following month; same EU no-shift rule as OSS. Unlike OSS the
+  // scheme does not require Swedish VAT registration (Art. 369s applies to
+  // registered IOSS sellers regardless), so the opt-in flag stands alone.
   {
     type: 'ioss_monthly',
     titleTemplate: 'IOSS-deklaration {periodLabel}',
     description: 'IOSS-deklaration (importordningen) för distansförsäljning av importerade varor',
-    condition: (s) => s.vat_registered && s.ioss_enabled,
+    condition: (s) => s.ioss_enabled,
     priority: 'important',
     linkedReportType: null,
     skipBankingDayAdjustment: true,
