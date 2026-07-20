@@ -1478,6 +1478,13 @@ export const UpdateSettingsSchema = z.object({
   periodisk_sammanstallning_enabled: z.boolean().optional(),
   periodisk_sammanstallning_period: PsPeriodTypeSchema.optional(),
   periodisk_sammanstallning_filing_method: TaxFilingMethodSchema.optional(),
+  kontrolluppgifter_enabled: z.boolean().optional(),
+  rot_rut_enabled: z.boolean().optional(),
+  oss_enabled: z.boolean().optional(),
+  ioss_enabled: z.boolean().optional(),
+  intrastat_enabled: z.boolean().optional(),
+  punktskatt_enabled: z.boolean().optional(),
+  fyllnadsinbetalning_enabled: z.boolean().optional(),
   tax_contact_name: z.string().max(200).nullable().optional(),
   tax_contact_phone: z.string().max(40).nullable().optional(),
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),
@@ -1548,6 +1555,9 @@ export const UpdateSettingsSchema = z.object({
   invoice_company_name_position: z.enum(['header', 'footer']).optional(),
   invoice_late_fee_text: z.string().nullable().optional(),
   invoice_credit_terms_text: z.string().nullable().optional(),
+  // Opt-in for the invoice payment-link feature (editor field + automatic
+  // Stripe link on send). Default off at the DB level.
+  invoice_payment_links_enabled: z.boolean().optional(),
   // Editable invoice email texts: { sv?: {...}, en?: {...} }; null clears
   // all overrides. Without this entry the generic PUT would silently strip
   // the field (the schema is the de-facto column whitelist).

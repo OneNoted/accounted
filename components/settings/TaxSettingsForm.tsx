@@ -12,9 +12,18 @@ interface TaxSettingsFormProps {
   settings: CompanySettings
   /** Ledger-derived signal: EU sales postings exist (3108/3308/3107). */
   euSalesDetected?: boolean
+  /** Ledger-derived signal: utdelning/ägarlån postings exist (2898/2393/2893). */
+  kuSignalDetected?: boolean
+  /** Invoice-derived signal: invoices with ROT/RUT deductions exist. */
+  rotRutSignalDetected?: boolean
 }
 
-export function TaxSettingsForm({ settings, euSalesDetected = false }: TaxSettingsFormProps) {
+export function TaxSettingsForm({
+  settings,
+  euSalesDetected = false,
+  kuSignalDetected = false,
+  rotRutSignalDetected = false,
+}: TaxSettingsFormProps) {
   const t = useTranslations('settings_tax_form')
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
@@ -31,6 +40,15 @@ export function TaxSettingsForm({ settings, euSalesDetected = false }: TaxSettin
   )
   const [hasEuTrade, setHasEuTrade] = useState(settings.vat_has_eu_trade ?? false)
   const [psEnabled, setPsEnabled] = useState(settings.periodisk_sammanstallning_enabled ?? false)
+  const [kuEnabled, setKuEnabled] = useState(settings.kontrolluppgifter_enabled ?? false)
+  const [rotRutEnabled, setRotRutEnabled] = useState(settings.rot_rut_enabled ?? false)
+  const [ossEnabled, setOssEnabled] = useState(settings.oss_enabled ?? false)
+  const [iossEnabled, setIossEnabled] = useState(settings.ioss_enabled ?? false)
+  const [intrastatEnabled, setIntrastatEnabled] = useState(settings.intrastat_enabled ?? false)
+  const [punktskattEnabled, setPunktskattEnabled] = useState(settings.punktskatt_enabled ?? false)
+  const [fyllnadEnabled, setFyllnadEnabled] = useState(
+    settings.fyllnadsinbetalning_enabled ?? false,
+  )
 
   const isEnskildFirma = settings.entity_type === 'enskild_firma'
 
@@ -422,6 +440,80 @@ export function TaxSettingsForm({ settings, euSalesDetected = false }: TaxSettin
         )}
       </section>
 
+      {/* Kontrolluppgifter (KU) */}
+      <section className="border-t border-border pt-8 space-y-4">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {t('kontrolluppgifter_heading')}
+        </h2>
+
+        {kuSignalDetected && !kuEnabled && (
+          <div className="rounded-lg border border-border p-4">
+            <p className="text-sm">{t('ku_suggestion_title')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('ku_suggestion_help')}
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-start space-x-3">
+          <Checkbox
+            id="kontrolluppgifter_enabled"
+            checked={kuEnabled}
+            onCheckedChange={(v) => setKuEnabled(v === true)}
+          />
+          <input
+            type="hidden"
+            name="kontrolluppgifter_enabled"
+            value={kuEnabled ? 'true' : 'false'}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="kontrolluppgifter_enabled" className="cursor-pointer">
+              {t('kontrolluppgifter_label')}
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              {t('kontrolluppgifter_help')}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ROT/RUT */}
+      <section className="border-t border-border pt-8 space-y-4">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {t('rot_rut_heading')}
+        </h2>
+
+        {rotRutSignalDetected && !rotRutEnabled && (
+          <div className="rounded-lg border border-border p-4">
+            <p className="text-sm">{t('rot_rut_suggestion_title')}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('rot_rut_suggestion_help')}
+            </p>
+          </div>
+        )}
+
+        <div className="flex items-start space-x-3">
+          <Checkbox
+            id="rot_rut_enabled"
+            checked={rotRutEnabled}
+            onCheckedChange={(v) => setRotRutEnabled(v === true)}
+          />
+          <input
+            type="hidden"
+            name="rot_rut_enabled"
+            value={rotRutEnabled ? 'true' : 'false'}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="rot_rut_enabled" className="cursor-pointer">
+              {t('rot_rut_label')}
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              {t('rot_rut_help')}
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Preliminary tax */}
       <section className="border-t border-border pt-8 space-y-4">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
@@ -441,6 +533,103 @@ export function TaxSettingsForm({ settings, euSalesDetected = false }: TaxSettin
           <p className="text-xs text-muted-foreground">
             {t('preliminary_tax_monthly_help')}
           </p>
+        </div>
+      </section>
+
+      {/* Long-tail deadlines: explicit opt-in only */}
+      <section className="border-t border-border pt-8 space-y-4">
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {t('more_deadlines_heading')}
+        </h2>
+        <p className="text-xs text-muted-foreground -mt-2">
+          {t('more_deadlines_help')}
+        </p>
+
+        {vatRegistered && (
+          <>
+            <div className="flex items-start space-x-3">
+              <Checkbox
+                id="oss_enabled"
+                checked={ossEnabled}
+                onCheckedChange={(v) => setOssEnabled(v === true)}
+              />
+              <input type="hidden" name="oss_enabled" value={ossEnabled ? 'true' : 'false'} />
+              <div className="space-y-1">
+                <Label htmlFor="oss_enabled" className="cursor-pointer">{t('oss_label')}</Label>
+                <p className="text-xs text-muted-foreground">{t('oss_help')}</p>
+              </div>
+            </div>
+
+            <div className="flex items-start space-x-3">
+              <Checkbox
+                id="ioss_enabled"
+                checked={iossEnabled}
+                onCheckedChange={(v) => setIossEnabled(v === true)}
+              />
+              <input type="hidden" name="ioss_enabled" value={iossEnabled ? 'true' : 'false'} />
+              <div className="space-y-1">
+                <Label htmlFor="ioss_enabled" className="cursor-pointer">{t('ioss_label')}</Label>
+                <p className="text-xs text-muted-foreground">{t('ioss_help')}</p>
+              </div>
+            </div>
+
+            <div className="flex items-start space-x-3">
+              <Checkbox
+                id="intrastat_enabled"
+                checked={intrastatEnabled}
+                onCheckedChange={(v) => setIntrastatEnabled(v === true)}
+              />
+              <input
+                type="hidden"
+                name="intrastat_enabled"
+                value={intrastatEnabled ? 'true' : 'false'}
+              />
+              <div className="space-y-1">
+                <Label htmlFor="intrastat_enabled" className="cursor-pointer">
+                  {t('intrastat_label')}
+                </Label>
+                <p className="text-xs text-muted-foreground">{t('intrastat_help')}</p>
+              </div>
+            </div>
+          </>
+        )}
+
+        <div className="flex items-start space-x-3">
+          <Checkbox
+            id="punktskatt_enabled"
+            checked={punktskattEnabled}
+            onCheckedChange={(v) => setPunktskattEnabled(v === true)}
+          />
+          <input
+            type="hidden"
+            name="punktskatt_enabled"
+            value={punktskattEnabled ? 'true' : 'false'}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="punktskatt_enabled" className="cursor-pointer">
+              {t('punktskatt_label')}
+            </Label>
+            <p className="text-xs text-muted-foreground">{t('punktskatt_help')}</p>
+          </div>
+        </div>
+
+        <div className="flex items-start space-x-3">
+          <Checkbox
+            id="fyllnadsinbetalning_enabled"
+            checked={fyllnadEnabled}
+            onCheckedChange={(v) => setFyllnadEnabled(v === true)}
+          />
+          <input
+            type="hidden"
+            name="fyllnadsinbetalning_enabled"
+            value={fyllnadEnabled ? 'true' : 'false'}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="fyllnadsinbetalning_enabled" className="cursor-pointer">
+              {t('fyllnadsinbetalning_label')}
+            </Label>
+            <p className="text-xs text-muted-foreground">{t('fyllnadsinbetalning_help')}</p>
+          </div>
         </div>
       </section>
     </div>

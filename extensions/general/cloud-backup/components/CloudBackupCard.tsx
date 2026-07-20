@@ -242,6 +242,9 @@ export default function CloudBackupCard() {
             <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
               {t('ext_cloud_backup_card_tagline')}
             </p>
+            <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+              {t('ext_cloud_backup_legal_note')}
+            </p>
           </div>
         </div>
 

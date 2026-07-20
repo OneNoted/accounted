@@ -8,6 +8,7 @@ import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import type { Transaction } from '@/types'
 
@@ -138,8 +139,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed
+      // Untyped errors map to Swedish via getErrorMessage: the raw message is
+      // logged here and must never reach the user verbatim (issue #337).
+      log.error('failed to create journal entry on book', err as Error)
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Failed to create journal entry' },
+        { error: getErrorMessage(err, { context: 'transaction' }) },
         { status: 400 }
       )
     }

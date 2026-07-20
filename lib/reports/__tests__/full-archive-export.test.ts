@@ -9,6 +9,7 @@ import {
 } from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
+import type { AuditLogEntry } from '@/types'
 
 vi.mock('../sie-export', () => ({
   generateSIEExport: vi.fn().mockResolvedValue('#FLAGGA 0\n#PROGRAM "ERPBase"'),
@@ -244,6 +245,76 @@ describe('generateFullArchive', () => {
           to_date: `${PERIOD_2024.period_end}T23:59:59.999Z`,
         })
       )
+    })
+
+    it("includes audit rows for the period's entries booked outside the window", async () => {
+      // Bokslut reality: the FY2024 year-end entry is committed in March 2025,
+      // so its audit rows fall outside the period's date window. The year's
+      // archive must still carry them (BFNAR 2013:2 kap 8).
+      const inWindow: AuditLogEntry = {
+        id: 'audit-1',
+        user_id: 'user-1',
+        company_id: 'company-1',
+        action: 'INSERT',
+        table_name: 'journal_entries',
+        record_id: 'e-1',
+        actor_id: 'user-1',
+        actor_type: null,
+        actor_label: null,
+        old_state: null,
+        new_state: null,
+        description: 'Created journal_entries record',
+        created_at: '2024-06-01T10:00:00Z',
+      }
+      const outOfWindowCommit: AuditLogEntry = {
+        ...inWindow,
+        id: 'audit-2',
+        action: 'COMMIT',
+        description: 'Committed journal entry A55',
+        created_at: '2025-03-15T09:00:00Z',
+      }
+      // Line audit rows carry company_id NULL (write_audit_log finds no
+      // company_id column on journal_entry_lines).
+      const lineRow: AuditLogEntry = {
+        ...inWindow,
+        id: 'audit-3',
+        company_id: null,
+        table_name: 'journal_entry_lines',
+        record_id: 'l-1',
+        created_at: '2025-03-15T09:00:01Z',
+      }
+
+      mockGetAuditLog.mockResolvedValue({ data: [inWindow], count: 1 })
+
+      enqueueMany([
+        { data: COMPANY_ROW }, // company_settings
+        { data: PERIOD_2024 }, // fiscal_periods
+        { data: [] }, // document_attachments
+        { data: [{ id: 'e-1' }] }, // journal_entries ids for the period
+        { data: [{ id: 'l-1' }] }, // journal_entry_lines ids
+        // audit_log by record id: returns the in-window row again (dedupe)
+        // plus the two out-of-window rows
+        { data: [inWindow, outOfWindowCommit, lineRow] },
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period',
+        period_id: PERIOD_2024.id,
+      })
+
+      const zip = await JSZip.loadAsync(buffer)
+      const history = JSON.parse(
+        await zip.file('revision/behandlingshistorik.json')!.async('text')
+      ) as Array<{ id: string }>
+
+      // Deduped: audit-1 appears once despite arriving via both fetches.
+      expect(history).toHaveLength(3)
+      const ids = history.map((h) => h.id)
+      expect(ids).toContain('audit-2')
+      expect(ids).toContain('audit-3')
+      // Newest first, matching getAuditLog's output order.
+      expect(ids[0]).toBe('audit-3')
+      expect(ids[2]).toBe('audit-1')
     })
   })
 

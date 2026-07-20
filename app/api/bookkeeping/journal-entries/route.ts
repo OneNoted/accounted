@@ -6,6 +6,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -13,7 +14,7 @@ ensureInitialized()
 // each param's comment) rather than a Zod schema; response shapes are legacy
 // `{ data, count }` / `{ error: string }` for the verifikat list UI.
 export const GET = withRouteContext('bookkeeping.journal_entries.list', async (request, ctx) => {
-  const { supabase, companyId } = ctx
+  const { supabase, companyId, log } = ctx
 
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
@@ -88,7 +89,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      log.error('failed to list fiscal period entries via RPC', error)
+      return NextResponse.json(
+        { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
+        { status: 500 }
+      )
     }
 
     const rows = data ?? []
@@ -180,7 +185,11 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   const { data, error, count } = await query
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    log.error('failed to list journal entries', error)
+    return NextResponse.json(
+      { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
+      { status: 500 }
+    )
   }
 
   return NextResponse.json({ data, count })
@@ -189,7 +198,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
 export const POST = withRouteContext(
   'bookkeeping.journal_entries.create',
   async (request, ctx) => {
-  const { supabase, companyId, user } = ctx
+  const { supabase, companyId, user, log } = ctx
 
   const validation = await validateBody(request, CreateJournalEntrySchema)
   if (!validation.success) return validation.response
@@ -206,8 +215,11 @@ export const POST = withRouteContext(
   } catch (err) {
     const typed = bookkeepingErrorResponse(err)
     if (typed) return typed
+    // Untyped errors map to Swedish via getErrorMessage: the raw message is
+    // logged here and must never reach the user verbatim (issue #337).
+    log.error('failed to create journal entry', err as Error)
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to create journal entry' },
+      { error: getErrorMessage(err, { context: 'journal_entry' }) },
       { status: 400 }
     )
   }

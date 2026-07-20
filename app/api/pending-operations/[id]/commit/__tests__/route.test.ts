@@ -100,7 +100,9 @@ describe('POST /api/pending-operations/:id/commit', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toMatch(/already (committed|claimed|resolved)/i)
+    // The executor's English error string maps to the Swedish HTTP-409
+    // fallback: raw English never reaches the toast (issue #337).
+    expect(body.error).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
   })
 
   describe('categorize_transaction', () => {
@@ -190,7 +192,10 @@ describe('POST /api/pending-operations/:id/commit', () => {
       const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
       expect(status).toBe(409)
-      expect(body.error).toContain('already has a journal entry')
+      // Known-pattern translation of the executor's English message (#337).
+      expect(body.error).toBe(
+        'Transaktionen är redan bokförd. Ångra kategoriseringen om du vill ändra den.',
+      )
     })
   })
 
@@ -286,7 +291,8 @@ describe('POST /api/pending-operations/:id/commit', () => {
       const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
       expect(status).toBe(404)
-      expect(body.error).toContain('Customer not found')
+      // English executor message → Swedish HTTP-404 fallback (issue #337).
+      expect(body.error).toBe('Resursen kunde inte hittas.')
     })
   })
 })

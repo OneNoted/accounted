@@ -260,13 +260,20 @@ function SkatteverketPersonalConnectionCard() {
           <p className="text-sm text-muted-foreground">
             {t('connect_intro')}
           </p>
-          {/* The skahmst consent-page note only matters when the user can
-              actually reach that page: hidden while the feature is gated. */}
+          {/* The consent-page notes only matter when the user can actually
+              reach that page: hidden while the feature is gated. */}
           {hasSkatteverket && (
-            <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-              {t.rich('skahmst_note', {
-                code: (chunks) => <span className="font-mono">{chunks}</span>,
-              })}
+            <div className="space-y-2 rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+              {/* Pre-empt the most common broken connect: a behörighet left
+                  unticked on SKV's consent page. Before this note the
+                  "godkänn alla" guidance only appeared AFTER a failed
+                  attempt (missing_scope_message). */}
+              <p className="text-foreground">{t('connect_approve_all')}</p>
+              <p>
+                {t.rich('skahmst_note', {
+                  code: (chunks) => <span className="font-mono">{chunks}</span>,
+                })}
+              </p>
             </div>
           )}
           {!hasSkatteverket && (

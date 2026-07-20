@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { VatPeriodType } from '@/types'
-import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
+import { calculateVatDeclaration, resolvePeriodDates } from '@/lib/reports/vat-declaration'
 import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './mappers'
 import type { SkatteverketMomsuppgift } from '../types'
 
@@ -63,12 +63,24 @@ export async function resolveRedovisare(
 export async function buildMomsuppgift(
   supabase: SupabaseClient,
   companyId: string,
-  input: { periodType: VatPeriodType; year: number; period: number },
+  input: { periodType: VatPeriodType; year: number; period: number; fiscalPeriodId?: string },
 ): Promise<VatDeclarationPrep> {
-  const { periodType, year, period } = input
+  const { periodType, year, period, fiscalPeriodId } = input
 
   const redovisare = await resolveRedovisare(supabase, companyId)
-  const redovisningsperiod = formatRedovisningsperiod(periodType, year, period)
+
+  // Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§): the SKV
+  // redovisningsperiod is the FY-end month, which for a broken fiscal year is
+  // not December. Resolve the fiscal period's actual bounds so the period
+  // identifier and the figures below always describe the same räkenskapsår.
+  let fiscalYearEnd: { year: number; month: number } | undefined
+  if (periodType === 'yearly') {
+    const { end } = await resolvePeriodDates(
+      supabase, companyId, periodType, year, period, fiscalPeriodId,
+    )
+    fiscalYearEnd = { year: Number(end.slice(0, 4)), month: Number(end.slice(5, 7)) }
+  }
+  const redovisningsperiod = formatRedovisningsperiod(periodType, year, period, fiscalYearEnd)
 
   // Calculate VAT declaration from the general ledger
   const declaration = await calculateVatDeclaration(
@@ -77,6 +89,8 @@ export async function buildMomsuppgift(
     periodType,
     year,
     period,
+    'accrual',
+    { fiscalPeriodId },
   )
 
   const momsuppgift = rutorToMomsuppgift(declaration.rutor)

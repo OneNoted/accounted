@@ -268,7 +268,13 @@ export const POST = withRouteContext(
     const ccAddress = company.email || user.email
     const partialFailures: Array<{ step: string; reason: string }> = []
     if (paymentLinkFailure) {
-      partialFailures.push({ step: 'payment_link', reason: paymentLinkFailure })
+      // The failure string is a raw provider/DB message: log it, but the
+      // response field is user-visible and must stay Swedish (issue #337).
+      opLog.warn('payment link creation failed on send', { reason: paymentLinkFailure })
+      partialFailures.push({
+        step: 'payment_link',
+        reason: 'Betalningslänken kunde inte skapas. Fakturan skickades utan betalningslänk.',
+      })
     }
 
     let statusFlipped = isCreditDeliveryRetry
@@ -387,7 +393,10 @@ export const POST = withRouteContext(
 
       if (updateError) {
         opLog.warn('failed to update invoice status to sent', updateError)
-        partialFailures.push({ step: 'status_update', reason: updateError.message })
+        partialFailures.push({
+          step: 'status_update',
+          reason: 'Fakturans status kunde inte uppdateras till skickad.',
+        })
       } else if (!flipRows || flipRows.length === 0) {
         opLog.warn('invoice already flipped to sent by a concurrent request; skipping bookkeeping follow-ups')
         partialFailures.push({

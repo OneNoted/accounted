@@ -23,6 +23,13 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     periodisk_sammanstallning_enabled: false,
     periodisk_sammanstallning_period: 'monthly',
     periodisk_sammanstallning_filing_method: 'electronic',
+    kontrolluppgifter_enabled: false,
+    rot_rut_enabled: false,
+    oss_enabled: false,
+    ioss_enabled: false,
+    intrastat_enabled: false,
+    punktskatt_enabled: false,
+    fyllnadsinbetalning_enabled: false,
     ...overrides,
   }
 }
@@ -209,6 +216,136 @@ describe('periodic EU sales list deadlines', () => {
     }))
     expect(dates).toHaveLength(4)
     expect(dates[0]).toMatchObject({ day: 20, month: 3, year: 2026, period: '2026-Q1' })
+  })
+})
+
+describe('kontrolluppgifter: 31 January (SFL 24 kap. 1 §)', () => {
+  const config = getConfig('kontrolluppgifter')
+
+  it('is only applicable when explicitly enabled', () => {
+    expect(config.condition(makeSettings())).toBe(false)
+    expect(config.condition(makeSettings({ kontrolluppgifter_enabled: true }))).toBe(true)
+  })
+
+  it('is due 31 January for the previous income year', () => {
+    const dates = config.generateDates(2027, makeSettings({ kontrolluppgifter_enabled: true }))
+    expect(dates).toHaveLength(1)
+    expect(dates[0]).toMatchObject({
+      day: 31, month: 0, year: 2027, period: '2026', periodLabel: '2026',
+    })
+  })
+
+  it('follows the calendar income year even for broken fiscal years', () => {
+    // KU reporting follows the income year (SFL 24 kap.), never the
+    // räkenskapsår: a broken FY must not shift the period.
+    const dates = config.generateDates(2027, makeSettings({
+      kontrolluppgifter_enabled: true,
+      fiscal_year_start_month: 7,
+    }))
+    expect(dates[0]).toMatchObject({ day: 31, month: 0, year: 2027, period: '2026' })
+  })
+})
+
+describe('rot_rut_begaran: 31 January after the payment year (Lag 2009:194 8 §)', () => {
+  const config = getConfig('rot_rut_begaran')
+
+  it('is only applicable when explicitly enabled', () => {
+    expect(config.condition(makeSettings())).toBe(false)
+    expect(config.condition(makeSettings({ rot_rut_enabled: true }))).toBe(true)
+  })
+
+  it('generates a 31 January row only for years with ROT/RUT payments', () => {
+    const settings = makeSettings({
+      rot_rut_enabled: true,
+      rot_rut_payment_years: [2026],
+    })
+    expect(config.generateDates(2027, settings)).toEqual([
+      { day: 31, month: 0, year: 2027, period: '2026', periodLabel: '2026' },
+    ])
+    // No payments in 2027 → no row for the 2028 deadline year.
+    expect(config.generateDates(2028, settings)).toEqual([])
+  })
+
+  it('generates nothing when payment years are unknown (pure-settings contexts)', () => {
+    // Backfill detection passes settings without the derived field: the
+    // deadline must never be "expected" there, or the nightly cron would
+    // regenerate (and status-reset) the company every day.
+    const settings = makeSettings({ rot_rut_enabled: true })
+    expect(config.generateDates(2027, settings)).toEqual([])
+  })
+})
+
+describe('long-tail opt-in deadlines', () => {
+  it('OSS: quarterly, last day of the month after the quarter, opt-in, no banking-day shift', () => {
+    const config = getConfig('oss_quarterly')
+    expect(config.condition(makeSettings())).toBe(false)
+    expect(config.condition(makeSettings({ oss_enabled: true }))).toBe(true)
+    // Requires VAT registration.
+    expect(config.condition(makeSettings({ oss_enabled: true, vat_registered: false }))).toBe(false)
+    expect(config.skipBankingDayAdjustment).toBe(true)
+
+    const dates = config.generateDates(2030, makeSettings({ oss_enabled: true }))
+    expect(dates.map(({ day, month, year }) => ({ day, month, year }))).toEqual([
+      { day: 30, month: 3, year: 2030 },
+      { day: 31, month: 6, year: 2030 },
+      { day: 31, month: 9, year: 2030 },
+      { day: 31, month: 0, year: 2031 },
+    ])
+  })
+
+  it('IOSS: opt-in alone controls the deadline (Art. 369s does not require Swedish VAT registration)', () => {
+    const config = getConfig('ioss_monthly')
+    expect(config.condition(makeSettings({ ioss_enabled: true, vat_registered: false }))).toBe(true)
+    expect(config.condition(makeSettings({ ioss_enabled: false }))).toBe(false)
+  })
+
+  it('IOSS: monthly, last day of the following month, no banking-day shift', () => {
+    const config = getConfig('ioss_monthly')
+    expect(config.skipBankingDayAdjustment).toBe(true)
+    const dates = config.generateDates(2030, makeSettings({ ioss_enabled: true }))
+    expect(dates).toHaveLength(12)
+    // February 2030 → due 31 March 2030 (a Sunday: the EU deadline stands).
+    expect(dates[1]).toMatchObject({ day: 31, month: 2, year: 2030, period: '2030-02' })
+    // December 2030 → due 31 January 2031.
+    expect(dates[11]).toMatchObject({ day: 31, month: 0, year: 2031, period: '2030-12' })
+  })
+
+  it('Intrastat: 10th banking day of the month after the reference month', () => {
+    const config = getConfig('intrastat_monthly')
+    const dates = config.generateDates(2030, makeSettings({ intrastat_enabled: true }))
+    // January 2030 → February 2030: banking days 1,4,5,6,7,8,11,12,13,14.
+    expect(dates[0]).toMatchObject({ day: 14, month: 1, year: 2030, period: '2030-01' })
+  })
+
+  it('punktskatt: ordinary skattedeklaration schedule (12th, 17th in Jan/Aug)', () => {
+    const config = getConfig('punktskatt_monthly')
+    expect(config.condition(makeSettings({ punktskatt_enabled: true, vat_registered: false }))).toBe(true)
+    const dates = config.generateDates(2030, makeSettings({ punktskatt_enabled: true }))
+    expect(dates[0]).toMatchObject({ day: 12, month: 1, year: 2030, period: '2030-01' })
+    expect(dates[6]).toMatchObject({ day: 17, month: 7, year: 2030, period: '2030-07' })
+    expect(dates[11]).toMatchObject({ day: 17, month: 0, year: 2031, period: '2030-12' })
+  })
+
+  it('fyllnadsinbetalning: 12th of 2nd month over 30k, 3rd of 5th month for the rest (SFL 62:8, 65 kap.)', () => {
+    const config = getConfig('fyllnadsinbetalning')
+    // Calendar FY 2030: 12 Feb 2031 and 3 May 2031.
+    const dates = config.generateDates(2031, makeSettings({ fyllnadsinbetalning_enabled: true }))
+    expect(dates.map(({ day, month, year }) => ({ day, month, year }))).toEqual([
+      { day: 12, month: 1, year: 2031 },
+      { day: 3, month: 4, year: 2031 },
+    ])
+    expect(dates[0].period).toBe('2030-over30k')
+    expect(dates[1].period).toBe('2030-rest')
+
+    // Broken FY ending June 2030 (start July): 12 Aug 2030 and 3 Nov 2030.
+    const broken = config.generateDates(2030, makeSettings({
+      fyllnadsinbetalning_enabled: true,
+      fiscal_year_start_month: 7,
+    }))
+    expect(broken.map(({ day, month, year }) => ({ day, month, year }))).toEqual([
+      { day: 12, month: 7, year: 2030 },
+      { day: 3, month: 10, year: 2030 },
+    ])
   })
 })
 

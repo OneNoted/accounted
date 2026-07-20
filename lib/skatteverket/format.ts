@@ -36,11 +36,17 @@ export function formatRedovisare(
  * - monthly period 3, year 2025 → "202503"
  * - quarterly period 1, year 2025 → "202503" (Q1 ends in March)
  * - yearly period 1, year 2025 → "202512"
+ *
+ * Annual VAT (helårsmoms) is reported per räkenskapsår (SFL 26 kap 10-11 §§),
+ * so a broken fiscal year ends in its own month, not December. Callers that
+ * know the räkenskapsår pass `fiscalYearEnd`; without it the yearly branch
+ * keeps the calendar-year fallback.
  */
 export function formatRedovisningsperiod(
   periodType: VatPeriodType,
   year: number,
-  period: number
+  period: number,
+  fiscalYearEnd?: { year: number; month: number }
 ): string {
   let lastMonth: number
 
@@ -52,6 +58,9 @@ export function formatRedovisningsperiod(
       lastMonth = period * 3
       break
     case 'yearly':
+      if (fiscalYearEnd) {
+        return `${fiscalYearEnd.year}${String(fiscalYearEnd.month).padStart(2, '0')}`
+      }
       lastMonth = 12
       break
   }

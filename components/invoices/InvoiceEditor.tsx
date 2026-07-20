@@ -127,10 +127,19 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   // Self-billing is never available when editing an existing draft.
   const [mode, setMode] = useState<'invoice' | 'self_billed'>('invoice')
+  // Company-wide opt-in from the invoice settings page: the whole payment
+  // link section (manual field + Stripe auto toggle) stays hidden until the
+  // company enables it. The send routes enforce the same setting server-side
+  // (maybeCreatePaymentLinkForInvoice), so this is presentation, not the gate.
+  const [paymentLinksEnabled, setPaymentLinksEnabled] = useState(false)
+  // An already-linked invoice keeps showing the section even when the
+  // setting is off, so the user can still see or clear the old link.
+  const hasExistingPaymentLink = Boolean(initial?.payment_link_url)
   // Active Stripe connection: drives the "auto payment link" toggle in the
   // payment link section. Absent extension or no connection → toggle hidden.
   const [stripeConnected, setStripeConnected] = useState(false)
   useEffect(() => {
+    if (!paymentLinksEnabled) return
     if (!ENABLED_EXTENSION_IDS.has('stripe')) return
     let cancelled = false
     fetch('/api/extensions/ext/stripe/status')
@@ -142,7 +151,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [paymentLinksEnabled])
 
   const schema = useMemo(() => {
     const itemSchema = z.object({
@@ -586,7 +595,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!company?.id) return
     const { data } = await supabase
       .from('company_settings')
-      .select('invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered, dimensions_enabled')
+      .select('invoice_default_notes, default_our_reference, clearing_number, account_number, bankgiro, accounting_method, ore_rounding, logo_url, vat_registered, dimensions_enabled, invoice_payment_links_enabled')
       .eq('company_id', company.id)
       .single()
     if (data?.invoice_default_notes) {
@@ -617,6 +626,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
     // Gates the dimension affordances (header default + per-row override).
     setDimensionsEnabled(data?.dimensions_enabled === true)
+    // Gates the payment-link section (opt-in on the invoice settings page).
+    setPaymentLinksEnabled(data?.invoice_payment_links_enabled === true)
   }
 
   // First-invoice detection (issue #520): captured at page load so the
@@ -2199,10 +2210,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     />
                   </div>
 
-                  {/* Online payment link (manual MVP): pasted per invoice from
-                      the user's PSP dashboard. Only real invoices: proformas
-                      and delivery notes carry no payment request. */}
-                  {watchDocumentType === 'invoice' && (
+                  {/* Online payment link: manual paste or the Stripe auto
+                      toggle. Only real invoices: proformas and delivery notes
+                      carry no payment request. Hidden unless the company has
+                      opted in on the invoice settings page, except when the
+                      draft already carries a link (still viewable/clearable). */}
+                  {watchDocumentType === 'invoice' && (paymentLinksEnabled || hasExistingPaymentLink) && (
                     <div className="space-y-2">
                       <Label htmlFor="payment_link_url">{t('payment_link_label')}</Label>
                       <Input

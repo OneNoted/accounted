@@ -222,15 +222,36 @@ export async function resolvePeriodDates(
   period: number,
   fiscalPeriodId?: string
 ): Promise<{ start: string; end: string }> {
-  if (periodType === 'yearly' && fiscalPeriodId) {
-    const { data: fp } = await supabase
-      .from('fiscal_periods')
-      .select('period_start, period_end')
-      .eq('id', fiscalPeriodId)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (fp?.period_start && fp?.period_end) {
-      return { start: fp.period_start, end: fp.period_end }
+  if (periodType === 'yearly') {
+    if (fiscalPeriodId) {
+      const { data: fp } = await supabase
+        .from('fiscal_periods')
+        .select('period_start, period_end')
+        .eq('id', fiscalPeriodId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (fp?.period_start && fp?.period_end) {
+        return { start: fp.period_start, end: fp.period_end }
+      }
+    } else {
+      // No explicit fiscal period: resolve the räkenskapsår ending in `year`
+      // instead of assuming a calendar FY. Helårsmoms is filed per
+      // räkenskapsår (SFL 26 kap 10-11 §§), so for a broken fiscal year the
+      // calendar-year assumption would put both the redovisningsperiod and
+      // the figures on the wrong period. For calendar-FY companies this
+      // resolves to Jan-Dec of `year`, identical to the arithmetic fallback.
+      const { data: fp } = await supabase
+        .from('fiscal_periods')
+        .select('period_start, period_end')
+        .eq('company_id', companyId)
+        .gte('period_end', `${year}-01-01`)
+        .lte('period_end', `${year}-12-31`)
+        .order('period_end', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (fp?.period_start && fp?.period_end) {
+        return { start: fp.period_start, end: fp.period_end }
+      }
     }
   }
   return calculatePeriodDates(periodType, year, period)

@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react'
 import { Deadline, DeadlineType } from '@/types'
 import { Button } from '@/components/ui/button'
 import { DeadlineCard } from './DeadlineCard'
+import { DeadlineGroupCard, isSkattekontoDeadline } from './DeadlineGroupCard'
 import { DeadlineFilters } from './DeadlineFilters'
 import { DeadlineForm } from './DeadlineForm'
 import { isDeadlineOverdue } from '@/lib/calendar/utils'
@@ -96,6 +97,38 @@ export function DeadlineList({
     { key: 'completed', label: 'Klara', items: groupedDeadlines.completed },
   ].filter(s => s.items.length > 0)
 
+  // Skattekonto obligations legally share the same due date (moms + AGI +
+  // preliminärskatt all fall on "den 12:e"): collapse 2+ such rows into one
+  // grouped card per date instead of near-identical rows. Other deadlines
+  // render as before, in their original order.
+  type ListEntry =
+    | { kind: 'single'; deadline: Deadline }
+    | { kind: 'group'; date: string; items: Deadline[] }
+
+  const toEntries = (items: Deadline[]): ListEntry[] => {
+    const byDate = new Map<string, Deadline[]>()
+    for (const d of items) {
+      if (!isSkattekontoDeadline(d)) continue
+      const group = byDate.get(d.due_date) ?? []
+      group.push(d)
+      byDate.set(d.due_date, group)
+    }
+    const emittedDates = new Set<string>()
+    const entries: ListEntry[] = []
+    for (const d of items) {
+      const group = byDate.get(d.due_date)
+      if (isSkattekontoDeadline(d) && group && group.length >= 2) {
+        if (!emittedDates.has(d.due_date)) {
+          emittedDates.add(d.due_date)
+          entries.push({ kind: 'group', date: d.due_date, items: group })
+        }
+        continue
+      }
+      entries.push({ kind: 'single', deadline: d })
+    }
+    return entries
+  }
+
   return (
     <div className="space-y-6">
       {/* Toolbar */}
@@ -159,15 +192,24 @@ export function DeadlineList({
                 <div className="flex-1 h-px bg-border/60" />
               </div>
               <div className="space-y-1.5">
-                {items.map((deadline) => (
-                  <DeadlineCard
-                    key={deadline.id}
-                    deadline={deadline}
-                    onToggle={onDeadlineToggle}
-                    onEdit={handleEdit}
-                    onDelete={onDeadlineDelete}
-                  />
-                ))}
+                {toEntries(items).map((entry) =>
+                  entry.kind === 'group' ? (
+                    <DeadlineGroupCard
+                      key={`skattekonto-${entry.date}`}
+                      deadlines={entry.items}
+                      onToggle={onDeadlineToggle}
+                      onEdit={handleEdit}
+                    />
+                  ) : (
+                    <DeadlineCard
+                      key={entry.deadline.id}
+                      deadline={entry.deadline}
+                      onToggle={onDeadlineToggle}
+                      onEdit={handleEdit}
+                      onDelete={onDeadlineDelete}
+                    />
+                  ),
+                )}
               </div>
             </section>
           ))}

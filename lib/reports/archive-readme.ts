@@ -39,7 +39,8 @@ export function buildDriveFolderReadme(params: DriveFolderReadmeParams): string 
     '',
     'Arkiv <år>.zip       Ett komplett arkiv per räkenskapsår: bokföringen som',
     '                     SIE4-fil, rapporter (JSON och CSV), underlag döpta',
-    '                     efter verifikat samt behandlingshistorik för året.',
+    '                     efter verifikat samt behandlingshistorik för årets',
+    '                     bokföring.',
     'Grunddata.zip        Register (kunder, leverantörer, fakturor, anställda,',
     '                     löner, tillgångar med mera), ursprungliga SIE-filer,',
     '                     dokument som ännu inte kopplats till verifikat samt',
@@ -48,6 +49,11 @@ export function buildDriveFolderReadme(params: DriveFolderReadmeParams): string 
     'Filerna uppdateras på plats vid varje säkerhetskopiering: bara år med',
     'ändringar laddas upp på nytt. Google Drive sparar tidigare versioner i',
     'cirka 30 dagar (högerklicka på filen och välj Hantera versioner).',
+    '',
+    'Den här mappen är en extra säkerhetskopia som du själv råder över.',
+    'Filer i Drive kan ändras eller raderas, så mappen utgör inte företagets',
+    `lagliga arkiv enligt bokföringslagen: ${app} bevarar`,
+    'räkenskapsinformationen i oföränderligt skick i minst 7 år (BFL 7 kap.).',
     '',
     'Varje zip innehåller en egen LÄSMIG.txt som beskriver innehållet.',
     `${app} är öppen källkod (AGPL): bokföringen förblir läsbar utan tjänsten.`,
@@ -71,8 +77,12 @@ export function buildArchiveReadme(params: ArchiveReadmeParams): string {
     `Omfattning: ${scopeLine}`,
     '',
     'Det här arkivet innehåller företagets räkenskapsinformation i öppna',
-    'format (SIE4, JSON, CSV). Det är läsbart utan särskild programvara och',
-    'är avsett att uppfylla arkiveringskraven i Bokföringslagen (7 år).',
+    'format (SIE4, JSON, CSV), läsbart utan särskild programvara.',
+    '',
+    'Arkivet är en säkerhetskopia. En fil som lagras utanför tjänsten kan',
+    'ändras eller raderas och utgör därför inte i sig det lagliga arkivet',
+    `enligt bokföringslagen: ${app} bevarar räkenskapsinformationen i`,
+    'oföränderligt skick i minst 7 år (BFL 7 kap.).',
     '',
     'INNEHÅLL',
     '--------',
@@ -107,8 +117,9 @@ export function buildArchiveReadme(params: ArchiveReadmeParams): string {
       '                     CSV för Excel (semikolonavgränsad).',
       'dokument/            Underlag (kvitton, fakturor) döpta efter verifikat.',
       '                     dokument/manifest.json listar alla filer med SHA-256.',
-      'revision/            behandlingshistorik.json (alla ändringar under året)',
-      '                     och systemdokumentation.json.'
+      'revision/            behandlingshistorik.json (ändringar under året samt',
+      '                     ändringar som rör årets verifikat även när de',
+      '                     bokförts efter årets slut) och systemdokumentation.json.'
     )
   }
 

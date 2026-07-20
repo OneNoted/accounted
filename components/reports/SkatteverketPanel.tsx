@@ -74,6 +74,14 @@ interface SkatteverketPanelProps {
   periodType: VatPeriodType
   year: number
   period: number
+  /**
+   * Selected räkenskapsår for helårsmoms. The SKV redovisningsperiod for
+   * yearly filers is the FY-end month (broken FYs do not end in December),
+   * and the `year` prop is not maintained in yearly mode, so both the period
+   * id and the fiscal-year end ride along explicitly.
+   */
+  fiscalPeriodId?: string
+  fiscalYearEnd?: { year: number; month: number }
   hasData: boolean
   /**
    * True when the local pre-flight checks (VatChecksCard, section 1 of the
@@ -135,9 +143,15 @@ function SkatteverketPanelInner({
   periodType,
   year,
   period,
+  fiscalPeriodId,
+  fiscalYearEnd,
   hasData,
   localBlocked,
 }: SkatteverketPanelProps) {
+  // In yearly mode the year picker is replaced by the räkenskapsår selector,
+  // so the `year` prop is stale (stuck at the current year). Every SKV call
+  // must target the FY-end year instead.
+  const effectiveYear = periodType === 'yearly' && fiscalYearEnd ? fiscalYearEnd.year : year
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
@@ -156,7 +170,7 @@ function SkatteverketPanelInner({
   // one period must never render as if it belonged to another. Without this,
   // the visibilitychange auto-check could stamp "Deklarationen har lämnats
   // in" for a different period than the one being signed.
-  const periodKey = `${periodType}:${year}:${period}`
+  const periodKey = `${periodType}:${effectiveYear}:${period}:${fiscalPeriodId ?? ''}`
   const [appliedPeriodKey, setAppliedPeriodKey] = useState(periodKey)
   if (appliedPeriodKey !== periodKey) {
     setAppliedPeriodKey(periodKey)
@@ -271,7 +285,7 @@ function SkatteverketPanelInner({
       const res = await fetch('/api/extensions/ext/skatteverket/declaration/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ periodType, year, period }),
+        body: JSON.stringify({ periodType, year: effectiveYear, period, fiscalPeriodId }),
       })
       const result = await res.json()
       if (applyApiError(result)) {
@@ -324,7 +338,7 @@ function SkatteverketPanelInner({
       const res = await fetch('/api/extensions/ext/skatteverket/declaration/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ periodType, year, period }),
+        body: JSON.stringify({ periodType, year: effectiveYear, period, fiscalPeriodId }),
       })
       const result = await res.json()
       if (applyApiError(result)) {
@@ -358,8 +372,8 @@ function SkatteverketPanelInner({
   }, [])
 
   const getRedovisningsperiod = useCallback((): string => {
-    return formatRedovisningsperiod(periodType, year, period)
-  }, [periodType, year, period])
+    return formatRedovisningsperiod(periodType, year, period, fiscalYearEnd)
+  }, [periodType, year, period, fiscalYearEnd])
 
   const handleLock = async () => {
     setActionLoading('lock')
@@ -416,7 +430,7 @@ function SkatteverketPanelInner({
       const res = await fetch('/api/extensions/ext/skatteverket/declaration/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ periodType, year, period }),
+        body: JSON.stringify({ periodType, year: effectiveYear, period, fiscalPeriodId }),
       })
       const result = await res.json()
 
@@ -512,7 +526,7 @@ function SkatteverketPanelInner({
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/submitted?redovisare=${encodeURIComponent(
           await getRedovisare()
-        )}&redovisningsperiod=${getRedovisningsperiod()}&periodType=${periodType}&year=${year}&period=${period}`
+        )}&redovisningsperiod=${getRedovisningsperiod()}&periodType=${periodType}&year=${effectiveYear}&period=${period}`
       )
       const result = await res.json()
       if (applyApiError(result)) {
@@ -532,7 +546,7 @@ function SkatteverketPanelInner({
     } finally {
       setActionLoading(null)
     }
-  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, year, period])
+  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, effectiveYear, period])
 
   // While a signing link is outstanding, re-check submission status when the
   // user returns to this tab: signing happens on Skatteverket's site, so the
@@ -617,7 +631,7 @@ function SkatteverketPanelInner({
       const res = await fetch(
         `/api/extensions/ext/skatteverket/declaration/decided?redovisare=${encodeURIComponent(
           await getRedovisare()
-        )}&redovisningsperiod=${getRedovisningsperiod()}&periodType=${periodType}&year=${year}&period=${period}`
+        )}&redovisningsperiod=${getRedovisningsperiod()}&periodType=${periodType}&year=${effectiveYear}&period=${period}`
       )
       const result = await res.json()
       if (applyApiError(result)) {

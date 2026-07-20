@@ -68,6 +68,22 @@ export async function maybeCreatePaymentLinkForInvoice(
     .find((ext) => typeof ext.services?.[CREATE_INVOICE_PAYMENT_LINK_SERVICE] === 'function')
   if (!provider) return null
 
+  // Company-wide opt-in from the invoice settings page. Checked here, after
+  // the provider lookup (so the extension-free core build never queries), so
+  // every send path obeys it: dashboard, v1, MCP, recurring schedules. Fail
+  // closed on a read error: the feature defaults to off and a link is a
+  // convenience, never worth blocking a send over.
+  try {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('invoice_payment_links_enabled')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (settings?.invoice_payment_links_enabled !== true) return null
+  } catch {
+    return null
+  }
+
   try {
     const result = (await provider.services![CREATE_INVOICE_PAYMENT_LINK_SERVICE](
       supabase,

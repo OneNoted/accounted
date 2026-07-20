@@ -26,12 +26,35 @@ export function TaxSettingsContent() {
   // sammanställning obligation the opt-in flags may not reflect. Suggestion
   // only; the user confirms via the ordinary checkboxes.
   const [euSalesDetected, setEuSalesDetected] = useState(false)
+  // Same pattern for kontrolluppgifter: postings on 2898 (utdelning) or
+  // 2393/2893 (ägarlån) imply a KU obligation on 31 January that AGI never
+  // covers. Suggestion only; the user confirms via the checkbox.
+  const [kuSignalDetected, setKuSignalDetected] = useState(false)
+  // And for ROT/RUT: invoices with deductions mean a begäran om utbetalning
+  // must reach Skatteverket by 31 January after the payment year.
+  const [rotRutSignalDetected, setRotRutSignalDetected] = useState(false)
   useEffect(() => {
     let cancelled = false
     fetch('/api/settings/eu-trade-signal')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
         if (!cancelled && json?.data?.has_eu_sales) setEuSalesDetected(true)
+      })
+      .catch(() => {
+        // Best-effort signal: a failed fetch just hides the suggestion.
+      })
+    fetch('/api/settings/ku-signal')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.data?.has_ku_signal) setKuSignalDetected(true)
+      })
+      .catch(() => {
+        // Best-effort signal: a failed fetch just hides the suggestion.
+      })
+    fetch('/api/settings/rot-rut-signal')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.data?.has_rot_rut) setRotRutSignalDetected(true)
       })
       .catch(() => {
         // Best-effort signal: a failed fetch just hides the suggestion.
@@ -105,6 +128,14 @@ export function TaxSettingsContent() {
       // means false rather than "keep stored value".
       employer_seasonal: employerRegistered && formData.get('employer_seasonal') === 'true',
       preliminary_tax_monthly: parseFloat(formData.get('preliminary_tax_monthly') as string) || null,
+      kontrolluppgifter_enabled: formData.get('kontrolluppgifter_enabled') === 'true',
+      rot_rut_enabled: formData.get('rot_rut_enabled') === 'true',
+      // OSS/IOSS/Intrastat presuppose VAT registration; retire them with it.
+      oss_enabled: vatRegistered && formData.get('oss_enabled') === 'true',
+      ioss_enabled: vatRegistered && formData.get('ioss_enabled') === 'true',
+      intrastat_enabled: vatRegistered && formData.get('intrastat_enabled') === 'true',
+      punktskatt_enabled: formData.get('punktskatt_enabled') === 'true',
+      fyllnadsinbetalning_enabled: formData.get('fyllnadsinbetalning_enabled') === 'true',
     }
     return {
       updates,
@@ -127,7 +158,12 @@ export function TaxSettingsContent() {
       {showSkatteverket && <SkatteverketConnectPanel />}
 
       <SettingsFormWrapper onSave={handleSave} className="space-y-0">
-        <TaxSettingsForm settings={settings} euSalesDetected={euSalesDetected} />
+        <TaxSettingsForm
+          settings={settings}
+          euSalesDetected={euSalesDetected}
+          kuSignalDetected={kuSignalDetected}
+          rotRutSignalDetected={rotRutSignalDetected}
+        />
       </SettingsFormWrapper>
     </div>
   )

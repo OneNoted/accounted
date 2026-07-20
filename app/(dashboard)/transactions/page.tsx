@@ -22,7 +22,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu'
-import { ChevronDown, EyeOff, Layers, Search, Trash2, X } from 'lucide-react'
+import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'lucide-react'
 import TransactionForm from '@/components/transactions/TransactionForm'
 import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
@@ -270,6 +270,11 @@ export default function TransactionsPage() {
   const [skvMatchTarget, setSkvMatchTarget] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
+  // True when an SKV connection exists but is dead (needs_reconsent, or
+  // expired with no refresh left). Drives the reconnect banner: without it
+  // a user whose token died sees an empty skattekonto and has no reason to
+  // ever visit the settings panel where the reconnect prompt lives.
+  const [skvNeedsReconnect, setSkvNeedsReconnect] = useState(false)
 
   // Source filter for the merged inbox. Defaults to 'all' so users see
   // both sources unless they want to narrow down.
@@ -361,6 +366,33 @@ export default function TransactionsPage() {
   const PAGE_SIZE = 200
 
   const loadSkvRows = useCallback(async () => {
+    // Connection health, fetched alongside the rows: any failure (extension
+    // disabled, capability gate, not connected) just hides the banner.
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/skatteverket/status')
+        if (!res.ok) {
+          setSkvNeedsReconnect(false)
+          return
+        }
+        const s = (await res.json()) as {
+          connected?: boolean
+          disabled?: boolean
+          needsReconsent?: boolean
+          expired?: boolean
+          canRefresh?: boolean
+        }
+        setSkvNeedsReconnect(
+          Boolean(
+            s.connected &&
+              !s.disabled &&
+              (s.needsReconsent || (s.expired && !s.canRefresh)),
+          ),
+        )
+      } catch {
+        setSkvNeedsReconnect(false)
+      }
+    })()
     try {
       const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner')
       if (!res.ok) {
@@ -2092,6 +2124,19 @@ export default function TransactionsPage() {
         </Button>
       </div>
       <BankSyncSinceLastVisit />
+
+      {skvNeedsReconnect && (
+        <div className="flex flex-wrap items-start gap-3 rounded-lg border border-border bg-secondary/40 p-4 text-sm">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="font-medium">{t('skv_reconnect_title')}</p>
+            <p className="text-muted-foreground">{t('skv_reconnect_body')}</p>
+          </div>
+          <Button asChild variant="outline" size="sm" className="shrink-0">
+            <Link href="/settings/tax">{t('skv_reconnect_cta')}</Link>
+          </Button>
+        </div>
+      )}
 
       {/* Search + view dropdown */}
       <div className="flex items-center gap-2">

@@ -3,6 +3,7 @@ import { getErrorMessage } from '../get-error-message'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
+  CannotEditNonDraftError,
   CannotReverseStornoError,
   JournalEntryNotBalancedError,
 } from '@/lib/bookkeeping/errors'
@@ -149,6 +150,66 @@ describe('getErrorMessage: typed bookkeeping Error instances (issue #337)', () =
   it('regression: plain-object bare envelope with a Swedish message passes through unchanged', () => {
     const msg = getErrorMessage({ code: 'SOME_CODE', message: 'Kunde inte hantera fakturan. Försök igen.' })
     expect(msg).toBe('Kunde inte hantera fakturan. Försök igen.')
+  })
+})
+
+describe('getErrorMessage: unknown-code Error instances never leak raw text (#337 follow-up)', () => {
+  it('CannotEditNonDraftError instance → registry Swedish message', () => {
+    const msg = getErrorMessage(new CannotEditNonDraftError('posted'))
+    expect(msg).toBe('Endast utkast kan redigeras. Bokförda verifikationer rättas med storno.')
+    expect(msg).not.toContain('Only draft entries')
+  })
+
+  it('CANNOT_EDIT_NON_DRAFT envelope → registry Swedish message', () => {
+    const msg = getErrorMessage({
+      error: { code: 'CANNOT_EDIT_NON_DRAFT', message: 'Only draft entries can be edited' },
+    })
+    expect(msg).toBe('Endast utkast kan redigeras. Bokförda verifikationer rättas med storno.')
+  })
+
+  it('ECONNREFUSED Error → transient Swedish message, never the socket string', () => {
+    const err = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
+      code: 'ECONNREFUSED',
+    })
+    const msg = getErrorMessage(err)
+    expect(msg).toBe('Kunde inte nå en extern tjänst. Försök igen om en stund.')
+    expect(msg).not.toContain('127.0.0.1')
+  })
+
+  it('ECONNREFUSED Error with locale "en" → registry English message', () => {
+    const err = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:5432'), {
+      code: 'ECONNREFUSED',
+    })
+    const msg = getErrorMessage(err, { locale: 'en' })
+    expect(msg).toBe(
+      'An upstream network call failed. Retry the same request after a short backoff.'
+    )
+  })
+
+  it('Error with an unregistered code and English message → context fallback, not raw', () => {
+    const err = Object.assign(new Error('some upstream failure text'), {
+      code: 'E_SOMETHING_WEIRD',
+    })
+    const msg = getErrorMessage(err, { context: 'transaction' })
+    expect(msg).toBe('Kunde inte hantera transaktionen. Försök igen.')
+    expect(msg).not.toContain('upstream failure')
+  })
+
+  it('Error wrapping a Postgres SQLSTATE → Postgres-map Swedish message', () => {
+    const err = Object.assign(
+      new Error('duplicate key value violates unique constraint "invoices_pkey"'),
+      { code: '23505' },
+    )
+    const msg = getErrorMessage(err)
+    expect(msg).toBe('En post med samma uppgifter finns redan.')
+    expect(msg).not.toContain('duplicate key')
+  })
+
+  it('Error with an unregistered code but a Swedish message passes through', () => {
+    const err = Object.assign(new Error('Kunde inte hantera fakturan. Försök igen.'), {
+      code: 'EXT_CUSTOM_CODE',
+    })
+    expect(getErrorMessage(err)).toBe('Kunde inte hantera fakturan. Försök igen.')
   })
 })
 

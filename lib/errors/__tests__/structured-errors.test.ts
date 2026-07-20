@@ -44,6 +44,11 @@ describe('structured-errors registry', () => {
     expect(codes.length).toBeGreaterThan(20)
     expect(codes).toContain('JOURNAL_ENTRY_NOT_BALANCED')
     expect(codes).toContain('PROVIDER_AUTH_EXPIRED')
+    expect(codes).toContain('CANNOT_EDIT_NON_DRAFT')
+    expect(codes).toContain('MANDATORY_DIMENSION_MISSING')
+    // Node network system codes registered as retryable transients (#337).
+    expect(codes).toContain('ECONNREFUSED')
+    expect(getErrorEntry('ECONNREFUSED')?.retryable).toBe(true)
   })
 })
 

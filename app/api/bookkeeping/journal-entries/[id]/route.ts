@@ -27,7 +27,12 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 404 })
+      // PostgREST's "no rows" message is raw English; the user just needs to
+      // know the verifikat is gone (matches JOURNAL_ENTRY_NOT_FOUND registry).
+      return NextResponse.json(
+        { error: 'Verifikationen kunde inte hittas.' },
+        { status: 404 }
+      )
     }
 
     return NextResponse.json({ data })
@@ -106,8 +111,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed
+      // Untyped errors map to Swedish via getErrorMessage: the raw message is
+      // logged here and must never reach the user verbatim (issue #337).
+      logger.error('failed to update draft journal entry', { entryId: id, error: err })
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Failed to update journal entry' },
+        { error: getErrorMessage(err, { context: 'journal_entry' }) },
         { status: 400 },
       )
     }
