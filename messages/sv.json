@@ -4112,6 +4112,7 @@
     "ext_cloud_backup_no_documents_note": "utan underlag",
     "ext_cloud_backup_last_sync_no_documents": "Senaste kopian togs utan underlagsfiler",
     "ext_cloud_backup_card_tagline": "Säkerhetskopia till din egen Drive.",
+    "ext_cloud_backup_legal_note": "Drive-kopian är en extra säkerhetskopia. Det lagliga arkivet (7 år enligt bokföringslagen) finns kvar i Accounted.",
     "ext_cloud_backup_loading": "Laddar…",
     "ext_cloud_backup_account_label": "Konto",
     "ext_cloud_backup_last_sync_label": "Senaste synk",

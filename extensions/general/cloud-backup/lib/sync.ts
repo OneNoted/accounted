@@ -49,7 +49,7 @@ export const ROOT_FOLDER_NAME = 'gnubok'
  */
 export const SIZE_LIMIT_BYTES = 300 * 1024 * 1024
 /** Bump to force a re-upload of every file when the archive format changes. */
-export const ARCHIVE_FORMAT_VERSION = 2
+export const ARCHIVE_FORMAT_VERSION = 3
 
 export type SyncFailureReason =
   | 'not_connected'

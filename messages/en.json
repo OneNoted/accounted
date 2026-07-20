@@ -4112,6 +4112,7 @@
     "ext_cloud_backup_no_documents_note": "without documents",
     "ext_cloud_backup_last_sync_no_documents": "Latest copy was made without document files",
     "ext_cloud_backup_card_tagline": "Backup to your own Drive.",
+    "ext_cloud_backup_legal_note": "The Drive copy is an extra backup. The legal archive (7 years under the Swedish Bookkeeping Act) remains in Accounted.",
     "ext_cloud_backup_loading": "Loading…",
     "ext_cloud_backup_account_label": "Account",
     "ext_cloud_backup_last_sync_label": "Last sync",

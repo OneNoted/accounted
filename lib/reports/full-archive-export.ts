@@ -178,14 +178,10 @@ export async function generateFullArchive(
 
   const revision = zip.folder('revision')!
 
-  const auditFilters =
+  const auditEntries =
     options.scope === 'period'
-      ? {
-          from_date: periods[0].period_start,
-          to_date: `${periods[0].period_end}T23:59:59.999Z`,
-        }
-      : {}
-  const auditEntries = await fetchAllAuditEntries(supabase, companyId, auditFilters)
+      ? await fetchPeriodAuditEntries(supabase, companyId, periods[0])
+      : await fetchAllAuditEntries(supabase, companyId, {})
   revision.file('behandlingshistorik.json', JSON.stringify(auditEntries, null, 2))
 
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, options.scope)
@@ -1042,6 +1038,86 @@ async function buildEntryToPeriodMap(
     map.set(entry.id, entry.fiscal_period_id)
   }
   return map
+}
+
+/**
+ * Behandlingshistorik for a single räkenskapsår.
+ *
+ * A date window alone is not enough: bokslut entries and stornos for the year
+ * are routinely committed months after period_end, so their audit rows fall
+ * outside [period_start, period_end]. BFNAR 2013:2 kap 8 expects the year's
+ * archive to carry the treatment history of the year's bokföringsposter, so
+ * the window is complemented with every audit row touching the period's
+ * journal entries and lines, regardless of when it was logged.
+ */
+async function fetchPeriodAuditEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: FiscalPeriodRow
+): Promise<AuditLogEntry[]> {
+  const windowed = await fetchAllAuditEntries(supabase, companyId, {
+    from_date: period.period_start,
+    to_date: `${period.period_end}T23:59:59.999Z`,
+  })
+
+  const entryIds = (
+    await fetchAllRows<{ id: string }>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', period.id)
+        // Stable total order for correct paging (see fetch-all.ts).
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  ).map((r) => r.id)
+  if (entryIds.length === 0) return windowed
+
+  // journal_entry_lines has no company_id column; tenant scoping comes from
+  // the entry ids fetched above.
+  const lineIds: string[] = []
+  for (let i = 0; i < entryIds.length; i += CHILD_FK_CHUNK) {
+    const chunk = entryIds.slice(i, i + CHILD_FK_CHUNK)
+    const lines = await fetchAllRows<{ id: string }>(({ from, to }) =>
+      supabase
+        .from('journal_entry_lines')
+        .select('id')
+        .in('journal_entry_id', chunk)
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+    lineIds.push(...lines.map((r) => r.id))
+  }
+
+  const byId = new Map<string, AuditLogEntry>()
+  for (const row of windowed) byId.set(row.id, row)
+
+  // write_audit_log derives company_id from the audited row, and
+  // journal_entry_lines has no such column, so line audit rows carry
+  // company_id NULL: a plain company filter would drop them. The record-id
+  // set above is already tenant-scoped; the OR admits NULL-company rows only
+  // for journal_entry_lines. Under RLS (manual download) those rows stay
+  // invisible; the service-role backup path (Drive cron) sees them.
+  const recordIds = [...entryIds, ...lineIds]
+  for (let i = 0; i < recordIds.length; i += CHILD_FK_CHUNK) {
+    const chunk = recordIds.slice(i, i + CHILD_FK_CHUNK)
+    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
+      supabase
+        .from('audit_log')
+        .select('*')
+        .in('record_id', chunk)
+        .or(
+          `company_id.eq.${companyId},and(company_id.is.null,table_name.eq.journal_entry_lines)`
+        )
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+    for (const row of rows) byId.set(row.id, row)
+  }
+
+  // Newest first, matching getAuditLog's output order.
+  return [...byId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at))
 }
 
 async function fetchAllAuditEntries(
