@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,13 +14,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, FileInput, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { PageHeader } from '@/components/ui/page-header'
-import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
+import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice } from '@/types'
+
+const NewSupplierInvoiceDialog = dynamic(
+  () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   registered: 'secondary',
@@ -267,14 +273,16 @@ export default function SupplierInvoicesPage() {
         </TabsContent>
       </Tabs>
 
-      <NewSupplierInvoiceDialog
-        open={showNewInvoice}
-        onOpenChange={(open) => {
-          if (!open) closeNewInvoice()
-        }}
-        inboxItemId={inboxItemId}
-        onCreated={handleCreated}
-      />
+      {showNewInvoice && (
+        <NewSupplierInvoiceDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) closeNewInvoice()
+          }}
+          inboxItemId={inboxItemId}
+          onCreated={handleCreated}
+        />
+      )}
     </div>
   )
 }

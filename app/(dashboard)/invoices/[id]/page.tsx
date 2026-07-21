@@ -83,7 +83,7 @@ interface InvoiceWithRelations extends Invoice {
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
-  const { isSandbox } = useCompany()
+  const { company, isSandbox } = useCompany()
   const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
@@ -138,6 +138,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   async function fetchInvoice() {
     setIsLoading(true)
+
+    // Settings depend only on the active company, so start them with the main
+    // invoice batch instead of waiting for the invoice row first.
+    const settingsPromise = company?.id
+      ? supabase
+          .from('company_settings')
+          .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
+          .eq('company_id', company.id)
+          .maybeSingle()
+      : Promise.resolve(null)
 
     // Invoice, reminders, and payments all key on the route id — one
     // parallel batch. Only the follow-ups below need the invoice row.
@@ -213,19 +223,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       )
     }
 
-    // Follow-ups that need the invoice row: company settings (öresavrundning
-    // + VAT registration so the detail view matches the PDF — see
-    // pdf-template.tsx:792 and :876), the credit note, the original invoice,
-    // and the proforma source. Independent of each other → parallel.
-    const [settingsRes, creditNoteRes, originalRes, convertedRes] =
-      await Promise.all([
-        data.company_id
-          ? supabase
-              .from('company_settings')
-              .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
-              .eq('company_id', data.company_id)
-              .maybeSingle()
-          : Promise.resolve(null),
+    const settingsRes = await settingsPromise
+    if (settingsRes) {
+      const settings = settingsRes.data
+      setOreRounding(settings?.ore_rounding ?? true)
+      if (typeof settings?.vat_registered === 'boolean') {
+        setVatRegistered(settings.vat_registered)
+      }
+      setAccountingMethod(settings?.accounting_method === 'cash' ? 'cash' : 'accrual')
+      setDeferInvoiceBooking(!!settings?.defer_invoice_booking)
+      setReminderDays([
+        settings?.reminder_days_level_1 ?? 15,
+        settings?.reminder_days_level_2 ?? 30,
+        settings?.reminder_days_level_3 ?? 45,
+      ])
+    }
+
+    // Related documents need the invoice row but do not gate the main detail
+    // view. Resolve them together after first paint and fill their links in.
+    setIsLoading(false)
+    void Promise.all([
         !data.credited_invoice_id &&
         ['sent', 'paid', 'overdue', 'credited'].includes(data.status)
           ? supabase
@@ -249,31 +266,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               .eq('id', data.converted_from_id)
               .single()
           : Promise.resolve(null),
-      ])
-
-    if (settingsRes) {
-      const settings = settingsRes.data
-      setOreRounding(settings?.ore_rounding ?? true)
-      if (typeof settings?.vat_registered === 'boolean') {
-        setVatRegistered(settings.vat_registered)
-      }
-      setAccountingMethod(settings?.accounting_method === 'cash' ? 'cash' : 'accrual')
-      setDeferInvoiceBooking(!!settings?.defer_invoice_booking)
-      setReminderDays([
-        settings?.reminder_days_level_1 ?? 15,
-        settings?.reminder_days_level_2 ?? 30,
-        settings?.reminder_days_level_3 ?? 45,
-      ])
-    }
-    setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
-    if (originalRes?.data) {
-      setOriginalInvoice(originalRes.data as Invoice)
-    }
-    if (convertedRes?.data) {
-      setConvertedFromInvoice(convertedRes.data as Invoice)
-    }
-
-    setIsLoading(false)
+      ]).then(([creditNoteRes, originalRes, convertedRes]) => {
+        setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
+        if (originalRes?.data) {
+          setOriginalInvoice(originalRes.data as Invoice)
+        }
+        if (convertedRes?.data) {
+          setConvertedFromInvoice(convertedRes.data as Invoice)
+        }
+      })
   }
 
   // #967: deferred booking: create the revenue verifikat afterwards.

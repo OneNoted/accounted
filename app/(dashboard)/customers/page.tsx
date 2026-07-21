@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
+import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -21,7 +22,6 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, Search, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
-import CustomerForm from '@/components/customers/CustomerForm'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
@@ -30,6 +30,19 @@ import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+
+const CustomerForm = dynamic(
+  () => import('@/components/customers/CustomerForm'),
+  {
+    loading: () => (
+      <div className="space-y-4 py-4" role="status">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    ),
+  },
+)
 
 const CUSTOMER_TYPE_LABEL_KEYS: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -49,6 +62,7 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'city',
   'created_at',
 ]
+const INITIAL_VISIBLE_ROWS = 100
 
 function getInitials(name: string): string {
   return name
@@ -73,11 +87,13 @@ function CustomersPageInner() {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('customers')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
@@ -93,6 +109,7 @@ function CustomersPageInner() {
 
   const updateSort = useCallback(
     (column: SortColumn) => {
+      setVisibleCount(INITIAL_VISIBLE_ROWS)
       const params = new URLSearchParams(searchParams.toString())
       let nextDir: SortDir = 'asc'
       if (column === sortColumn) {
@@ -211,6 +228,7 @@ function CustomersPageInner() {
     })
     return arr
   }, [filteredCustomers, sortColumn, sortDir])
+  const visibleCustomers = sortedCustomers.slice(0, visibleCount)
 
   function SortableHeader({
     column,
@@ -284,7 +302,10 @@ function CustomersPageInner() {
         <Input
           placeholder={t('search_placeholder')}
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
           className="pl-10"
         />
       </div>
@@ -350,7 +371,7 @@ function CustomersPageInner() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedCustomers.map((customer) => {
+                  {visibleCustomers.map((customer) => {
                     const identifier = getIdentifier(customer)
                     return (
                       <TableRow
@@ -399,7 +420,7 @@ function CustomersPageInner() {
 
           {/* Mobile card list */}
           <div className="grid gap-4 md:hidden">
-            {sortedCustomers.map((customer) => (
+            {visibleCustomers.map((customer) => (
               <Link key={customer.id} href={`/customers/${customer.id}`}>
                 <Card className="cursor-pointer transition-colors duration-150 hover:bg-secondary/60 h-full group">
                   <CardHeader className="pb-3">
@@ -441,6 +462,17 @@ function CustomersPageInner() {
               </Link>
             ))}
           </div>
+          {visibleCount < sortedCustomers.length && (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
+              >
+                {tCommon('load_more')}
+              </Button>
+            </div>
+          )}
         </>
       )}
     </div>

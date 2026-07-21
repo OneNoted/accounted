@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
@@ -12,11 +11,15 @@ import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
-import { getActiveCompanyId } from '@/lib/company/context'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getBranding } from '@/lib/branding/service'
-import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import type { EntityType, CompanyRole, Team } from '@/types'
+import {
+  getDashboardAuthContext,
+  getDashboardCompanyId,
+  getDashboardSettings,
+  getResolvedDashboardAgentProfile,
+} from './request-context'
 
 /**
  * Routes inside the dashboard group that must remain reachable when the
@@ -34,9 +37,7 @@ export default async function DashboardLayout({
   // current page on in-app navigation to /settings/*; null otherwise.
   settingsModal: React.ReactNode
 }) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
+  const { supabase, user } = await getDashboardAuthContext()
 
   if (!user) {
     redirect('/login')
@@ -51,7 +52,7 @@ export default async function DashboardLayout({
   // so it resolves in parallel, this layout is on the critical path of
   // every dashboard page, so sequential round-trips are wall-clock time.
   const [companyId, headerStore, { data: teamMembership }] = await Promise.all([
-    getActiveCompanyId(supabase, user.id),
+    getDashboardCompanyId(),
     // Read the pathname forwarded by middleware so we can branch on it.
     headers(),
     supabase
@@ -128,7 +129,7 @@ export default async function DashboardLayout({
     { data: memberRow },
     { data: allMemberships },
     { data: settings },
-    { data: agentProfileIdentity },
+    agentProfileIdentity,
     { data: userProfile },
     entitlements,
     { data: allSettingsNames },
@@ -136,22 +137,14 @@ export default async function DashboardLayout({
     supabase.from('companies').select('*').eq('id', companyId).single(),
     supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
     supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
-    supabase
-      .from('company_settings')
-      .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled')
-      .eq('company_id', companyId)
-      .single(),
+    getDashboardSettings(),
     // Nav badge counts (unbooked transactions, pending operations) are NOT
     // fetched here anymore: DashboardNav loads them client-side after mount
     // (lib/hooks/use-worklist-badges) so two head-count queries stop blocking
     // first paint on every dashboard navigation.
     // Agent identity, name + avatar, surfaced on the FAB and chat
     // surfaces. Null when no agent_profile exists yet (banner CTA path).
-    supabase
-      .from('agent_profiles')
-      .select('display_name, avatar_id, verified_at')
-      .eq('company_id', companyId)
-      .maybeSingle(),
+    getResolvedDashboardAgentProfile(),
     // The signed-in user's profile, shown in the bottom-left account
     // popover (full_name + initial) so it's clear which user is logged
     // in, distinct from the active company shown at the top.
@@ -242,23 +235,6 @@ export default async function DashboardLayout({
 
   const isSandbox = settings?.is_sandbox === true
 
-  // Backfill a verified agent_profile for sandbox sessions that pre-date the
-  // seed change. Without this an old anonymous session shows the "Bygg din
-  // bokföringsassistent" CTA in three places (dashboard hero, NewUserChecklist
-  // step 4, /chat layout redirect) and the user can still kick off a build
-  // flow that the server now 403s. Best-effort; doesn't block the layout
-  // even if the insert fails.
-  let resolvedAgentIdentity = agentProfileIdentity
-  if (isSandbox && !agentProfileIdentity?.verified_at) {
-    await ensureSandboxAgentProfile(supabase, companyId)
-    const { data: refreshed } = await supabase
-      .from('agent_profiles')
-      .select('display_name, avatar_id, verified_at')
-      .eq('company_id', companyId)
-      .maybeSingle()
-    resolvedAgentIdentity = refreshed ?? agentProfileIdentity
-  }
-
   const companyContextValue = {
     company: companyWithName,
     role: memberRow.role as CompanyRole,
@@ -283,9 +259,9 @@ export default async function DashboardLayout({
     <CompanyProvider value={companyContextValue}>
       <AgentSheetProvider
         identity={{
-          displayName: resolvedAgentIdentity?.display_name ?? null,
-          avatarId: resolvedAgentIdentity?.avatar_id ?? null,
-          isVerified: Boolean(resolvedAgentIdentity?.verified_at),
+          displayName: agentProfileIdentity?.display_name ?? null,
+          avatarId: agentProfileIdentity?.avatar_id ?? null,
+          isVerified: Boolean(agentProfileIdentity?.verified_at),
         }}
       >
         <CompanyTabSync />

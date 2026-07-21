@@ -1,13 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { cookies } from 'next/headers'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import WelcomeGate from '@/components/onboarding/WelcomeGate'
-import { getActiveCompanyId } from '@/lib/company/context'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
 import type { Deadline, OnboardingProgress } from '@/types'
+import {
+  getDashboardAuthContext,
+  getDashboardCompanyId,
+  getDashboardSettings,
+  getResolvedDashboardAgentProfile,
+} from './request-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,32 +19,13 @@ export const dynamic = 'force-dynamic'
 // the dashboard; once the agent is verified, / renders the normal Översikt.
 
 export default async function DashboardPage() {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
+  const [{ supabase, user }, companyId] = await Promise.all([
+    getDashboardAuthContext(),
+    getDashboardCompanyId(),
+  ])
 
   if (!user) {
     redirect('/login')
-  }
-
-  const cookieStore = await cookies()
-  const rawCompanyId = cookieStore.get('gnubok-company-id')?.value
-    ?? await getActiveCompanyId(supabase, user.id)
-
-  // Validate the cookie/preference points to a company the user can access.
-  // Only a positive "no membership row" clears it: a FAILED query means the
-  // membership is unknown, and treating that as absent bounced onboarded
-  // users to the wizard on transient failures (issue #1053). RLS still
-  // guards every downstream query if the cookie is stale.
-  let companyId = rawCompanyId
-  if (companyId) {
-    const { data: membership, error: membershipError } = await supabase
-      .from('company_members')
-      .select('company_id')
-      .eq('company_id', companyId)
-      .eq('user_id', user.id)
-      .maybeSingle()
-    if (!membership && !membershipError) companyId = null
   }
 
   if (!companyId) {
@@ -70,12 +53,12 @@ export default async function DashboardPage() {
     { count: sieImportCount },
     { count: staleUncategorizedCount },
     { count: skatteverketTokenCount },
-    { data: agentProfile },
+    agentProfile,
     { count: postedEntriesCount },
     worklist,
     suggestedMatches,
   ] = await Promise.all([
-    supabase.from('company_settings').select('*').eq('company_id', companyId).maybeSingle(),
+    getDashboardSettings(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -95,7 +78,7 @@ export default async function DashboardPage() {
     // carry the active company_id; either filter would work: we use user_id
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
-    supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
+    getResolvedDashboardAgentProfile(),
     // Any posted entry counts as "company has been used" for the hasData gate.
     supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted'),
     // Pending-work counts + suggested matches come from lib/worklist: the
@@ -118,22 +101,7 @@ export default async function DashboardPage() {
     redirect('/onboarding')
   }
 
-  // Sandbox sessions that pre-date the agent_profile seeding step would
-  // otherwise still see the "Bygg din bokföringsassistent" hero + the
-  // NewUserChecklist's agent step lit up. Backfill here so the next render
-  // sees a verified profile and treats the sandbox as fully set up.
-  let effectiveAgentVerified = agentProfile?.verified_at ?? null
-  if (settings?.is_sandbox === true && !effectiveAgentVerified) {
-    await ensureSandboxAgentProfile(supabase, companyId)
-    const { data: refreshed } = await supabase
-      .from('agent_profiles')
-      .select('verified_at')
-      .eq('company_id', companyId)
-      .maybeSingle()
-    effectiveAgentVerified = refreshed?.verified_at ?? null
-  }
-
-  const agentBuilt = Boolean(effectiveAgentVerified)
+  const agentBuilt = Boolean(agentProfile?.verified_at)
 
   // "Has the company already been used?" Any real business data means we must
   // NOT hijack the dashboard with the full-screen onboarding gate: existing

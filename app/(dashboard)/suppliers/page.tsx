@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -13,17 +14,30 @@ import { PageHeader } from '@/components/ui/page-header'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Building2, Lock } from 'lucide-react'
-import SupplierForm from '@/components/suppliers/SupplierForm'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
+
+const SupplierForm = dynamic(
+  () => import('@/components/suppliers/SupplierForm'),
+  {
+    loading: () => (
+      <div className="space-y-4 py-4" role="status">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    ),
+  },
+)
 
 const SUPPLIER_TYPE_KEYS: Record<SupplierType, string> = {
   swedish_business: 'type_swedish_business',
   eu_business: 'type_eu_business',
   non_eu_business: 'type_non_eu_business',
 }
+const INITIAL_VISIBLE_ROWS = 100
 
 function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label: string; value: string } | null {
   if (supplier.bankgiro) return { label: t('label_bg'), value: supplier.bankgiro }
@@ -46,10 +60,12 @@ export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
   const supabase = createClient()
+  const tCommon = useTranslations('common')
 
   async function fetchSuppliers() {
     if (!company) return
@@ -111,6 +127,7 @@ export default function SuppliersPage() {
     s.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     s.org_number?.includes(searchTerm)
   )
+  const visibleSuppliers = filteredSuppliers.slice(0, visibleCount)
 
   return (
     <div className="space-y-8">
@@ -159,7 +176,10 @@ export default function SuppliersPage() {
         <Input
           placeholder={t('search_placeholder')}
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
           className="pl-10"
         />
       </div>
@@ -200,8 +220,9 @@ export default function SuppliersPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredSuppliers.map((supplier) => {
+        <>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {visibleSuppliers.map((supplier) => {
             const payment = getPaymentInfo(supplier, t)
             const location = formatLocation(supplier)
             return (
@@ -251,7 +272,19 @@ export default function SuppliersPage() {
               </Link>
             )
           })}
-        </div>
+          </div>
+          {visibleCount < filteredSuppliers.length && (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
+              >
+                {tCommon('load_more')}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   )

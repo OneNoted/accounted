@@ -17,6 +17,7 @@
     "search": "Search",
     "filter": "Filter",
     "loading": "Loading...",
+    "load_more": "Load more",
     "retry": "Try again",
     "load_error": "Could not load data",
     "confirm": "Confirm",

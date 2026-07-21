@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
@@ -23,8 +24,6 @@ import {
   DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu'
 import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'lucide-react'
-import TransactionForm from '@/components/transactions/TransactionForm'
-import BatchCategorySelector from '@/components/transactions/BatchCategorySelector'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
@@ -33,21 +32,9 @@ import TransactionInboxCard from '@/components/transactions/TransactionInboxCard
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
-import { SkattekontoMatchDialog } from '@/components/skattekonto/SkattekontoMatchDialog'
-import InvoiceMatchDialog from '@/components/transactions/InvoiceMatchDialog'
-import { MatchVoucherDialog } from '@/components/transactions/MatchVoucherDialog'
-import InvoicePicker from '@/components/transactions/InvoicePicker'
-import SupplierInvoicePicker from '@/components/transactions/SupplierInvoicePicker'
-import MatchAllocationDialog from '@/components/transactions/MatchAllocationDialog'
-import BulkBookDialog from '@/components/transactions/BulkBookDialog'
-import TransactionBookingDialog from '@/components/transactions/TransactionBookingDialog'
-import TransactionAttachDocumentDialog from '@/components/transactions/TransactionAttachDocumentDialog'
-import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
-import EditTransactionTitleDialog from '@/components/transactions/EditTransactionTitleDialog'
-import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
-import TemplatePicker from '@/components/transactions/TemplatePicker'
+import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
@@ -66,6 +53,47 @@ import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, Su
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
+
+function InlineDialogContentLoading() {
+  return (
+    <div className="space-y-4 py-4" role="status">
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-10 w-40" />
+    </div>
+  )
+}
+
+const TransactionForm = dynamic(() => import('@/components/transactions/TransactionForm'), { loading: InlineDialogContentLoading })
+const BatchCategorySelector = dynamic(() => import('@/components/transactions/BatchCategorySelector'), { loading: DialogLoadingSkeleton })
+const InvoiceMatchDialog = dynamic(() => import('@/components/transactions/InvoiceMatchDialog'), { loading: DialogLoadingSkeleton })
+const MatchVoucherDialog = dynamic(
+  () => import('@/components/transactions/MatchVoucherDialog').then((module) => module.MatchVoucherDialog),
+  { loading: DialogLoadingSkeleton },
+)
+const InvoicePicker = dynamic(() => import('@/components/transactions/InvoicePicker'), { loading: InlineDialogContentLoading })
+const SupplierInvoicePicker = dynamic(() => import('@/components/transactions/SupplierInvoicePicker'), { loading: InlineDialogContentLoading })
+const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'), { loading: DialogLoadingSkeleton })
+const BulkBookDialog = dynamic(() => import('@/components/transactions/BulkBookDialog'), { loading: DialogLoadingSkeleton })
+const TransactionBookingDialog = dynamic(() => import('@/components/transactions/TransactionBookingDialog'), { loading: DialogLoadingSkeleton })
+const TransactionAttachDocumentDialog = dynamic(
+  () => import('@/components/transactions/TransactionAttachDocumentDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+const QuickReviewDialog = dynamic(() => import('@/components/transactions/QuickReviewDialog'), { loading: DialogLoadingSkeleton })
+const EditTransactionTitleDialog = dynamic(
+  () => import('@/components/transactions/EditTransactionTitleDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+const SkattekontoMatchDialog = dynamic(
+  () => import('@/components/skattekonto/SkattekontoMatchDialog').then((module) => module.SkattekontoMatchDialog),
+  { loading: DialogLoadingSkeleton },
+)
+const DuplicateBookingDialog = dynamic(
+  () => import('@/components/transactions/DuplicateBookingDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+const TemplatePicker = dynamic(() => import('@/components/transactions/TemplatePicker'), { loading: InlineDialogContentLoading })
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
@@ -249,8 +277,8 @@ export default function TransactionsPage() {
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
 
-  // Entity type for tooltip context
-  const [entityType, setEntityType] = useState<string>('enskild_firma')
+  // Dashboard layout already resolved the effective entity type from settings.
+  const entityType = company?.entity_type ?? 'enskild_firma'
 
   // Pagination
   const [hasMore, setHasMore] = useState(false)
@@ -294,14 +322,17 @@ export default function TransactionsPage() {
   const refreshTransactionsQueuedRef = useRef(false)
 
   // Computed lists
-  const uncategorizedTransactions = transactions
-    .filter((t) => t.is_business === null && !t.is_ignored && !exitingIds.has(t.id))
-    .sort((a, b) => {
-      const aHasMatch = a.potential_invoice || a.potential_supplier_invoice ? 1 : 0
-      const bHasMatch = b.potential_invoice || b.potential_supplier_invoice ? 1 : 0
-      if (aHasMatch !== bHasMatch) return bHasMatch - aHasMatch
-      return b.date.localeCompare(a.date)
-    })
+  const uncategorizedTransactions = useMemo(
+    () => transactions
+      .filter((t) => t.is_business === null && !t.is_ignored && !exitingIds.has(t.id))
+      .sort((a, b) => {
+        const aHasMatch = a.potential_invoice || a.potential_supplier_invoice ? 1 : 0
+        const bHasMatch = b.potential_invoice || b.potential_supplier_invoice ? 1 : 0
+        if (aHasMatch !== bHasMatch) return bHasMatch - aHasMatch
+        return b.date.localeCompare(a.date)
+      }),
+    [exitingIds, transactions],
+  )
 
   // Merged inbox: bank tx + SKV rows interleaved by date. Source filter
   // narrows to one side. SKV rows always go after bank rows on the same
@@ -311,14 +342,24 @@ export default function TransactionsPage() {
     | { source: 'bank'; date: string; data: TransactionWithInvoice }
     | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
 
-  const skvUnmatched = skvRows.filter(r => !r.journal_entry_id)
+  const skvUnmatched = useMemo(
+    () => skvRows.filter((row) => !row.journal_entry_id),
+    [skvRows],
+  )
 
-  const bankToSkvHints = findBankSkvCounterparts({
-    bankRows: uncategorizedTransactions.map(t => ({ id: t.id, date: t.date, amount: t.amount })),
-    skvRows: skvUnmatched,
-  })
+  const bankToSkvHints = useMemo(
+    () => findBankSkvCounterparts({
+      bankRows: uncategorizedTransactions.map((transaction) => ({
+        id: transaction.id,
+        date: transaction.date,
+        amount: transaction.amount,
+      })),
+      skvRows: skvUnmatched,
+    }),
+    [skvUnmatched, uncategorizedTransactions],
+  )
 
-  const inboxItems: InboxItem[] = (() => {
+  const inboxItems = useMemo<InboxItem[]>(() => {
     const items: InboxItem[] = []
     const query = searchTerm.trim().toLowerCase()
     if (sourceFilter !== 'skatteverket') {
@@ -356,11 +397,14 @@ export default function TransactionsPage() {
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
     })
-  })()
-  const transactionsWithMatches = transactions.filter(
-    (t) =>
-      (t.potential_invoice && !t.invoice_id) ||
-      (t.potential_supplier_invoice && !t.supplier_invoice_id),
+  }, [exitingIds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
+  const transactionsWithMatches = useMemo(
+    () => transactions.filter(
+      (transaction) =>
+        (transaction.potential_invoice && !transaction.invoice_id) ||
+        (transaction.potential_supplier_invoice && !transaction.supplier_invoice_id),
+    ),
+    [transactions],
   )
 
   const PAGE_SIZE = 200
@@ -413,6 +457,7 @@ export default function TransactionsPage() {
   const fetchTransactions = useCallback(async (showLoading = false, includeSkvRows = false) => {
     if (!companyId) return
     if (showLoading) setIsLoading(true)
+    if (includeSkvRows) void loadSkvRows()
     try {
       const [{ data: txData, error: txError }, { count: uncatCount }] = await Promise.all([
         supabase
@@ -451,13 +496,6 @@ export default function TransactionsPage() {
       setTotalUncategorizedCount(uncatCount ?? 0)
       setHasMore(rows.length >= PAGE_SIZE)
 
-      // Fire-and-forget: load SKV rows in parallel with the rest of the
-      // page. We don't block on this: if the extension is disabled or the
-      // user isn't connected the response is 503/401 and we just leave the
-      // SKV section empty.
-      if (includeSkvRows) {
-        void loadSkvRows()
-      }
     } finally {
       if (showLoading) setIsLoading(false)
     }
@@ -608,27 +646,9 @@ export default function TransactionsPage() {
     }
   }
 
-  // Fetch transactions and entity type in parallel on mount, then suggestions
+  // Fetch the initial page. Entity type is already available from CompanyContext.
   useEffect(() => {
-    let cancelled = false
-
-    async function loadAll() {
-      // Fetch transactions and entity type in parallel
-      const [, entityRes] = await Promise.all([
-        fetchTransactions(true, true),
-        fetch('/api/settings').then(r => r.json()).catch(() => null),
-      ])
-
-      if (cancelled) return
-
-      if (entityRes?.data?.entity_type) {
-        setEntityType(entityRes.data.entity_type)
-      }
-    }
-
-    loadAll()
-
-    return () => { cancelled = true }
+    void fetchTransactions(true, true)
   }, [fetchTransactions])
 
   useEffect(() => {
@@ -2349,68 +2369,82 @@ export default function TransactionsPage() {
       )}
 
       {/* Dialogs */}
-      <BatchCategorySelector
-        open={showBatchSelector}
-        onOpenChange={setShowBatchSelector}
-        selectedCount={selectedIds.size}
-        onSelectCategory={handleBatchCategorize}
-        progress={batchProgress}
-      />
+      {showBatchSelector && (
+        <BatchCategorySelector
+          open
+          onOpenChange={setShowBatchSelector}
+          selectedCount={selectedIds.size}
+          onSelectCategory={handleBatchCategorize}
+          progress={batchProgress}
+        />
+      )}
 
-      <InvoiceMatchDialog
-        open={matchDialogOpen}
-        onOpenChange={setMatchDialogOpen}
-        transaction={selectedTransaction}
-        isConfirming={isConfirmingMatch}
-        onConfirm={handleConfirmInvoiceMatch}
-        onLinkToExisting={handleLinkToExistingVoucher}
-      />
+      {matchDialogOpen && (
+        <InvoiceMatchDialog
+          open
+          onOpenChange={setMatchDialogOpen}
+          transaction={selectedTransaction}
+          isConfirming={isConfirmingMatch}
+          onConfirm={handleConfirmInvoiceMatch}
+          onLinkToExisting={handleLinkToExistingVoucher}
+        />
+      )}
 
-      <MatchVoucherDialog
-        open={matchVoucherTx !== null}
-        onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
-        transaction={matchVoucherTx}
-        onLinked={handleVoucherLinked}
-      />
+      {matchVoucherTx && (
+        <MatchVoucherDialog
+          open
+          onOpenChange={(o) => { if (!o) setMatchVoucherTx(null) }}
+          transaction={matchVoucherTx}
+          onLinked={handleVoucherLinked}
+        />
+      )}
 
-      <MatchAllocationDialog
-        open={splitMatchOpen}
-        onOpenChange={(o) => {
-          setSplitMatchOpen(o)
-          if (!o) setSplitMatchTransaction(null)
-        }}
-        transaction={splitMatchTransaction}
-        onSuccess={handleSplitMatchSuccess}
-      />
+      {splitMatchOpen && (
+        <MatchAllocationDialog
+          open
+          onOpenChange={(o) => {
+            setSplitMatchOpen(o)
+            if (!o) setSplitMatchTransaction(null)
+          }}
+          transaction={splitMatchTransaction}
+          onSuccess={handleSplitMatchSuccess}
+        />
+      )}
 
-      <BulkBookDialog
-        open={bulkBookOpen}
-        onOpenChange={setBulkBookOpen}
-        transactions={selectedTransactions}
-        onSuccess={handleBulkBookSuccess}
-      />
+      {bulkBookOpen && (
+        <BulkBookDialog
+          open
+          onOpenChange={setBulkBookOpen}
+          transactions={selectedTransactions}
+          onSuccess={handleBulkBookSuccess}
+        />
+      )}
 
-      <TransactionBookingDialog
-        open={bookingDialogOpen}
-        onOpenChange={(o) => {
-          setBookingDialogOpen(o)
-          if (!o) setBookingDialogTemplate(null)
-        }}
-        transaction={bookingDialogTransaction}
-        preselectedTemplate={bookingDialogTemplate}
-        onBooked={handleTransactionBooked}
-      />
+      {bookingDialogOpen && (
+        <TransactionBookingDialog
+          open
+          onOpenChange={(o) => {
+            setBookingDialogOpen(o)
+            if (!o) setBookingDialogTemplate(null)
+          }}
+          transaction={bookingDialogTransaction}
+          preselectedTemplate={bookingDialogTemplate}
+          onBooked={handleTransactionBooked}
+        />
+      )}
 
-      <TransactionAttachDocumentDialog
-        open={attachDocTx !== null}
-        onOpenChange={(o) => {
-          if (!o) setAttachDocTx(null)
-        }}
-        transaction={attachDocTx}
-        onAttached={handleDocumentAttached}
-      />
+      {attachDocTx && (
+        <TransactionAttachDocumentDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setAttachDocTx(null)
+          }}
+          transaction={attachDocTx}
+          onAttached={handleDocumentAttached}
+        />
+      )}
 
-      <Dialog open={templatePickerOpen} onOpenChange={setTemplatePickerOpen}>
+      {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
@@ -2471,10 +2505,10 @@ export default function TransactionsPage() {
             onPickLibraryTemplate={handlePickLibraryTemplate}
           />
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
-      <Dialog
-        open={invoicePickerOpen}
+      {invoicePickerOpen && <Dialog
+        open
         onOpenChange={(open) => {
           if (isMatchingFromPicker) return
           setInvoicePickerOpen(open)
@@ -2501,10 +2535,10 @@ export default function TransactionsPage() {
             </>
           )}
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
-      <Dialog
-        open={supplierInvoicePickerOpen}
+      {supplierInvoicePickerOpen && <Dialog
+        open
         onOpenChange={(open) => {
           if (isMatchingSupplierFromPicker) return
           setSupplierInvoicePickerOpen(open)
@@ -2531,67 +2565,73 @@ export default function TransactionsPage() {
             </>
           )}
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
-      <QuickReviewDialog
-        key={quickReview?.transaction.id ?? '' + String(quickReview?.category) + String(quickReview?.templateId) + String(quickReview?.template?.id)}
-        open={quickReviewOpen}
-        onOpenChange={setQuickReviewOpen}
-        transaction={quickReview?.transaction ?? null}
-        category={quickReview?.category ?? null}
-        categoryLabel={quickReview?.label ?? ''}
-        defaultAccount={
-          // For library templates (no templateId but a template object), use the
-          // template's debit account as the default; otherwise fall back to the
-          // category's default account.
-          !quickReview?.templateId && quickReview?.template
-            ? quickReview.template.debit_account
-            : quickReview?.category ? getDefaultAccountForCategory(quickReview.category) : ''
-        }
-        defaultVat={
-          !quickReview?.templateId && quickReview?.template
-            ? (quickReview.template.vat_treatment ?? 'none')
-            : quickReview?.category ? (getDefaultVatTreatmentForCategory(quickReview.category) ?? 'none') : 'none'
-        }
-        entityType={entityType as EntityType}
-        template={quickReview?.template ?? null}
-        templateId={quickReview?.templateId}
-        counterpartyLinePattern={quickReview?.linePattern ?? null}
-        onConfirm={handleQuickReviewConfirm}
-        onChangeTemplate={handleChangeTemplate}
-      />
+      {quickReviewOpen && (
+        <QuickReviewDialog
+          key={quickReview?.transaction.id ?? '' + String(quickReview?.category) + String(quickReview?.templateId) + String(quickReview?.template?.id)}
+          open
+          onOpenChange={setQuickReviewOpen}
+          transaction={quickReview?.transaction ?? null}
+          category={quickReview?.category ?? null}
+          categoryLabel={quickReview?.label ?? ''}
+          defaultAccount={
+            // For library templates (no templateId but a template object), use the
+            // template's debit account as the default; otherwise fall back to the
+            // category's default account.
+            !quickReview?.templateId && quickReview?.template
+              ? quickReview.template.debit_account
+              : quickReview?.category ? getDefaultAccountForCategory(quickReview.category) : ''
+          }
+          defaultVat={
+            !quickReview?.templateId && quickReview?.template
+              ? (quickReview.template.vat_treatment ?? 'none')
+              : quickReview?.category ? (getDefaultVatTreatmentForCategory(quickReview.category) ?? 'none') : 'none'
+          }
+          entityType={entityType as EntityType}
+          template={quickReview?.template ?? null}
+          templateId={quickReview?.templateId}
+          counterpartyLinePattern={quickReview?.linePattern ?? null}
+          onConfirm={handleQuickReviewConfirm}
+          onChangeTemplate={handleChangeTemplate}
+        />
+      )}
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      {isDialogOpen && <Dialog open onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('dialog_add_transaction')}</DialogTitle>
           </DialogHeader>
           <TransactionForm onSubmit={handleCreateTransaction} isLoading={isCreating} />
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
 
-      <EditTransactionTitleDialog
-        open={editTitleTarget !== null}
-        onOpenChange={(v) => {
-          if (!v) setEditTitleTarget(null)
-        }}
-        currentTitle={editTitleTarget?.description ?? ''}
-        originalTitle={editTitleTarget?.original_description ?? null}
-        onSave={handleSaveTitle}
-      />
+      {editTitleTarget && (
+        <EditTransactionTitleDialog
+          open
+          onOpenChange={(v) => {
+            if (!v) setEditTitleTarget(null)
+          }}
+          currentTitle={editTitleTarget.description ?? ''}
+          originalTitle={editTitleTarget.original_description ?? null}
+          onSave={handleSaveTitle}
+        />
+      )}
 
-      <SkattekontoMatchDialog
-        row={skvMatchTarget}
-        open={!!skvMatchTarget}
-        onClose={() => setSkvMatchTarget(null)}
-        onMatched={handleSkvMatched}
-      />
+      {skvMatchTarget && (
+        <SkattekontoMatchDialog
+          row={skvMatchTarget}
+          open
+          onClose={() => setSkvMatchTarget(null)}
+          onMatched={handleSkvMatched}
+        />
+      )}
 
       {/* Prong B: match-against-supplier-invoice suggestion */}
-      <Dialog
-        open={siMatchSuggestion !== null}
+      {siMatchSuggestion && <Dialog
+        open
         onOpenChange={(open) => {
           if (!open) setSiMatchSuggestion(null)
         }}
@@ -2645,11 +2685,11 @@ export default function TransactionsPage() {
             </div>
           </div>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
       {/* Prong B (customer side): match-against-customer-invoice suggestion */}
-      <Dialog
-        open={ciMatchSuggestion !== null}
+      {ciMatchSuggestion && <Dialog
+        open
         onOpenChange={(open) => {
           if (!open) setCiMatchSuggestion(null)
         }}
@@ -2708,10 +2748,10 @@ export default function TransactionsPage() {
             </div>
           </div>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
-      <DuplicateBookingDialog
-        candidate={duplicateWarning?.candidate ?? null}
+      {duplicateWarning && <DuplicateBookingDialog
+        candidate={duplicateWarning.candidate}
         processing={duplicateProcessing}
         onCancel={() => setDuplicateWarning(null)}
         // Ledger-only candidate (transaction_id null, e.g. a verifikat from an
@@ -2719,11 +2759,9 @@ export default function TransactionsPage() {
         // voucher instead of double-booking it. Success refreshes the same
         // state a MatchVoucherDialog link does.
         matchTransaction={
-          duplicateWarning
-            ? transactions.find((tx) => tx.id === duplicateWarning.transactionId) ?? {
-                id: duplicateWarning.transactionId,
-              }
-            : null
+          transactions.find((tx) => tx.id === duplicateWarning.transactionId) ?? {
+            id: duplicateWarning.transactionId,
+          }
         }
         onMatched={(transactionId, journalEntryId, voucherLabel) => {
           setDuplicateWarning(null)
@@ -2739,7 +2777,7 @@ export default function TransactionsPage() {
             setDuplicateProcessing(false)
           }
         }}
-      />
+      />}
 
     </div>
   )

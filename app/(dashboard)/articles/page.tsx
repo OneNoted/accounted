@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react'
+import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -21,7 +22,6 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, Search, Package, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
-import ArticleForm from '@/components/articles/ArticleForm'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import {
   useSubmitWithAccountActivation,
@@ -36,6 +36,19 @@ import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
+
+const ArticleForm = dynamic(
+  () => import('@/components/articles/ArticleForm'),
+  {
+    loading: () => (
+      <div className="space-y-4 py-4" role="status">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    ),
+  },
+)
 
 const ARTICLE_TYPE_LABEL_KEYS: Record<ArticleType, string> = {
   vara: 'type_vara',
@@ -53,6 +66,7 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'price_excl_vat',
   'vat_rate',
 ]
+const INITIAL_VISIBLE_ROWS = 100
 
 function compareStrings(a: string, b: string): number {
   return a.localeCompare(b, 'sv', { sensitivity: 'base' })
@@ -64,11 +78,13 @@ function ArticlesPageInner() {
   const [articles, setArticles] = useState<Article[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('articles')
+  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
@@ -85,6 +101,7 @@ function ArticlesPageInner() {
 
   const updateSort = useCallback(
     (column: SortColumn) => {
+      setVisibleCount(INITIAL_VISIBLE_ROWS)
       const params = new URLSearchParams(searchParams.toString())
       let nextDir: SortDir = 'asc'
       if (column === sortColumn) {
@@ -208,6 +225,7 @@ function ArticlesPageInner() {
     })
     return arr
   }, [filteredArticles, sortColumn, sortDir])
+  const visibleArticles = sortedArticles.slice(0, visibleCount)
 
   function SortableHeader({
     column,
@@ -281,7 +299,10 @@ function ArticlesPageInner() {
         <Input
           placeholder={t('search_placeholder')}
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => {
+            setSearchTerm(e.target.value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
           className="pl-10"
         />
       </div>
@@ -358,7 +379,7 @@ function ArticlesPageInner() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedArticles.map((article) => (
+                  {visibleArticles.map((article) => (
                     <TableRow
                       key={article.id}
                       className="cursor-pointer"
@@ -400,7 +421,7 @@ function ArticlesPageInner() {
 
           {/* Mobile card list */}
           <div className="grid gap-4 md:hidden">
-            {sortedArticles.map((article) => (
+            {visibleArticles.map((article) => (
               <Link key={article.id} href={`/articles/${article.id}`}>
                 <Card className="cursor-pointer transition-colors duration-150 hover:bg-secondary/60 h-full group">
                   <CardHeader className="pb-3">
@@ -430,6 +451,17 @@ function ArticlesPageInner() {
               </Link>
             ))}
           </div>
+          {visibleCount < sortedArticles.length && (
+            <div className="flex justify-center">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
+              >
+                {tCommon('load_more')}
+              </Button>
+            </div>
+          )}
         </>
       )}
 

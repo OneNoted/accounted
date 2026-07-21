@@ -51,6 +51,16 @@ interface Props {
    */
   onReady?: () => void
   className?: string
+  /** Server-loaded periods for the first render, scoped to initialCompanyId. */
+  initialPeriods?: FiscalPeriod[]
+  initialCompanyId?: string | null
+}
+
+function preparePeriods(periods: FiscalPeriod[], hideFuturePeriods: boolean): FiscalPeriod[] {
+  const today = new Date().toISOString().split('T')[0]
+  return periods
+    .filter((period) => !hideFuturePeriods || period.period_start <= today)
+    .sort((a, b) => b.period_start.localeCompare(a.period_start))
 }
 
 /**
@@ -71,11 +81,16 @@ export function FiscalYearSelector({
   hideFuturePeriods = false,
   onReady,
   className,
+  initialPeriods,
+  initialCompanyId,
 }: Props) {
   const { company } = useCompany()
   const t = useTranslations('fiscal_year')
-  const [periods, setPeriods] = useState<FiscalPeriod[]>([])
-  const [loaded, setLoaded] = useState(false)
+  const canUseInitialPeriods = initialCompanyId === company?.id && initialPeriods !== undefined
+  const [periods, setPeriods] = useState<FiscalPeriod[]>(() =>
+    canUseInitialPeriods ? preparePeriods(initialPeriods, hideFuturePeriods) : [],
+  )
+  const [loaded, setLoaded] = useState(canUseInitialPeriods)
   const effectiveLabel = label === null ? null : (label ?? t('label'))
 
   useEffect(() => {
@@ -87,24 +102,23 @@ export function FiscalYearSelector({
     }
     let cancelled = false
     ;(async () => {
-      const res = await fetch('/api/bookkeeping/fiscal-periods')
-      if (!res.ok) {
-        if (!cancelled) {
-          setLoaded(true)
-          onReady?.()
+      let fetched: FiscalPeriod[]
+      if (initialCompanyId === company.id && initialPeriods !== undefined) {
+        fetched = preparePeriods(initialPeriods, hideFuturePeriods)
+      } else {
+        const res = await fetch('/api/bookkeeping/fiscal-periods')
+        if (!res.ok) {
+          if (!cancelled) {
+            setLoaded(true)
+            onReady?.()
+          }
+          return
         }
-        return
+        const { data } = await res.json()
+        fetched = preparePeriods(data || [], hideFuturePeriods)
       }
-      const { data } = await res.json()
       if (cancelled) return
 
-      let fetched: FiscalPeriod[] = data || []
-      if (hideFuturePeriods) {
-        const today = new Date().toISOString().split('T')[0]
-        fetched = fetched.filter((p) => p.period_start <= today)
-      }
-      // Newest first: most migrations list recent years at the top
-      fetched.sort((a, b) => b.period_start.localeCompare(a.period_start))
       setPeriods(fetched)
       setLoaded(true)
 
@@ -131,7 +145,7 @@ export function FiscalYearSelector({
   // onReady is intentionally excluded from deps: it's a lifecycle callback that
   // should fire once per load, not re-trigger if the parent re-creates it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption])
+  }, [company?.id, hideFuturePeriods, includeAllOption, initialCompanyId, initialPeriods])
 
   const handleChange = (next: string) => {
     const nextPeriodId = next === ALL_YEARS_VALUE ? null : next
