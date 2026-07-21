@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -10,21 +11,26 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
-import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2, Trash2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
+import { AnnualReportStudio } from '@/components/bokslut/AnnualReportStudio'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
+import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export default function ArsredovisningPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const periodId = searchParams.get('period')
   const { toast } = useToast()
+  const tStudio = useTranslations('annualReportStudio')
 
   const [data, setData] = useState<ArsredovisningData | null>(null)
   const [signatures, setSignatures] = useState<SignatureRequest[]>([])
@@ -37,11 +43,19 @@ export default function ArsredovisningPage() {
   const [description, setDescription] = useState('')
   const [importantEvents, setImportantEvents] = useState('')
   const [resultatdisposition, setResultatdisposition] = useState('')
+  const [proposedDividend, setProposedDividend] = useState('')
   const [savedDescription, setSavedDescription] = useState('')
   const [savedImportantEvents, setSavedImportantEvents] = useState('')
   const [savedResultatdisposition, setSavedResultatdisposition] = useState('')
+  const [savedProposedDividend, setSavedProposedDividend] = useState('')
   const [agmDate, setAgmDate] = useState('')
   const [savedAgmDate, setSavedAgmDate] = useState('')
+  const [agmDispositionOutcome, setAgmDispositionOutcome] = useState<
+    '' | 'proposal_approved' | 'alternative_decision'
+  >('')
+  const [savedAgmDispositionOutcome, setSavedAgmDispositionOutcome] = useState('')
+  const [agmDispositionDecision, setAgmDispositionDecision] = useState('')
+  const [savedAgmDispositionDecision, setSavedAgmDispositionDecision] = useState('')
   // Disclosure fields per ÅRL 5:13-15 § + BFNAR koncernförhållanden.
   // Persisted via the same POST endpoint as the förvaltningsberättelse text.
   const [longTermDebt, setLongTermDebt] = useState('')
@@ -56,12 +70,37 @@ export default function ArsredovisningPage() {
   const [savedParentOrgNr, setSavedParentOrgNr] = useState('')
   const [parentCity, setParentCity] = useState('')
   const [savedParentCity, setSavedParentCity] = useState('')
+  const [longTermDebtConfirmed, setLongTermDebtConfirmed] = useState(false)
+  const [savedLongTermDebtConfirmed, setSavedLongTermDebtConfirmed] = useState(false)
+  const [securitiesPledgedConfirmed, setSecuritiesPledgedConfirmed] = useState(false)
+  const [savedSecuritiesPledgedConfirmed, setSavedSecuritiesPledgedConfirmed] = useState(false)
+  const [contingentLiabilitiesConfirmed, setContingentLiabilitiesConfirmed] = useState(false)
+  const [savedContingentLiabilitiesConfirmed, setSavedContingentLiabilitiesConfirmed] = useState(false)
+  const [parentCompanyConfirmed, setParentCompanyConfirmed] = useState(false)
+  const [savedParentCompanyConfirmed, setSavedParentCompanyConfirmed] = useState(false)
   const [savingNarrative, setSavingNarrative] = useState(false)
   const [savedAt, setSavedAt] = useState<number | null>(null)
 
   // Add-signer form
   const [signerName, setSignerName] = useState('')
   const [signerRole, setSignerRole] = useState('Styrelseledamot')
+  const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
+  const [selectedSignatureVersionId, setSelectedSignatureVersionId] = useState('')
+  const [signingMethod, setSigningMethod] = useState<
+    'paper_original' | 'advanced_e_signature' | 'bankid'
+  >('paper_original')
+  const [signatureEvidence, setSignatureEvidence] = useState('')
+  const [signatureDate, setSignatureDate] = useState(() => new Date().toISOString().slice(0, 10))
+
+  const handleVersionsChanged = useCallback((nextVersions: AnnualReportVersionSummary[]) => {
+    setVersions(nextVersions)
+    setSelectedSignatureVersionId((current) => {
+      if (nextVersions.some((version) => version.id === current && version.status === 'ready_for_signature')) {
+        return current
+      }
+      return nextVersions.find((version) => version.status === 'ready_for_signature')?.id ?? ''
+    })
+  }, [])
 
   useEffect(() => {
     if (!periodId) return
@@ -75,7 +114,7 @@ export default function ArsredovisningPage() {
       .then(([arBody, sigBody]) => {
         if (cancelled) return
         if (arBody?.error) {
-          setError(arBody.error.message ?? 'Kunde inte hämta årsredovisning')
+          setError(getUserErrorMessage(arBody.error) ?? 'Kunde inte hämta årsredovisning')
           return
         }
         const d = arBody.data as ArsredovisningData
@@ -87,11 +126,18 @@ export default function ArsredovisningPage() {
         setDescription(d.forvaltningsberattelse.description)
         setImportantEvents(d.forvaltningsberattelse.important_events)
         setResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
+        const dividend = String(d.forvaltningsberattelse.proposed_dividend || '')
+        setProposedDividend(dividend)
         setAgmDate(d.forvaltningsberattelse.agm_date ?? '')
         setSavedDescription(d.forvaltningsberattelse.description)
         setSavedImportantEvents(d.forvaltningsberattelse.important_events)
         setSavedResultatdisposition(d.forvaltningsberattelse.resultatdisposition)
+        setSavedProposedDividend(dividend)
         setSavedAgmDate(d.forvaltningsberattelse.agm_date ?? '')
+        setAgmDispositionOutcome(d.forvaltningsberattelse.agm_disposition_outcome ?? '')
+        setSavedAgmDispositionOutcome(d.forvaltningsberattelse.agm_disposition_outcome ?? '')
+        setAgmDispositionDecision(d.forvaltningsberattelse.agm_disposition_decision ?? '')
+        setSavedAgmDispositionDecision(d.forvaltningsberattelse.agm_disposition_decision ?? '')
         const ltd = d.disclosures.long_term_debt_over_five_years
         const ltdStr = ltd != null ? String(ltd) : ''
         setLongTermDebt(ltdStr)
@@ -106,6 +152,14 @@ export default function ArsredovisningPage() {
         setSavedParentOrgNr(d.disclosures.parent_company_org_number ?? '')
         setParentCity(d.disclosures.parent_company_city ?? '')
         setSavedParentCity(d.disclosures.parent_company_city ?? '')
+        setLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
+        setSavedLongTermDebtConfirmed(d.disclosures.confirmations.long_term_debt_over_five_years)
+        setSecuritiesPledgedConfirmed(d.disclosures.confirmations.securities_pledged)
+        setSavedSecuritiesPledgedConfirmed(d.disclosures.confirmations.securities_pledged)
+        setContingentLiabilitiesConfirmed(d.disclosures.confirmations.contingent_liabilities)
+        setSavedContingentLiabilitiesConfirmed(d.disclosures.confirmations.contingent_liabilities)
+        setParentCompanyConfirmed(d.disclosures.confirmations.parent_company)
+        setSavedParentCompanyConfirmed(d.disclosures.confirmations.parent_company)
         setSignatures((sigBody.data ?? []) as SignatureRequest[])
       })
       .catch(() => {
@@ -123,13 +177,20 @@ export default function ArsredovisningPage() {
     description !== savedDescription ||
     importantEvents !== savedImportantEvents ||
     resultatdisposition !== savedResultatdisposition ||
+    proposedDividend !== savedProposedDividend ||
     agmDate !== savedAgmDate ||
+    agmDispositionOutcome !== savedAgmDispositionOutcome ||
+    agmDispositionDecision !== savedAgmDispositionDecision ||
     longTermDebt !== savedLongTermDebt ||
     securitiesPledged !== savedSecuritiesPledged ||
     contingentLiabilities !== savedContingentLiabilities ||
     parentName !== savedParentName ||
     parentOrgNr !== savedParentOrgNr ||
-    parentCity !== savedParentCity
+    parentCity !== savedParentCity ||
+    longTermDebtConfirmed !== savedLongTermDebtConfirmed ||
+    securitiesPledgedConfirmed !== savedSecuritiesPledgedConfirmed ||
+    contingentLiabilitiesConfirmed !== savedContingentLiabilitiesConfirmed ||
+    parentCompanyConfirmed !== savedParentCompanyConfirmed
 
   const handleSaveNarrative = useCallback(async () => {
     if (!periodId) return
@@ -150,6 +211,19 @@ export default function ArsredovisningPage() {
       }
       longTermDebtParsed = parsed
     }
+    let proposedDividendParsed = 0
+    if (proposedDividend.trim()) {
+      const parsed = Number(proposedDividend.replace(/\s/g, '').replace(',', '.'))
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        toast({
+          title: 'Ogiltigt belopp',
+          description: 'Föreslagen utdelning måste vara noll eller ett positivt belopp.',
+          variant: 'destructive',
+        })
+        return
+      }
+      proposedDividendParsed = Math.round(parsed * 100) / 100
+    }
     setSavingNarrative(true)
     try {
       const res = await fetch(
@@ -161,13 +235,23 @@ export default function ArsredovisningPage() {
             description,
             important_events: importantEvents,
             resultatdisposition,
+            proposed_dividend: proposedDividendParsed,
             agm_date: agmDate || null,
+            agm_disposition_outcome: agmDispositionOutcome || null,
+            agm_disposition_decision:
+              agmDispositionOutcome === 'alternative_decision'
+                ? agmDispositionDecision.trim() || null
+                : null,
             long_term_debt_over_five_years: longTermDebtParsed,
             securities_pledged: securitiesPledged.trim() || null,
             contingent_liabilities: contingentLiabilities.trim() || null,
             parent_company_name: parentName.trim() || null,
             parent_company_org_number: parentOrgNr.trim() || null,
             parent_company_city: parentCity.trim() || null,
+            long_term_debt_over_five_years_confirmed: longTermDebtConfirmed,
+            securities_pledged_confirmed: securitiesPledgedConfirmed,
+            contingent_liabilities_confirmed: contingentLiabilitiesConfirmed,
+            parent_company_confirmed: parentCompanyConfirmed,
           }),
         },
       )
@@ -175,7 +259,7 @@ export default function ArsredovisningPage() {
       if (!res.ok) {
         toast({
           title: 'Kunde inte spara texten',
-          description: body?.error?.message ?? '',
+          description: getUserErrorMessage(body?.error) ?? '',
           variant: 'destructive',
         })
         return
@@ -183,18 +267,25 @@ export default function ArsredovisningPage() {
       setSavedDescription(description)
       setSavedImportantEvents(importantEvents)
       setSavedResultatdisposition(resultatdisposition)
+      setSavedProposedDividend(proposedDividend)
       setSavedAgmDate(agmDate)
+      setSavedAgmDispositionOutcome(agmDispositionOutcome)
+      setSavedAgmDispositionDecision(agmDispositionDecision)
       setSavedLongTermDebt(longTermDebt)
       setSavedSecuritiesPledged(securitiesPledged)
       setSavedContingentLiabilities(contingentLiabilities)
       setSavedParentName(parentName)
       setSavedParentOrgNr(parentOrgNr)
       setSavedParentCity(parentCity)
+      setSavedLongTermDebtConfirmed(longTermDebtConfirmed)
+      setSavedSecuritiesPledgedConfirmed(securitiesPledgedConfirmed)
+      setSavedContingentLiabilitiesConfirmed(contingentLiabilitiesConfirmed)
+      setSavedParentCompanyConfirmed(parentCompanyConfirmed)
       setSavedAt(Date.now())
     } catch (err) {
       toast({
         title: 'Kunde inte spara texten',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     } finally {
@@ -205,33 +296,55 @@ export default function ArsredovisningPage() {
     description,
     importantEvents,
     resultatdisposition,
+    proposedDividend,
     agmDate,
+    agmDispositionOutcome,
+    agmDispositionDecision,
     longTermDebt,
     securitiesPledged,
     contingentLiabilities,
     parentName,
     parentOrgNr,
     parentCity,
+    longTermDebtConfirmed,
+    securitiesPledgedConfirmed,
+    contingentLiabilitiesConfirmed,
+    parentCompanyConfirmed,
     toast,
   ])
 
   const handleMarkSigned = useCallback(
     async (signatureId: string) => {
       if (!periodId) return
+      if (!selectedSignatureVersionId || !signatureEvidence.trim() || !signatureDate) {
+        toast({
+          title: 'Underskriftsbevis saknas',
+          description:
+            'Välj en låst version och ange datum samt en referens till originalet eller e-signaturkvittot.',
+          variant: 'destructive',
+        })
+        return
+      }
       try {
         const res = await fetch(
           `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/${signatureId}`,
           {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'signed' }),
+            body: JSON.stringify({
+              status: 'signed',
+              annual_report_version_id: selectedSignatureVersionId,
+              signing_method: signingMethod,
+              evidence_reference: signatureEvidence.trim(),
+              signed_at: new Date(`${signatureDate}T12:00:00`).toISOString(),
+            }),
           },
         )
         const body = await res.json()
         if (!res.ok) {
           toast({
             title: 'Kunde inte markera som signerad',
-            description: body?.error?.message ?? '',
+            description: getUserErrorMessage(body?.error) ?? '',
             variant: 'destructive',
           })
           return
@@ -239,16 +352,31 @@ export default function ArsredovisningPage() {
         setSignatures((prev) =>
           prev.map((s) => (s.id === signatureId ? (body.data as SignatureRequest) : s)),
         )
+        const versionsResponse = await fetch(
+          `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/versions`,
+        )
+        if (versionsResponse.ok) {
+          const versionsBody = await versionsResponse.json()
+          handleVersionsChanged((versionsBody.data ?? []) as AnnualReportVersionSummary[])
+        }
         toast({ title: 'Underskrift registrerad' })
       } catch (err) {
         toast({
           title: 'Kunde inte markera som signerad',
-          description: err instanceof Error ? err.message : 'Okänt fel',
+          description: err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel',
           variant: 'destructive',
         })
       }
     },
-    [periodId, toast],
+    [
+      handleVersionsChanged,
+      periodId,
+      selectedSignatureVersionId,
+      signatureDate,
+      signatureEvidence,
+      signingMethod,
+      toast,
+    ],
   )
 
   const handleAddSigner = useCallback(async () => {
@@ -266,7 +394,7 @@ export default function ArsredovisningPage() {
       if (!res.ok) {
         toast({
           title: 'Kunde inte lägga till undertecknare',
-          description: body?.error?.message ?? '',
+          description: getUserErrorMessage(body?.error) ?? '',
           variant: 'destructive',
         })
         return
@@ -277,11 +405,36 @@ export default function ArsredovisningPage() {
     } catch (err) {
       toast({
         title: 'Kunde inte lägga till undertecknare',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }
   }, [periodId, signerName, signerRole, toast])
+
+  const handleRemoveSigner = useCallback(
+    async (signatureId: string) => {
+      if (!periodId) return
+      try {
+        const response = await fetch(
+          `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/${signatureId}`,
+          { method: 'DELETE' },
+        )
+        if (!response.ok) {
+          const body = await response.json()
+          throw new Error(getUserErrorMessage(body?.error))
+        }
+        setSignatures((current) => current.filter((signature) => signature.id !== signatureId))
+        toast({ title: tStudio('signer_removed') })
+      } catch (err) {
+        toast({
+          title: tStudio('signer_remove_error'),
+          description: err instanceof Error ? getUserErrorMessage(err) : undefined,
+          variant: 'destructive',
+        })
+      }
+    },
+    [periodId, tStudio, toast],
+  )
 
   if (!periodId) {
     return (
@@ -381,6 +534,16 @@ export default function ArsredovisningPage() {
         </Card>
       )}
 
+      <AnnualReportStudio
+        periodId={periodId}
+        periodStart={data.fiscal_period.period_start}
+        periodEnd={data.fiscal_period.period_end}
+        framework={data.accounting_framework}
+        hasUnsavedNarrative={hasUnsavedNarrative}
+        contentRevision={savedAt ?? 0}
+        onVersionsChanged={handleVersionsChanged}
+      />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Förvaltningsberättelse: narrativ</CardTitle>
@@ -418,6 +581,20 @@ export default function ArsredovisningPage() {
             />
           </div>
           <div className="space-y-2">
+            <Label htmlFor="ar-dividend">Föreslagen utdelning (kr)</Label>
+            <Input
+              id="ar-dividend"
+              inputMode="decimal"
+              value={proposedDividend}
+              onChange={(event) => setProposedDividend(event.target.value)}
+              placeholder="0"
+              className="min-h-11 max-w-[220px] tabular-nums"
+            />
+            <p className="text-xs text-muted-foreground">
+              Beloppet används i resultatdispositionen i samma version av PDF och iXBRL.
+            </p>
+          </div>
+          <div className="space-y-2">
             <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
             <Input
               id="ar-agm-date"
@@ -431,6 +608,37 @@ export default function ArsredovisningPage() {
               fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
             </p>
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="ar-agm-outcome">Årsstämmans beslut om resultatdisposition</Label>
+            <select
+              id="ar-agm-outcome"
+              className="min-h-11 w-full max-w-xl rounded-md border border-border bg-background px-3 text-sm"
+              value={agmDispositionOutcome}
+              onChange={(event) =>
+                setAgmDispositionOutcome(
+                  event.target.value as
+                    | ''
+                    | 'proposal_approved'
+                    | 'alternative_decision',
+                )
+              }
+            >
+              <option value="">Välj efter genomförd årsstämma</option>
+              <option value="proposal_approved">Styrelsens förslag godkändes</option>
+              <option value="alternative_decision">Årsstämman fattade ett annat beslut</option>
+            </select>
+          </div>
+          {agmDispositionOutcome === 'alternative_decision' && (
+            <div className="space-y-2">
+              <Label htmlFor="ar-agm-decision">Årsstämmans beslut</Label>
+              <Textarea
+                id="ar-agm-decision"
+                value={agmDispositionDecision}
+                onChange={(event) => setAgmDispositionDecision(event.target.value)}
+                rows={3}
+              />
+            </div>
+          )}
 
           <div className="pt-4 border-t border-border space-y-4">
             <div>
@@ -458,6 +666,14 @@ export default function ArsredovisningPage() {
               <p className="text-xs text-muted-foreground">
                 ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
               </p>
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+                <Checkbox
+                  id="ar-ltd-confirmed"
+                  checked={longTermDebtConfirmed}
+                  onCheckedChange={(checked) => setLongTermDebtConfirmed(Boolean(checked))}
+                />
+                Jag har kontrollerat uppgiften, även om beloppet är noll.
+              </label>
             </div>
             <div className="space-y-2">
               <Label htmlFor="ar-securities">Ställda säkerheter</Label>
@@ -469,6 +685,14 @@ export default function ArsredovisningPage() {
                 placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+                <Checkbox
+                  id="ar-securities-confirmed"
+                  checked={securitiesPledgedConfirmed}
+                  onCheckedChange={(checked) => setSecuritiesPledgedConfirmed(Boolean(checked))}
+                />
+                Jag har kontrollerat ställda säkerheter, även om svaret är inga.
+              </label>
             </div>
             <div className="space-y-2">
               <Label htmlFor="ar-contingent">Eventualförpliktelser</Label>
@@ -480,6 +704,14 @@ export default function ArsredovisningPage() {
                 placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+                <Checkbox
+                  id="ar-contingent-confirmed"
+                  checked={contingentLiabilitiesConfirmed}
+                  onCheckedChange={(checked) => setContingentLiabilitiesConfirmed(Boolean(checked))}
+                />
+                Jag har kontrollerat eventualförpliktelser, även om svaret är inga.
+              </label>
             </div>
             <div className="space-y-2">
               <Label htmlFor="ar-parent-name">
@@ -516,6 +748,14 @@ export default function ArsredovisningPage() {
                 />
               </div>
             </div>
+            <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <Checkbox
+                id="ar-parent-confirmed"
+                checked={parentCompanyConfirmed}
+                onCheckedChange={(checked) => setParentCompanyConfirmed(Boolean(checked))}
+              />
+              Jag har kontrollerat koncernförhållandet, även om bolaget saknar moderföretag.
+            </label>
           </div>
 
           <div className="flex items-center justify-between pt-2">
@@ -588,12 +828,77 @@ export default function ArsredovisningPage() {
         <CardHeader>
           <CardTitle className="text-base">Underskrifter</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Lägg till varje styrelseledamot + VD som ska skriva under. BankID-signering
-            kommer i en kommande version: för nu visas slottar och status här, och
-            själva underskriften görs på pappret.
+            Lägg till varje styrelseledamot och eventuell VD. Lås först en version i
+            arbetsflödet ovan. När originalet eller en extern e-signatur är klar registrerar
+            du datum och bevisreferens mot exakt den version som skrevs under.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="signature-version">Låst version</Label>
+              <select
+                id="signature-version"
+                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+                value={selectedSignatureVersionId}
+                onChange={(event) => setSelectedSignatureVersionId(event.target.value)}
+              >
+                <option value="">Välj version</option>
+                {versions
+                  .filter((version) => version.status === 'ready_for_signature')
+                  .map((version) => (
+                    <option key={version.id} value={version.id}>
+                      Version {version.version_number}: {version.content_hash.slice(0, 12)}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="signature-method">Underskriftsmetod</Label>
+              <select
+                id="signature-method"
+                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+                value={signingMethod}
+                onChange={(event) =>
+                  setSigningMethod(
+                    event.target.value as
+                      | 'paper_original'
+                      | 'advanced_e_signature'
+                      | 'bankid',
+                  )
+                }
+              >
+                <option value="paper_original">Undertecknat original på papper</option>
+                <option value="advanced_e_signature">Avancerad e-signatur</option>
+                <option value="bankid">BankID via extern signeringstjänst</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="signature-date">Underskriftsdatum</Label>
+              <Input
+                id="signature-date"
+                type="date"
+                className="min-h-11"
+                value={signatureDate}
+                onChange={(event) => setSignatureDate(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="signature-evidence">Bevisreferens</Label>
+              <Input
+                id="signature-evidence"
+                className="min-h-11"
+                value={signatureEvidence}
+                onChange={(event) => setSignatureEvidence(event.target.value)}
+                placeholder="Arkivplats, dokument-id eller signeringskvitto"
+                maxLength={500}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground md:col-span-2">
+              Accounted registrerar beviset men skapar inte själva underskriften. Spara
+              originalet eller signeringskvittot enligt bolagets dokumenthantering.
+            </p>
+          </div>
           {signatures.length === 0 && (
             <p className="text-sm text-muted-foreground italic">
               Inga undertecknare tillagda än.
@@ -602,13 +907,13 @@ export default function ArsredovisningPage() {
           {signatures.map((sig) => (
             <div
               key={sig.id}
-              className="flex items-center justify-between border-b border-border last:border-b-0 pb-3 last:pb-0"
+              className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
             >
               <div>
                 <p className="text-sm font-medium">{sig.signer_name}</p>
                 <p className="text-xs text-muted-foreground">{sig.role}</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
                 {sig.status === 'signed' ? (
                   <Badge variant="success">Signerad</Badge>
                 ) : sig.status === 'declined' ? (
@@ -616,10 +921,27 @@ export default function ArsredovisningPage() {
                 ) : (
                   <>
                     <Badge variant="outline">Väntar på underskrift</Badge>
+                    {sig.annual_report_version_id === null && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="min-h-11 min-w-11"
+                        aria-label={tStudio('remove_signer')}
+                        onClick={() => void handleRemoveSigner(sig.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
+                      className="min-h-11"
                       onClick={() => void handleMarkSigned(sig.id)}
+                      disabled={
+                        !selectedSignatureVersionId ||
+                        !signatureEvidence.trim() ||
+                        !signatureDate
+                      }
                     >
                       Markera som signerad
                     </Button>
@@ -628,14 +950,14 @@ export default function ArsredovisningPage() {
               </div>
             </div>
           ))}
-          <div className="flex flex-wrap gap-2 items-end pt-2">
+          <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:flex-wrap sm:items-end">
             <div className="space-y-1">
               <Label htmlFor="signer-role" className="text-xs">
                 Roll
               </Label>
               <select
                 id="signer-role"
-                className="border border-border rounded-md h-9 text-sm px-2 bg-background"
+                className="min-h-11 rounded-md border border-border bg-background px-3 text-sm"
                 value={signerRole}
                 onChange={(e) => setSignerRole(e.target.value)}
               >
@@ -654,10 +976,10 @@ export default function ArsredovisningPage() {
                 value={signerName}
                 onChange={(e) => setSignerName(e.target.value)}
                 placeholder="t.ex. Anna Andersson"
-                className="h-9"
+                className="min-h-11"
               />
             </div>
-            <Button onClick={handleAddSigner} disabled={!signerName.trim()}>
+            <Button className="min-h-11 w-full sm:w-auto" onClick={handleAddSigner} disabled={!signerName.trim()}>
               <Plus className="mr-1 h-4 w-4" /> Lägg till
             </Button>
           </div>
@@ -666,15 +988,17 @@ export default function ArsredovisningPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Ladda ner & lämna in</CardTitle>
+          <CardTitle className="text-base">PDF för pappersinlämning</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
           <p className="text-muted-foreground">
-            Ladda ner PDF-utkastet, granska, skriv ut och låt undertecknarna signera
-            fastställelseintyget. Ladda sedan upp PDF:en till Bolagsverkets e-tjänst.
+            Ladda ner PDF-utkastet och granska det. För pappersinlämning ska
+            årsredovisningens original skrivas under av samtliga styrelseledamöter och
+            eventuell VD. En bestyrkt kopia med fastställelseintyg skickas sedan per post
+            till Bolagsverket. PDF-filen kan inte laddas upp som digital årsredovisning.
           </p>
           <div className="flex flex-wrap gap-3">
-            <Button asChild>
+            <Button className="min-h-11" asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
@@ -690,13 +1014,13 @@ export default function ArsredovisningPage() {
                   : undefined
               }
             >
-              <Button variant="outline" asChild>
+              <Button className="min-h-11" variant="outline" asChild>
                 <Link
-                  href="https://www.bolagsverket.se/foretag/aktiebolag/arsredovisning/lamna-in-arsredovisning"
+                  href="https://bolagsverket.se/foretag/aktiebolag/arsredovisningforaktiebolag.759.html"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <ExternalLink className="mr-2 h-4 w-4" /> Bolagsverket Mina Sidor
+                  <ExternalLink className="mr-2 h-4 w-4" /> Bolagsverket om årsredovisning
                 </Link>
               </Button>
             </span>
@@ -721,11 +1045,10 @@ export default function ArsredovisningPage() {
             </div>
           )}
           <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
-            <strong>Notis om digital inlämning:</strong> Digital inlämning (iXBRL) av
-            årsredovisning föreslås bli obligatorisk för K2/K3-aktiebolag för
-            räkenskapsår som inleds efter 2025-12-31. Använd avsnittet{' '}
-            <strong>Digital inlämning</strong> nedan för att granska, validera och lämna
-            in årsredovisningen som iXBRL. PDF:en ovan är ett läsexemplar.
+            <strong>Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
+            ansluten programvara. Accounteds direktinlämning förblir stängd tills avtal,
+            certifikat och Bolagsverkets acceptanstest är klara. PDF-flödet ovan är den
+            separata vägen för pappersinlämning.
           </div>
           </div>
         </CardContent>

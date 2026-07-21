@@ -12926,7 +12926,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_preview_arsredovisning',
     title: 'Preview Annual Report (Årsredovisning)',
     description:
-      'Read-only K2 årsredovisning preview for a fiscal period. Returns flerårsöversikt, eget-kapital-förändring, RR, BR, K2 noter, signature slots. PDF download is via UI.',
+      'Read-only annual report preview from the canonical model. Returns report content, eligibility, compliance blockers, and capabilities. PDF and immutable versions are available in the UI.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -12940,8 +12940,128 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
-      const { buildArsredovisningData } = await import('@/lib/bokslut/arsredovisning/build-data')
-      return buildArsredovisningData(supabase, companyId, fiscalPeriodId)
+      const { buildCanonicalAnnualReport } = await import('@/lib/bokslut/arsredovisning/model')
+      const { getAnnualReportCapabilities } = await import(
+        '@/lib/bokslut/arsredovisning/capabilities'
+      )
+      const model = await buildCanonicalAnnualReport(supabase, companyId, fiscalPeriodId, {
+        stage: 'draft',
+        includeIxbrl: false,
+      })
+      return {
+        schema_version: model.schema_version,
+        generated_at: model.generated_at,
+        report: model.report,
+        profile: model.profile,
+        disclosures: model.disclosures,
+        eligibility: model.eligibility,
+        validation: model.validation,
+        capabilities: getAnnualReportCapabilities(
+          model.report.accounting_framework,
+          model.eligibility,
+        ),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_validate_arsredovisning',
+    title: 'Validate Annual Report (Årsredovisning)',
+    description:
+      'Read-only compliance validation for an annual report. Use draft while editing, signing before locking a version, and filing before a Bolagsverket submission.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period' },
+        stage: {
+          type: 'string',
+          enum: ['draft', 'signing', 'filing'],
+          description: 'Validation strictness. Default: draft',
+        },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: { type: 'object', additionalProperties: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase, _actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      const stage = (args.stage as 'draft' | 'signing' | 'filing' | undefined) ?? 'draft'
+      const { buildCanonicalAnnualReport } = await import('@/lib/bokslut/arsredovisning/model')
+      const model = await buildCanonicalAnnualReport(supabase, companyId, fiscalPeriodId, {
+        stage,
+        includeIxbrl: stage === 'filing',
+      })
+      return {
+        fiscal_period_id: fiscalPeriodId,
+        framework: model.report.accounting_framework,
+        profile: model.profile,
+        eligibility: model.eligibility,
+        validation: model.validation,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_list_arsredovisning_versions',
+    title: 'List Annual Report Versions',
+    description:
+      'Read-only list of immutable annual report versions with content hashes, taxonomy versions, and signing or filing status.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: { type: 'object', additionalProperties: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase, _actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      const { listAnnualReportVersions } = await import(
+        '@/lib/bokslut/arsredovisning/version-service'
+      )
+      const versions = await listAnnualReportVersions(supabase, companyId, fiscalPeriodId)
+      return { fiscal_period_id: fiscalPeriodId, versions }
+    },
+  },
+
+  {
+    name: 'gnubok_get_arsredovisning_filing_status',
+    title: 'Get Annual Report Filing Status',
+    description:
+      'Read-only filing history for a fiscal period, including uncertain upload states that must be reconciled before retrying.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period' },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: { type: 'object', additionalProperties: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase, _actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      const { data, error } = await supabase
+        .from('arsredovisning_submissions')
+        .select(
+          'id, annual_report_version_id, handling_typ, environment, status, archive_status, bolagsverket_url, error_message, uploaded_at, registered_at, created_at',
+        )
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', fiscalPeriodId)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      if (error) throw new Error(`Failed to list annual report filings: ${error.message}`)
+      const submissions = ((data ?? []) as Array<Record<string, unknown>>).map((submission) => {
+        const { idnummer: _idnummer, ...publicSubmission } = submission
+        return publicSubmission
+      })
+      return { fiscal_period_id: fiscalPeriodId, submissions }
     },
   },
 

@@ -4,6 +4,7 @@ export interface NarrativeOverrides {
   description: string | null
   important_events: string | null
   resultatdisposition: string | null
+  proposed_dividend: number | null
   /** ISO date of the AGM (årsstämma) where the årsredovisning was adopted.
    *  Populates the fastställelseintyg date blank: without it the PDF
    *  cannot be filed at Bolagsverket without manual pen-and-ink edit. */
@@ -24,6 +25,12 @@ export interface NarrativeOverrides {
   parent_company_name: string | null
   parent_company_org_number: string | null
   parent_company_city: string | null
+  long_term_debt_over_five_years_confirmed: boolean
+  securities_pledged_confirmed: boolean
+  contingent_liabilities_confirmed: boolean
+  parent_company_confirmed: boolean
+  agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
+  agm_disposition_decision: string | null
 }
 
 /**
@@ -38,6 +45,7 @@ export interface NarrativeRow {
   description: string | null
   important_events: string | null
   resultatdisposition: string | null
+  proposed_dividend: number | null
   agm_date: string | null
   long_term_debt_over_five_years: number | null
   securities_pledged: string | null
@@ -45,6 +53,12 @@ export interface NarrativeRow {
   parent_company_name: string | null
   parent_company_org_number: string | null
   parent_company_city: string | null
+  long_term_debt_over_five_years_confirmed: boolean
+  securities_pledged_confirmed: boolean
+  contingent_liabilities_confirmed: boolean
+  parent_company_confirmed: boolean
+  agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
+  agm_disposition_decision: string | null
   updated_at: string
 }
 
@@ -54,7 +68,7 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, updated_at'
 
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
@@ -90,20 +104,13 @@ export async function upsertNarrative(
   fiscalPeriodId: string,
   input: Partial<NarrativeOverrides>,
 ): Promise<NarrativeRow> {
-  const payload = {
+  const payload: Record<string, unknown> = {
     user_id: userId,
     company_id: companyId,
     fiscal_period_id: fiscalPeriodId,
-    description: input.description ?? null,
-    important_events: input.important_events ?? null,
-    resultatdisposition: input.resultatdisposition ?? null,
-    agm_date: input.agm_date ?? null,
-    long_term_debt_over_five_years: input.long_term_debt_over_five_years ?? null,
-    securities_pledged: input.securities_pledged ?? null,
-    contingent_liabilities: input.contingent_liabilities ?? null,
-    parent_company_name: input.parent_company_name ?? null,
-    parent_company_org_number: input.parent_company_org_number ?? null,
-    parent_company_city: input.parent_company_city ?? null,
+  }
+  for (const [key, value] of Object.entries(input)) {
+    payload[key] = value ?? null
   }
   const { data, error } = await supabase
     .from(TABLE)

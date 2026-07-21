@@ -38,9 +38,10 @@ function makeCtx(supabase: unknown): ExtensionContext {
 
 const validBody = {
   fiscal_period_id: '123e4567-e89b-12d3-a456-426614174000',
-  avsandare_pnr: '198001019876',
+  annual_report_version_id: '123e4567-e89b-12d3-a456-426614174001',
+  avsandare_pnr: '198001019879',
   undertecknare: {
-    pnr: '198001019876',
+    pnr: '198001019879',
     fornamn: 'Anna',
     efternamn: 'Svensson',
     roll: 'VD',
@@ -62,10 +63,12 @@ interface ErrorEnvelope {
 
 const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL
 const ORIGINAL_BV_ENV = process.env.BOLAGSVERKET_ENV
+const ORIGINAL_FILING_ENABLED = process.env.BOLAGSVERKET_FILING_ENABLED
 
 beforeEach(() => {
   vi.clearAllMocks()
   process.env.NEXT_PUBLIC_APP_URL = 'http://localhost:3000'
+  process.env.BOLAGSVERKET_FILING_ENABLED = 'true'
   delete process.env.BOLAGSVERKET_ENV
 })
 
@@ -74,6 +77,8 @@ afterEach(() => {
   else process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL
   if (ORIGINAL_BV_ENV === undefined) delete process.env.BOLAGSVERKET_ENV
   else process.env.BOLAGSVERKET_ENV = ORIGINAL_BV_ENV
+  if (ORIGINAL_FILING_ENABLED === undefined) delete process.env.BOLAGSVERKET_FILING_ENABLED
+  else process.env.BOLAGSVERKET_FILING_ENABLED = ORIGINAL_FILING_ENABLED
 })
 
 describe('POST /submissions: write-role enforcement', () => {
@@ -146,9 +151,12 @@ describe('POST /submissions: environment validation + ceiling', () => {
     })
 
     const res = await route('POST', '/submissions').handler(makePost('/submissions'), makeCtx(supabase))
-    const { status, body } = await parseJsonResponse<{ data: { outcome: string } }>(res as Response)
+    const { status, body } = await parseJsonResponse<{
+      data: { outcome: string; idnummer?: string }
+    }>(res as Response)
     expect(status).toBe(200)
     expect(body.data.outcome).toBe('uploaded')
+    expect(body.data.idnummer).toBeUndefined()
     // The service got a client pinned to the validated environment.
     const deps = vi.mocked(submitArsredovisning).mock.calls[0][0]
     expect(deps.client.environment).toBe('test')
@@ -195,6 +203,23 @@ describe('POST /submissions: config + error mapping', () => {
     const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('rejects an invalid personnummer before calling the filing service', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' }, error: null })
+
+    const res = await route('POST', '/submissions').handler(
+      makePost('/submissions', {
+        ...validBody,
+        avsandare_pnr: '198002309879',
+      }),
+      makeCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(submitArsredovisning).not.toHaveBeenCalled()
   })
 })
 

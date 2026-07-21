@@ -21,6 +21,7 @@ function makeMinimalK3Data(): ArsredovisningData {
     company: {
       name: 'Testbolaget AB',
       org_number: '556677-8899',
+      entity_type: 'aktiebolag',
       city: 'Stockholm',
     },
     fiscal_period: {
@@ -43,7 +44,18 @@ function makeMinimalK3Data(): ArsredovisningData {
         { label: 'Årets resultat', amount: 300_000 },
       ],
       resultatdisposition: 'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
+      proposed_dividend: 0,
+      resultatdisposition_amounts: {
+        retained_earnings: 0,
+        share_premium_reserve: 0,
+        current_year_result: 0,
+        total: 0,
+        proposed_dividend: 0,
+        carried_forward: 0,
+      },
       agm_date: '2026-06-15',
+      agm_disposition_outcome: 'proposal_approved',
+      agm_disposition_decision: null,
     },
     resultatrakning: [
       {
@@ -147,6 +159,12 @@ function makeMinimalK3Data(): ArsredovisningData {
       parent_company_name: null,
       parent_company_org_number: null,
       parent_company_city: null,
+      confirmations: {
+        long_term_debt_over_five_years: true,
+        securities_pledged: true,
+        contingent_liabilities: true,
+        parent_company: true,
+      },
     },
   }
 }

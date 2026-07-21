@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface SignatureRequest {
   id: string
-  user_id: string
+  user_id: string | null
   company_id: string
   fiscal_period_id: string
   role: string
@@ -11,6 +11,10 @@ export interface SignatureRequest {
   signed_at: string | null
   created_at: string
   updated_at: string
+  annual_report_version_id: string | null
+  signing_method: 'paper_original' | 'advanced_e_signature' | 'bankid' | 'bolagsverket' | null
+  evidence_reference: string | null
+  evidence_recorded_at: string | null
 }
 
 export interface CreateSignatureRequestInput {
@@ -28,12 +32,24 @@ export async function listSignatureRequests(
 ): Promise<SignatureRequest[]> {
   const { data, error } = await supabase
     .from('arsredovisning_signature_requests')
-    .select('id, user_id, company_id, fiscal_period_id, role, signer_name, status, signed_at, created_at, updated_at')
+    .select('id, user_id, company_id, fiscal_period_id, role, signer_name, status, signed_at, created_at, updated_at, annual_report_version_id, signing_method, evidence_reference, evidence_recorded_at')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .order('created_at', { ascending: true })
   if (error) throw new Error(`Failed to list signature requests: ${error.message}`)
-  return (data ?? []) as SignatureRequest[]
+  const rows = (data ?? []) as SignatureRequest[]
+  const unbound = rows.filter(
+    (request) => request.annual_report_version_id === null && request.status === 'pending',
+  )
+  if (unbound.length > 0) return unbound
+  const latestBound = [...rows]
+    .filter((request) => request.annual_report_version_id !== null)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))[0]
+  return latestBound
+    ? rows.filter(
+        (request) => request.annual_report_version_id === latestBound.annual_report_version_id,
+      )
+    : rows
 }
 
 /**
@@ -76,17 +92,35 @@ export async function markSignatureSigned(
   supabase: SupabaseClient,
   companyId: string,
   requestId: string,
-  options: { bankidSignatureData?: Record<string, unknown> } = {},
+  options: {
+    fiscalPeriodId: string
+    annualReportVersionId: string
+    signingMethod: SignatureRequest['signing_method']
+    evidenceReference: string
+    evidenceRecordedBy: string
+    signedAt?: string
+    bankidSignatureData?: Record<string, unknown>
+  },
 ): Promise<SignatureRequest> {
   const { data, error } = await supabase
     .from('arsredovisning_signature_requests')
     .update({
       status: 'signed',
-      signed_at: new Date().toISOString(),
+      signed_at: options.signedAt ?? new Date().toISOString(),
+      annual_report_version_id: options.annualReportVersionId,
+      signing_method: options.signingMethod,
+      evidence_reference: options.evidenceReference,
+      evidence_recorded_by: options.evidenceRecordedBy,
+      evidence_recorded_at: new Date().toISOString(),
       bankid_signature_data: options.bankidSignatureData ?? null,
     })
     .eq('id', requestId)
     .eq('company_id', companyId)
+    .eq('fiscal_period_id', options.fiscalPeriodId)
+    .eq('status', 'pending')
+    .or(
+      `annual_report_version_id.is.null,annual_report_version_id.eq.${options.annualReportVersionId}`,
+    )
     .select('*')
     .single()
   if (error || !data) {

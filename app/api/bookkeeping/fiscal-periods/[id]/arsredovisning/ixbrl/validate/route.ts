@@ -4,6 +4,8 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { buildIxbrlInput } from '@/lib/bokslut/ixbrl/build-input'
 import { generateK2IxbrlDocument } from '@/lib/bokslut/ixbrl/document/k2-document'
 import { runPreflightChecks, type PreflightIssue } from '@/lib/bokslut/ixbrl/validate/rules'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getVersionIxbrlInput } from '@/lib/bokslut/arsredovisning/version-ixbrl'
 
 /**
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl/validate
@@ -21,12 +23,19 @@ export const GET = withRouteContext(
     const { supabase, companyId, log, requestId } = ctx
     try {
       const url = new URL(request.url)
+      const versionId = url.searchParams.get('version')
       const utdelningRaw = url.searchParams.get('utdelning')
-      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : 0
+      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : undefined
 
-      const input = await buildIxbrlInput(supabase, companyId, id, {
-        proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
-      })
+      const input = versionId
+        ? await getVersionIxbrlInput(supabase, companyId, id, versionId)
+        : await buildIxbrlInput(supabase, companyId, id, {
+            proposedDividend:
+              proposedDividend !== undefined && Number.isFinite(proposedDividend)
+                ? proposedDividend
+                : undefined,
+          })
+      if (!input) return errorResponseFromCode('NOT_FOUND', log, { requestId })
       const result = runPreflightChecks(input)
 
       // Generation dry-run: a document that cannot even be generated must
@@ -47,7 +56,7 @@ export const GET = withRouteContext(
         issues.push({
           code: 'ACC-GEN',
           severity: 'error',
-          message: `iXBRL-dokumentet kunde inte genereras: ${genErr instanceof Error ? genErr.message : 'okänt fel'}`,
+          message: `iXBRL-dokumentet kunde inte genereras: ${genErr instanceof Error ? getUserErrorMessage(genErr) : 'okänt fel'}`,
         })
       }
 
@@ -61,6 +70,7 @@ export const GET = withRouteContext(
           generated_bytes: generatedBytes,
           entry_point: input.entryPointId,
           period: input.period,
+          annual_report_version_id: versionId,
         },
       })
     } catch (err) {

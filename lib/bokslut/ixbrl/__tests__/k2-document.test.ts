@@ -107,6 +107,15 @@ describe('generateK2IxbrlDocument', () => {
     expect(xhtml).toContain('<xbrli:measure>se-k2-type:AntalAnstallda</xbrli:measure>')
   })
 
+  it('tags the long-term debt disclosure instead of leaving the note as plain XHTML', () => {
+    expect(xhtml).toMatch(
+      /contextRef="balans0" name="se-gen-base:LangfristigaSkulderForfallerSenare5Ar"[^>]*>0<\/ix:nonFraction>/,
+    )
+    expect(xhtml).toContain('name="se-gen-base:NotStalldaSakerheter"')
+    expect(xhtml).toContain('name="se-gen-base:NotEventualforpliktelser"')
+    expect(xhtml).toContain('name="se-gen-base:NotUpplysningModerforetag"')
+  })
+
   it('tags resultatdisposition (BÖR: förslag) consistently with BR', () => {
     expect(xhtml).toMatch(/name="se-gen-base:ForslagDispositionBalanserasINyRakning"[^>]*>220 000/)
     expect(xhtml).toMatch(/name="se-gen-base:ForslagDisposition"[^>]*>220 000/)

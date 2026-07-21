@@ -22,6 +22,7 @@ import type {
   IxbrlSigner,
   Resultatdisposition,
 } from './types'
+import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 
 /** TA §4.3.4-4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>". */
 export const PROGRAMVARA_NAMN = 'Accounted - Accounted'
@@ -35,6 +36,10 @@ export interface BuildIxbrlOptions {
   proposedDividend?: number
   /** Override "today" for deterministic tests (ISO date). */
   todayIso?: string
+  /** Reuse a canonical report instance so PDF and iXBRL cannot diverge. */
+  reportData?: ArsredovisningData
+  /** Reuse the version-bound signer roster when a canonical model is built. */
+  signatureRequests?: Awaited<ReturnType<typeof listSignatureRequests>>
 }
 
 function splitName(fullName: string): { firstName: string; lastName: string } {
@@ -59,7 +64,7 @@ export async function buildIxbrlInput(
   // without it the BR would not tie.
   const [pdfData, periodRow, currentTbFull, currentTbPreClosing, signatureRequests] =
     await Promise.all([
-      buildArsredovisningData(supabase, companyId, fiscalPeriodId),
+      options.reportData ?? buildArsredovisningData(supabase, companyId, fiscalPeriodId),
       supabase
         .from('fiscal_periods')
         .select('id, period_start, period_end, previous_period_id')
@@ -68,7 +73,7 @@ export async function buildIxbrlInput(
         .single(),
       generateTrialBalance(supabase, companyId, fiscalPeriodId),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
-      listSignatureRequests(supabase, companyId, fiscalPeriodId),
+      options.signatureRequests ?? listSignatureRequests(supabase, companyId, fiscalPeriodId),
     ])
 
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
@@ -226,11 +231,17 @@ export async function buildIxbrlInput(
   // same context: the disposition row must carry the identical value
   // (TA §2.7.3), so fri överkursfond (2097) is its own row tagged with the
   // separate Overkursfond concept instead of being folded into balanserat.
-  const proposedDividend = Math.max(0, Math.round(options.proposedDividend ?? 0))
-  const dispBalanserat = br['BalanseratResultat']?.current ?? 0
-  const dispOverkursfond = br['Overkursfond']?.current ?? 0
-  const dispArets = br['AretsResultatEgetKapital']?.current ?? 0
-  const dispSumma = mapping.totals.frittEgetKapital.current
+  const proposedDividend = Math.max(
+    0,
+    Math.round(
+      options.proposedDividend ?? pdfData.forvaltningsberattelse.proposed_dividend,
+    ),
+  )
+  const dispositionAmounts = pdfData.forvaltningsberattelse.resultatdisposition_amounts
+  const dispBalanserat = dispositionAmounts.retained_earnings
+  const dispOverkursfond = dispositionAmounts.share_premium_reserve
+  const dispArets = dispositionAmounts.current_year_result
+  const dispSumma = dispositionAmounts.total
   if (proposedDividend > dispSumma) {
     warnings.push(
       `Föreslagen utdelning (${proposedDividend} kr) överstiger fritt eget kapital (${dispSumma} kr).`,
@@ -247,14 +258,17 @@ export async function buildIxbrlInput(
   }
 
   // ---- underskrifter ---------------------------------------------------------
-  // Every signature request becomes a signer row (the board must appear in
-  // the document), but ONLY actually-signed requests get a date: an unsigned
+  // Every active signature request becomes a signer row (the board must appear
+  // in the document), but ONLY actually-signed requests get a date: an unsigned
   // request keeps signedDate null. Legal dates are never fabricated: the
   // missing date renders as an omitted fact in the preview and preflight 1214
   // blocks the submission path until everyone has signed.
-  const signedRequests = signatureRequests.filter((request) => request.status === 'signed')
+  const activeSignatureRequests = signatureRequests.filter(
+    (request) => request.status !== 'declined',
+  )
+  const signedRequests = activeSignatureRequests.filter((request) => request.status === 'signed')
   const today = options.todayIso ?? new Date().toISOString().slice(0, 10)
-  const signers: IxbrlSigner[] = signatureRequests.map((request) => {
+  const signers: IxbrlSigner[] = activeSignatureRequests.map((request) => {
     const { firstName, lastName } = splitName(request.signer_name)
     return {
       firstName,
@@ -268,7 +282,7 @@ export async function buildIxbrlInput(
       'Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).',
     )
   }
-  if (signedRequests.length !== signatureRequests.length) {
+  if (signedRequests.length !== activeSignatureRequests.length) {
     warnings.push('Alla underskriftsförfrågningar är inte signerade ännu.')
   }
   const harVd = signers.some((signer) => /verkställande direktör|^vd$/i.test(signer.role ?? ''))
@@ -289,6 +303,11 @@ export async function buildIxbrlInput(
     warnings.push(
       'Datum för årsstämma saknas: fastställelseintyget kan inte fyllas i (kontrollera-kod 1103).',
     )
+  }
+  const agmDispositionOutcome = pdfData.forvaltningsberattelse.agm_disposition_outcome
+  const agmDispositionDecision = pdfData.forvaltningsberattelse.agm_disposition_decision
+  if (!agmDispositionOutcome) {
+    warnings.push('Årsstämmans beslut om resultatdisposition saknas i fastställelseintyget.')
   }
   const fallbackSigner = signers[0] ?? { firstName: '', lastName: '', role: null }
   const undertecknare = options.undertecknare ?? {
@@ -352,6 +371,26 @@ export async function buildIxbrlInput(
       resultatdisposition,
     },
     noter: pdfData.noter.map((note) => ({ number: note.number, title: note.title, body: note.body })),
+    disclosures: {
+      longTermDebtOverFiveYears:
+        pdfData.disclosures.long_term_debt_over_five_years ?? 0,
+      securitiesPledged: pdfData.disclosures.securities_pledged?.trim() || 'Inga.',
+      contingentLiabilities:
+        pdfData.disclosures.contingent_liabilities?.trim() || 'Inga.',
+      parentCompany: pdfData.disclosures.parent_company_name
+        ? [
+            `Moderföretag: ${pdfData.disclosures.parent_company_name}.`,
+            pdfData.disclosures.parent_company_org_number
+              ? `Organisationsnummer: ${pdfData.disclosures.parent_company_org_number}.`
+              : '',
+            pdfData.disclosures.parent_company_city
+              ? `Säte: ${pdfData.disclosures.parent_company_city}.`
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ')
+        : null,
+    },
     medelantalAnstallda,
     underskrifter: {
       ort: pdfData.company.city ?? '',
@@ -361,6 +400,8 @@ export async function buildIxbrlInput(
     },
     faststallelseintyg: {
       arsstammaDatum: agmDate ?? null,
+      resultatdispositionOutcome: agmDispositionOutcome,
+      resultatdispositionDecision: agmDispositionDecision,
       signerFirstName: undertecknare.firstName,
       signerLastName: undertecknare.lastName,
       signerRole: undertecknare.role,

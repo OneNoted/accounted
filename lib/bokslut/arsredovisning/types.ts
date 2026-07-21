@@ -55,6 +55,7 @@ export interface ArsredovisningData {
   company: {
     name: string
     org_number: string
+    entity_type: string
     /** Företagets säte (Bolagsverket-registered registered office city).
      *  Used in the underskrifter "Stad, datum" line and the fastställelseintyg. */
     city: string | null
@@ -90,10 +91,22 @@ export interface ArsredovisningData {
     egen_kapital_changes: EgenKapitalRow[]
     /** Styrelsens förslag till resultatdisposition (manual input). */
     resultatdisposition: string
+    proposed_dividend: number
+    resultatdisposition_amounts: {
+      retained_earnings: number
+      share_premium_reserve: number
+      current_year_result: number
+      total: number
+      proposed_dividend: number
+      carried_forward: number
+    }
     /** ISO date of the årsstämma where the årsredovisning was adopted.
      *  Populates the fastställelseintyg date blank. Null means "not yet
      *  recorded": PDF then leaves the blank. */
     agm_date: string | null
+    /** What the AGM actually decided, distinct from the board's proposal. */
+    agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
+    agm_disposition_decision: string | null
   }
   resultatrakning: StatementRow[]
   balansrakning: {
@@ -138,6 +151,12 @@ export interface ArsredovisningData {
     parent_company_name: string | null
     parent_company_org_number: string | null
     parent_company_city: string | null
+    confirmations: {
+      long_term_debt_over_five_years: boolean
+      securities_pledged: boolean
+      contingent_liabilities: boolean
+      parent_company: boolean
+    }
   }
 }
 
