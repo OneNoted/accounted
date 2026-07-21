@@ -324,8 +324,8 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground mb-4">
-            Grundläggande justeringar beräknas automatiskt. Manuella justeringar
-            (periodiseringsfonder, koncernbidrag m.m.) hanteras av din
+            Grundläggande justeringar och de återläggningar som sparats i bokslutet
+            beräknas automatiskt. Kontrollera övriga deklarationsjusteringar med din
             redovisningskonsult.
           </p>
           <Table>
@@ -355,6 +355,16 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 code="4.3a"
                 label="Skatt på årets resultat (ej avdragsgill)"
                 amount={data.ink2s['7651']}
+              />
+              <DeclarationRutaRow
+                code="4.3c"
+                label="Andra ej avdragsgilla kostnader"
+                amount={data.ink2s['7653']}
+              />
+              <DeclarationRutaRow
+                code="4.5c"
+                label="Andra ej skattepliktiga intäkter"
+                amount={data.ink2s['7754']}
               />
             </TableBody>
             <tfoot>
