@@ -9,6 +9,13 @@ import { isBankingDay } from './swedish-holidays'
 // Condition function type for determining if a deadline applies
 export type DeadlineCondition = (settings: CompanySettingsForDeadlines) => boolean
 
+export interface TaxAssessmentNoticeForDeadline {
+  id: string
+  fiscalPeriodName: string
+  decisionType: 'final' | 'reassessment'
+  paymentDueDate: string
+}
+
 // Subset of company settings needed for deadline generation
 export interface CompanySettingsForDeadlines {
   entity_type: EntityType
@@ -43,6 +50,8 @@ export interface CompanySettingsForDeadlines {
    * detection), where rot_rut_begaran rows are simply never expected.
    */
   rot_rut_payment_years?: number[]
+  /** Derived from active tax_assessment_notices rows by the generator. */
+  tax_assessment_notices?: TaxAssessmentNoticeForDeadline[]
 }
 
 // Configuration for a single tax deadline type
@@ -71,6 +80,7 @@ export interface DeadlineInstance {
   year: number
   period: string   // e.g., "2025-Q1", "2025-01", "2025"
   periodLabel: string // Human-readable, e.g., "Q1 2025", "januari 2025"
+  taxAssessmentNoticeId?: string
 }
 
 /**
@@ -522,6 +532,31 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
       }
       return results
     },
+  },
+
+  // Kvarskatt: the payment date is copied exactly from the final tax notice
+  // or reassessment decision. It must not be estimated or moved to a banking
+  // day because Skatteverket has already determined the statutory due date.
+  {
+    type: 'kvarskatt',
+    titleTemplate: 'Kvarskatt {periodLabel}',
+    description: 'Kvarskatt enligt slutskattebesked eller omprövningsbeslut',
+    condition: (s) => (s.tax_assessment_notices?.length ?? 0) > 0,
+    priority: 'critical',
+    linkedReportType: null,
+    skipBankingDayAdjustment: true,
+    generateDates: (year, settings) => (settings.tax_assessment_notices ?? [])
+      .filter((notice) => Number(notice.paymentDueDate.slice(0, 4)) === year)
+      .map((notice) => ({
+        day: Number(notice.paymentDueDate.slice(8, 10)),
+        month: Number(notice.paymentDueDate.slice(5, 7)) - 1,
+        year,
+        period: `notice:${notice.id}`,
+        periodLabel: notice.decisionType === 'reassessment'
+          ? `omprövning, ${notice.fiscalPeriodName}`
+          : `slutskattebesked, ${notice.fiscalPeriodName}`,
+        taxAssessmentNoticeId: notice.id,
+      })),
   },
 
   // Kontrolluppgifter (KU10/KU20/KU31): annual income statements to

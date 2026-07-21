@@ -120,6 +120,7 @@ export function DeadlineForm({
         linked_report_type: null,
         linked_report_period: null,
         dismissed_at: null,
+        tax_assessment_notice_id: null,
       })
     } finally {
       setIsLoading(false)

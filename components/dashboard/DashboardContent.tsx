@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
@@ -20,11 +19,9 @@ import {
   ArrowRight,
   MessageCircle,
 } from 'lucide-react'
-import type { Deadline, OnboardingProgress } from '@/types'
+import type { Deadline, InitialSetupState, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import { visibleWorklistTotalFrom } from '@/lib/worklist/visible-total'
-
-const setupFreshStartKey = (companyId: string) => `erp_setup_fresh_start:${companyId}`
 
 interface DashboardContentProps {
   companyId: string
@@ -45,6 +42,7 @@ interface DashboardContentProps {
   /** High-confidence transaction↔invoice matches for inline one-click confirm. */
   suggestedMatches: SuggestedMatch[]
   onboardingProgress?: OnboardingProgress
+  initialSetup: InitialSetupState
   /**
    * False until the company has a verified agent_profile. When false the hero
    * slot shows a build-assistant prompt instead of the next-best-action card,
@@ -54,55 +52,9 @@ interface DashboardContentProps {
   agentBuilt?: boolean
 }
 
-export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
+export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, initialSetup, agentBuilt = true }: DashboardContentProps) {
   const t = useTranslations('dashboard')
   const hasAi = useCapability(CAPABILITY.ai)
-
-  // The setup gate exists to nudge brand-new users into a data-import step
-  // before they hit the dashboard. Once the assistant is built we treat the
-  // user as past that phase (they've already committed to using the tool)
-  // and let the dashboard render normally. This also keeps the sandbox
-  // (which ships with a pre-built assistant + seeded data but no bank
-  // connection / SIE import) from showing a checklist that re-links to
-  // /onboarding/agent.
-  const needsSetup =
-    !agentBuilt &&
-    onboardingProgress &&
-    !onboardingProgress.hasBankConnected &&
-    !onboardingProgress.hasSIEImport
-  const [setupGateActive, setSetupGateActive] = useState(!!needsSetup)
-
-  useEffect(() => {
-    if (!needsSetup) {
-      setSetupGateActive(false)
-      return
-    }
-    const scopedKey = setupFreshStartKey(companyId)
-    const freshStart = localStorage.getItem(scopedKey) === 'true'
-    const legacyFreshStart = localStorage.getItem('erp_setup_fresh_start') === 'true'
-    const legacyDismissed = localStorage.getItem('erp_checklist_dismissed') === 'true'
-    if (freshStart || legacyFreshStart || legacyDismissed) {
-      if (!freshStart) {
-        localStorage.setItem(scopedKey, 'true')
-      }
-      setSetupGateActive(false)
-    }
-  }, [needsSetup, companyId])
-
-  if (setupGateActive) {
-    return (
-      <NewUserChecklist
-        hasBookkeepingImported={!!onboardingProgress?.hasSIEImport}
-        hasBankConnected={!!onboardingProgress?.hasBankConnected}
-        hasSkatteverketConnected={!!onboardingProgress?.hasSkatteverketConnected}
-        hasAgentBuilt={agentBuilt}
-        onFreshStart={() => {
-          localStorage.setItem(setupFreshStartKey(companyId), 'true')
-          setSetupGateActive(false)
-        }}
-      />
-    )
-  }
 
   const formatLargeNumber = (amount: number) => {
     return new Intl.NumberFormat('sv-SE', {
@@ -124,6 +76,13 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
   return (
     <div className="stagger-enter space-y-8">
       <BackupHealthBanner />
+      <NewUserChecklist
+        initialState={initialSetup}
+        hasBookkeepingImported={!!onboardingProgress?.hasSIEImport}
+        hasBankConnected={!!onboardingProgress?.hasBankConnected}
+        hasSkatteverketConnected={!!onboardingProgress?.hasSkatteverketConnected}
+        hasAgentBuilt={agentBuilt}
+      />
       {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. Once the assistant is built the

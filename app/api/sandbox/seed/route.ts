@@ -146,6 +146,9 @@ export async function POST(request: Request) {
         invoice_default_days: 30,
         onboarding_step: 6,
         onboarding_complete: true,
+        initial_setup_path: 'fresh',
+        initial_setup_completed_at: new Date().toISOString(),
+        initial_setup_dismissed_at: new Date().toISOString(),
         is_sandbox: true,
         // Dimensions demo: the register/pickers render out of the box.
         dimensions_enabled: true,

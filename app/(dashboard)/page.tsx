@@ -1,6 +1,5 @@
 import { redirect } from 'next/navigation'
 import DashboardContent from '@/components/dashboard/DashboardContent'
-import WelcomeGate from '@/components/onboarding/WelcomeGate'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
 import type { Deadline, OnboardingProgress } from '@/types'
@@ -14,9 +13,8 @@ import {
 export const dynamic = 'force-dynamic'
 
 // Home route = Översikt (DashboardContent). The agent chat has its own nav
-// entry at /chat, so / no longer forwards there. New users who haven't built
-// their assistant yet get WelcomeGate (the build-agent checklist) instead of
-// the dashboard; once the agent is verified, / renders the normal Översikt.
+// entry at /chat, so / no longer forwards there. Initial setup is an optional,
+// persisted surface inside the dashboard and never replaces the overview.
 
 export default async function DashboardPage() {
   const [{ supabase, user }, companyId] = await Promise.all([
@@ -44,7 +42,6 @@ export default async function DashboardPage() {
     settingsRes,
     { count: customerCount },
     { count: invoiceCount },
-    { count: receiptCount },
     { count: transactionCount },
     { data: journalLines },
     { data: unpaidInvoices },
@@ -54,14 +51,12 @@ export default async function DashboardPage() {
     { count: staleUncategorizedCount },
     { count: skatteverketTokenCount },
     agentProfile,
-    { count: postedEntriesCount },
     worklist,
     suggestedMatches,
   ] = await Promise.all([
     getDashboardSettings(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('journal_entry_lines')
       .select('account_number, debit_amount, credit_amount, journal_entry:journal_entries!inner(entry_date, status, company_id)')
@@ -79,8 +74,6 @@ export default async function DashboardPage() {
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
     getResolvedDashboardAgentProfile(),
-    // Any posted entry counts as "company has been used" for the hasData gate.
-    supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'posted'),
     // Pending-work counts + suggested matches come from lib/worklist: the
     // same source as the sidebar badges, so the numbers can never diverge.
     getWorklistCounts(supabase, companyId),
@@ -103,36 +96,10 @@ export default async function DashboardPage() {
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
 
-  // "Has the company already been used?" Any real business data means we must
-  // NOT hijack the dashboard with the full-screen onboarding gate: existing
-  // and migrated users get the normal Översikt with a build-assistant prompt
-  // in the hero slot (see DashboardContent's agentBuilt branch) instead.
-  const hasData =
-    (transactionCount || 0) > 0 ||
-    (sieImportCount || 0) > 0 ||
-    (invoiceCount || 0) > 0 ||
-    (receiptCount || 0) > 0 ||
-    (customerCount || 0) > 0 ||
-    (postedEntriesCount || 0) > 0
-
-  // Only a genuinely empty company without an assistant sees the full
-  // onboarding checklist (where building the assistant is the last step).
-  // Everyone else falls through to the dashboard below.
-  if (!agentBuilt && !hasData) {
-    return (
-      <WelcomeGate
-        companyId={companyId}
-        hasBookkeepingImported={(sieImportCount || 0) > 0}
-        hasBankConnected={(transactionCount || 0) > 0}
-        hasSkatteverketConnected={(skatteverketTokenCount || 0) > 0}
-      />
-    )
-  }
-
   const onboardingProgress: OnboardingProgress = {
     hasCustomers: (customerCount || 0) > 0,
     hasInvoices: (invoiceCount || 0) > 0,
-    hasBankConnected: (transactionCount || 0) > 0,
+    hasBankConnected: (bankConnections?.length || 0) > 0 || (transactionCount || 0) > 0,
     hasSIEImport: (sieImportCount || 0) > 0,
     hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0,
   }
@@ -234,6 +201,11 @@ export default async function DashboardPage() {
       worklist={worklist}
       suggestedMatches={suggestedMatches}
       onboardingProgress={onboardingProgress}
+      initialSetup={{
+        path: settings.initial_setup_path ?? null,
+        completedAt: settings.initial_setup_completed_at ?? null,
+        dismissedAt: settings.initial_setup_dismissed_at ?? null,
+      }}
     />
   )
 }

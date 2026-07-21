@@ -370,6 +370,9 @@ export interface CompanySettings {
   // Onboarding
   onboarding_step: number
   onboarding_complete: boolean
+  initial_setup_path?: InitialSetupPath | null
+  initial_setup_completed_at?: string | null
+  initial_setup_dismissed_at?: string | null
 
   // Sector
   sector_slug: string | null
@@ -2148,6 +2151,14 @@ export interface OnboardingProgress {
   hasSkatteverketConnected: boolean
 }
 
+export type InitialSetupPath = 'migration' | 'bank' | 'fresh'
+
+export interface InitialSetupState {
+  path: InitialSetupPath | null
+  completedAt: string | null
+  dismissedAt: string | null
+}
+
 // Onboarding step data
 export interface OnboardingStepData {
   step1?: {
@@ -2221,6 +2232,23 @@ export type TaxDeadlineType =
   | 'intrastat_monthly'
   | 'punktskatt_monthly'
   | 'fyllnadsinbetalning'
+  | 'kvarskatt'
+
+export type TaxAssessmentDecisionType = 'final' | 'reassessment'
+
+export interface TaxAssessmentNotice {
+  id: string
+  company_id: string
+  user_id: string | null
+  fiscal_period_id: string
+  decision_type: TaxAssessmentDecisionType
+  decision_date: string
+  payment_due_date: string
+  archived_at: string | null
+  created_at: string
+  updated_at: string
+  fiscal_period?: Pick<FiscalPeriod, 'id' | 'name' | 'period_start' | 'period_end'>
+}
 
 // Deadline status workflow
 export type DeadlineStatus =
@@ -2268,6 +2296,7 @@ export interface Deadline {
   dismissed_at: string | null
   linked_report_type: string | null
   linked_report_period: Record<string, unknown> | null
+  tax_assessment_notice_id: string | null
 
   // Relations
   customer?: Customer
@@ -2406,7 +2435,8 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
   ioss_monthly: 'IOSS-deklaration',
   intrastat_monthly: 'Intrastat',
   punktskatt_monthly: 'Punktskattedeklaration',
-  fyllnadsinbetalning: 'Fyllnadsinbetalning'
+  fyllnadsinbetalning: 'Fyllnadsinbetalning',
+  kvarskatt: 'Kvarskatt'
 }
 
 // ============================================================
