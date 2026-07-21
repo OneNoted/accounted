@@ -775,9 +775,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // book every line momsfritt. `vatRegistered` is the single switch the whole
   // form keys off: no rate picker, no warning, no VAT in the totals/preview.
   // The API enforces the same (forces 0% server-side), so a stale hidden field
-  // value can't smuggle VAT onto the invoice. With VAT shown the description
-  // keeps its 3/12 width; when hidden it widens to fill the freed columns.
-  const descColSpan = vatRegistered ? 'md:col-span-3' : 'md:col-span-5'
+  // value can't smuggle VAT onto the invoice. Description gets the widest share
+  // of the 12-col row (4/12 with VAT shown, 6/12 without): it holds free text,
+  // the numeric fields need far less room. Antal drops to 1 col to pay for it.
+  const descColSpan = vatRegistered ? 'md:col-span-4' : 'md:col-span-6'
 
   // Calculate per-item VAT. When not VAT-registered every rate is forced to 0
   // so vatAmount stays 0 and total === subtotal.
@@ -1707,7 +1708,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
                       {/* Antal, Enhet, à-pris */}
                       <div className="grid grid-cols-3 gap-2 md:contents">
-                        <div className="space-y-1 md:col-span-2 md:space-y-2">
+                        <div className="space-y-1 md:col-span-1 md:space-y-2">
                           <Label className="text-xs text-muted-foreground md:text-sm md:text-foreground">{t('quantity_label')}</Label>
                           <Input
                             type="number"
