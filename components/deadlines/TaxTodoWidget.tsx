@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Deadline, DeadlineStatus, TAX_DEADLINE_TYPE_LABELS, DEADLINE_STATUS_LABELS } from '@/types'
 import { getReportUrl } from '@/lib/tax/deadline-config'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Use the labels from types
 const STATUS_LABELS = DEADLINE_STATUS_LABELS
@@ -95,7 +96,7 @@ export function TaxTodoWidget({ deadlines, onStatusChange }: TaxTodoWidgetProps)
       onStatusChange?.(deadlineId, newStatus)
     } catch (error) {
       toast({
-        title: error instanceof Error ? error.message : t('toast_status_update_failed'),
+        title: error instanceof Error ? getUserErrorMessage(error) : t('toast_status_update_failed'),
         variant: 'destructive',
       })
     } finally {

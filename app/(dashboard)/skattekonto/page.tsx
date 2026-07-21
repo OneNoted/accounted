@@ -41,6 +41,7 @@ import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
 } from '@/extensions/general/skatteverket/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface SaldoEnvelope {
   data: SkatteverketSaldoResponse | null
@@ -194,7 +195,7 @@ export default function SkattekontoPage() {
     } catch (err) {
       toast({
         title: 'Synk misslyckades',
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {
@@ -222,7 +223,7 @@ export default function SkattekontoPage() {
     } catch (err) {
       toast({
         title: 'Kunde inte bokföra',
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {
@@ -246,7 +247,7 @@ export default function SkattekontoPage() {
     } catch (err) {
       toast({
         title: 'Kunde inte hämta kandidater',
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
       setMatchOpenFor(null)
@@ -278,7 +279,7 @@ export default function SkattekontoPage() {
     } catch (err) {
       toast({
         title: 'Kunde inte koppla transaktionen',
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {

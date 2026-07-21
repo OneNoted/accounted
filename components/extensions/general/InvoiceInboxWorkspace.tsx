@@ -48,6 +48,7 @@ import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDi
 // INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 type AccountingMethod = 'accrual' | 'cash'
 
@@ -458,7 +459,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch (err) {
       toast({
         title: 'Kunde inte ladda dokumentet',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     }
@@ -534,7 +535,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }
       toast({
         title: 'Uppladdning misslyckades',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     } finally {
@@ -597,7 +598,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch (err) {
       toast({
         title: 'Kunde inte ta bort',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     } finally {
@@ -697,7 +698,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch (err) {
       toast({
         title: 'Rotation misslyckades',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     } finally {
@@ -2049,7 +2050,7 @@ export function EditableFieldsList({
         toast({
           variant: 'destructive',
           title: 'Nätverksfel',
-          description: err instanceof Error ? err.message : 'Kunde inte spara',
+          description: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte spara',
         })
         setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
       }

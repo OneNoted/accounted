@@ -467,7 +467,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     } catch (err) {
       toast({
         title: t('toast_zip_failed'),
-        description: err instanceof Error ? err.message : t('unknown_error'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
     } finally {

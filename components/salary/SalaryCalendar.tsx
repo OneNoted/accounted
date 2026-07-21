@@ -44,6 +44,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import type { SalaryType } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -169,7 +170,7 @@ export function SalaryCalendar({
         setWorked(wJson.data ?? [])
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setLoading(false)
     }
@@ -318,7 +319,7 @@ export function SalaryCalendar({
       await load()
       onChange?.()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setDeleting(false)
     }
@@ -645,7 +646,7 @@ function BulkWorkedDialog({
       if (!res.ok) throw new Error(json.error || t('error_save_hours'))
       onSaved([])
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setSubmitting(false)
     }
@@ -791,7 +792,7 @@ function BulkAbsenceDialog({
       }
       onSaved([])
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setSubmitting(false)
     }
@@ -918,7 +919,7 @@ function DayInspectorDialog({
       onChanged()
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setBusy(null)
     }
@@ -940,7 +941,7 @@ function DayInspectorDialog({
       // Stay open if there's other content; close if this was the last entry.
       if (absences.length === 1 && !worked) onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setBusy(null)
     }

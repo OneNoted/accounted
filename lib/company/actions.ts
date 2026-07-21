@@ -11,6 +11,7 @@ import {
 } from '@/lib/tax/deadline-generator'
 import type { CompanySettingsForDeadlines } from '@/lib/tax/deadline-config'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * Switch the active company. Returns an error *code* (translated by the
@@ -76,8 +77,7 @@ export async function createCompanyFromOnboarding(params: {
     // and a redacted message in prod. Logging the full error here gives
     // us a server-side trace and returns a localized fallback to the UI.
     console.error('[createCompanyFromOnboarding] unexpected error', err)
-    const message = err instanceof Error ? err.message : String(err)
-    return { error: message || 'Något gick fel när företaget skulle skapas. Försök igen.' }
+    return { error: getErrorMessage(err, { context: 'settings' }) }
   }
 }
 

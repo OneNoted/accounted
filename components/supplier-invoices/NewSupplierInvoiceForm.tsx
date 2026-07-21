@@ -580,7 +580,7 @@ export default function NewSupplierInvoiceForm({
         if (cancelled) return
         toast({
           title: t('inbox_load_failed_title'),
-          description: err instanceof Error ? err.message : t('unknown_error'),
+          description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
           variant: 'destructive',
         })
       } finally {

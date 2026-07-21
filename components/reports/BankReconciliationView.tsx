@@ -31,6 +31,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import type { CashAccount } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -761,7 +762,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         toast({
           variant: 'destructive',
           title: 'Kunde inte bokföra transaktionen',
-          description: result.error?.message || (typeof result.error === 'string' ? result.error : undefined),
+          description: getUserErrorMessage(result.error) || (typeof result.error === 'string' ? result.error : undefined),
         })
         return
       }

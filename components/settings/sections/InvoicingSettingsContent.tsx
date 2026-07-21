@@ -15,6 +15,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { normaliseSwish } from '@/lib/payments/swish'
 import { formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
 import type { CompanySettings } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export function InvoicingSettingsContent() {
   const t = useTranslations('settings_invoicing')
@@ -29,7 +30,7 @@ export function InvoicingSettingsContent() {
     if (bankErrors.length > 0) {
       toast({
         title: t('bank_validation_title'),
-        description: bankErrors.map(e => e.message).join(', '),
+        description: bankErrors.map(e => getUserErrorMessage(e)).join(', '),
         variant: 'destructive',
       })
       return {}

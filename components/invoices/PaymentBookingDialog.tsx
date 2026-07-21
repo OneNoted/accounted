@@ -168,7 +168,7 @@ export default function PaymentBookingDialog({
         if (cancelled) return
         toast({
           title: t('load_dialog_failed_title'),
-          description: err instanceof Error ? err.message : t('try_again'),
+          description: err instanceof Error ? getErrorMessage(err) : t('try_again'),
           variant: 'destructive',
         })
         onOpenChange(false)

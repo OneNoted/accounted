@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Upload, Trash2 } from 'lucide-react'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 
 interface LogoUploadProps {
@@ -59,7 +60,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
     } catch (error) {
       toast({
         title: t('logo_upload_failed_title'),
-        description: error instanceof Error ? error.message : t('logo_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('logo_try_again'),
         variant: 'destructive',
       })
     }

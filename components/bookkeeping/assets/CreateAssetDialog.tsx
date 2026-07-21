@@ -23,6 +23,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
 import type { AssetCategory, DepreciationMethod, K3Component } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface CreateAssetDialogProps {
   open: boolean
@@ -247,7 +248,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte spara tillgången')
+        setError(getUserErrorMessage(body?.error) ?? 'Kunde inte spara tillgången')
         return
       }
       toast({ title: 'Tillgång sparad', description: name.trim() })
@@ -260,7 +261,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       setComponentRows([])
       onCreated()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
     } finally {
       setSubmitting(false)
     }

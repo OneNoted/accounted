@@ -29,6 +29,7 @@ import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Invoice, InvoiceItem, Customer, EntityType, BASAccount } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -151,7 +152,7 @@ export default function SendInvoiceDialog({
         if (cancelled) return
         toast({
           title: t('load_failed_title'),
-          description: err instanceof Error ? err.message : t('try_again'),
+          description: err instanceof Error ? getUserErrorMessage(err) : t('try_again'),
           variant: 'destructive',
         })
         onOpenChange(false)
@@ -345,7 +346,7 @@ export default function SendInvoiceDialog({
     } catch (error) {
       toast({
         title: t(isCreditNote ? 'credit_send_failed_title' : 'send_failed_title'),
-        description: error instanceof Error ? error.message : t('try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('try_again'),
         variant: 'destructive',
       })
     }

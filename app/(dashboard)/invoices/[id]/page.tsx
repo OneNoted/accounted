@@ -53,6 +53,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { Invoice, InvoiceItem, Customer, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const statusVariantMap: Record<InvoiceStatus, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   draft: 'secondary',
@@ -305,7 +306,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } catch (error) {
       toast({
         title: t('book_failed_title'),
-        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
     } finally {
@@ -358,7 +359,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } catch (error) {
       toast({
         title: t('status_update_failed_title'),
-        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -395,7 +396,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } catch (error) {
       toast({
         title: t('convert_failed_title'),
-        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -434,7 +435,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } catch (error) {
       toast({
         title: t('pdf_download_failed_title'),
-        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
     }
@@ -496,7 +497,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } catch (error) {
       toast({
         title: t('finalize_failed_title'),
-        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
     } finally {
@@ -541,7 +542,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     } catch (error) {
       toast({
         title: t('cancel_failed_title'),
-        description: error instanceof Error ? error.message : t('fallback_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('fallback_try_again'),
         variant: 'destructive',
       })
     }

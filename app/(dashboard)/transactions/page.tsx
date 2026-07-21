@@ -1667,7 +1667,7 @@ export default function TransactionsPage() {
     } catch (err) {
       toast({
         title: 'Kunde inte bokföra',
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {

@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { AVATAR_OPTIONS } from '@/components/agent/avatars'
 import AgentAvatar from '@/components/agent/AgentAvatar'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface InitialFields {
   entity_type_label: string
@@ -177,7 +178,7 @@ export default function ReviewCard({
 
       onVerified()
     } catch (err) {
-      setVerifyError(err instanceof Error ? err.message : 'Kunde inte verifiera.')
+      setVerifyError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte verifiera.')
     } finally {
       setVerifying(false)
     }

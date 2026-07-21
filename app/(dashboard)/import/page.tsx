@@ -192,7 +192,7 @@ function BankFileImportWizard() {
                 'Exportera en ny fil från banken om du vill lägga till fler transaktioner.'
             )
           } else {
-            setBankError(err.message || 'Kunde inte läsa filen')
+            setBankError(getErrorMessage(err) || 'Kunde inte läsa filen')
           }
         } else {
           setBankError(typeof err === 'string' ? err : 'Kunde inte läsa filen')
@@ -226,7 +226,7 @@ function BankFileImportWizard() {
         setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
       }
     } catch (err) {
-      setBankError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setBankError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setBankIsLoading(false)
     }
@@ -274,7 +274,7 @@ function BankFileImportWizard() {
         description: `${data.data.imported} transaktioner importerades`,
       })
     } catch (err) {
-      setBankError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setBankError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setBankIsLoading(false)
     }
@@ -531,7 +531,7 @@ function SIEImportWizard() {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const message = isNetworkError
         ? 'Kunde inte nå servern. Kontrollera din internetanslutning och försök igen.'
-        : err instanceof Error ? err.message : 'Ett oväntat fel uppstod.'
+        : getErrorMessage(err)
       setErrorType(isNetworkError ? 'network' : 'parse')
       setError(message)
       toast({ title: isNetworkError ? 'Anslutningsfel' : 'Ett fel uppstod', description: message, variant: 'destructive' })
@@ -684,7 +684,7 @@ function SIEImportWizard() {
         setBasAccounts(accountsData.data || [])
       }
     } catch (err) {
-      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? err.message : 'Försök igen.', variant: 'destructive' })
+      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
@@ -746,7 +746,7 @@ function SIEImportWizard() {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const msg = isNetworkError
         ? 'Tappade anslutningen till servern under importen. Kontrollera din internetanslutning och se om importen genomfördes under Bokföring.'
-        : err instanceof Error ? err.message : 'Ett oväntat fel uppstod.'
+        : getErrorMessage(err)
       setError(msg)
       toast({ title: 'Import avbröts', description: msg, variant: 'destructive' })
     } finally {
@@ -893,7 +893,7 @@ function OpeningBalanceFlow() {
         setObStep('edit')
       }
     } catch (err) {
-      setObError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setObError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setObIsLoading(false)
     }
@@ -925,7 +925,7 @@ function OpeningBalanceFlow() {
       setParseResult(data.data)
       setObStep('edit')
     } catch (err) {
-      setObError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setObError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setObIsLoading(false)
     }
@@ -986,7 +986,7 @@ function OpeningBalanceFlow() {
         })
       }
     } catch (err) {
-      setObError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setObError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setObIsLoading(false)
     }
@@ -1163,7 +1163,7 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
         return
       }
 
@@ -1182,7 +1182,7 @@ function CustomersFlow() {
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1224,14 +1224,14 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen med de valda kolumnerna')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1256,7 +1256,7 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
         return
       }
 
@@ -1270,7 +1270,7 @@ function CustomersFlow() {
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setIsLoading(false)
     }
@@ -1414,7 +1414,7 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
         return
       }
 
@@ -1433,7 +1433,7 @@ function SuppliersFlow() {
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1481,14 +1481,14 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen')
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1513,7 +1513,7 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
         return
       }
 
@@ -1527,7 +1527,7 @@ function SuppliersFlow() {
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setIsLoading(false)
     }
@@ -1664,7 +1664,7 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
         return
       }
 
@@ -1683,7 +1683,7 @@ function ArticlesFlow() {
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1724,14 +1724,14 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen med de valda kolumnerna')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1756,7 +1756,7 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
         return
       }
 
@@ -1770,7 +1770,7 @@ function ArticlesFlow() {
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setIsLoading(false)
     }

@@ -163,7 +163,7 @@ function LoginPageContent() {
       if (error) {
         toast({
           title: tAuth('login_failed_title'),
-          description: error.message === 'Invalid login credentials'
+          description: getErrorMessage(error) === 'Invalid login credentials'
             ? tAuth('login_invalid_credentials')
             : getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',

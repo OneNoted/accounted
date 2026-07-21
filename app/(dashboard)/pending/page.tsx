@@ -755,7 +755,7 @@ export default function PendingOperationsPage() {
     } catch (err) {
       toast({
         title: 'Misslyckades',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }
@@ -800,7 +800,7 @@ export default function PendingOperationsPage() {
     } catch (err) {
       toast({
         title: 'Misslyckades',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }
@@ -868,7 +868,7 @@ export default function PendingOperationsPage() {
     } catch (err) {
       toast({
         title: 'Kunde inte avvisa',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }

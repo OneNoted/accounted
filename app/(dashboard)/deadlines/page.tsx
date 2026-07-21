@@ -15,6 +15,7 @@ import { AlertTriangle, ArrowRight, CalendarClock, Loader2 } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const supabase = createClient()
 
@@ -123,7 +124,7 @@ export default function DeadlinesPage() {
     } catch (error) {
       toast({
         title: t('generate_failed_title'),
-        description: error instanceof Error ? error.message : t('retry'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
         variant: 'destructive',
       })
     } finally {
@@ -155,7 +156,7 @@ export default function DeadlinesPage() {
     } catch (error) {
       toast({
         title: t('create_failed_title'),
-        description: error instanceof Error ? error.message : t('retry'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
         variant: 'destructive',
       })
       throw error
@@ -208,7 +209,7 @@ export default function DeadlinesPage() {
     } catch (error) {
       toast({
         title: t('toggle_failed_title'),
-        description: error instanceof Error ? error.message : t('retry'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
         variant: 'destructive',
       })
     }
@@ -236,7 +237,7 @@ export default function DeadlinesPage() {
     } catch (error) {
       toast({
         title: t('update_failed_title'),
-        description: error instanceof Error ? error.message : t('retry'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
         variant: 'destructive',
       })
     }
@@ -258,7 +259,7 @@ export default function DeadlinesPage() {
     } catch (error) {
       toast({
         title: t('delete_failed_title'),
-        description: error instanceof Error ? error.message : t('retry'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
         variant: 'destructive',
       })
     }

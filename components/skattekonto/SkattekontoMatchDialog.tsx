@@ -24,6 +24,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface MatchCandidate {
   journal_entry_id: string
@@ -84,7 +85,7 @@ export function SkattekontoMatchDialog({
         if (cancelled) return
         toast({
           title: t('fetch_candidates_failed_title'),
-          description: err instanceof Error ? err.message : undefined,
+          description: err instanceof Error ? getUserErrorMessage(err) : undefined,
           variant: 'destructive',
         })
         onClose()
@@ -119,7 +120,7 @@ export function SkattekontoMatchDialog({
     } catch (err) {
       toast({
         title: t('match_failed_title'),
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {

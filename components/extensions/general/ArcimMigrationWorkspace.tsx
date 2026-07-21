@@ -13,6 +13,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import Link from 'next/link'
 import { FallbackPrompt } from '@/components/ui/fallback-prompt'
 import { getBranding } from '@/lib/branding/service'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const branding = getBranding()
 import {
@@ -1827,7 +1828,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte hämta förhandsgranskning')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte hämta förhandsgranskning')
     } finally {
       setIsLoading(false)
     }
@@ -1866,7 +1867,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       }
       // Token-based providers stay on connect step for credential input
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Anslutning misslyckades')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Anslutning misslyckades')
     } finally {
       setIsLoading(false)
     }
@@ -1925,7 +1926,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         setStep('connect')
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte återansluta')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte återansluta')
       setAuthExpired(true)
     } finally {
       setIsLoading(false)
@@ -1947,7 +1948,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       toast({ title: 'Frånkopplad', description: 'Anslutningen har tagits bort.' })
       await fetchStatus()
     } catch (err) {
-      toast({ title: err instanceof Error ? err.message : 'Något gick fel', variant: 'destructive' })
+      toast({ title: err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel', variant: 'destructive' })
     }
   }, [toast, fetchStatus])
 
@@ -1978,7 +1979,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       // Token stored: consent is now accepted, proceed to preview
       await loadPreview(consentId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte ansluta')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte ansluta')
     } finally {
       setIsLoading(false)
     }
@@ -2079,7 +2080,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         setStep('options')
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte hämta SIE-data')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte hämta SIE-data')
     } finally {
       setIsLoading(false)
     }
@@ -2229,7 +2230,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         description: 'Din bokföringsdata har importerats.',
       })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Migrering misslyckades'
+      const msg = getUserErrorMessage(err)
       setError(msg)
       setStep('result')
     }

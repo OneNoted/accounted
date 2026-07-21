@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import type { BASAccount } from '@/types'
 import { BAS_REFERENCE, isStandardBASAccount, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -243,7 +244,7 @@ export default function ChartOfAccountsManager() {
       await refreshAll()
     } catch (err) {
       toast({
-        title: err instanceof Error ? err.message : t('toast_delete_failed'),
+        title: err instanceof Error ? getUserErrorMessage(err) : t('toast_delete_failed'),
         variant: 'destructive',
       })
     } finally {

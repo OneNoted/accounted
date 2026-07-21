@@ -25,6 +25,7 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { AgiSubmissionState } from '@/lib/salary/agi-submission-state'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AGIPanelProps {
   salaryRunId: string
@@ -430,7 +431,7 @@ export function AGIPanel(props: AGIPanelProps) {
       await fetchStatus()
       onRefreshSubmission()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('disconnect_failed'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('disconnect_failed'))
     } finally {
       setActionLoading(null)
     }
@@ -674,7 +675,7 @@ export function AGIPanel(props: AGIPanelProps) {
       signingTab?.close()
       setChain(prev => (prev ? { ...prev, failed: true } : prev))
       if (!(e instanceof ChainFailed)) {
-        setError(e instanceof Error ? e.message : t('submit_failed'))
+        setError(e instanceof Error ? getUserErrorMessage(e) : t('submit_failed'))
       }
       onRefreshSubmission()
     } finally {
@@ -705,7 +706,7 @@ export function AGIPanel(props: AGIPanelProps) {
       URL.revokeObjectURL(url)
       onChange?.()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('xml_download_failed'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('xml_download_failed'))
     } finally {
       setActionLoading(null)
     }
@@ -723,7 +724,7 @@ export function AGIPanel(props: AGIPanelProps) {
       onRefreshSubmission()
       onChange?.()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('submit_failed'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('submit_failed'))
     } finally {
       setActionLoading(null)
     }
@@ -739,7 +740,7 @@ export function AGIPanel(props: AGIPanelProps) {
       if (link !== null) setSuccess(t('signing_link_ready'))
       onRefreshSubmission()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('signing_link_failed'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('signing_link_failed'))
     } finally {
       setActionLoading(null)
     }
@@ -762,7 +763,7 @@ export function AGIPanel(props: AGIPanelProps) {
       setSuccess(t('unlock_success'))
       onRefreshSubmission()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unlock_failed'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unlock_failed'))
     } finally {
       setActionLoading(null)
     }
@@ -796,7 +797,7 @@ export function AGIPanel(props: AGIPanelProps) {
       onRefreshSubmission()
       onChange?.()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('check_status_failed'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('check_status_failed'))
     } finally {
       setActionLoading(null)
     }
