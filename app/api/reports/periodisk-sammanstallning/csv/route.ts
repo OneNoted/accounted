@@ -8,6 +8,7 @@ import {
 } from '@/lib/reports/periodisk-sammanstallning-csv'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/reports/periodisk-sammanstallning/csv
@@ -85,12 +86,12 @@ export const GET = withRouteContext(
       if (err instanceof PsCsvBuildError) {
         if (err.reason === 'BLOCKING_WARNINGS') {
           return errorResponseFromCode('PS_REPORT_CSV_BLOCKED_BY_ERRORS', log, {
-            requestId, details: { message: err.message },
+            requestId, details: { message: getUserErrorMessage(err) },
           })
         }
         if (err.reason === 'MISSING_FILER_INFO') {
           return errorResponseFromCode('PS_REPORT_MISSING_FILER_INFO', log, {
-            requestId, details: { message: err.message },
+            requestId, details: { message: getUserErrorMessage(err) },
           })
         }
       }
@@ -99,7 +100,7 @@ export const GET = withRouteContext(
       })
       return errorResponseFromCode('PS_REPORT_GENERATION_FAILED', log, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

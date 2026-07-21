@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Settings2, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface SalaryOverridePanelProps {
   runId: string
@@ -84,7 +85,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
     } catch (err) {
       toast({
         title: t('save_failed'),
-        description: err instanceof Error ? err.message : t('unknown_error'),
+        description: err instanceof Error ? getUserErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
     } finally {

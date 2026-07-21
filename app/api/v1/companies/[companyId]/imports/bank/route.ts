@@ -37,6 +37,7 @@ import {
 } from '@/lib/import/bank-file/parser'
 import { ingestTransactions, type RawTransaction } from '@/lib/transactions/ingest'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BankImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -292,14 +293,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           id: op.id,
           error: {
             code: 'BANK_IMPORT_FAILED',
-            message: err instanceof Error ? err.message : 'Unknown failure during bank import.',
+            message: err instanceof Error ? getUserErrorMessage(err) : 'Unknown failure during bank import.',
           },
         },
         ctx.log,
       )
       return v1ErrorResponseFromCode('BANK_IMPORT_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { operation_id: op.id, reason: err instanceof Error ? err.message : 'unknown' },
+        details: { operation_id: op.id, reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 

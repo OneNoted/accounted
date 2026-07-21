@@ -171,6 +171,17 @@ function PageChrome({
 }
 
 export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
+  const reportSignatureDate = data.signatures
+    .map((signature) => signature.signed_at?.slice(0, 10) ?? null)
+    .filter((date): date is string => date !== null)
+    .sort()
+    .at(-1)
+  const agmDispositionDecision =
+    data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
+      ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
+      : data.forvaltningsberattelse.agm_disposition_outcome === 'alternative_decision'
+        ? data.forvaltningsberattelse.agm_disposition_decision
+        : null
   return (
     <Document>
       {/* Cover */}
@@ -237,6 +248,22 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
 
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
+        {[
+          ['Balanserat resultat', data.forvaltningsberattelse.resultatdisposition_amounts.retained_earnings],
+          ['Fri överkursfond', data.forvaltningsberattelse.resultatdisposition_amounts.share_premium_reserve],
+          ['Årets resultat', data.forvaltningsberattelse.resultatdisposition_amounts.current_year_result],
+          ['Summa till årsstämmans förfogande', data.forvaltningsberattelse.resultatdisposition_amounts.total],
+          ['Föreslagen utdelning', -data.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend],
+          ['Balanseras i ny räkning', data.forvaltningsberattelse.resultatdisposition_amounts.carried_forward],
+        ].map(([label, amount], index) => (
+          <View
+            key={String(label)}
+            style={index === 3 || index === 5 ? styles.tableRowTotal : styles.tableRow}
+          >
+            <Text style={styles.colLabel}>{label}</Text>
+            <Text style={styles.colAmount}>{fmt(Number(amount))}</Text>
+          </View>
+        ))}
       </Page>
 
       {/* Resultaträkning — ÅRL post level, no account numbers. */}
@@ -292,7 +319,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         <Text style={styles.sectionTitle}>Underskrifter</Text>
         <Text style={styles.paragraph}>
           {data.company.city ? `${data.company.city}, ` : ''}
-          {data.fiscal_period.period_end}
+          {reportSignatureDate ?? '____________________'}
         </Text>
         {(data.signatures.length > 0
           ? data.signatures
@@ -345,7 +372,7 @@ export function ArsredovisningPDF({ data }: { data: ArsredovisningData }) {
         </Text>
         <Text style={styles.sectionTitle}>Stämmans beslut om resultatdisposition</Text>
         <Text style={styles.paragraph}>
-          {data.forvaltningsberattelse.resultatdisposition}
+          {agmDispositionDecision ?? 'Årsstämmans beslut har ännu inte registrerats.'}
         </Text>
         <View style={styles.signatureLine}>
           <View style={styles.signatureSlot}>

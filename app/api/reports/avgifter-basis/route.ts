@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateAvgifterBasis } from '@/lib/reports/avgifter-basis'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * Arbetsgivaravgiftsunderlag report.
@@ -15,7 +16,6 @@ export const GET = withRouteContext('report.avgifter_basis', async (request, { s
     const report = await generateAvgifterBasis(supabase, companyId, year)
     return NextResponse.json({ data: report })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Kunde inte generera avgiftsunderlag'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
   }
 })

@@ -61,6 +61,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
   } | null>(null)
+  const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
 
   // Skatteverket's per-period AGI submission record: drives the AGI step on
   // the progress rail and the panel's state machine (underlag submitted /
@@ -79,11 +80,14 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       setRun(data)
       if (data?.period_year && data?.period_month) {
         const period = `${data.period_year}-${String(data.period_month).padStart(2, '0')}`
-        const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
-        if (txRes.ok) {
-          const tx = await txRes.json()
-          setTaxPayment(tx.data)
-        }
+        setTaxPaymentLoading(true)
+        void fetch(`/api/skatteverket/tax-payments/${period}`)
+          .then(async (txRes) => (txRes.ok ? txRes.json() : null))
+          .then((tx) => {
+            if (tx) setTaxPayment(tx.data)
+          })
+          .catch(() => setTaxPayment(null))
+          .finally(() => setTaxPaymentLoading(false))
       }
     }
   }
@@ -463,7 +467,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     } catch (err) {
       toast({
         title: t('toast_zip_failed'),
-        description: err instanceof Error ? err.message : t('unknown_error'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
     } finally {
@@ -650,15 +654,24 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
       {/* Tax payment (skatt + arbetsgivaravgifter): once AGI has been generated */}
       {run.status === 'booked' && run.agi_generated_at && (
-        <TaxPaymentPanel
-          period={periodLabel}
-          totalTax={run.total_tax}
-          totalAvgifter={run.total_avgifter}
-          paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
-          taxPaidAt={taxPayment?.tax_paid_at ?? null}
-          readOnly={!canWrite}
-          onChange={loadRun}
-        />
+        taxPaymentLoading ? (
+          <Card>
+            <CardContent className="space-y-4 p-6">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-20 w-full" />
+            </CardContent>
+          </Card>
+        ) : (
+          <TaxPaymentPanel
+            period={periodLabel}
+            totalTax={run.total_tax}
+            totalAvgifter={run.total_avgifter}
+            paymentFileGeneratedAt={taxPayment?.tax_payment_file_generated_at ?? null}
+            taxPaidAt={taxPayment?.tax_paid_at ?? null}
+            readOnly={!canWrite}
+            onChange={loadRun}
+          />
+        )
       )}
 
       {/* AGI (Arbetsgivardeklaration): available once the run is booked */}

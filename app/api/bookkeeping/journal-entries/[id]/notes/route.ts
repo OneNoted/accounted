@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const UpdateNotesSchema = z.object({
   notes: z.string().max(2000).nullable(),
@@ -27,7 +28,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .maybeSingle()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 400 })
     }
     // Zero rows = the entry doesn't exist in this company — report it instead
     // of a phantom success.

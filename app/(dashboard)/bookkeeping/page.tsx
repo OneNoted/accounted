@@ -1,18 +1,25 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import JournalEntryList from '@/components/bookkeeping/JournalEntryList'
 import { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import NewJournalEntryDialog, { type CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
+import type { CopyPrefill } from '@/components/bookkeeping/NewJournalEntryDialog'
+import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
+
+const NewJournalEntryDialog = dynamic(
+  () => import('@/components/bookkeeping/NewJournalEntryDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 
 interface NextVoucher {
   next: number
@@ -153,20 +160,22 @@ export default function BookkeepingPage() {
 
       <JournalEntryList key={refreshKey} />
 
-      <NewJournalEntryDialog
-        open={showNewEntry}
-        onOpenChange={(o) => {
-          setShowNewEntry(o)
-          if (!o) setCopyPrefill(null)
-        }}
-        onCreated={() => {
-          setRefreshKey((k) => k + 1)
-          setShowNewEntry(false)
-          setCopyPrefill(null)
-        }}
-        copyPrefill={copyPrefill}
-        isLoading={isLoadingCopy}
-      />
+      {showNewEntry && (
+        <NewJournalEntryDialog
+          open
+          onOpenChange={(o) => {
+            setShowNewEntry(o)
+            if (!o) setCopyPrefill(null)
+          }}
+          onCreated={() => {
+            setRefreshKey((k) => k + 1)
+            setShowNewEntry(false)
+            setCopyPrefill(null)
+          }}
+          copyPrefill={copyPrefill}
+          isLoading={isLoadingCopy}
+        />
+      )}
     </div>
   )
 }

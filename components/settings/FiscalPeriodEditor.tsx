@@ -18,6 +18,7 @@ import {
   validateFirstPeriod,
 } from '@/components/bookkeeping/FiscalPeriodDateFields'
 import type { FiscalPeriod } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 function formatSwedishDate(dateStr: string): string {
   const months = [
@@ -84,7 +85,7 @@ export function FiscalPeriodEditor() {
         setEndDate(first.period_end)
       } catch (err) {
         if (!cancelled) {
-          setLoadError(err instanceof Error ? err.message : t('fp_load_error_unknown'))
+          setLoadError(err instanceof Error ? getUserErrorMessage(err) : t('fp_load_error_unknown'))
         }
       } finally {
         if (!cancelled) setIsLoading(false)
@@ -158,7 +159,7 @@ export function FiscalPeriodEditor() {
     } catch (err) {
       toast({
         title: t('fp_update_failed_title'),
-        description: err instanceof Error ? err.message : t('fp_try_again'),
+        description: err instanceof Error ? getUserErrorMessage(err) : t('fp_try_again'),
         variant: 'destructive',
       })
     } finally {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/company/check-org-number?org_number=XXXXXXXXXX
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
     .is('archived_at', null)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   const companies = (data ?? []).map((c: { id: string; name: string }) => ({

@@ -26,6 +26,9 @@
  *      whose package.json spec or locked version drifted from the pin. Guards
  *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
  *      (empty Bedrock stream). No baseline: any drift is a hard failure.
+ *   5. raw-user-error: raw caught-error messages passed to API response fields,
+ *      client error state, or toast fields. Engine, database, and upstream
+ *      messages must pass through getErrorMessage() or errorResponse().
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -36,6 +39,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'antipatterns-baseline.json')
@@ -167,11 +171,285 @@ function findPinnedDepViolations() {
   return out
 }
 
+const USER_ERROR_FIELD_NAMES = new Set([
+  'description',
+  'detail',
+  'details',
+  'error',
+  'message',
+  'reason',
+  'title',
+])
+
+function propertyNameText(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text
+  }
+  return null
+}
+
+function propertyPath(node) {
+  const parts = []
+  let current = node
+  while (ts.isPropertyAccessExpression(current)) {
+    parts.unshift(current.name.text)
+    current = current.expression
+  }
+  if (ts.isIdentifier(current)) parts.unshift(current.text)
+  return parts
+}
+
+function isRawErrorMessage(node) {
+  if (!ts.isPropertyAccessExpression(node) || node.name.text !== 'message') return false
+  const parts = propertyPath(node)
+  if (parts.length < 2) return false
+  const root = parts[0]
+  return (
+    /^(?:e|err|error|cause)$/i.test(root) ||
+    /(?:Error|Err)$/.test(root) ||
+    parts.slice(0, -1).some((part) => /^(?:error|first_error)$/i.test(part))
+  )
+}
+
+function isErrorLikeIdentifier(node) {
+  return ts.isIdentifier(node) && (
+    /^(?:e|err|error|cause)$/i.test(node.text) || /(?:Error|Err)$/.test(node.text)
+  )
+}
+
+function isRawErrorString(node) {
+  return (
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'String' &&
+    node.arguments.length === 1 &&
+    isErrorLikeIdentifier(node.arguments[0])
+  )
+}
+
+function containsRawErrorMessage(node) {
+  let found = false
+  const visit = (child) => {
+    if (found) return
+    if (isRawErrorMessage(child) || isRawErrorString(child)) {
+      found = true
+      return
+    }
+    ts.forEachChild(child, visit)
+  }
+  visit(node)
+  return found
+}
+
+function enclosingCatch(node) {
+  let current = node.parent
+  while (current) {
+    if (ts.isCatchClause(current)) return current
+    if (ts.isFunctionLike(current)) return null
+    current = current.parent
+  }
+  return null
+}
+
+const taintedCatchNames = new WeakMap()
+
+function getTaintedNames(catchClause) {
+  const cached = taintedCatchNames.get(catchClause)
+  if (cached) return cached
+
+  const declarations = []
+  const collect = (node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer
+    ) {
+      declarations.push(node)
+    }
+    ts.forEachChild(node, collect)
+  }
+  collect(catchClause.block)
+
+  const names = new Set()
+
+  const isTaintedValue = (node) => {
+    if (isRawErrorMessage(node) || isRawErrorString(node)) return true
+    if (ts.isCallExpression(node) && callName(node) === 'getErrorMessage') return false
+    if (ts.isConditionalExpression(node)) {
+      return isTaintedValue(node.whenTrue) || isTaintedValue(node.whenFalse)
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind !== ts.SyntaxKind.PlusToken) {
+      return false
+    }
+    let tainted = false
+    const visit = (child) => {
+      if (tainted) return
+      if (isRawErrorMessage(child) || isRawErrorString(child)) {
+        tainted = true
+        return
+      }
+      if (ts.isIdentifier(child) && names.has(child.text)) {
+        tainted = true
+        return
+      }
+      if (ts.isCallExpression(child) && callName(child) === 'getErrorMessage') return
+      ts.forEachChild(child, visit)
+    }
+    ts.forEachChild(node, visit)
+    return tainted
+  }
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const declaration of declarations) {
+      if (names.has(declaration.name.text)) continue
+      const tainted = isTaintedValue(declaration.initializer)
+      if (tainted) {
+        names.add(declaration.name.text)
+        changed = true
+      }
+    }
+  }
+
+  taintedCatchNames.set(catchClause, names)
+  return names
+}
+
+function containsRawOrTaintedError(node) {
+  if (containsRawErrorMessage(node)) return true
+  const catchClause = enclosingCatch(node)
+  if (!catchClause) return false
+  const names = getTaintedNames(catchClause)
+  let found = false
+  const visit = (child) => {
+    if (found) return
+    if (ts.isIdentifier(child) && names.has(child.text)) {
+      found = true
+      return
+    }
+    if (ts.isPropertyAssignment(child)) {
+      visit(child.initializer)
+      return
+    }
+    ts.forEachChild(child, visit)
+  }
+  visit(node)
+  return found
+}
+
+function callName(call) {
+  const expression = call.expression
+  if (ts.isIdentifier(expression)) return expression.text
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text
+  return ''
+}
+
+function isLoggingCall(call) {
+  const expression = call.expression
+  if (!ts.isPropertyAccessExpression(expression)) return false
+  const owner = expression.expression.getText()
+  return (
+    owner === 'console' ||
+    /(?:^|\.)log$/.test(owner) ||
+    /Log$/.test(owner) ||
+    owner.endsWith('Logger')
+  )
+}
+
+function ancestorCall(node, predicate = () => true) {
+  let current = node.parent
+  while (current) {
+    if (ts.isCallExpression(current) && predicate(current)) return current
+    if (ts.isFunctionLike(current)) return null
+    current = current.parent
+  }
+  return null
+}
+
+function isApiResponseCall(call) {
+  const name = callName(call)
+  if (/^(?:errorResponse|errorResponseFromCode|getErrorMessage)$/.test(name)) return false
+  if (/^(?:json|v1ErrorResponse|v1ErrorResponseFromCode)$/.test(name)) return true
+  if (ts.isPropertyAccessExpression(call.expression)) {
+    return call.expression.name.text === 'json'
+  }
+  return false
+}
+
+function isClientErrorSetter(call) {
+  const name = callName(call)
+  return name === 'toast' || /^set[A-Z].*(?:Error|Message)$/.test(name) || name === 'setError'
+}
+
+/**
+ * Raw caught-error messages in user-visible sinks. This is deliberately an
+ * AST check: line regexes cannot distinguish a logger payload from a JSON
+ * response, nor a Zod issue message from err.message.
+ */
+function findRawUserErrors() {
+  const files = [
+    ...walk(path.join(ROOT, 'app', 'api'), ['route.ts']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']).filter((f) => !rel(f).startsWith('app/api/')),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+  ]
+  const findings = []
+
+  for (const file of files) {
+    const sourceText = fs.readFileSync(file, 'utf8')
+    const source = ts.createSourceFile(
+      file,
+      sourceText,
+      ts.ScriptTarget.Latest,
+      true,
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    )
+    const isApi = rel(file).startsWith('app/api/')
+
+    const add = (node) => {
+      const pos = source.getLineAndCharacterOfPosition(node.getStart(source))
+      findings.push(`${rel(file)}:${pos.line + 1}`)
+    }
+
+    const visit = (node) => {
+      if (ts.isPropertyAssignment(node)) {
+        const field = propertyNameText(node.name)
+        if (
+          field &&
+          USER_ERROR_FIELD_NAMES.has(field) &&
+          !ts.isObjectLiteralExpression(node.initializer) &&
+          containsRawOrTaintedError(node.initializer)
+        ) {
+          const loggingCall = ancestorCall(node, isLoggingCall)
+          const clientSink = ancestorCall(node, isClientErrorSetter)
+          if (!loggingCall) {
+            if (isApi || clientSink) add(node)
+          }
+        }
+      }
+
+      if (ts.isCallExpression(node) && node.arguments.some(containsRawOrTaintedError)) {
+        if (!isLoggingCall(node)) {
+          if ((isApi && isApiResponseCall(node)) || (!isApi && isClientErrorSetter(node))) {
+            add(node)
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit)
+    }
+    visit(source)
+  }
+
+  return [...new Set(findings)].sort()
+}
+
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
   directJelInsert: findDirectJelInserts(),
   pinnedDepViolations: findPinnedDepViolations(),
+  rawUserErrors: findRawUserErrors(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -244,6 +522,19 @@ if (current.pinnedDepViolations.length) {
   )
 }
 
+// 1d. raw-user-error: user-facing sinks must never receive err.message.
+if (current.rawUserErrors.length) {
+  failed = true
+  console.error(
+    `\n✗ raw-user-error: ${current.rawUserErrors.length} user-visible sink(s) expose a raw caught-error message:`,
+  )
+  current.rawUserErrors.forEach((finding) => console.error(`    ${finding}`))
+  console.error(
+    '  → map the error through getErrorMessage(), or throw it inside withRouteContext so\n' +
+      '    errorResponse() produces the canonical structured envelope.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -268,5 +559,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0, pinned-dep: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0).`,
 )

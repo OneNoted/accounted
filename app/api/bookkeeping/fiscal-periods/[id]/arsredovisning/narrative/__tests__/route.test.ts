@@ -121,6 +121,15 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 when the payload contains an unknown field', async () => {
+    setupSupabase()
+    const res = await POST(
+      postReq({ description: 'x', annual_report_version_id: 'forged-version' }),
+      idParams,
+    )
+    expect(res.status).toBe(400)
+  })
+
   it('returns 404 when the period does not belong to the company', async () => {
     const { enqueue } = setupSupabase()
     enqueue({ data: null }) // fiscal_periods ownership check
@@ -135,6 +144,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/arsredovisning/narrative', (
     enqueue({ data: { id: 'period-1' } }) // fiscal_periods ownership check
     enqueue({ data: null }) // no registrerad submission
     enqueue({ data: narrativeRow }) // upsert
+    enqueue({ data: null }) // clear narrative confirmation
     const { status, body } = await parseJsonResponse<{ data: typeof narrativeRow }>(
       await POST(postReq({ description: 'Bolaget bedriver konsultverksamhet.' }), idParams),
     )

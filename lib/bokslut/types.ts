@@ -34,6 +34,33 @@ export interface ProposedDisposition {
   required?: boolean
 }
 
+export type TaxAdjustmentType = 'non_deductible_expense' | 'non_taxable_income'
+export type TaxAdjustmentSource = 'detected' | 'manual'
+
+export interface TaxAdjustmentItem {
+  sourceKey: string
+  source: TaxAdjustmentSource
+  adjustmentType: TaxAdjustmentType
+  description: string
+  accountNumber: string | null
+  amount: number
+  included: boolean
+}
+
+export interface TaxAdjustmentSnapshot {
+  items: TaxAdjustmentItem[]
+  nonDeductibleExpenses: number
+  nonTaxableIncome: number
+}
+
+export interface CompletedDisposition {
+  kind: DispositionKind
+  label: string
+  amount: number
+  status: 'booked' | 'needs_correction'
+  warnings: string[]
+}
+
 /**
  * Snapshot of all proposed dispositions for a fiscal period, returned by the
  * dispositions API. Order is the suggested user-flow order: p-fond återföring
@@ -52,4 +79,6 @@ export interface DispositionsProposal {
   /** Result before any new dispositions, from the income statement (positive = profit). */
   netResultBefore: number
   proposals: ProposedDisposition[]
+  taxAdjustments?: TaxAdjustmentSnapshot
+  completedDispositions?: CompletedDisposition[]
 }

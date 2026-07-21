@@ -17,6 +17,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { eventBus } from '@/lib/events'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const DocumentDownloadResponse = z.object({
   id: z.string().uuid(),
@@ -122,7 +123,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       ctx.log.error('createSignedUrl failed', signErr as Error, { documentId })
       return v1ErrorResponseFromCode('DOC_DOWNLOAD_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: signErr?.message ?? 'unknown' },
+        details: { reason: getUserErrorMessage(signErr) ?? 'unknown' },
       })
     }
 

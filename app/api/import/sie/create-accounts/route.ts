@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import type { SIEAccount } from '@/lib/import/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * Determine account type based on account class (first digit)
@@ -106,7 +107,7 @@ export const POST = withRouteContext(
         if (error) {
           console.error('Error upserting accounts batch:', error)
           return NextResponse.json({
-            error: `Kunde inte skapa konton (batch ${Math.floor(i / batchSize) + 1}): ${error.message}. ${totalCreated} konton skapades innan felet.`,
+            error: `Kunde inte skapa konton (batch ${Math.floor(i / batchSize) + 1}): ${getUserErrorMessage(error)}. ${totalCreated} konton skapades innan felet.`,
             created: totalCreated,
           }, { status: 500 })
         }
@@ -123,7 +124,7 @@ export const POST = withRouteContext(
     } catch (error) {
       console.error('Create accounts error:', error)
       return NextResponse.json(
-        { error: `Kunde inte skapa konton: ${error instanceof Error ? error.message : 'Okänt fel'}. Försök igen.` },
+        { error: `Kunde inte skapa konton: ${error instanceof Error ? getUserErrorMessage(error) : 'Okänt fel'}. Försök igen.` },
         { status: 500 }
       )
     }

@@ -9,6 +9,7 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import type { TrialBalanceRow } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.trial_balance.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -77,7 +78,7 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera saldobalans' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera saldobalans' },
       { status: 500 }
     )
   }

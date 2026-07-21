@@ -204,7 +204,20 @@ export function makeInput(): IxbrlArsredovisningInput {
       },
       { number: 2, title: 'Medelantal anställda', body: 'Medelantalet anställda har uppgått till 2.' },
       { number: 3, title: 'Långfristiga skulder', body: 'Inga skulder förfaller senare än fem år efter balansdagen.' },
+      { number: 4, title: 'Ställda säkerheter', body: 'Inga.' },
+      { number: 5, title: 'Eventualförpliktelser', body: 'Inga.' },
+      {
+        number: 6,
+        title: 'Koncernförhållanden',
+        body: 'Moderföretag: Moderbolaget AB.',
+      },
     ],
+    disclosures: {
+      longTermDebtOverFiveYears: 0,
+      securitiesPledged: 'Inga.',
+      contingentLiabilities: 'Inga.',
+      parentCompany: 'Moderföretag: Moderbolaget AB.',
+    },
     medelantalAnstallda: { current: 2, previous: 1 },
     underskrifter: {
       ort: 'Sundsvall',
@@ -222,6 +235,8 @@ export function makeInput(): IxbrlArsredovisningInput {
     },
     faststallelseintyg: {
       arsstammaDatum: '2026-03-15',
+      resultatdispositionOutcome: 'proposal_approved',
+      resultatdispositionDecision: null,
       signerFirstName: 'Karl',
       signerLastName: 'Karlsson',
       signerRole: 'Styrelseledamot',

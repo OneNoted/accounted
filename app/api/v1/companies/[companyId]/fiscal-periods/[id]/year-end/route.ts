@@ -21,6 +21,7 @@ import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { startOperation, completeOperation, failOperation } from '@/lib/api/v1/operations'
 import { executeYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const YearEndAcceptedResponse = z.object({
   operation_id: z.string().uuid(),
@@ -133,13 +134,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
       return accepted(operationId, 'fiscal_periods.year_end', { requestId: ctx.requestId })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'unknown'
       ctx.log.error('fiscal-periods.year-end failed', err as Error, { fiscalPeriodId, operationId })
       await failOperation(
         ctx.supabase,
         {
           id: operationId,
-          error: { code: 'YEAR_END_FAILED', message: msg },
+          error: { code: 'YEAR_END_FAILED', message: getErrorMessage(err, { locale: 'en' }) },
         },
         ctx.log,
       )

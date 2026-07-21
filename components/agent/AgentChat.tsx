@@ -18,6 +18,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Markdown parser loads on the first assistant message instead of with the
 // chat surface itself; react-markdown + remark-gfm pull in the whole
@@ -259,7 +260,7 @@ export default function AgentChat({
       })
     } catch (err) {
       if (signal.aborted) return
-      setErrorMessage(err instanceof Error ? err.message : 'Kunde inte nå assistenten.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte nå assistenten.')
       setStreaming(false)
       activeControllerRef.current = null
       return
@@ -332,7 +333,7 @@ export default function AgentChat({
       }
     } catch (err) {
       if (!signal.aborted) {
-        setErrorMessage(err instanceof Error ? err.message : 'Streamen avbröts.')
+        setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Streamen avbröts.')
       }
     } finally {
       try {

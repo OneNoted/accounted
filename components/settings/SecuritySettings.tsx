@@ -14,6 +14,7 @@ import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
 const mfaRequired = isMfaRequired()
@@ -141,7 +142,7 @@ export function SecuritySettings() {
         }
         toast({
           title: t('toast_unenroll_failed_title'),
-          description: error.message,
+          description: getUserErrorMessage(error),
           variant: 'destructive',
         })
         return

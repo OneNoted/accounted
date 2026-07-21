@@ -25,6 +25,7 @@ import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { createDraftEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import type { Logger } from '@/lib/logger'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BulkRequest = z.object({
   journal_entries: z.array(CreateJournalEntrySchema).min(1).max(50),
@@ -140,7 +141,7 @@ async function createOne(
         request_index: index,
         error: {
           code: e.code ?? 'BOOKKEEPING_DATABASE_ERROR',
-          message: e.message ?? 'Engine error',
+          message: getUserErrorMessage(e) ?? 'Engine error',
           details: e.details,
         },
       }

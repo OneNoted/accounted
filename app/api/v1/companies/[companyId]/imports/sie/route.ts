@@ -45,6 +45,7 @@ import {
 import { suggestMappings } from '@/lib/import/account-mapper'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -141,7 +142,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           requestId: ctx.requestId,
           details: {
             field: 'options',
-            message: `options must be a valid JSON string: ${err instanceof Error ? err.message : 'parse error'}`,
+            message: `options must be a valid JSON string: ${err instanceof Error ? getUserErrorMessage(err) : 'parse error'}`,
           },
         })
       }
@@ -205,7 +206,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       ctx.log.error('SIE parse failed', err as Error)
       return v1ErrorResponseFromCode('SIE_PARSE_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 
@@ -309,14 +310,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           id: op.id,
           error: {
             code: 'SIE_IMPORT_FAILED',
-            message: err instanceof Error ? err.message : 'Unknown failure during SIE import.',
+            message: err instanceof Error ? getUserErrorMessage(err) : 'Unknown failure during SIE import.',
           },
         },
         ctx.log,
       )
       return v1ErrorResponseFromCode('SIE_IMPORT_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { operation_id: op.id, reason: err instanceof Error ? err.message : 'unknown' },
+        details: { operation_id: op.id, reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 

@@ -121,7 +121,7 @@ describe('POST /api/transactions/[id]/uncategorize', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
-    expect(body).toEqual({ error: 'Period is locked' })
+    expect(body).toEqual({ error: 'Kunde inte hantera transaktionen. Försök igen.' })
   })
 
   it('returns 200 and reverses entry on success', async () => {

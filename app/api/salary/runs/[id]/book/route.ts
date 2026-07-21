@@ -4,6 +4,7 @@ import { bookPaidSalaryRun } from '@/lib/salary/book-run'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -40,7 +41,7 @@ export const POST = withRouteContext(
       opLog.error('salary booking failed', err as Error)
       return errorResponseFromCode('SALARY_RUN_BOOK_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

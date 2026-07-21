@@ -14,6 +14,7 @@ import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -108,7 +109,7 @@ export const POST = withRouteContext(
         opLog.error('chart_of_accounts lookup failed', accountsError)
         return errorResponseFromCode('BULK_BOOK_RPC_FAILED', opLog, {
           requestId,
-          details: { message: accountsError.message },
+          details: { message: getUserErrorMessage(accountsError) },
         })
       }
       const validSet = new Set(
@@ -283,7 +284,7 @@ export const POST = withRouteContext(
       opLog.error('bulk_book_transactions RPC error', error)
       return errorResponseFromCode('BULK_BOOK_RPC_FAILED', opLog, {
         requestId,
-        details: { message: error.message },
+        details: { message: getUserErrorMessage(error) },
       })
     }
 

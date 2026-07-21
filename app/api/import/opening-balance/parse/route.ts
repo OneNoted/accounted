@@ -3,6 +3,7 @@ import { parseOpeningBalanceFile } from '@/lib/import/opening-balance/parser'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { DetectedColumns } from '@/lib/import/opening-balance/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -60,7 +61,7 @@ export const POST = withRouteContext(
       opLog.error('opening balance parse failed', err as Error)
       return errorResponseFromCode('OB_PARSE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

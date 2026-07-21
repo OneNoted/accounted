@@ -6,6 +6,7 @@ import { CreateEmployeeSchema } from '@/lib/api/schemas'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -25,7 +26,7 @@ export const GET = withRouteContext('salary.employees.list', async (request, { s
   const { data, error } = await query.order('last_name')
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   // Mask personnummer: show birthdate, hide the 4-digit suffix
@@ -110,7 +111,7 @@ export const POST = withRouteContext('salary.employees.create', async (request, 
     if (error.code === '23505') {
       return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
     }
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({

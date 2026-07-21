@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tools, deriveToolMeta } from '../server'
+import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { projectToolInputSchema } from '../company-routing'
 
 describe('tools/list payload size guard', () => {
@@ -7,7 +7,7 @@ describe('tools/list payload size guard', () => {
     // Mirror the real tools/list serializer, including the derived staging
     // _meta (requires_approval / approve_tool / preflight) merged over any
     // literal _meta: otherwise the guard under-measures the wire payload.
-    const projection = tools.map((t) => {
+    const projection = tools.filter(isDefaultCatalogTool).map((t) => {
       const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
       return {
         name: t.name,

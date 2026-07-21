@@ -11,6 +11,7 @@ import { AlertTriangle, FileDown, Info } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
 import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface EfDeclarationSectionProps {
   fiscalPeriodId: string
@@ -129,7 +130,7 @@ export function EfDeclarationSection({
       )
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte ladda EF-deklaration')
+        setError(getUserErrorMessage(body?.error) ?? 'Kunde inte ladda EF-deklaration')
         setPreview(null)
         return
       }

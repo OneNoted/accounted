@@ -8,6 +8,7 @@ import { UpdateInvoiceSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceDocumentType } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized() // Module-level: wires the audit-log handler for invoice.draft_deleted.
 
@@ -220,7 +221,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       ctxLog.error('invoice update failed', updateError, { invoiceId: id })
       return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', ctxLog, {
         requestId,
-        details: { pgCode: updateError.code, pgMessage: updateError.message },
+        details: { pgCode: updateError.code, pgMessage: getUserErrorMessage(updateError) },
       })
     }
     if (!updated || updated.length === 0) {
@@ -239,7 +240,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       ctxLog.error('invoice items delete failed on update', deleteItemsError, { invoiceId: id })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctxLog, {
         requestId,
-        details: { pgCode: deleteItemsError.code, pgMessage: deleteItemsError.message },
+        details: { pgCode: deleteItemsError.code, pgMessage: getUserErrorMessage(deleteItemsError) },
       })
     }
 
@@ -250,7 +251,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       ctxLog.error('invoice items insert failed on update', itemsError, { invoiceId: id })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctxLog, {
         requestId,
-        details: { pgCode: itemsError.code, pgMessage: itemsError.message },
+        details: { pgCode: itemsError.code, pgMessage: getUserErrorMessage(itemsError) },
       })
     }
 

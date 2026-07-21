@@ -4,6 +4,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { LinkDocumentSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -73,7 +74,7 @@ export const POST = withRouteContext(
           // Non-fatal: the verifikat ↔ underlag link already succeeded.
           opLog.warn('inbox item stamp after link failed', {
             inboxItemId: body.inbox_item_id,
-            reason: inboxError.message,
+            reason: getUserErrorMessage(inboxError),
           })
         } else if (!stamped || stamped.length === 0) {
           // Zero rows updated means the supplied inbox_item_id / document_id
@@ -100,7 +101,7 @@ export const POST = withRouteContext(
           // pin is row-level UX on the /transactions list.
           opLog.warn('transaction pin after link failed', {
             transactionId: body.transaction_id,
-            reason: pinError.message,
+            reason: getUserErrorMessage(pinError),
           })
         }
       }
@@ -125,7 +126,7 @@ export const POST = withRouteContext(
       }
       return errorResponseFromCode('DOC_LINK_FAILED', opLog, {
         requestId,
-        details: { reason: message || 'unknown' },
+        details: { reason: getUserErrorMessage(err) },
       })
     }
   },

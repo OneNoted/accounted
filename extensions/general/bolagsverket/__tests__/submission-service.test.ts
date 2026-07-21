@@ -10,10 +10,19 @@ vi.mock('@/lib/bokslut/ixbrl/build-input', () => ({
 }))
 vi.mock('@/lib/bokslut/ixbrl/document/k2-document', () => ({
   generateK2IxbrlDocument: vi.fn(() => ({ xhtml: '<?xml version="1.0"?><html></html>' })),
-  embedKontrollsumma: vi.fn((xhtml: string) => xhtml),
+  embedKontrollsumma: vi.fn(
+    (xhtml: string, checksum: string) => `${xhtml}<!-- checksum:${checksum} -->`,
+  ),
 }))
 vi.mock('@/lib/bokslut/ixbrl/validate/rules', () => ({
   runPreflightChecks: vi.fn(() => ({ ok: true, issues: [] })),
+}))
+vi.mock('@/lib/bokslut/ixbrl/validate/arelle-client', () => ({
+  validateIxbrlWithArelle: vi.fn(async () => ({
+    status: 'passed',
+    validator_version: 'test',
+    issues: [],
+  })),
 }))
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(async () => ({ id: 'doc-1' })),
@@ -25,6 +34,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
 }))
 
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { validateIxbrlWithArelle } from '@/lib/bokslut/ixbrl/validate/arelle-client'
 import {
   applyHandelse,
   BolagsverketSubmissionError,
@@ -34,6 +44,7 @@ import {
   submitArsredovisning,
 } from '../lib/submission-service'
 import type { HandelseMeddelande } from '../types'
+import { makeInput } from '@/lib/bokslut/ixbrl/__tests__/fixtures'
 
 function makeLog() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
@@ -96,14 +107,20 @@ const submitParams = {
   companyId: 'company-1',
   userId: 'user-1',
   fiscalPeriodId: 'period-1',
-  avsandarePnr: '198001019876',
+  annualReportVersionId: 'version-1',
+  avsandarePnr: '198001019879',
   undertecknare: {
-    pnr: '198001019876',
-    fornamn: 'Anna',
-    efternamn: 'Svensson',
-    roll: 'VD',
+    pnr: '198001019879',
+    fornamn: 'Karl',
+    efternamn: 'Karlsson',
+    roll: 'Styrelseledamot',
     epost: 'anna@example.com',
   },
+}
+
+const eligibleValidation = {
+  digital_filing_eligible: true,
+  digital_issues: [],
 }
 
 function message(overrides: Partial<HandelseMeddelande> = {}): HandelseMeddelande {
@@ -129,12 +146,12 @@ describe('normalizeOrgnr / hashPnr', () => {
   })
 
   it('hashes personnummer with company salt: never the raw value', () => {
-    const hash = hashPnr('company-1', '19830101-9876')
+    const hash = hashPnr('company-1', '19830101-9876', 'test-secret')
     expect(hash).toMatch(/^[0-9a-f]{64}$/)
     expect(hash).not.toContain('9876')
-    expect(hashPnr('company-2', '198301019876')).not.toBe(hash)
+    expect(hashPnr('company-2', '198301019876', 'test-secret')).not.toBe(hash)
     // Same pnr + company → stable.
-    expect(hashPnr('company-1', '198301019876')).toBe(hash)
+    expect(hashPnr('company-1', '198301019876', 'test-secret')).toBe(hash)
   })
 })
 
@@ -328,6 +345,15 @@ describe('submitArsredovisning', () => {
   it('refuses when an active submission already exists for the fiscal period', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { org_number: '556000-1111' }, error: null }) // company_settings
+    enqueue({
+      data: {
+        id: 'version-1',
+        status: 'signed',
+        ixbrl_data: makeInput(),
+        validation_summary: eligibleValidation,
+      },
+      error: null,
+    })
     enqueue({ data: [{ id: 'sub-0', status: 'uploaded' }], error: null }) // active submissions
 
     await expect(
@@ -341,14 +367,104 @@ describe('submitArsredovisning', () => {
     })
   })
 
-  it('marks the submission row as error and rethrows when inlämning fails', async () => {
+  it('blocks a signed version that is not eligible for connected filing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { org_number: '556000-1111' }, error: null })
+    enqueue({
+      data: {
+        id: 'version-1',
+        status: 'signed',
+        ixbrl_data: makeInput(),
+        validation_summary: {
+          digital_filing_eligible: false,
+          digital_issues: [{ code: 'AR-DIGITAL-AUDIT' }],
+        },
+      },
+      error: null,
+    })
+
+    await expect(
+      submitArsredovisning(
+        {
+          supabase: supabase as never,
+          client: makeClientMock(),
+          appUrl: 'https://app.test',
+          log: makeLog(),
+        },
+        submitParams,
+      ),
+    ).rejects.toMatchObject({ code: 'BOLAGSVERKET_DIGITAL_INELIGIBLE' })
+  })
+
+  it('requires the certificate signer to match the immutable version', async () => {
+    const { supabase } = makeRecordingSupabase([
+      { data: { org_number: '5560001111' } },
+      {
+        data: {
+          id: 'version-1',
+          status: 'signed',
+          ixbrl_data: makeInput(),
+          taxonomy_version: '2024-09-12',
+          validation_summary: eligibleValidation,
+        },
+      },
+      { data: [] },
+      { data: { id: 'acc-1' } },
+      {
+        data: [
+          {
+            signer_name: 'Anna Svensson',
+            role: 'VD',
+            signed_at: '2026-03-01T10:00:00Z',
+            status: 'signed',
+            signing_method: 'paper_original',
+            evidence_reference: 'Arkiv A-1',
+          },
+        ],
+      },
+    ])
+
+    await expect(
+      submitArsredovisning(
+        {
+          supabase,
+          client: makeClientMock(),
+          appUrl: 'https://app.test',
+          log: makeLog(),
+        },
+        {
+          ...submitParams,
+          undertecknare: { ...submitParams.undertecknare, fornamn: 'Någon annan' },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 'BOLAGSVERKET_CERTIFICATE_SIGNER_MISMATCH',
+    })
+  })
+
+  it('marks the submission as unknown and blocks an automatic retry when upload is uncertain', async () => {
     const { supabase, updates } = makeRecordingSupabase([
       { data: { org_number: '5560001111' } }, // getOrgnr
+      {
+        data: {
+          id: 'version-1',
+          status: 'signed',
+          ixbrl_data: makeInput(),
+          taxonomy_version: '2024-09-12',
+          validation_summary: eligibleValidation,
+        },
+      },
       { data: [] },                            // no active submission
       { data: { id: 'acc-1' } },               // avtal acceptance exists
+      { data: [{ signer_name: 'Anna Svensson', role: 'VD', signed_at: '2026-03-01T10:00:00Z', status: 'signed', signing_method: 'paper_original', evidence_reference: 'Arkiv A-1' }] },
+      {},                                      // local validation run
+      {},                                      // Arelle validation run
+      { data: null },                          // no exact request
       { data: { id: 'sub-1' } },               // insert submission row
       {},                                      // update → kontrollerad
-      {},                                      // markSubmissionError update
+      {},                                      // archive link update
+      {},                                      // update → sending
+      {},                                      // update → unknown
     ])
     const client = makeClientMock({
       lamnaIn: vi.fn(async () => {
@@ -357,52 +473,110 @@ describe('submitArsredovisning', () => {
     })
     const log = makeLog()
 
-    await expect(
-      submitArsredovisning({ supabase, client, appUrl: 'https://app.test', log }, submitParams),
-    ).rejects.toThrow('inlamning exploded')
+    const result = await submitArsredovisning(
+      { supabase, client, appUrl: 'https://app.test', log },
+      submitParams,
+    )
 
-    const errorUpdate = updates.find((u) => u.payload.status === 'error')
-    expect(errorUpdate).toBeDefined()
-    expect(errorUpdate!.table).toBe('arsredovisning_submissions')
-    expect(errorUpdate!.payload.error_message).toContain('inlamning exploded')
+    expect(result.outcome).toBe('state_unknown')
+    const unknownUpdate = updates.find((u) => u.payload.status === 'unknown')
+    expect(unknownUpdate).toBeDefined()
+    expect(unknownUpdate!.payload.error_message).toContain('inlamning exploded')
   })
 
-  it('logs and persists a document-archive failure without blocking the filing', async () => {
+  it('blocks filing when the exact uploaded bytes cannot be archived first', async () => {
     vi.mocked(uploadDocument).mockRejectedValueOnce(new Error('magic bytes rejected'))
     const { supabase, updates } = makeRecordingSupabase([
       { data: { org_number: '5560001111' } }, // getOrgnr
+      {
+        data: {
+          id: 'version-1',
+          status: 'signed',
+          ixbrl_data: makeInput(),
+          taxonomy_version: '2024-09-12',
+          validation_summary: eligibleValidation,
+        },
+      },
       { data: [] },                            // no active submission
       { data: { id: 'acc-1' } },               // avtal acceptance exists
+      { data: [{ signer_name: 'Anna Svensson', role: 'VD', signed_at: '2026-03-01T10:00:00Z', status: 'signed', signing_method: 'paper_original', evidence_reference: 'Arkiv A-1' }] },
+      {},                                      // local validation run
+      {},                                      // Arelle validation run
+      { data: null },                          // no exact request
       { data: { id: 'sub-1' } },               // insert submission row
       {},                                      // update → kontrollerad
-      {},                                      // error_message update (doc failure)
-      {},                                      // update → uploaded
-      // ensureSubscription throws on the empty appUrl before any query.
+      {},                                      // archive failure update
+      {},                                      // mark submission error
     ])
     const log = makeLog()
 
-    const result = await submitArsredovisning(
-      { supabase, client: makeClientMock(), appUrl: '', log },
-      submitParams,
-    )
-    expect(result.outcome).toBe('uploaded')
+    await expect(
+      submitArsredovisning(
+        { supabase, client: makeClientMock(), appUrl: 'https://app.test', log },
+        submitParams,
+      ),
+    ).rejects.toThrow('Dokumentarkivering misslyckades')
 
     // The failure is logged AND visible on the row.
-    expect(log.error).toHaveBeenCalledTimes(1)
-    expect(log.error.mock.calls[0][0]).toMatch(/archive/)
     const docFailureUpdate = updates.find(
       (u) => typeof u.payload.error_message === 'string' && !u.payload.status,
     )
     expect(docFailureUpdate).toBeDefined()
     expect(docFailureUpdate!.payload.error_message).toContain('magic bytes rejected')
 
-    // The filing itself still went through with dokument_id null.
-    const uploadedUpdate = updates.find((u) => u.payload.status === 'uploaded')
-    expect(uploadedUpdate).toBeDefined()
-    expect(uploadedUpdate!.payload.dokument_id).toBeNull()
+    expect(updates.some((update) => update.payload.status === 'sending')).toBe(false)
+  })
 
-    // Subscription failure (invalid appUrl) is logged, not swallowed.
-    expect(log.warn.mock.calls.some(([msg]) => /prenumeration/.test(String(msg)))).toBe(true)
+  it('reuses a stopped kontrollera row when the user explicitly accepts warnings', async () => {
+    const { supabase, updates } = makeRecordingSupabase([
+      { data: { org_number: '5560001111' } },
+      {
+        data: {
+          id: 'version-1',
+          status: 'signed',
+          ixbrl_data: makeInput(),
+          taxonomy_version: '2024-09-12',
+          validation_summary: eligibleValidation,
+        },
+      },
+      { data: [] },
+      { data: { id: 'acc-1' } },
+      {
+        data: [
+          {
+            signer_name: 'Anna Svensson',
+            role: 'VD',
+            signed_at: '2026-03-01T10:00:00Z',
+            status: 'signed',
+            signing_method: 'paper_original',
+            evidence_reference: 'Arkiv A-1',
+          },
+        ],
+      },
+      {},
+      {},
+      { data: { id: 'sub-1', status: 'kontrollerad' } },
+      { data: { id: 'sub-1' } },
+      {},
+      {},
+      {},
+      {},
+      {},
+    ])
+
+    const result = await submitArsredovisning(
+      { supabase, client: makeClientMock(), appUrl: '', log: makeLog() },
+      { ...submitParams, ignoreWarnings: true },
+    )
+
+    expect(result.outcome).toBe('uploaded')
+    expect(updates.some((update) => update.payload.status === 'draft')).toBe(true)
+    expect(updates.some((update) => update.payload.status === 'uploaded')).toBe(true)
+    expect(validateIxbrlWithArelle).toHaveBeenCalledWith(
+      expect.stringContaining('checksum:ksum'),
+    )
+    const archivedFile = vi.mocked(uploadDocument).mock.calls[0][3]
+    expect(Buffer.from(archivedFile.buffer).toString('utf8')).toContain('checksum:ksum')
   })
 
   it('exports BolagsverketSubmissionError with a stable code', () => {

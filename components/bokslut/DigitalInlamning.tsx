@@ -6,7 +6,7 @@
  * Three steps below the year-end ÅR editors:
  *   1. Granska: the generated iXBRL rendered in an iframe (the XHTML *is*
  *      the filed presentation) + pre-flight validation results + download
- *      for manual filing (the self-hosted/no-extension path).
+ *      for technical inspection and support diagnostics.
  *   2. Skicka in: only when the bolagsverket extension responds: avtalstext
  *      acceptance → kontrollera-utfall → upload till eget utrymme → kvittens
  *      with "signera hos Bolagsverket"-link. The fastställelseintyg is signed
@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -33,13 +34,16 @@ import {
   Send,
   ShieldCheck,
 } from 'lucide-react'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { CONNECTED_FILING_PUBLIC_RELEASED } from '@/lib/bokslut/arsredovisning/capabilities'
+import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
 
 /** Inlämningen till Bolagsverket väntar på avtal + organisationscertifikat
  *  (M0). Tills dess visas hela digital inlämning-sektionen blurrad med en
  *  "Kommer snart"-skylt: endast PDF-nedladdningen på ÅR-sidan är användbar.
  *  Flippa till false när integrationen är godkänd. Importeras också av
  *  ÅR-sidan som blurrar sina Bolagsverket-delar med samma flagga. */
-export const INLAMNING_COMING_SOON = true
+export const INLAMNING_COMING_SOON = !CONNECTED_FILING_PUBLIC_RELEASED
 
 interface PreflightIssue {
   code: string
@@ -66,7 +70,6 @@ interface SubmissionRow {
   id: string
   status: string
   environment: string
-  idnummer: string | null
   kontrollsumma: string | null
   sha256_checksumma: string | null
   bolagsverket_url: string | null
@@ -76,13 +79,33 @@ interface SubmissionRow {
   uploaded_at: string | null
   registered_at: string | null
   created_at: string
+  annual_report_version_id: string | null
+  archive_status: 'pending' | 'stored' | 'failed'
+}
+
+interface RegistryInformation {
+  namn: string
+  status: Array<{ kod?: string; text?: string }>
+  rakenskapsperioder: Array<{
+    from: string
+    tom: string
+    kravPaRevisionsberattelse: 'ja' | 'nej' | 'uppgift_saknas'
+    revisorsplikt: 'ja' | 'nej' | 'uppgift_saknas'
+  }>
+}
+
+interface RegistryCaseStatus {
+  typ: string
+  arendenummer: string | null
+  rakenskapsperiod: { from: string; tom: string } | null
 }
 
 type SubmitOutcome =
   | { outcome: 'avtal_required'; avtalstext: string; avtalstextAndrad: string }
   | { outcome: 'preflight_failed'; issues: PreflightIssue[] }
   | { outcome: 'kontrollera_stopped'; submissionId: string; utfall: KontrolleraUtfall[] }
-  | { outcome: 'uploaded'; submissionId: string; idnummer: string; url: string; utfall: KontrolleraUtfall[] }
+  | { outcome: 'uploaded'; submissionId: string; url: string; utfall: KontrolleraUtfall[] }
+  | { outcome: 'state_unknown'; submissionId: string; url: string | null; message: string }
 
 /**
  * Normalize a Swedish personnummer to the 12-digit ÅÅÅÅMMDDNNNN form the
@@ -108,7 +131,9 @@ function normalizePnr(raw: string): string | null {
 const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline' }> = {
   draft: { label: 'Utkast', variant: 'outline' },
   kontrollerad: { label: 'Kontrollerad', variant: 'secondary' },
+  sending: { label: 'Skickar: avvakta', variant: 'warning' },
   uploaded: { label: 'Uppladdad: väntar på signering', variant: 'warning' },
+  unknown: { label: 'Okänd extern status: skicka inte igen', variant: 'destructive' },
   inkommen: { label: 'Inkommen till Bolagsverket', variant: 'secondary' },
   forelagd: { label: 'Föreläggande: åtgärd krävs', variant: 'destructive' },
   komplettering: { label: 'Komplettering inlämnad', variant: 'secondary' },
@@ -119,6 +144,7 @@ const STATUS_BADGES: Record<string, { label: string; variant: 'default' | 'secon
 
 export function DigitalInlamning({ periodId }: { periodId: string }) {
   const { toast } = useToast()
+  const tStudio = useTranslations('annualReportStudio')
   const ixbrlUrl = `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/ixbrl`
 
   const [showPreview, setShowPreview] = useState(false)
@@ -127,6 +153,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
 
   // Extension availability: probe the status route; 404 = not enabled.
   const [extensionActive, setExtensionActive] = useState<boolean | null>(null)
+  const [filingEnabled, setFilingEnabled] = useState(false)
   const [environment, setEnvironment] = useState<string>('test')
 
   // Submission form
@@ -139,22 +166,31 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [submitting, setSubmitting] = useState(false)
   const [avtal, setAvtal] = useState<{ text: string; andrad: string; accepted: boolean } | null>(null)
   const [utfall, setUtfall] = useState<KontrolleraUtfall[] | null>(null)
-  const [kvittens, setKvittens] = useState<{ idnummer: string; url: string } | null>(null)
+  const [kvittens, setKvittens] = useState<{ url: string } | null>(null)
 
-  // Proposed dividend (utdelning) for the resultatdisposition. There is no
-  // persisted dividend proposal in the year-end flow yet, so the value is
-  // entered here and forwarded to the preview, the download and the
-  // submission so all three render the same disposition.
-  const [utdelning, setUtdelning] = useState('')
-  const parsedUtdelning = Math.round(Number(utdelning.replace(/\s/g, '').replace(',', '.')))
-  const utdelningValue = Number.isFinite(parsedUtdelning) && parsedUtdelning > 0 ? parsedUtdelning : 0
-  const previewUrl = utdelningValue > 0 ? `${ixbrlUrl}?utdelning=${utdelningValue}` : ixbrlUrl
-  const downloadUrl =
-    utdelningValue > 0 ? `${ixbrlUrl}?download=1&utdelning=${utdelningValue}` : `${ixbrlUrl}?download=1`
+  const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
+  const [selectedVersionId, setSelectedVersionId] = useState('')
+  const [registryInformation, setRegistryInformation] = useState<RegistryInformation | null>(null)
+  const [registryCase, setRegistryCase] = useState<RegistryCaseStatus | null>(null)
+
+  const versionQuery = selectedVersionId
+    ? `version=${encodeURIComponent(selectedVersionId)}`
+    : ''
+  const previewUrl = versionQuery ? `${ixbrlUrl}?${versionQuery}` : ixbrlUrl
+  const downloadUrl = `${ixbrlUrl}?download=1${versionQuery ? `&${versionQuery}` : ''}`
 
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
   const [submissionsError, setSubmissionsError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const signer = versions.find((version) => version.id === selectedVersionId)
+      ?.certificate_signer
+    if (!signer) return
+    setFornamn(signer.first_name)
+    setEfternamn(signer.last_name)
+    setRoll(signer.role)
+  }, [selectedVersionId, versions])
 
   const loadSubmissions = useCallback(async () => {
     setLoadingSubmissions(true)
@@ -179,6 +215,25 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
     }
   }, [periodId])
 
+  const loadVersions = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/versions`,
+      )
+      if (!res.ok) return
+      const body = await res.json()
+      const rows = (body.data ?? []) as AnnualReportVersionSummary[]
+      setVersions(rows)
+      const latestSigned = rows.find(
+        (version) => version.status === 'signed' && version.digital_filing_eligible,
+      )
+      if (latestSigned) setSelectedVersionId((current) => current || latestSigned.id)
+    } catch {
+      // The version list is also visible in the studio. Submission stays
+      // disabled here until a signed version can be selected.
+    }
+  }, [periodId])
+
   useEffect(() => {
     let cancelled = false
     fetch('/api/extensions/ext/bolagsverket/status')
@@ -190,26 +245,43 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         }
         const body = await res.json()
         setExtensionActive(true)
+        setFilingEnabled(body.data?.filing_enabled === true)
         setEnvironment(body.data?.environment ?? 'test')
         void loadSubmissions()
+        void Promise.all([
+          fetch('/api/extensions/ext/bolagsverket/grunduppgifter'),
+          fetch('/api/extensions/ext/bolagsverket/arendestatus'),
+        ])
+          .then(async ([informationResponse, caseResponse]) => {
+            if (informationResponse.ok) {
+              const informationBody = await informationResponse.json()
+              if (!cancelled) setRegistryInformation(informationBody.data as RegistryInformation)
+            }
+            if (caseResponse.ok) {
+              const caseBody = await caseResponse.json()
+              if (!cancelled) setRegistryCase(caseBody.data as RegistryCaseStatus)
+            }
+          })
+          .catch(() => undefined)
       })
       .catch(() => {
         if (!cancelled) setExtensionActive(false)
       })
+    void loadVersions()
     return () => {
       cancelled = true
     }
-  }, [loadSubmissions])
+  }, [loadSubmissions, loadVersions])
 
   const handleValidate = async () => {
     setValidating(true)
     try {
       const res = await fetch(
-        `${ixbrlUrl}/validate${utdelningValue > 0 ? `?utdelning=${utdelningValue}` : ''}`,
+        `${ixbrlUrl}/validate${versionQuery ? `?${versionQuery}` : ''}`,
       )
       const body = await res.json()
       if (body?.error) {
-        toast({ title: 'Kunde inte validera', description: body.error.message, variant: 'destructive' })
+        toast({ title: 'Kunde inte validera', description: getUserErrorMessage(body.error), variant: 'destructive' })
         return
       }
       setValidation(body.data as ValidateResponse)
@@ -233,6 +305,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       toast({ title: 'Fyll i undertecknarens namn och e-post', variant: 'destructive' })
       return
     }
+    if (!selectedVersionId) {
+      toast({ title: 'Lås och underteckna en version före inlämning', variant: 'destructive' })
+      return
+    }
     setSubmitting(true)
     setUtfall(null)
     try {
@@ -241,6 +317,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fiscal_period_id: periodId,
+          annual_report_version_id: selectedVersionId,
           avsandare_pnr: normalizedAvsandare,
           undertecknare: {
             pnr: normalizedPnr,
@@ -249,14 +326,13 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             roll,
             epost: epost.trim(),
           },
-          ...(utdelningValue > 0 ? { utdelning: utdelningValue } : {}),
           ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
           ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
         }),
       })
       const body = await res.json()
       if (body?.error) {
-        toast({ title: 'Inlämningen misslyckades', description: body.error.message, variant: 'destructive' })
+        toast({ title: 'Inlämningen misslyckades', description: getUserErrorMessage(body.error), variant: 'destructive' })
         return
       }
       const result = body.data as SubmitOutcome
@@ -285,7 +361,17 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         void loadSubmissions()
         return
       }
-      setKvittens({ idnummer: result.idnummer, url: result.url })
+      if (result.outcome === 'state_unknown') {
+        setKvittens(result.url ? { url: result.url } : null)
+        void loadSubmissions()
+        toast({
+          title: 'Okänd status hos Bolagsverket',
+          description: result.message,
+          variant: 'destructive',
+        })
+        return
+      }
+      setKvittens({ url: result.url })
       setUtfall(result.utfall.length > 0 ? result.utfall : null)
       setAvtal(null)
       void loadSubmissions()
@@ -306,7 +392,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       })
       const body = await res.json()
       if (body?.error) {
-        toast({ title: 'Kunde inte hämta händelser', description: body.error.message, variant: 'destructive' })
+        toast({ title: 'Kunde inte hämta händelser', description: getUserErrorMessage(body.error), variant: 'destructive' })
         return
       }
       void loadSubmissions()
@@ -340,31 +426,16 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           </p>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
-          <div className="space-y-1.5 max-w-xs">
-            <Label htmlFor="di-utdelning">Föreslagen utdelning (kr)</Label>
-            <Input
-              id="di-utdelning"
-              inputMode="numeric"
-              placeholder="0"
-              value={utdelning}
-              onChange={(event) => setUtdelning(event.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              Ingår i resultatdispositionen i dokumentet: 0 betyder att allt
-              balanseras i ny räkning. Beloppet följer med förhandsgranskning,
-              nedladdning och inlämning.
-            </p>
-          </div>
           <div className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => setShowPreview((value) => !value)}>
+            <Button className="min-h-11" variant="outline" onClick={() => setShowPreview((value) => !value)}>
               {showPreview ? 'Dölj förhandsgranskning' : 'Förhandsgranska iXBRL'}
             </Button>
-            <Button variant="outline" asChild>
+            <Button className="min-h-11" variant="outline" asChild>
               <a href={downloadUrl}>
-                <FileDown className="mr-2 h-4 w-4" /> Ladda ner iXBRL (.xhtml)
+                <FileDown className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
               </a>
             </Button>
-            <Button onClick={() => void handleValidate()} disabled={validating}>
+            <Button className="min-h-11" onClick={() => void handleValidate()} disabled={validating}>
               {validating ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
@@ -436,13 +507,13 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <div className="space-y-3">
               <p className="text-muted-foreground">
                 Bolagsverket-integrationen är inte aktiverad i den här installationen.
-                Ladda ner iXBRL-filen ovan och lämna in den manuellt via Bolagsverkets
-                e-tjänst, eller aktivera integrationen (kräver avtal med Bolagsverket och
-                organisationscertifikat).
+                Digital inlämning kräver en ansluten programvara. Använd PDF-flödet för
+                pappersinlämning per post, eller aktivera integrationen efter avtal,
+                organisationscertifikat och godkänt acceptanstest.
               </p>
-              <Button variant="outline" asChild>
+              <Button className="min-h-11" variant="outline" asChild>
                 <a
-                  href="https://www.bolagsverket.se/foretag/aktiebolag/arsredovisning/lamna-in-arsredovisning"
+                  href="https://bolagsverket.se/foretag/aktiebolag/arsredovisningforaktiebolag.759.html"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -452,7 +523,14 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             </div>
           )}
 
-          {extensionActive === true && (
+          {extensionActive === true && !filingEnabled && (
+            <p className="text-muted-foreground">
+              Anslutningen finns installerad men säkerhetsgrinden för inlämning är stängd.
+              Den öppnas först efter genomförd acceptanstest och produktionsgodkännande.
+            </p>
+          )}
+
+          {extensionActive === true && filingEnabled && (
             <>
               {environment !== 'prod' && (
                 <Badge variant="warning">
@@ -460,11 +538,58 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 </Badge>
               )}
 
+              <div className="space-y-1.5">
+                <Label htmlFor="di-version">Undertecknad årsredovisningsversion</Label>
+                <select
+                  id="di-version"
+                  className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  value={selectedVersionId}
+                  onChange={(event) => {
+                    const versionId = event.target.value
+                    setSelectedVersionId(versionId)
+                    const signer = versions.find((version) => version.id === versionId)
+                      ?.certificate_signer
+                    if (signer) {
+                      setFornamn(signer.first_name)
+                      setEfternamn(signer.last_name)
+                      setRoll(signer.role)
+                    }
+                  }}
+                >
+                  <option value="">Välj undertecknad version</option>
+                  {versions
+                    .filter(
+                      (version) =>
+                        version.status === 'signed' && version.digital_filing_eligible,
+                    )
+                    .map((version) => (
+                      <option key={version.id} value={version.id}>
+                        Version {version.version_number}: skapad {formatDate(version.created_at)}
+                      </option>
+                    ))}
+                </select>
+                {versions.every(
+                  (version) =>
+                    version.status !== 'signed' || !version.digital_filing_eligible,
+                ) && (
+                  <p className="text-xs text-muted-foreground">
+                    {tStudio('no_digital_version')}
+                  </p>
+                )}
+                {selectedVersionId && (
+                  <p className="text-xs text-muted-foreground">
+                    Namn och roll för fastställelseintyget kommer från den låsta versionen och
+                    måste vara oförändrade vid inlämning.
+                  </p>
+                )}
+              </div>
+
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="di-avsandare-pnr">Ditt personnummer (avsändare)</Label>
                   <Input
                     id="di-avsandare-pnr"
+                    className="min-h-11"
                     inputMode="numeric"
                     placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
                     value={avsandarePnr}
@@ -475,6 +600,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Label htmlFor="di-pnr">Undertecknarens personnummer</Label>
                   <Input
                     id="di-pnr"
+                    className="min-h-11"
                     inputMode="numeric"
                     placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
                     value={pnr}
@@ -483,19 +609,32 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="di-fornamn">Undertecknarens förnamn</Label>
-                  <Input id="di-fornamn" value={fornamn} onChange={(event) => setFornamn(event.target.value)} />
+                  <Input
+                    id="di-fornamn"
+                    className="min-h-11"
+                    value={fornamn}
+                    onChange={(event) => setFornamn(event.target.value)}
+                    readOnly={Boolean(selectedVersionId)}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="di-efternamn">Undertecknarens efternamn</Label>
-                  <Input id="di-efternamn" value={efternamn} onChange={(event) => setEfternamn(event.target.value)} />
+                  <Input
+                    id="di-efternamn"
+                    className="min-h-11"
+                    value={efternamn}
+                    onChange={(event) => setEfternamn(event.target.value)}
+                    readOnly={Boolean(selectedVersionId)}
+                  />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="di-roll">Roll</Label>
                   <select
                     id="di-roll"
-                    className="border border-border rounded-md h-9 text-sm px-2 bg-background w-full"
+                    className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
                     value={roll}
                     onChange={(event) => setRoll(event.target.value)}
+                    disabled={Boolean(selectedVersionId)}
                   >
                     <option>Styrelseledamot</option>
                     <option>Styrelseordförande</option>
@@ -506,6 +645,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Label htmlFor="di-epost">Undertecknarens e-post</Label>
                   <Input
                     id="di-epost"
+                    className="min-h-11"
                     type="email"
                     placeholder="namn@foretag.se"
                     value={epost}
@@ -515,9 +655,34 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </div>
               <p className="text-xs text-muted-foreground">
                 Personnumren skickas till Bolagsverket för att skapa eget utrymme och bjuda
-                in undertecknaren. De sparas inte i Accounted: endast en teknisk
-                referens (hash) lagras.
+                in undertecknaren. De sparas inte i Accounted och skrivs inte till loggar.
               </p>
+
+              {registryInformation && (
+                <div className="rounded-md border border-border bg-muted/20 p-4 text-xs">
+                  <p className="font-medium">Grunduppgifter från Bolagsverket</p>
+                  <p className="mt-1 text-muted-foreground">
+                    {registryInformation.namn}
+                    {registryInformation.status[0]?.text
+                      ? `: ${registryInformation.status[0].text}`
+                      : ''}
+                  </p>
+                  {registryInformation.rakenskapsperioder[0] && (
+                    <p className="mt-1 text-muted-foreground">
+                      Senaste period: {registryInformation.rakenskapsperioder[0].from} till{' '}
+                      {registryInformation.rakenskapsperioder[0].tom}. Krav på
+                      revisionsberättelse:{' '}
+                      {registryInformation.rakenskapsperioder[0].kravPaRevisionsberattelse}.
+                    </p>
+                  )}
+                  {registryCase && (
+                    <p className="mt-1 text-muted-foreground">
+                      Senaste ärendestatus: {registryCase.typ}
+                      {registryCase.arendenummer ? `, ärende ${registryCase.arendenummer}` : ''}.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {avtal && (
                 <div className="rounded-lg border border-border p-4 space-y-3">
@@ -525,7 +690,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <p className="text-muted-foreground whitespace-pre-wrap text-xs max-h-48 overflow-y-auto">
                     {avtal.text}
                   </p>
-                  <label className="flex items-start gap-2 text-sm">
+                  <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm">
                     <input
                       type="checkbox"
                       className="mt-0.5"
@@ -568,8 +733,14 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
 
               <div className="flex flex-wrap gap-3">
                 <Button
+                  className="min-h-11"
                   onClick={() => void handleSubmit()}
-                  disabled={submitting || blockingErrors || (avtal !== null && !avtal.accepted)}
+                  disabled={
+                    submitting ||
+                    blockingErrors ||
+                    !selectedVersionId ||
+                    (avtal !== null && !avtal.accepted)
+                  }
                 >
                   {submitting ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -580,6 +751,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 </Button>
                 {utfall && utfall.length > 0 && !utfallHasErrors && (
                   <Button
+                    className="min-h-11"
                     variant="outline"
                     onClick={() => void handleSubmit({ ignoreWarnings: true })}
                     disabled={submitting}
@@ -596,11 +768,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     <p className="font-medium">Uppladdad till eget utrymme</p>
                   </div>
                   <p className="text-muted-foreground text-xs">
-                    Dokument-id: <span className="tabular-nums">{kvittens.idnummer}</span>.
                     Undertecknaren har fått e-post från Bolagsverket och signerar
                     fastställelseintyget där. Ärendet startar först efter signering.
                   </p>
-                  <Button variant="outline" size="sm" asChild>
+                  <Button className="min-h-11" variant="outline" size="sm" asChild>
                     <a href={kvittens.url} target="_blank" rel="noopener noreferrer">
                       <ExternalLink className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
                     </a>
@@ -623,7 +794,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
             <div className="flex justify-end">
-              <Button variant="outline" size="sm" onClick={() => void handlePollEvents()}>
+              <Button className="min-h-11" variant="outline" size="sm" onClick={() => void handlePollEvents()}>
                 <RefreshCcw className="mr-2 h-4 w-4" /> Uppdatera status
               </Button>
             </div>
@@ -653,14 +824,13 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               return (
                 <div
                   key={submission.id}
-                  className="flex items-start justify-between gap-4 border-b border-border last:border-b-0 pb-3 last:pb-0"
+                  className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between"
                 >
                   <div className="space-y-1">
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                     <p className="text-xs text-muted-foreground tabular-nums">
                       {envLabel ? `${envLabel} · ` : ''}
                       {formatDate(submission.created_at)}
-                      {submission.idnummer ? ` · id ${submission.idnummer}` : ''}
                       {submission.undertecknare_namn ? ` · ${submission.undertecknare_namn}` : ''}
                     </p>
                     {submission.status === 'forelagd' && (
@@ -674,7 +844,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     )}
                   </div>
                   {submission.bolagsverket_url && submission.status === 'uploaded' && (
-                    <Button variant="outline" size="sm" asChild>
+                    <Button className="min-h-11" variant="outline" size="sm" asChild>
                       <a href={submission.bolagsverket_url} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="mr-1 h-3.5 w-3.5" /> Signera
                       </a>

@@ -26,6 +26,7 @@ import type {
   PeriodiseringConfidence,
 } from '@/lib/bokslut/accruals/auto-detect'
 import type { FiscalPeriod } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 type Step = 'vacation' | 'audit' | 'auto' | 'manual' | 'review'
 
@@ -160,7 +161,7 @@ export default function PeriodiseringWizardPage() {
         const body = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setLoadError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
+          setLoadError(getUserErrorMessage(body?.error) ?? 'Kunde inte ladda periodiseringar')
           return
         }
         const data = body.data as ProposalResponse
@@ -329,7 +330,7 @@ export default function PeriodiseringWizardPage() {
       })
       const body = await res.json()
       if (!res.ok) {
-        setPostError(body?.error?.message ?? 'Kunde inte bokföra periodiseringarna')
+        setPostError(getUserErrorMessage(body?.error) ?? 'Kunde inte bokföra periodiseringarna')
         return
       }
       const created = body.data?.created?.length ?? 0
@@ -340,7 +341,7 @@ export default function PeriodiseringWizardPage() {
         description: skipped > 0 ? `${skipped} hoppades över (redan postade).` : undefined,
       })
     } catch (err) {
-      setPostError(err instanceof Error ? err.message : 'Okänt fel')
+      setPostError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
     } finally {
       setPosting(false)
     }

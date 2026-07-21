@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { generateResultatrapport } from '@/lib/reports/resultatrapport'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.resultatrapport', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -41,7 +42,7 @@ export const GET = withRouteContext('report.resultatrapport', async (request, { 
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate resultatrapport' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to generate resultatrapport' },
       { status: 500 }
     )
   }

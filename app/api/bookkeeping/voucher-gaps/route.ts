@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { VoucherGapQuerySchema, SaveGapExplanationSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Voucher gap detection + explanations (BFNAR 2013:2 — gaps in voucher
 // sequences must be documented). Response shapes are legacy `{ data }` /
@@ -31,7 +32,7 @@ export const GET = withRouteContext('voucher_gaps.list', async (request, ctx) =>
   const { data: seriesRows, error: seriesError } = await seriesQuery
   if (seriesError) {
     log.error('voucher series lookup failed', seriesError)
-    return NextResponse.json({ error: seriesError.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(seriesError) }, { status: 500 })
   }
 
   if (!seriesRows || seriesRows.length === 0) {
@@ -59,7 +60,7 @@ export const GET = withRouteContext('voucher_gaps.list', async (request, ctx) =>
     // render "no gaps" on a compliance view when the check didn't run.
     if (gapsError) {
       log.error('detect_voucher_gaps failed', gapsError, { series: row.voucher_series })
-      return NextResponse.json({ error: gapsError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(gapsError) }, { status: 500 })
     }
 
     for (const gap of (gaps ?? []) as Array<{ gap_start: number; gap_end: number }>) {
@@ -148,7 +149,7 @@ export const POST = withRouteContext(
           { status: 403 }
         )
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })

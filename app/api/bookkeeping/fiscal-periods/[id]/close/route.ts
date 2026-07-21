@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { closePeriod } from '@/lib/core/bookkeeping/period-service'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Response shapes are legacy `{ error: string }` — kept for the year-end UI.
 // closePeriod throws plain Errors for every refusal (period not found, drafts
@@ -16,7 +17,7 @@ export const POST = withRouteContext(
       return NextResponse.json({ data: period })
     } catch (err) {
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Failed to close period' },
+        { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to close period' },
         { status: 400 }
       )
     }

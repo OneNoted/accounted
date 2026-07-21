@@ -2,6 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices
@@ -51,7 +52,7 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
     .limit(PAGE_LIMIT)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

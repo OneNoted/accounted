@@ -9,6 +9,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
 import type { SupplierImportExecuteResult } from '@/lib/import/suppliers/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -110,7 +111,7 @@ export const POST = withRouteContext(
             .single()
 
           if (error) {
-            errors.push({ row_index: row.row_index, name: row.name, reason: error.message })
+            errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
             continue
           }
           if (data) updated.push(data as Supplier)
@@ -150,7 +151,7 @@ export const POST = withRouteContext(
             skipped++
             continue
           }
-          errors.push({ row_index: row.row_index, name: row.name, reason: error.message })
+          errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
           continue
         }
         if (data) {
@@ -185,7 +186,7 @@ export const POST = withRouteContext(
       opLog.error('supplier import execute failed', err as Error)
       return errorResponseFromCode('REG_IMPORT_EXECUTE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

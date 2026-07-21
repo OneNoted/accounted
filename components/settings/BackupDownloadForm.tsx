@@ -12,6 +12,7 @@ import { Cloud, Download, Info, Loader2 } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import type { FiscalPeriod } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const CloudBackupPanel = getSettingsPanel('cloud-backup')
 const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
@@ -170,7 +171,7 @@ export function BackupDownloadForm() {
     } catch (err) {
       toast({
         title: t('toast_backup_failed'),
-        description: err instanceof Error ? err.message : t('toast_try_again'),
+        description: err instanceof Error ? getUserErrorMessage(err) : t('toast_try_again'),
         variant: 'destructive',
       })
     } finally {

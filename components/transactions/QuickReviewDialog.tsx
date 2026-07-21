@@ -21,6 +21,7 @@ import VatTreatmentSelect from './VatTreatmentSelect'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { TransactionCategory, VatTreatment, BASAccount, EntityType, LinePatternEntry } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface QuickReviewDialogProps {
   open: boolean
@@ -133,7 +134,7 @@ export default function QuickReviewDialog({
         const json = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setRateError(json?.error?.message || t('exchange_rate_fetch_failed'))
+          setRateError(getUserErrorMessage(json?.error) || t('exchange_rate_fetch_failed'))
           return
         }
         if (json?.data) {

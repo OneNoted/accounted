@@ -9,6 +9,7 @@ import {
   integerColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 function toDate(s: string): Date | null {
   if (!s) return null
@@ -96,7 +97,7 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera lönejournal' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera lönejournal' },
       { status: 500 }
     )
   }

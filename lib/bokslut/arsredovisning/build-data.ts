@@ -173,6 +173,11 @@ export async function buildArsredovisningData(
   )
 
   const egen_kapital_changes = buildEquityChanges(mapping)
+  const proposedDividend = narrative?.proposed_dividend ?? 0
+  const retainedEarnings = mapping.br['BalanseratResultat']?.current ?? 0
+  const sharePremiumReserve = mapping.br['Overkursfond']?.current ?? 0
+  const currentYearResult = mapping.br['AretsResultatEgetKapital']?.current ?? 0
+  const distributableEquity = mapping.totals.frittEgetKapital.current
 
   // Duplicate-value consistency with the RR (mirrors build-input.ts): the
   // flerårsöversikt is computed from the income statement (ALL class-3
@@ -325,6 +330,7 @@ export async function buildArsredovisningData(
     company: {
       name: companyName,
       org_number: orgNumber,
+      entity_type: entityType,
       city,
     },
     fiscal_period: {
@@ -351,7 +357,18 @@ export async function buildArsredovisningData(
         overrides.resultatdisposition ??
         persistedRd ??
         'Styrelsen föreslår att årets resultat balanseras i ny räkning.',
+      proposed_dividend: proposedDividend,
+      resultatdisposition_amounts: {
+        retained_earnings: retainedEarnings,
+        share_premium_reserve: sharePremiumReserve,
+        current_year_result: currentYearResult,
+        total: distributableEquity,
+        proposed_dividend: proposedDividend,
+        carried_forward: distributableEquity - proposedDividend,
+      },
       agm_date: persistedAgmDate,
+      agm_disposition_outcome: narrative?.agm_disposition_outcome ?? null,
+      agm_disposition_decision: narrative?.agm_disposition_decision ?? null,
     },
     resultatrakning,
     warnings,
@@ -367,6 +384,13 @@ export async function buildArsredovisningData(
       parent_company_name: narrative?.parent_company_name ?? null,
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
+      confirmations: {
+        long_term_debt_over_five_years:
+          narrative?.long_term_debt_over_five_years_confirmed ?? false,
+        securities_pledged: narrative?.securities_pledged_confirmed ?? false,
+        contingent_liabilities: narrative?.contingent_liabilities_confirmed ?? false,
+        parent_company: narrative?.parent_company_confirmed ?? false,
+      },
     },
   }
 }

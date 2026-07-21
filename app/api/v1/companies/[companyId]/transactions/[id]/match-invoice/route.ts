@@ -32,7 +32,7 @@ import {
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
@@ -453,14 +453,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
       txLog.error('match-invoice: payment JE creation failed: aborting before state mutation', err as Error)
-      const message = isBookkeepingError(err)
-        ? getErrorMessage(err, { context: 'invoice' })
-        : err instanceof Error
-          ? err.message
-          : 'Unknown error'
       return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', txLog, {
         requestId: ctx.requestId,
-        details: { reason: message },
+        details: { reason: getErrorMessage(err, { context: 'invoice' }) },
       })
     }
 

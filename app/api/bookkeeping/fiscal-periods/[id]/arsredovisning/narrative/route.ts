@@ -30,6 +30,15 @@ const PostSchema = z.object({
   description: sanitizedText(4000).nullable().optional(),
   important_events: sanitizedText(4000).nullable().optional(),
   resultatdisposition: sanitizedText(2000).nullable().optional(),
+  proposed_dividend: z
+    .number()
+    .min(0)
+    .max(1_000_000_000_000)
+    .nullable()
+    .optional()
+    .transform((value) =>
+      value === null || value === undefined ? value : Math.round(value * 100) / 100,
+    ),
   // ISO YYYY-MM-DD per the DATE column; null clears it. Validate as a
   // real calendar date (not just regex) so '2024-13-99' returns 400 from
   // the API instead of bubbling up as a Postgres 500.
@@ -75,6 +84,26 @@ const PostSchema = z.object({
     .nullable()
     .optional(),
   parent_company_city: sanitizedText(100).nullable().optional(),
+  long_term_debt_over_five_years_confirmed: z.boolean().optional(),
+  securities_pledged_confirmed: z.boolean().optional(),
+  contingent_liabilities_confirmed: z.boolean().optional(),
+  parent_company_confirmed: z.boolean().optional(),
+  agm_disposition_outcome: z
+    .enum(['proposal_approved', 'alternative_decision'])
+    .nullable()
+    .optional(),
+  agm_disposition_decision: sanitizedText(2000).nullable().optional(),
+}).strict().superRefine((value, ctx) => {
+  if (
+    value.agm_disposition_outcome === 'alternative_decision' &&
+    !value.agm_disposition_decision?.trim()
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['agm_disposition_decision'],
+      message: 'Årsstämmans alternativa beslut måste beskrivas.',
+    })
+  }
 })
 
 export const GET = withRouteContext(
@@ -150,6 +179,14 @@ export const POST = withRouteContext(
         return errorResponseFromCode('ARSREDOVISNING_REGISTERED', log, { requestId })
       }
       const data = await upsertNarrative(supabase, companyId, user.id, id, validation.data)
+      const { error: confirmationError } = await supabase
+        .from('annual_report_profiles')
+        .update({ narrative_confirmed_at: null })
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', id)
+      if (confirmationError) {
+        throw new Error(`Failed to clear narrative confirmation: ${confirmationError.message}`)
+      }
       return NextResponse.json({ data })
     } catch (err) {
       return errorResponse(err, log, { requestId })

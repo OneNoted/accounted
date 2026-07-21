@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createNewVersion, validateDocumentFile } from '@/lib/core/documents/document-service'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -42,7 +43,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (error) {
       console.error('[documents/versions/POST] Version creation failed:', error)
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : 'Version creation failed' },
+        { error: error instanceof Error ? getUserErrorMessage(error) : 'Version creation failed' },
         { status: 500 }
       )
     }
@@ -83,7 +84,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .order('version', { ascending: true })
 
     if (versionsError) {
-      return NextResponse.json({ error: versionsError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(versionsError) }, { status: 500 })
     }
 
     return NextResponse.json({ data: versions })

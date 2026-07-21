@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   performSync,
   CONNECTION_KEY,
@@ -210,6 +211,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
       const consecutiveFailures = syncResult.ok
         ? 0
         : (schedule.consecutive_failures ?? 0) + 1
+      const safeSyncError = syncResult.ok ? null : getErrorMessage(syncResult.message)
       let lastAlertAt = schedule.last_alert_at ?? null
       if (!syncResult.ok) {
         lastAlertAt = await maybeAlert({
@@ -217,7 +219,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
           userId,
           kind: syncResult.reason === 'needs_reauth' ? 'needs_reauth' : 'repeated_failures',
           consecutiveFailures,
-          errorMessage: syncResult.message,
+          errorMessage: safeSyncError,
           lastAlertAt,
         })
       }
@@ -226,7 +228,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
         ...schedule,
         last_auto_sync_at: new Date().toISOString(),
         last_auto_sync_status: syncResult.ok ? 'success' : 'error',
-        last_auto_sync_error: syncResult.ok ? null : syncResult.message,
+        last_auto_sync_error: safeSyncError,
         consecutive_failures: consecutiveFailures,
         last_alert_at: lastAlertAt,
       }
@@ -235,10 +237,10 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
       results.push({
         companyId,
         status: syncResult.ok ? 'success' : 'error',
-        error: syncResult.ok ? undefined : syncResult.message,
+        error: safeSyncError ?? undefined,
       })
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error'
+      const safeMessage = getErrorMessage(err)
       ctx.log.error('cloud backup sync failed for company', err as Error, {
         companyId,
       })
@@ -249,7 +251,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
         userId,
         kind: 'repeated_failures',
         consecutiveFailures,
-        errorMessage: message.slice(0, 200),
+        errorMessage: safeMessage.slice(0, 200),
         lastAlertAt: schedule.last_alert_at,
       })
 
@@ -257,7 +259,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
         ...schedule,
         last_auto_sync_at: new Date().toISOString(),
         last_auto_sync_status: 'error',
-        last_auto_sync_error: message.slice(0, 200),
+        last_auto_sync_error: safeMessage.slice(0, 200),
         consecutive_failures: consecutiveFailures,
         last_alert_at: lastAlertAt,
       }
@@ -267,7 +269,7 @@ export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_reques
         },
       )
 
-      results.push({ companyId, status: 'error', error: message })
+      results.push({ companyId, status: 'error', error: safeMessage })
     }
   }
 

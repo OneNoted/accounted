@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
 import type { VatPeriodType } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'report.vat_declaration.rc_basis_gaps',
@@ -40,7 +41,7 @@ export const GET = withRouteContext(
       log.error('rc-basis-gaps detection failed', err as Error, { periodType, year, period })
       return errorResponseFromCode('VAT_REPORT_GENERATION_FAILED', log, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

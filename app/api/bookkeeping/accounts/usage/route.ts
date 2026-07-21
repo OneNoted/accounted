@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // GET /api/bookkeeping/accounts/usage — per-account posting counts for the
 // active company, from the get_account_usage_counts RPC. Accounts that have
@@ -17,7 +18,7 @@ export const GET = withRouteContext('bookkeeping.accounts.usage', async (_reques
   })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data: data ?? [] })

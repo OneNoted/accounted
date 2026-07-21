@@ -8,6 +8,7 @@ import {
   currencyColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface FlatRow {
   group: string
@@ -118,7 +119,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera balansrapport' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera balansrapport' },
       { status: 500 }
     )
   }

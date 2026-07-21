@@ -17,6 +17,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { generateOpeningBalances } from '@/lib/core/bookkeeping/year-end-service'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const Body = z.object({ next_period_id: z.string().uuid() }).strict()
 
@@ -153,7 +154,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
       return v1ErrorResponseFromCode('BOOKKEEPING_DATABASE_ERROR', ctx.log, {
-        requestId: ctx.requestId, details: { reason: msg, step: 'opening_balances' },
+        requestId: ctx.requestId,
+        details: { reason: getErrorMessage(err, { locale: 'en' }), step: 'opening_balances' },
       })
     }
   },

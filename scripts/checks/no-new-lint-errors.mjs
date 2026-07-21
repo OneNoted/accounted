@@ -31,15 +31,17 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'eslint-baseline.json')
 
 function runEslint() {
+  const eslintBin = path.join(ROOT, 'node_modules', 'eslint', 'bin', 'eslint.js')
   const result = spawnSync(
-    'npx',
-    ['eslint', '.', '--quiet', '-f', 'json'],
+    process.execPath,
+    [eslintBin, '.', '--quiet', '-f', 'json'],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
   // ESLint exits 1 when errors exist: that's expected; only treat a missing/
   // unparsable report as fatal.
   if (!result.stdout) {
     console.error('no-new-lint-errors: eslint produced no JSON output')
+    if (result.error) console.error(result.error)
     console.error(result.stderr ?? '')
     process.exit(2)
   }

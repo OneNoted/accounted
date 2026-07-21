@@ -12,6 +12,7 @@ import { ArrowRight, Loader2, Plus, Trash2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AccrualsStepProps {
   periodId: string
@@ -56,7 +57,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
         const body = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setError(body?.error?.message ?? 'Kunde inte ladda periodiseringar')
+          setError(getUserErrorMessage(body?.error) ?? 'Kunde inte ladda periodiseringar')
           return
         }
         setProposal(body.data as AccrualsProposal)
@@ -140,7 +141,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte bokföra periodiseringarna')
+        setError(getUserErrorMessage(body?.error) ?? 'Kunde inte bokföra periodiseringarna')
         return
       }
       const created = body.data?.created?.length ?? 0
@@ -152,7 +153,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
       })
       onContinue()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
     } finally {
       setPosting(false)
     }

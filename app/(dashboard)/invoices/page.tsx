@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -11,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import {
   DataList,
   DataListRow,
@@ -26,12 +28,34 @@ import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { Plus, Search, ReceiptText, Lock, Repeat } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
-import NewInvoiceDialog from '@/components/invoices/NewInvoiceDialog'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Invoice, InvoiceStatus } from '@/types'
 
+function NewInvoiceDialogLoading() {
+  const t = useTranslations('invoices')
+  return (
+    <Dialog open>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogTitle>{t('new_invoice')}</DialogTitle>
+        <div className="space-y-4 py-4" role="status">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-10 w-40" />
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const NewInvoiceDialog = dynamic(
+  () => import('@/components/invoices/NewInvoiceDialog'),
+  { loading: NewInvoiceDialogLoading },
+)
+
 type InvoiceStatusVariant = 'default' | 'secondary' | 'success' | 'warning' | 'destructive'
+
+const INITIAL_VISIBLE_ROWS = 100
 
 const STATUS_CONFIG: Record<InvoiceStatus, { labelKey: string; variant: InvoiceStatusVariant }> = {
   draft: { labelKey: 'status_draft', variant: 'secondary' },
@@ -77,9 +101,11 @@ export default function InvoicesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [activeTab, setActiveTab] = useState('all')
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoices')
+  const tCommon = useTranslations('common')
   const getRelativeTimeLabel = useRelativeTimeLabel()
 
   // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
@@ -144,6 +170,7 @@ export default function InvoicesPage() {
 
     return matchesSearch && matchesTab
   })
+  const visibleInvoices = filteredInvoices.slice(0, visibleCount)
 
   const isOutstandingReceivable = (i: Invoice) =>
     ['sent', 'overdue'].includes(i.status) && !i.credited_invoice_id
@@ -218,11 +245,21 @@ export default function InvoicesPage() {
           <Input
             placeholder={t('search_placeholder')}
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value)
+              setVisibleCount(INITIAL_VISIBLE_ROWS)
+            }}
             className="pl-10"
           />
         </div>
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="min-w-0">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            setActiveTab(value)
+            setVisibleCount(INITIAL_VISIBLE_ROWS)
+          }}
+          className="min-w-0"
+        >
           <TabsList className="w-max max-w-full justify-start">
             <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
             <TabsTrigger value="unpaid">{t('tab_unpaid')}</TabsTrigger>
@@ -264,7 +301,7 @@ export default function InvoicesPage() {
             />
           )
         ) : (
-          filteredInvoices.map((invoice) => {
+          visibleInvoices.map((invoice) => {
             const status = STATUS_CONFIG[invoice.status]
             const isCreditNote = !!invoice.credited_invoice_id
             const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
@@ -378,13 +415,27 @@ export default function InvoicesPage() {
         )}
       </DataList>
 
-      <NewInvoiceDialog
-        open={showNewInvoice}
-        copyFromId={copyFromId}
-        onOpenChange={(open) => {
-          if (!open) closeNewInvoice()
-        }}
-      />
+      {!isLoading && visibleCount < filteredInvoices.length && (
+        <div className="flex justify-center">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
+          >
+            {tCommon('load_more')}
+          </Button>
+        </div>
+      )}
+
+      {showNewInvoice && (
+        <NewInvoiceDialog
+          open
+          copyFromId={copyFromId}
+          onOpenChange={(open) => {
+            if (!open) closeNewInvoice()
+          }}
+        />
+      )}
     </div>
   )
 }

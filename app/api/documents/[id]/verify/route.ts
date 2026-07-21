@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { verifyIntegrity } from '@/lib/core/documents/document-service'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -21,7 +22,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (error) {
       console.error('[documents/verify/POST] Verification failed:', error)
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : 'Verification failed' },
+        { error: error instanceof Error ? getUserErrorMessage(error) : 'Verification failed' },
         { status: 500 }
       )
     }

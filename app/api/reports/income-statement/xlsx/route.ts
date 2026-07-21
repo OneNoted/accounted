@@ -10,6 +10,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 import type { IncomeStatementSection } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface FlatRow {
   section: string
@@ -171,7 +172,7 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera resultaträkning' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera resultaträkning' },
       { status: 500 }
     )
   }

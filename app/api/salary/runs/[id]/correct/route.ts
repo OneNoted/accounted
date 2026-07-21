@@ -5,6 +5,7 @@ import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
 import { revokeLinksForRun } from '@/lib/salary/payslips/links'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -58,8 +59,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         if (err instanceof EntryAlreadyReversedError) continue
         const typed = bookkeepingErrorResponse(err)
         if (typed) return typed
-        const msg = err instanceof Error ? err.message : ''
-        return NextResponse.json({ error: `Kunde inte makulera verifikation: ${msg}` }, { status: 500 })
+        return NextResponse.json(
+          { error: getUserErrorMessage(err, { context: 'salary' }) },
+          { status: 500 },
+        )
       }
     }
 
@@ -107,7 +110,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           error: 'Det finns redan en aktiv lönekörning för denna period. Ta bort den först.',
         }, { status: 409 })
       }
-      return NextResponse.json({ error: createError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(createError) }, { status: 500 })
     }
 
     // Copy employees from original run to correction run (with snapshots)

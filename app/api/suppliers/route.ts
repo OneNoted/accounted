@@ -6,6 +6,7 @@ import { CreateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Supplier } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -80,7 +81,7 @@ export const POST = withRouteContext(
       log.error('supplier insert failed', error)
       return errorResponseFromCode('SUPPLIER_CREATE_FAILED', log, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

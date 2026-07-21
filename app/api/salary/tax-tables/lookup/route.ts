@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { lookupTaxFromApi, TaxTableUnavailableError } from '@/lib/salary/tax-tables'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('salary.tax_tables.lookup', async (request) => {
   const { searchParams } = new URL(request.url)
@@ -27,7 +28,7 @@ export const GET = withRouteContext('salary.tax_tables.lookup', async (request) 
     })
   } catch (err) {
     if (err instanceof TaxTableUnavailableError) {
-      return NextResponse.json({ error: err.message }, { status: 503 })
+      return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 503 })
     }
     throw err
   }

@@ -41,6 +41,7 @@ import {
   ALLOWED_DOCUMENT_TYPES,
 } from '@/lib/core/documents/document-service'
 import type { DocumentUploadSource } from '@/types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const DocumentUploaded = z.object({
   id: z.string().uuid(),
@@ -297,7 +298,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         opLog.warn('document upload rejected by content validation', { reason: message })
         return v1ErrorResponseFromCode('DOC_UPLOAD_INVALID_CONTENT', opLog, {
           requestId: ctx.requestId,
-          details: { reason: message },
+          details: { reason: getErrorMessage(err) },
         })
       }
       // Full error is logged above; the raw message can leak storage-layer

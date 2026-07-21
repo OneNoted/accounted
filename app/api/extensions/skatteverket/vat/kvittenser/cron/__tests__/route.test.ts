@@ -298,7 +298,10 @@ describe('VAT kvittenser cron', () => {
     const body = await res.json()
 
     expect(body.errors).toBe(1)
-    expect(body.results[0]).toMatchObject({ status: 'error', error: 'fetch failed' })
+    expect(body.results[0]).toMatchObject({
+      status: 'error',
+      error: 'Något gick fel. Försök igen.',
+    })
     expect(errorSpy).toHaveBeenCalledTimes(1)
   })
 

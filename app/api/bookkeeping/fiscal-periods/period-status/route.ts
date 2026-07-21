@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/bookkeeping/fiscal-periods/period-status?date=YYYY-MM-DD
@@ -45,7 +46,7 @@ export const GET = withRouteContext('period.status_for_date', async (request, ct
       {
         error: {
           code: 'PERIOD_STATUS_ERROR',
-          message: err instanceof Error ? err.message : 'Kunde inte hämta periodstatus',
+          message: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte hämta periodstatus',
         },
       },
       { status: 500 }

@@ -5,6 +5,7 @@ import { ReskontraPDF } from '@/lib/reports/reskontra-pdf-template'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import type { CompanySettings } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.supplier_ledger.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -70,7 +71,7 @@ export const GET = withRouteContext('report.supplier_ledger.pdf', async (request
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera leverantörsreskontra' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera leverantörsreskontra' },
       { status: 500 }
     )
   }

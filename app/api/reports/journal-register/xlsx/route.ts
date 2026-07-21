@@ -8,6 +8,7 @@ import {
   dateColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface FlatRow {
   voucher: string
@@ -102,7 +103,7 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera grundbok' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera grundbok' },
       { status: 500 }
     )
   }

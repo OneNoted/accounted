@@ -14,6 +14,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateDimensionSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -68,7 +69,7 @@ export const PATCH = withRouteContext(
       opLog.error('dimension update failed', error)
       return errorResponseFromCode('DIMENSION_UPDATE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

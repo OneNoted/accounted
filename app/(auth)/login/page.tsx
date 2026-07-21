@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
@@ -13,18 +14,23 @@ import { Loader2, Mail, ArrowLeft, KeyRound, ExternalLink } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
-import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
+import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 
 const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
+
+const BankIdAuth = dynamic(
+  () => import('@/components/auth/BankIdAuth').then((module) => module.BankIdAuth),
+  { ssr: false },
+)
 
 // Wrapping in Suspense is required because useSearchParams() forces
 // dynamic rendering in Next.js 16; static prerender bails out otherwise.
 export default function LoginPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<AuthPageSkeleton />}>
       <LoginPageContent />
     </Suspense>
   )
@@ -157,7 +163,7 @@ function LoginPageContent() {
       if (error) {
         toast({
           title: tAuth('login_failed_title'),
-          description: error.message === 'Invalid login credentials'
+          description: getErrorMessage(error) === 'Invalid login credentials'
             ? tAuth('login_invalid_credentials')
             : getErrorMessage(error, { context: 'auth', locale: errorLocale }),
           variant: 'destructive',

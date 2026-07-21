@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDateLong } from '@/lib/utils'
 import type { BillingPlan } from '@/lib/stripe/client'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const PRICE: Record<BillingPlan, { amount: string; suffix: string; sub: string; cta: string }> = {
   monthly: {
@@ -62,7 +63,7 @@ export function BillingActions({
     } catch (e) {
       toast({
         title: 'Kunde inte öppna betalningen',
-        description: e instanceof Error ? e.message : undefined,
+        description: e instanceof Error ? getUserErrorMessage(e) : undefined,
         variant: 'destructive',
       })
       setLoading(false)

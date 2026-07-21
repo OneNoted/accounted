@@ -7,6 +7,7 @@ import { getCompanyEntityType } from '@/lib/company/context'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -124,7 +125,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (error.code === '23505') {
         return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({

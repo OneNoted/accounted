@@ -12,6 +12,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const PeriodLockedResponse = z.object({
   id: z.string().uuid(),
@@ -83,7 +84,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (msg.includes('already closed') || msg.includes('already locked')) {
         return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
           requestId: ctx.requestId,
-          details: { reason: msg },
+          details: { reason: getErrorMessage(err, { locale: 'en' }) },
         })
       }
       // lockPeriod's uncategorised-transactions error message is in Swedish
@@ -94,13 +95,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       if (msg.includes('saknar bokföring') || msg.toLowerCase().includes('uncategorised')) {
         return v1ErrorResponseFromCode('PERIOD_HAS_UNBOOKED_TRANSACTIONS', ctx.log, {
           requestId: ctx.requestId,
-          details: { reason: msg },
+          details: { reason: getErrorMessage(err, { locale: 'en' }) },
         })
       }
       ctx.log.error('fiscal-periods.lock unexpected error', err as Error, { fiscalPeriodId: idParse.data })
       return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: msg },
+        details: { reason: getErrorMessage(err, { locale: 'en' }) },
       })
     }
   },

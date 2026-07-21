@@ -15,6 +15,7 @@ import { preWarmAtomCache } from '@/lib/agent/composer/prewarm'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import type { AtomSelection } from '@/lib/agent/composer/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BodySchema = z.object({
   company_id: z.string().uuid().optional(),
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
     body = BodySchema.parse(await request.json().catch(() => ({})))
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Invalid body' },
       { status: 400 },
     )
   }
@@ -229,7 +230,7 @@ export async function POST(request: Request) {
             { onConflict: 'company_id' },
           )
         if (upsertErr) {
-          send({ step: 'error', status: 'error', message: upsertErr.message })
+          send({ step: 'error', status: 'error', message: getUserErrorMessage(upsertErr) })
           return
         }
 
@@ -273,7 +274,7 @@ export async function POST(request: Request) {
         send({
           step: 'error',
           status: 'error',
-          message: err instanceof Error ? err.message : 'Composer pipeline failed',
+          message: err instanceof Error ? getUserErrorMessage(err) : 'Composer pipeline failed',
         })
       } finally {
         try {

@@ -6,6 +6,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { Invoice, SupplierInvoice, Transaction } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -81,7 +82,7 @@ export const POST = withRouteContext(
       txLog.error('match_batch_allocate RPC error', error)
       return errorResponseFromCode('BATCH_RPC_FAILED', txLog, {
         requestId,
-        details: { message: error.message },
+        details: { message: getUserErrorMessage(error) },
       })
     }
 

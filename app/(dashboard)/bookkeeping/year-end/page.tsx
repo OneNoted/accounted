@@ -148,7 +148,7 @@ export default function YearEndPage() {
         const body = await res.json()
         if (cancelled) return
         if (!res.ok) {
-          setReportError(body?.error?.message ?? 'Kunde inte ladda bokslutskontroll')
+          setReportError(getErrorMessage(body?.error) ?? 'Kunde inte ladda bokslutskontroll')
           return
         }
         setReport(body.data as BokslutReadinessReport)
@@ -174,7 +174,7 @@ export default function YearEndPage() {
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${selectedPeriodId}/year-end`)
       const body = await res.json()
       if (!res.ok) {
-        setPreviewError(body?.error?.message ?? 'Kunde inte hämta förhandsgranskning')
+        setPreviewError(getErrorMessage(body?.error) ?? 'Kunde inte hämta förhandsgranskning')
         return
       }
       setPreview(body.data.preview as YearEndPreview)
@@ -198,7 +198,7 @@ export default function YearEndPage() {
         // body.error.message is the localized Swedish message picked by
         // the structured-error registry. Do NOT interpolate raw details
         // here: they can contain DB-sourced strings (V2.3 finding).
-        setExecuteError(body?.error?.message ?? 'Bokslutet kunde inte verkställas')
+        setExecuteError(getErrorMessage(body?.error) ?? 'Bokslutet kunde inte verkställas')
         return
       }
       setResult(body.data as YearEndResult)

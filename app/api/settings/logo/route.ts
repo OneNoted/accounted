@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { LOGO_UPLOAD_MAX_BYTES, LOGO_UPLOAD_MAX_MB } from '@/lib/invoices/branding-constants'
 
-const MAX_SIZE = 2 * 1024 * 1024 // 2MB
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
 
 export const POST = withRouteContext(
@@ -19,8 +20,8 @@ export const POST = withRouteContext(
       return NextResponse.json({ error: 'Otillåten filtyp. Tillåtna: PNG, JPG, SVG, WebP.' }, { status: 400 })
     }
 
-    if (file.size > MAX_SIZE) {
-      return NextResponse.json({ error: 'Filen är för stor (max 2 MB).' }, { status: 400 })
+    if (file.size > LOGO_UPLOAD_MAX_BYTES) {
+      return NextResponse.json({ error: `Filen är för stor (max ${LOGO_UPLOAD_MAX_MB} MB).` }, { status: 400 })
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
@@ -53,7 +54,7 @@ export const POST = withRouteContext(
       })
 
     if (uploadError) {
-      return NextResponse.json({ error: `Uppladdning misslyckades: ${uploadError.message}` }, { status: 500 })
+      return NextResponse.json({ error: `Uppladdning misslyckades: ${getUserErrorMessage(uploadError)}` }, { status: 500 })
     }
 
     const { data: urlData } = serviceClient.storage

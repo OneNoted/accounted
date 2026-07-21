@@ -98,6 +98,19 @@ const RULES: Rule[] = [
     input.faststallelseintyg.arsstammaDatum
       ? null
       : issue('1103', 'error', 'Datum för årsstämman saknas i fastställelseintyget.'),
+  (input) =>
+    input.faststallelseintyg.resultatdispositionOutcome
+      ? null
+      : issue('ACC-AGM-DISP', 'error', 'Årsstämmans beslut om resultatdisposition saknas.'),
+  (input) =>
+    input.faststallelseintyg.resultatdispositionOutcome === 'alternative_decision' &&
+    !input.faststallelseintyg.resultatdispositionDecision?.trim()
+      ? issue(
+          'ACC-AGM-DISP-TEXT',
+          'error',
+          'Årsstämmans alternativa resultatdisposition saknar beslutstext.',
+        )
+      : null,
 
   // ---- date ordering ------------------------------------------------------
   (input, today) =>

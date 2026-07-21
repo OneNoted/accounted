@@ -19,6 +19,7 @@ import {
 import { RetentionNotice } from '@/components/ui/retention-notice'
 import { ExternalLink, Loader2 } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface Blocker {
   id: string
@@ -92,7 +93,7 @@ export function AccountDangerZone() {
 
       router.push('/login')
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('delete_failed_default'))
+      setError(err instanceof Error ? getUserErrorMessage(err) : t('delete_failed_default'))
       setIsDeleting(false)
     }
   }

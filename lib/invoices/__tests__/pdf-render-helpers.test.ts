@@ -12,9 +12,20 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import sharp from 'sharp'
 import { prepareInvoicePdfRender, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { makeCompanySettings, makeInvoice } from '@/tests/helpers'
+
+const fontDownloadMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => ({
+    storage: {
+      from: () => ({ download: fontDownloadMock }),
+    },
+  }),
+}))
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,'
 
@@ -47,9 +58,11 @@ async function expectValidEmbeddedPng(logoUrl: string | null | undefined) {
 describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
+    fontDownloadMock.mockReset()
   })
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     vi.restoreAllMocks()
   })
 
@@ -128,7 +141,7 @@ describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
       ok: true,
       headers: {
         get: (h: string) =>
-          h.toLowerCase() === 'content-length' ? String(6 * 1024 * 1024) : 'image/png',
+          h.toLowerCase() === 'content-length' ? String(11 * 1024 * 1024) : 'image/png',
       },
       arrayBuffer: async () => new ArrayBuffer(0),
     })
@@ -175,6 +188,77 @@ describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
     const { branding } = await prepareInvoicePdfRender(company)
 
     expect(branding.primaryColor).toBe('#c2410c')
+  })
+})
+
+describe('prepareInvoicePdfRender: invoice fonts', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    fontDownloadMock.mockReset()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('registers a bundled font before returning it to the PDF template', async () => {
+    const company = makeCompanySettings({ invoice_font_family: 'Source Sans 3' })
+
+    const { branding } = await prepareInvoicePdfRender(company)
+
+    expect(branding.fontFamily).toBe('Source Sans 3')
+  })
+
+  it('registers a valid stored custom font under an isolated render family', async () => {
+    const bytes = await readFile(
+      join(process.cwd(), 'public', 'fonts', 'invoice', 'SourceSans3-Regular.ttf'),
+    )
+    const arrayBuffer = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    )
+    fontDownloadMock.mockResolvedValue({
+      data: new Blob([arrayBuffer]),
+      error: null,
+    })
+    const company = makeCompanySettings({
+      invoice_font_family: 'Custom',
+      invoice_custom_font_path: 'company-1/invoice-font-1.ttf',
+    })
+
+    const { branding } = await prepareInvoicePdfRender(company)
+
+    expect(branding.fontFamily).toMatch(/^InvoiceCustom-[0-9a-f]{12}$/)
+  })
+
+  it('falls back to Helvetica when a custom font cannot be parsed', async () => {
+    const corruptedFont = new Uint8Array([0x00, 0x01, 0x00, 0x00, 0xff, 0xff])
+    fontDownloadMock.mockResolvedValue({
+      data: new Blob([corruptedFont]),
+      error: null,
+    })
+    const company = makeCompanySettings({
+      invoice_font_family: 'Custom',
+      invoice_custom_font_path: 'company-1/invoice-font-2.ttf',
+    })
+
+    const { branding } = await prepareInvoicePdfRender(company)
+
+    expect(branding.fontFamily).toBe('Helvetica')
+  })
+
+  it('does not download a custom font from another company path', async () => {
+    const company = makeCompanySettings({
+      invoice_font_family: 'Custom',
+      invoice_custom_font_path: 'company-2/invoice-font-3.ttf',
+    })
+
+    const { branding } = await prepareInvoicePdfRender(company)
+
+    expect(fontDownloadMock).not.toHaveBeenCalled()
+    expect(branding.fontFamily).toBe('Helvetica')
   })
 })
 

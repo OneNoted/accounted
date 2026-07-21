@@ -14,6 +14,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateDimensionValueSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -81,7 +82,7 @@ export const POST = withRouteContext(
       opLog.error('dimension value insert failed', error)
       return errorResponseFromCode('DIMENSION_VALUE_CREATE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

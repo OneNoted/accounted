@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext<{ params: Promise<{ sector: string; slug: string }> }>(
   'extension.data.get',
@@ -28,7 +29,7 @@ export const GET = withRouteContext<{ params: Promise<{ sector: string; slug: st
   const { data, error } = await query
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data })
@@ -65,7 +66,7 @@ export const POST = withRouteContext<{ params: Promise<{ sector: string; slug: s
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data })
@@ -95,7 +96,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ sector: string; slug:
     .eq('key', key)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ success: true })

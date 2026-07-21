@@ -11,6 +11,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { PendingOperationRejectionCategory } from '@/types'
 import { cn } from '@/lib/utils'
 import { formatCurrency } from '@/lib/utils'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Inline approval card for an agent-staged pending_operation.
 //
@@ -144,7 +145,7 @@ export default function ApprovalCard({
       setState('committed')
     } catch (err) {
       setState('error')
-      setErrorMessage(err instanceof Error ? err.message : 'Kunde inte godkänna.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte godkänna.')
     }
   }
 
@@ -169,7 +170,7 @@ export default function ApprovalCard({
       await handleCommit()
     } catch (err) {
       setState('error')
-      setErrorMessage(err instanceof Error ? err.message : 'Kunde inte aktivera kontona.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte aktivera kontona.')
     }
   }
 
@@ -210,7 +211,7 @@ export default function ApprovalCard({
       }
     } catch (err) {
       setState('error')
-      setErrorMessage(err instanceof Error ? err.message : 'Kunde inte avslå.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte avslå.')
     }
   }
 

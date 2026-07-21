@@ -10,6 +10,7 @@ import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookk
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Article } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -99,7 +100,7 @@ export const POST = withRouteContext(
       log.error('article insert failed', error)
       return errorResponseFromCode('ARTICLE_CREATE_FAILED', log, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

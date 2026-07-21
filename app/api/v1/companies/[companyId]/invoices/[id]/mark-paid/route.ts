@@ -38,7 +38,7 @@ import {
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
@@ -451,14 +451,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           invoiceId,
           companyId: ctx.companyId,
         })
-        const message = isBookkeepingError(err)
-          ? getErrorMessage(err, { context: 'invoice' })
-          : err instanceof Error
-            ? err.message
-            : 'Unknown error'
         return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
           requestId: ctx.requestId,
-          details: { reason: message },
+          details: { reason: getErrorMessage(err, { context: 'invoice' }) },
         })
       }
     }

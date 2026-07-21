@@ -16,6 +16,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { AlertTriangle, Check, Copy, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import { formatDateLong } from '@/lib/utils'
 import type { CompanyInboundDomain, InboundDomainDnsRecord } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BASE = '/api/extensions/ext/invoice-inbox/inbox/domain'
 
@@ -83,7 +84,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } catch (err) {
       toast({
         title: 'Kunde inte lägga till domänen',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     } finally {
@@ -106,7 +107,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } catch (err) {
       toast({
         title: 'Kontrollen misslyckades',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     } finally {
@@ -127,7 +128,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } catch (err) {
       toast({
         title: 'Borttagningen misslyckades',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Försök igen.',
         variant: 'destructive',
       })
     } finally {

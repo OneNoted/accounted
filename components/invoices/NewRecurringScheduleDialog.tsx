@@ -31,6 +31,7 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Plus, Trash2 } from 'lucide-react'
 import type { Customer, Currency, RecurringInvoiceSchedule } from '@/types'
 import { formatCurrency } from '@/lib/utils'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
 const units = ['st', 'tim', 'dag', 'månad', 'km', 'kg']
@@ -202,7 +203,7 @@ function NewRecurringScheduleForm({
     } catch (err) {
       toast({
         title: schedule ? t('update_failed_title') : t('create_failed_title'),
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {

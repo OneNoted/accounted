@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeBenefitSchema } from '@/lib/api/schemas'
 import { calculateBikeBenefit } from '@/lib/salary/benefits'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -79,7 +80,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; benefitId
       .eq('employee_id', id)
       .eq('company_id', companyId)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data: { id: benefitId, deleted: true } })
   },

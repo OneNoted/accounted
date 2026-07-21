@@ -17,6 +17,7 @@ import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface BankConn {
   id: string
@@ -86,7 +87,7 @@ export default function BankSyncNowButton() {
     } catch (error) {
       toast({
         title: t('bank_reconnect'),
-        description: error instanceof Error ? error.message : 'Reconnect failed',
+        description: error instanceof Error ? getUserErrorMessage(error) : 'Reconnect failed',
         variant: 'destructive',
       })
       setBusyId(null)
@@ -137,7 +138,7 @@ export default function BankSyncNowButton() {
     } catch (error) {
       toast({
         title: t('bank_sync_button_now'),
-        description: error instanceof Error ? error.message : 'Sync failed',
+        description: error instanceof Error ? getUserErrorMessage(error) : 'Sync failed',
         variant: 'destructive',
       })
     } finally {

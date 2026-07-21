@@ -18,6 +18,7 @@ import {
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import type { Asset } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface ProposalItem {
   asset: Asset
@@ -55,12 +56,12 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
       const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation`)
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte ladda avskrivningar')
+        setError(getUserErrorMessage(body?.error) ?? 'Kunde inte ladda avskrivningar')
         return
       }
       setProposal(body.data as Proposal)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
     } finally {
       setLoading(false)
     }
@@ -80,7 +81,7 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(body?.error?.message ?? 'Kunde inte bokföra avskrivningar')
+        setError(getUserErrorMessage(body?.error) ?? 'Kunde inte bokföra avskrivningar')
         return
       }
       const posted = body.data?.posted?.length ?? 0
@@ -92,7 +93,7 @@ export function DepreciationPanel({ periodId, onPosted }: DepreciationPanelProps
       onPosted()
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
     } finally {
       setPosting(false)
     }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { RetagLineDimensionsSchema } from '@/lib/api/schemas'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/bookkeeping/journal-entry-lines/[lineId]/retag
@@ -39,10 +40,10 @@ export const POST = withRouteContext<{ params: Promise<{ lineId: string }> }>(
       // Anything else is unexpected infrastructure failure → 500 + log.
       const message = error.message ?? 'Kunde inte ändra dimensioner'
       if (error.code === 'P0001') {
-        return NextResponse.json({ error: message }, { status: 409 })
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 409 })
       }
       if (error.code === '42501') {
-        return NextResponse.json({ error: message }, { status: 403 })
+        return NextResponse.json({ error: getErrorMessage(error) }, { status: 403 })
       }
       log.error('retag_line_dimensions failed', new Error(message), { lineId })
       return NextResponse.json({ error: 'Kunde inte ändra dimensioner' }, { status: 500 })

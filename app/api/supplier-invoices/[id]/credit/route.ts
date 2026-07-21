@@ -7,6 +7,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SupplierInvoice, SupplierInvoiceItem, AccountingMethod } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -70,7 +71,7 @@ export const POST = withRouteContext(
       opLog.error('credit note insert failed', creditError as Error)
       return errorResponseFromCode('SI_CREDIT_FAILED', opLog, {
         requestId,
-        details: { reason: creditError?.message || 'unknown' },
+        details: { reason: getUserErrorMessage(creditError) || 'unknown' },
       })
     }
 
@@ -139,7 +140,7 @@ export const POST = withRouteContext(
         return errorResponseFromCode('SI_CREDIT_FAILED', opLog, {
           requestId,
           details: {
-            reason: err instanceof Error ? err.message : 'unknown',
+            reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
             step: 'credit_note_journal_entry',
           },
         })

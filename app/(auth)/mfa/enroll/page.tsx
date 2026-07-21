@@ -11,6 +11,7 @@ import { Loader2, ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export default function MfaEnrollPage() {
   return (
@@ -83,7 +84,7 @@ function MfaEnrollContent() {
       if (error) {
         toast({
           title: 'Kunde inte aktivera 2FA',
-          description: error.message,
+          description: getUserErrorMessage(error),
           variant: 'destructive',
         })
         setIsEnrolling(false)

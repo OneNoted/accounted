@@ -8,6 +8,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encodeISO88591 } from '@/lib/reports/sru-encoding'
 import JSZip from 'jszip'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/reports/ink2
@@ -63,7 +64,7 @@ export const GET = withRouteContext(
       opLog.error('ink2 declaration generation failed', err as Error)
       return errorResponseFromCode('TAX_DECL_GENERATION_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

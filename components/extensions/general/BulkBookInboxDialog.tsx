@@ -17,6 +17,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Minimal shape the dialog needs from the workspace's inbox items.
 interface BulkBookInboxItem {
@@ -145,7 +146,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     } catch (err) {
       toast({
         title: 'Bokföringen misslyckades',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     } finally {

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { TaxSettingsForm } from '@/components/settings/TaxSettingsForm'
+import { TaxAssessmentNoticesPanel } from '@/components/settings/TaxAssessmentNoticesPanel'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
@@ -165,6 +166,8 @@ export function TaxSettingsContent() {
           rotRutSignalDetected={rotRutSignalDetected}
         />
       </SettingsFormWrapper>
+
+      <TaxAssessmentNoticesPanel />
     </div>
   )
 }

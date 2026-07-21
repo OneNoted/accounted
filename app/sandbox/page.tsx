@@ -9,6 +9,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const branding = getBranding()
 
@@ -33,7 +34,7 @@ export default function SandboxPage() {
       if (error) {
         toast({
           title: 'Kunde inte starta sandlådan',
-          description: error.message,
+          description: getUserErrorMessage(error),
           variant: 'destructive',
         })
         setIsLoading(false)

@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { notFound, redirect } from 'next/navigation'
-import { getActiveCompanyId } from '@/lib/company/context'
 import ChatConversationView from '@/components/agent/ChatConversationView'
+import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,12 +14,11 @@ interface PageProps {
 // up via /api/agent/invoke with conversation_id supplied.
 export default async function ChatConversationPage({ params }: PageProps) {
   const { id } = await params
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
+  const [{ supabase, user }, companyId] = await Promise.all([
+    getDashboardAuthContext(),
+    getDashboardCompanyId(),
+  ])
   if (!user) redirect('/login')
-
-  const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
   // Both queries key on the route id, so they run in parallel. The tenant

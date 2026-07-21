@@ -1,4 +1,5 @@
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { createServiceClient } from '@/lib/supabase/server'
 
 /**
  * Append an immutable row to skatteverket_api_audit_log. Errors are
@@ -28,7 +29,11 @@ export async function writeSkatteverketAudit(
   },
 ): Promise<void> {
   try {
-    const { error } = await ctx.supabase
+    // This table intentionally has no authenticated INSERT policy. Use the
+    // server-only service client so callers cannot fabricate regulator audit
+    // rows through their user session.
+    const auditClient = createServiceClient()
+    const { error } = await auditClient
       .from('skatteverket_api_audit_log')
       .insert({
         company_id: ctx.companyId,
@@ -47,12 +52,14 @@ export async function writeSkatteverketAudit(
       ctx.log.error('skatteverket_api_audit_log insert failed', {
         endpoint: fields.endpoint,
         outcome: fields.outcome,
+        correlationId: fields.correlationId ?? null,
         error: error.message,
       })
     }
   } catch (err) {
     ctx.log.error('skatteverket_api_audit_log insert threw', {
       endpoint: fields.endpoint,
+      correlationId: fields.correlationId ?? null,
       error: err instanceof Error ? err.message : String(err),
     })
   }

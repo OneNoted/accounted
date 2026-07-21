@@ -4,6 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateSalaryRunWithDefaultsSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
@@ -155,7 +156,7 @@ export const POST = withRouteContext(
       log.error('salary run create failed', err as Error)
       return errorResponseFromCode('SALARY_RUN_CREATE_FAILED', log, {
         requestId,
-        details: { reason: message },
+        details: { reason: getErrorMessage(err, { context: 'salary' }) },
       })
     }
 

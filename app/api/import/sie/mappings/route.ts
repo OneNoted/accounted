@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { saveMappings } from '@/lib/import/sie-import'
 import type { AccountMapping } from '@/lib/import/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/import/sie/mappings
@@ -17,7 +18,7 @@ export const GET = withRouteContext(
       .order('source_account')
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })
@@ -43,7 +44,7 @@ export const POST = withRouteContext(
       return NextResponse.json({ success: true })
     } catch (error) {
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : 'Failed to save mappings' },
+        { error: error instanceof Error ? getUserErrorMessage(error) : 'Failed to save mappings' },
         { status: 500 }
       )
     }
@@ -84,7 +85,7 @@ export const PUT = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })
@@ -111,7 +112,7 @@ export const DELETE = withRouteContext(
         .eq('source_account', sourceAccount)
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
       }
     } else {
       // Delete all mappings
@@ -121,7 +122,7 @@ export const DELETE = withRouteContext(
         .eq('company_id', companyId)
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
       }
     }
 

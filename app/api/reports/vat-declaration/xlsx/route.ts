@@ -16,6 +16,7 @@ import {
   type VatDeclarationRutor,
   type AccountingMethod,
 } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface RutaRow {
   ruta: string
@@ -102,7 +103,7 @@ export const GET = withRouteContext('report.vat_declaration.xlsx', async (reques
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera momsdeklaration' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera momsdeklaration' },
       { status: 500 }
     )
   }
