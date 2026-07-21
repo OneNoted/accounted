@@ -71,4 +71,25 @@ describe('fiscal_periods: subsequent-period start-day trigger', () => {
       insertPeriod(companyId, 'Räkenskapsår 2025 (bad)', '2025-06-15', '2025-12-31'),
     ).rejects.toThrow(/Non-first fiscal period must start on the 1st of a month/)
   })
+
+  it('still rejects changing a subsequent period to a mid-month start', async () => {
+    const { companyId } = await seedCompany()
+
+    await insertPeriod(companyId, 'Räkenskapsår 2024', '2024-01-01', '2024-12-31')
+    const { rows } = await insertPeriod(
+      companyId,
+      'Räkenskapsår 2025',
+      '2025-01-01',
+      '2025-12-31',
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.fiscal_periods
+         SET period_start = '2025-06-15'
+         WHERE id = $1`,
+        [rows[0]!.id],
+      ),
+    ).rejects.toThrow(/Non-first fiscal period must start on the 1st of a month/)
+  })
 })
