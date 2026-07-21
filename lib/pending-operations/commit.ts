@@ -81,6 +81,8 @@ import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schem
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
+import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
+import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
@@ -277,6 +279,154 @@ async function commitCreateCustomer(
   await eventBus.emit({ type: 'customer.created', payload: { customer: data as Customer, userId, companyId } })
 
   return { data: { customer_id: data.id } }
+}
+
+async function commitUpdateCustomer(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = UpdateCustomerParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return {
+        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
+        status: 400,
+      }
+    }
+    throw err
+  }
+
+  const { customer_id: customerId, changes } = validated
+  const { data: current, error: currentError } = await supabase
+    .from('customers')
+    .select('customer_type')
+    .eq('id', customerId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (currentError) return { error: currentError.message, status: 500 }
+  if (!current) return { error: 'Customer not found', status: 404 }
+
+  const updateData: Record<string, unknown> = { ...changes }
+  if (changes.customer_number !== undefined) {
+    updateData.customer_number = changes.customer_number || null
+  }
+  const effectiveType = changes.customer_type ?? current.customer_type
+  if (changes.customer_type !== undefined && effectiveType !== 'individual') {
+    updateData.personal_number = null
+  }
+
+  if (changes.vat_number !== undefined) {
+    if (effectiveType === 'eu_business') {
+      if (changes.vat_number) {
+        try {
+          const vatResult = await validateVatNumber(changes.vat_number)
+          updateData.vat_number_validated = vatResult.valid
+          updateData.vat_number_validated_at = vatResult.valid
+            ? new Date().toISOString()
+            : null
+        } catch (err) {
+          log.warn('Auto-VIES validation failed on staged customer update:', err)
+          updateData.vat_number_validated = false
+          updateData.vat_number_validated_at = null
+        }
+      } else {
+        updateData.vat_number_validated = false
+        updateData.vat_number_validated_at = null
+      }
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('customers')
+    .update(updateData)
+    .eq('id', customerId)
+    .eq('company_id', companyId)
+    .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes')
+    .maybeSingle()
+
+  if (error) {
+    if (error.code === '23505') {
+      return { error: 'A customer with this organization number already exists', status: 409 }
+    }
+    return { error: error.message, status: 500 }
+  }
+  if (!data) return { error: 'Customer not found', status: 404 }
+
+  return {
+    data: {
+      customer_id: data.id,
+      name: data.name,
+      customer_type: data.customer_type,
+      customer_number: data.customer_number ?? null,
+      email: data.email ?? null,
+      phone: data.phone ?? null,
+      address_line1: data.address_line1 ?? null,
+      address_line2: data.address_line2 ?? null,
+      postal_code: data.postal_code ?? null,
+      city: data.city ?? null,
+      country: data.country,
+      org_number: data.org_number ?? null,
+      vat_number: data.vat_number ?? null,
+      vat_number_validated: data.vat_number_validated ?? false,
+      language: data.language ?? 'sv',
+      default_payment_terms: data.default_payment_terms,
+      notes: data.notes ?? null,
+    },
+  }
+}
+
+async function commitUpdateCompanySettings(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  let validated
+  try {
+    validated = UpdateCompanySettingsParamsSchema.parse(params)
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issue = err.issues[0]
+      return {
+        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
+        status: 400,
+      }
+    }
+    throw err
+  }
+
+  const { data, error } = await supabase
+    .from('company_settings')
+    .update(validated.changes)
+    .eq('company_id', companyId)
+    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference')
+    .single()
+
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return { error: 'Company settings not found', status: 404 }
+    }
+    return { error: error.message, status: 500 }
+  }
+
+  return {
+    data: {
+      company_id: companyId,
+      bank_name: data.bank_name ?? null,
+      clearing_number: data.clearing_number ?? null,
+      account_number: data.account_number ?? null,
+      bankgiro: data.bankgiro ?? null,
+      plusgiro: data.plusgiro ?? null,
+      swish: data.swish ?? null,
+      iban: data.iban ?? null,
+      bic: data.bic ?? null,
+      contact_person: data.default_our_reference ?? null,
+    },
+  }
 }
 
 async function commitCreateArticle(
@@ -4291,6 +4441,12 @@ async function commitPendingOperationInner(
         break
       case 'create_customer':
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'update_customer':
+        result = await commitUpdateCustomer(supabase, companyId, pendingOp.params)
+        break
+      case 'update_company_settings':
+        result = await commitUpdateCompanySettings(supabase, companyId, pendingOp.params)
         break
       case 'create_article':
         result = await commitCreateArticle(supabase, userId, companyId, pendingOp.params)

@@ -1981,6 +1981,8 @@ export interface CreateFiscalPeriodInput {
 export type PendingOperationType =
   | 'categorize_transaction'
   | 'create_customer'
+  | 'update_customer'
+  | 'update_company_settings'
   | 'create_article'
   | 'update_article'
   // Kontoplan reference data (gnubok_create_account / gnubok_update_account)

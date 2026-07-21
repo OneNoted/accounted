@@ -43,6 +43,8 @@ import { accountClassTypeConflict } from '@/lib/pending-operations/schemas/accou
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
+import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
+import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -185,6 +187,8 @@ interface McpTool {
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
   annotations: McpToolAnnotations
+  /** Wide or specialized tools discoverable through gnubok_search_tools only. */
+  catalogVisibility?: 'default' | 'search'
   _meta?: { ui: { resourceUri: string } }
   // Result-level UI hint: when set, a call passing render_ui=true gets a
   // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
@@ -895,6 +899,10 @@ export function deriveToolMeta(t: { name: string; outputSchema?: Record<string, 
     approve_tool: 'gnubok_approve_pending_operation',
     ...(preflight ? { preflight } : {}),
   }
+}
+
+export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'search' }): boolean {
+  return tool.catalogVisibility !== 'search'
 }
 
 function paginatedSchema(itemsKey: string, itemSchema: Record<string, unknown> = { type: 'object' }) {
@@ -1680,12 +1688,12 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_search_tools',
     title: 'Search MCP Tools',
-    description: 'Search Accounted MCP tools by keyword and return their schemas at a chosen detail level. Call this first when looking for a capability: avoids loading every tool schema upfront.',
+    description: 'Search available tools by keyword and choose the returned schema detail level.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        query: { type: 'string', description: 'Keywords matched against tool name + description (e.g. "vat", "invoice", "categorize"). Empty string returns all tools.' },
+        query: { type: 'string', description: 'Keywords matched against tool names and descriptions. Empty returns all tools.' },
         detail: { type: 'string', enum: ['name', 'summary', 'full'], description: 'Detail level. name: just names. summary: name + description + scope (default). full: complete schema including inputSchema and outputSchema.' },
         scope: { type: 'string', description: 'Optional filter: only tools requiring this API key scope (e.g. "invoices:write").' },
         limit: { type: 'number', description: 'Max results, 1-50 (default 20).' },
@@ -1898,6 +1906,179 @@ export const tools: McpTool[] = [
         count: companies.length,
         default_company_id: hasAccessibleDefault ? defaultCompanyId : null,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_get_company_settings',
+    title: 'Get Company Settings',
+    description: 'Get invoice payment details and the default company contact person. Use before creating invoices or staging a settings update.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        company_id: { type: 'string' },
+        bank_name: { type: ['string', 'null'] },
+        clearing_number: { type: ['string', 'null'] },
+        account_number: { type: ['string', 'null'] },
+        bankgiro: { type: ['string', 'null'] },
+        plusgiro: { type: ['string', 'null'] },
+        swish: { type: ['string', 'null'] },
+        iban: { type: ['string', 'null'] },
+        bic: { type: ['string', 'null'] },
+        contact_person: { type: ['string', 'null'], description: 'Default Our reference value on new invoices.' },
+      },
+      required: [
+        'company_id',
+        'bank_name',
+        'clearing_number',
+        'account_number',
+        'bankgiro',
+        'plusgiro',
+        'swish',
+        'iban',
+        'bic',
+        'contact_person',
+      ],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    catalogVisibility: 'search',
+    async execute(_args, companyId, _userId, supabase) {
+      const { data, error } = await supabase
+        .from('company_settings')
+        .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference')
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!data) throw new Error('Company settings not found.')
+
+      return {
+        company_id: companyId,
+        bank_name: data.bank_name ?? null,
+        clearing_number: data.clearing_number ?? null,
+        account_number: data.account_number ?? null,
+        bankgiro: data.bankgiro ?? null,
+        plusgiro: data.plusgiro ?? null,
+        swish: data.swish ?? null,
+        iban: data.iban ?? null,
+        bic: data.bic ?? null,
+        contact_person: data.default_our_reference ?? null,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_update_company_settings',
+    title: 'Update Company Settings',
+    description: 'Stage changes to invoice payment details or the default company contact person. Requires approval before company settings are updated.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        bank_name: { type: 'string', maxLength: 100 },
+        clearing_number: { type: 'string', description: '4-5 digits. Empty string clears the value.' },
+        account_number: { type: 'string', description: '6-12 digits. Empty string clears the value.' },
+        bankgiro: { type: ['string', 'null'], description: 'Valid 7-8 digit Bankgiro with Luhn check digit. Null or empty string clears it.' },
+        plusgiro: { type: ['string', 'null'], description: 'Valid Plusgiro with hyphen and Luhn check digit. Null or empty string clears it.' },
+        swish: { type: ['string', 'null'], description: 'Swedish business or mobile Swish number. Null clears it.' },
+        iban: { type: ['string', 'null'], description: 'Swedish IBAN: SE followed by 22 digits. Null or empty string clears it.' },
+        bic: { type: ['string', 'null'], description: '8 or 11 character BIC/SWIFT. Null or empty string clears it.' },
+        contact_person: { type: ['string', 'null'], maxLength: 200, description: 'Default Our reference value on new invoices. Null clears it.' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging or changing data.' },
+        idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
+      },
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const rawChanges: Record<string, unknown> = {}
+      for (const key of [
+        'bank_name',
+        'clearing_number',
+        'account_number',
+        'bankgiro',
+        'plusgiro',
+        'swish',
+        'iban',
+        'bic',
+      ]) {
+        if (args[key] !== undefined) rawChanges[key] = args[key]
+      }
+      if (args.contact_person !== undefined) {
+        rawChanges.default_our_reference = args.contact_person
+      }
+
+      const parsed = UpdateCompanySettingsParamsSchema.safeParse({ changes: rawChanges })
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0]
+        throw new Error(`Invalid company settings: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+      }
+
+      const { data: current, error } = await supabase
+        .from('company_settings')
+        .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference')
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!current) throw new Error('Company settings not found.')
+
+      const currentPreview = {
+        company_id: companyId,
+        bank_name: current.bank_name ?? null,
+        clearing_number: current.clearing_number ?? null,
+        account_number: current.account_number ?? null,
+        bankgiro: current.bankgiro ?? null,
+        plusgiro: current.plusgiro ?? null,
+        swish: current.swish ?? null,
+        iban: current.iban ?? null,
+        bic: current.bic ?? null,
+        contact_person: current.default_our_reference ?? null,
+      }
+      const previewChanges = {
+        ...parsed.data.changes,
+        ...(parsed.data.changes.default_our_reference !== undefined
+          ? { contact_person: parsed.data.changes.default_our_reference }
+          : {}),
+      }
+      delete (previewChanges as Record<string, unknown>).default_our_reference
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'update_company_settings',
+        'Uppdatera företagsinställningar',
+        parsed.data,
+        {
+          current: currentPreview,
+          changes: previewChanges,
+          proposed: { ...currentPreview, ...previewChanges },
+        },
+        actor,
+        undefined,
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
+      )
     },
   },
 
@@ -3467,6 +3648,130 @@ export const tools: McpTool[] = [
           dryRun: Boolean(args.dry_run),
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
         }
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_update_customer',
+    title: 'Update Customer',
+    description: 'Stage a partial update to an existing customer. Find customer_id with gnubok_list_customers. Requires approval before customer data is changed.',
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        customer_id: { type: 'string', description: 'UUID from gnubok_list_customers.' },
+        name: { type: 'string', minLength: 1 },
+        customer_type: {
+          type: 'string',
+          enum: ['individual', 'swedish_business', 'eu_business', 'non_eu_business'],
+          description: 'Changing an individual customer to a business type clears its stored personal number.',
+        },
+        customer_number: { type: ['string', 'null'], maxLength: 32, description: 'Null or empty string clears the customer number.' },
+        email: { type: 'string', format: 'email' },
+        phone: { type: 'string' },
+        address_line1: { type: 'string' },
+        address_line2: { type: 'string' },
+        postal_code: { type: 'string' },
+        city: { type: 'string' },
+        country: { type: 'string' },
+        org_number: { type: 'string' },
+        vat_number: { type: 'string', description: 'EU VAT numbers are revalidated with VIES when the update is approved.' },
+        language: { type: 'string', enum: ['sv', 'en'] },
+        default_payment_terms: { type: 'integer', minimum: 1 },
+        notes: { type: 'string' },
+        dry_run: { type: 'boolean', description: 'Validate and preview without staging or changing data.' },
+        idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
+      },
+      required: ['customer_id'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const changes: Record<string, unknown> = {}
+      for (const key of [
+        'name',
+        'customer_type',
+        'customer_number',
+        'email',
+        'phone',
+        'address_line1',
+        'address_line2',
+        'postal_code',
+        'city',
+        'country',
+        'org_number',
+        'vat_number',
+        'language',
+        'default_payment_terms',
+        'notes',
+      ]) {
+        if (args[key] !== undefined) changes[key] = args[key]
+      }
+
+      const parsed = UpdateCustomerParamsSchema.safeParse({
+        customer_id: args.customer_id,
+        changes,
+      })
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0]
+        throw new Error(`Invalid customer update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+      }
+
+      const { data: current, error } = await supabase
+        .from('customers')
+        .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes')
+        .eq('id', parsed.data.customer_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!current) throw new Error('Customer not found.')
+
+      const currentPreview = {
+        customer_id: current.id,
+        name: current.name,
+        customer_type: current.customer_type,
+        customer_number: current.customer_number ?? null,
+        email: current.email ?? null,
+        phone: current.phone ?? null,
+        address_line1: current.address_line1 ?? null,
+        address_line2: current.address_line2 ?? null,
+        postal_code: current.postal_code ?? null,
+        city: current.city ?? null,
+        country: current.country,
+        org_number: current.org_number ?? null,
+        vat_number: current.vat_number ?? null,
+        vat_number_validated: current.vat_number_validated ?? false,
+        language: current.language ?? 'sv',
+        default_payment_terms: current.default_payment_terms,
+        notes: current.notes ?? null,
+      }
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'update_customer',
+        `Uppdatera kund: ${current.name}`,
+        parsed.data,
+        {
+          current: currentPreview,
+          changes: parsed.data.changes,
+          proposed: { ...currentPreview, ...parsed.data.changes },
+        },
+        actor,
+        undefined,
+        {
+          dryRun: Boolean(args.dry_run),
+          idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+        },
       )
     },
   },
@@ -13507,7 +13812,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
-            '• tools/list returns the full schema for every tool. To narrow a large catalog, call gnubok_search_tools(query="…"): it ranks tools by relevance; pass detail="name"|"summary"|"full" to control payload size.',
+            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size.',
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
@@ -13545,6 +13850,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     case 'tools/list': {
       const listStartedAt = Date.now()
       const allowedTools = tools.filter((t) => {
+        if (!isDefaultCatalogTool(t)) return false
         const required = TOOL_SCOPE_MAP[t.name]
         return !required || hasScope(keyScopes, required)
       })
