@@ -21,7 +21,11 @@ import { Loader2, KeyRound } from 'lucide-react'
  *   links but do not click buttons, so the one-time token survives
  *   scanning. Never verify in an effect; that re-opens the burn.
  * - 'enter-code': no session, no token_hash. The email also carries a
- *   6-digit code the user can type together with their email address.
+ *   one-time code the user can type together with their email address.
+ *   The code length follows the project's Email OTP Length setting
+ *   (this project uses 8, gotrue allows 6-10), so the input must never
+ *   cap at 6: a maxLength shorter than the real code silently truncates
+ *   what the user types and every verify fails.
  */
 type Mode = 'loading' | 'set-password' | 'confirm-link' | 'enter-code'
 
@@ -242,7 +246,7 @@ function ResetPasswordInner() {
                   onChange={(e) => setCode(e.target.value)}
                   required
                   minLength={6}
-                  maxLength={6}
+                  maxLength={10}
                   disabled={isLoading}
                   className="h-11 tracking-widest"
                 />
