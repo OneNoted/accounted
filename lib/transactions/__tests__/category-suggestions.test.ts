@@ -62,6 +62,24 @@ describe('buildMerchantHistory / merchantHistoryFor', () => {
     })
     expect(merchantHistoryFor(map, 'Anthropic')).toEqual({ expense_software: 3 })
   })
+
+  it('anchors on original_description so user renames do not sever history', () => {
+    // description is a mutable working title; a user renaming the row to
+    // "Software" must not detach it from the raw bank descriptor identity.
+    const map = buildMerchantHistory([
+      {
+        merchant_name: null,
+        description: 'Software',
+        original_description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
+        category: 'expense_software',
+      },
+    ])
+    expect(merchantHistoryFor(map, null, 'ANTHROPIC*CLAUDE SUB +14155551234')).toEqual({
+      expense_software: 1,
+    })
+    // Renamed title itself is NOT a key when the raw descriptor exists.
+    expect(merchantHistoryFor(map, null, 'Software')).toEqual({})
+  })
 })
 
 describe('getSuggestedCategories: counterparty history', () => {

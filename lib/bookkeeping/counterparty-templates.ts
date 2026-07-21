@@ -157,6 +157,15 @@ function distinctiveTokens(tokens: string[]): string[] {
   )
 }
 
+/**
+ * A single shared token is thin evidence: require the template to be backed
+ * by real booking history before trusting it, so a template named after a
+ * common word or first name (template "anders", occurrence 1) cannot vacuum
+ * up unrelated transfers ("SWISH ANDERS JOHANSSON"). Multi-token agreement
+ * is specific enough on its own.
+ */
+const MIN_SINGLE_TOKEN_OCCURRENCES = 3
+
 // ── Confidence ─────────────────────────────────────────────────
 
 // ── Display ───────────────────────────────────────────────────
@@ -372,9 +381,13 @@ export async function findCounterpartyTemplatesBatch(
       const tmplTokens = tmpl.counterparty_name.split(' ')
       const tmplDistinct = distinctiveTokens(tmplTokens)
       const templateInTx =
-        tmplDistinct.length > 0 && tmplDistinct.every((t) => txTokens.has(t))
+        tmplDistinct.length > 0 &&
+        tmplDistinct.every((t) => txTokens.has(t)) &&
+        (tmplDistinct.length >= 2 || tmpl.occurrence_count >= MIN_SINGLE_TOKEN_OCCURRENCES)
       const coreInTemplate =
-        coreDistinct.length > 0 && coreDistinct.every((t) => tmplTokens.includes(t))
+        coreDistinct.length > 0 &&
+        coreDistinct.every((t) => tmplTokens.includes(t)) &&
+        (coreDistinct.length >= 2 || tmpl.occurrence_count >= MIN_SINGLE_TOKEN_OCCURRENCES)
       if (!templateInTx && !coreInTemplate) continue
       const shared = templateInTx ? tmplDistinct.length : coreDistinct.length
       if (

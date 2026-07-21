@@ -45,23 +45,34 @@ export type MerchantHistoryMap = Map<string, Record<string, number>>
  * descriptors ("ANTHROPIC* CLAUDE SUB SAN FRANCISCO") and clean merchant
  * names ("Anthropic") aggregate under one key. merchant_name is null on card
  * purchases (bank feeds only carry counterparty names for transfers), so the
- * description is the fallback identity: without it, card merchants have no
+ * descriptor is the fallback identity: without it, card merchants have no
  * history at all and every recurring foreign SaaS line reads as no-signal.
+ * Callers pass `original_description ?? description`: the raw bank descriptor
+ * is the stable anchor, `description` is a user-editable working title that
+ * would sever the link on rename.
  */
 function normalizeMerchantKey(
   merchantName: string | null | undefined,
-  description?: string | null,
+  descriptor?: string | null,
 ): string {
-  const raw = (merchantName ?? '').trim() || (description ?? '').trim()
+  const raw = (merchantName ?? '').trim() || (descriptor ?? '').trim()
   return raw ? normalizeCounterpartyName(raw) : ''
 }
 
 export function buildMerchantHistory(
-  rows: Array<{ merchant_name: string | null; description?: string | null; category: string | null }>,
+  rows: Array<{
+    merchant_name: string | null
+    description?: string | null
+    original_description?: string | null
+    category: string | null
+  }>,
 ): MerchantHistoryMap {
   const map: MerchantHistoryMap = new Map()
   for (const row of rows) {
-    const key = normalizeMerchantKey(row.merchant_name, row.description)
+    const key = normalizeMerchantKey(
+      row.merchant_name,
+      row.original_description ?? row.description,
+    )
     if (!key || !row.category) continue
     const bucket = map.get(key) ?? {}
     bucket[row.category] = (bucket[row.category] || 0) + 1
@@ -73,9 +84,9 @@ export function buildMerchantHistory(
 export function merchantHistoryFor(
   map: MerchantHistoryMap,
   merchantName: string | null | undefined,
-  description?: string | null,
+  descriptor?: string | null,
 ): Record<string, number> {
-  const key = normalizeMerchantKey(merchantName, description)
+  const key = normalizeMerchantKey(merchantName, descriptor)
   return key ? (map.get(key) ?? {}) : {}
 }
 

@@ -279,6 +279,44 @@ describe('counterparty-templates', () => {
       expect(result!.matchMethod).toBe('token_subset')
     })
 
+    it('suppresses single-token matches without booking history behind them', async () => {
+      // A template named after a common first name (one prior booking) must
+      // not vacuum up an unrelated SWISH transfer that shares the name.
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'anders',
+        confidence: 0.5,
+        occurrence_count: 1,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({ merchant_name: null, description: 'SWISH ANDERS JOHANSSON' })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).toBeNull()
+    })
+
+    it('multi-token agreement matches without an occurrence floor', async () => {
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'blue bottle',
+        confidence: 0.5,
+        occurrence_count: 1,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'SQ *BLUE BOTTLE COFFEE OAKLAND',
+      })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).not.toBeNull()
+      expect(result!.matchMethod).toBe('token_subset')
+    })
+
     it('never token-matches on generic tokens alone', async () => {
       // A template whose name is all generic/geo words must not vacuum up
       // every descriptor mentioning them.

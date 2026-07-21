@@ -4847,7 +4847,7 @@ export const tools: McpTool[] = [
       // ~0.5 four-way spread agents reported as pure noise (P2-1).
       const { data: historicalTxns } = await supabase
         .from('transactions')
-        .select('category, merchant_name, description')
+        .select('category, merchant_name, description, original_description')
         .eq('company_id', companyId)
         .not('is_business', 'is', null)
         .neq('category', 'uncategorized')
@@ -4872,7 +4872,7 @@ export const tools: McpTool[] = [
           merchantHistoryFor(
             merchantHistory,
             (tx as Transaction).merchant_name,
-            (tx as Transaction).description,
+            (tx as Transaction).original_description ?? (tx as Transaction).description,
           )
         )
 
