@@ -1574,7 +1574,9 @@ export const UpdateSettingsSchema = z.object({
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/, 'Ange en giltig hex-färg (#RRGGBB)')
     .optional(),
-  invoice_font_family: z.enum(['Helvetica', 'Times-Roman', 'Courier']).optional(),
+  invoice_font_family: z
+    .enum(['Helvetica', 'Times-Roman', 'Courier', 'Source Sans 3', 'Source Serif 4', 'Custom'])
+    .optional(),
   invoice_header_text: z.string().max(200).nullable().optional(),
   invoice_footer_text: z.string().max(500).nullable().optional(),
   // Automation

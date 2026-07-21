@@ -197,6 +197,14 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
+export type InvoiceFontFamily =
+  | 'Helvetica'
+  | 'Times-Roman'
+  | 'Courier'
+  | 'Source Sans 3'
+  | 'Source Serif 4'
+  | 'Custom'
+
 // Company Settings
 export interface CompanySettings {
   id: string
@@ -336,7 +344,9 @@ export interface CompanySettings {
   // render identically to the pre-branding template.
   invoice_primary_color: string  // hex #RRGGBB, default '#1a1a1a'
   invoice_accent_color: string   // hex #RRGGBB, default '#666666'
-  invoice_font_family: 'Helvetica' | 'Times-Roman' | 'Courier'
+  invoice_font_family: InvoiceFontFamily
+  invoice_custom_font_path: string | null
+  invoice_custom_font_name: string | null
   invoice_header_text: string | null
   invoice_footer_text: string | null
 

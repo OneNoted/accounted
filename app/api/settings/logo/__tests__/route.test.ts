@@ -34,9 +34,13 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { POST } from '../route'
 
-function makeFormRequest(): Request {
+function makeFormRequest(
+  size = 3,
+  type = 'image/png',
+  name = 'logo.png',
+): Request {
   const fd = new FormData()
-  fd.append('file', new File([new Uint8Array([1, 2, 3])], 'logo.png', { type: 'image/png' }))
+  fd.append('file', new File([new Uint8Array(size)], name, { type }))
   return new Request('http://localhost/api/settings/logo', { method: 'POST', body: fd })
 }
 
@@ -71,6 +75,39 @@ describe('POST /api/settings/logo', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(403)
+  })
+
+  it('returns 400 for an unsupported file type', async () => {
+    const response = await POST(
+      makeFormRequest(3, 'application/pdf', 'logo.pdf'),
+      { params: Promise.resolve({}) },
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+  })
+
+  it('returns 400 when the logo exceeds 10 MB', async () => {
+    const response = await POST(
+      makeFormRequest(10 * 1024 * 1024 + 1),
+      { params: Promise.resolve({}) },
+    )
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('10 MB')
+  })
+
+  it('accepts a logo larger than the previous 2 MB limit', async () => {
+    enqueue({ error: null }) // company_settings update
+
+    const response = await POST(
+      makeFormRequest(2 * 1024 * 1024 + 1),
+      { params: Promise.resolve({}) },
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
   })
 
   it('uploads the logo and returns its public url on the happy path', async () => {

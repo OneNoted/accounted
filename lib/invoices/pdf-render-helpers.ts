@@ -25,6 +25,8 @@ import { brandingFromCompanySettings, SHOW_SWISH_ON_INVOICE, type InvoiceBrandin
 import { buildSwishQrPayload } from '@/lib/payments/swish'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { createLogger } from '@/lib/logger'
+import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
+import { prepareInvoiceFont } from '@/lib/invoices/pdf-fonts'
 
 const log = createLogger('invoice.swish-qr')
 const paymentLinkLog = createLogger('invoice.payment-link-qr')
@@ -50,9 +52,8 @@ const LOGO_CACHE_TTL_MS = 5 * 60 * 1000
 const LOGO_CACHE_MAX = 50
 const logoDataUrlCache = new Map<string, { dataUrl: string; at: number }>()
 
-// The invoice draws the logo at maxWidth 150pt / maxHeight 40pt (~200px at
-// print resolution), so 600px keeps it crisp while bounding the embedded
-// base64 payload.
+// The invoice draws the logo at up to 240pt by 80pt, so 600px keeps it crisp
+// while bounding the embedded base64 payload.
 const LOGO_MAX_PX = 600
 
 // Bound the logo fetch so a slow or oversized response can't hang or balloon an
@@ -60,7 +61,6 @@ const LOGO_MAX_PX = 600
 // URL (set only by the upload route), so SSRF is not reachable today: these
 // caps are defense-in-depth for that invariant plus plain robustness.
 const LOGO_FETCH_TIMEOUT_MS = 5_000
-const LOGO_MAX_BYTES = 5 * 1024 * 1024 // 5 MB: generous for a logo, bounds memory
 
 // Coalesce concurrent renders of the same logo (preflight + final on a send, and
 // every invoice in a recurring/batch loop) onto one in-flight fetch+encode
@@ -103,9 +103,9 @@ async function encodeLogo(logoUrl: string): Promise<string | null> {
     // Reject oversized payloads up front when the server declares a length, and
     // again after reading in case the header lied or was absent.
     const declared = Number(res.headers.get('content-length') ?? '')
-    if (Number.isFinite(declared) && declared > LOGO_MAX_BYTES) return null
+    if (Number.isFinite(declared) && declared > LOGO_UPLOAD_MAX_BYTES) return null
     const input = Buffer.from(await res.arrayBuffer())
-    if (input.byteLength > LOGO_MAX_BYTES) return null
+    if (input.byteLength > LOGO_UPLOAD_MAX_BYTES) return null
 
     // SVGs must be rasterized at a higher density or sharp renders them at
     // their intrinsic (often tiny) pixel size and the result looks blurry.
@@ -145,7 +145,10 @@ async function encodeLogo(logoUrl: string): Promise<string | null> {
 export async function prepareInvoicePdfRender(
   company: CompanySettings,
 ): Promise<InvoicePdfRenderExtras> {
-  const branding = brandingFromCompanySettings(company)
+  const branding = await prepareInvoiceFont(
+    company,
+    brandingFromCompanySettings(company),
+  )
   if (!company.logo_url) return { branding, company }
 
   const dataUrl = await resolveLogoDataUrl(company.logo_url)

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Upload, Trash2 } from 'lucide-react'
+import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 
 interface LogoUploadProps {
   logoUrl: string | null
@@ -28,7 +29,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       toast({ title: t('logo_disallowed_type_title'), description: t('logo_disallowed_type_description'), variant: 'destructive' })
       return
     }
-    if (file.size > 2 * 1024 * 1024) {
+    if (file.size > LOGO_UPLOAD_MAX_BYTES) {
       toast({ title: t('logo_too_large'), variant: 'destructive' })
       return
     }

@@ -9,6 +9,13 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import {
+  BUNDLED_INVOICE_FONT_FAMILIES,
+  INVOICE_LOGO_MAX_HEIGHT_PT,
+  INVOICE_LOGO_MAX_WIDTH_PT,
+  STANDARD_PDF_FONT_FAMILIES,
+} from '@/lib/invoices/branding-constants'
+import { CUSTOM_INVOICE_FONT_RENDER_PREFIX } from '@/lib/invoices/pdf-fonts'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { isTextLikeLine } from '@/lib/invoices/display'
 
@@ -188,8 +195,7 @@ export interface InvoiceBranding {
   /** Accent color: used for muted labels and section headings.
    *  Default '#666666' (the existing hardcoded value). */
   accentColor?: string
-  /** Font family: must be one of react-pdf's built-in PostScript fonts.
-   *  Default 'Helvetica'. */
+  /** Registered react-pdf font family. Default 'Helvetica'. */
   fontFamily?: string
   /** Optional banner text rendered above the document title. */
   headerText?: string | null
@@ -203,10 +209,10 @@ interface ResolvedBranding {
   fontFamily: string
 }
 
-// react-pdf only ships these three PostScript fonts. Anything else would
-// require registerFont() with a binary file, out of scope for AGPL-clean
-// branding and a fingerprinting risk besides.
-const ALLOWED_FONTS = new Set(['Helvetica', 'Times-Roman', 'Courier'])
+const ALLOWED_FONTS = new Set<string>([
+  ...STANDARD_PDF_FONT_FAMILIES,
+  ...BUNDLED_INVOICE_FONT_FAMILIES,
+])
 
 /**
  * Extract the InvoicePDF branding shape from a CompanySettings row. Tolerates
@@ -238,7 +244,9 @@ const DEFAULT_BRANDING: ResolvedBranding = {
 function resolveBranding(branding: InvoiceBranding | undefined): ResolvedBranding {
   if (!branding) return DEFAULT_BRANDING
   const fontFamily =
-    branding.fontFamily && ALLOWED_FONTS.has(branding.fontFamily)
+    branding.fontFamily &&
+    (ALLOWED_FONTS.has(branding.fontFamily) ||
+      branding.fontFamily.startsWith(CUSTOM_INVOICE_FONT_RENDER_PREFIX))
       ? branding.fontFamily
       : DEFAULT_BRANDING.fontFamily
   return {
@@ -730,7 +738,16 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
         <View style={styles.header}>
           <View style={styles.companyInfo}>
             {company.logo_url && (company.invoice_show_logo ?? true) && (
-              <Image src={company.logo_url} style={{ maxHeight: 40, maxWidth: 150, marginBottom: 6, alignSelf: 'flex-start' }} />
+              <Image
+                src={company.logo_url}
+                style={{
+                  maxHeight: INVOICE_LOGO_MAX_HEIGHT_PT,
+                  maxWidth: INVOICE_LOGO_MAX_WIDTH_PT,
+                  marginBottom: 6,
+                  alignSelf: 'flex-start',
+                  objectFit: 'contain',
+                }}
+              />
             )}
             {(company.invoice_show_company_name ?? true) &&
               (company.invoice_company_name_position ?? 'header') === 'header' && (
