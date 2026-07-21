@@ -858,7 +858,7 @@
     "code_subtitle": "Ange din e-post och engångskoden från mailet.",
     "email_label": "E-postadress",
     "code_label": "Engångskod",
-    "code_placeholder": "6-siffrig kod",
+    "code_placeholder": "Koden från mailet",
     "code_button": "Verifiera kod",
     "code_verifying": "Verifierar...",
     "code_hint": "Koden finns i mailet om lösenordsåterställning. Hittar du inget mail kan du begära en ny återställning från inloggningssidan.",
