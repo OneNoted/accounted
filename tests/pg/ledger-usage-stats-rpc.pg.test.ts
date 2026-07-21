@@ -223,6 +223,14 @@ describe('normalize_counterparty_key', () => {
     expect(await normalize('Ngrok Mars')).toBe('ngrok')
     // Invoice references.
     expect(await normalize('Acme INV-123')).toBe('acme')
+    // Card-network descriptors: merchant segment before the star, per-charge
+    // product/ref/city tail dropped (the Anthropic splinter bug). Processor
+    // prefixes keep the merchant AFTER the star instead.
+    expect(await normalize('ANTHROPIC* CLAUDE SUB SAN FRANCISCO')).toBe('anthropic')
+    expect(await normalize('ANTHROPIC*CLAUDE SUB +14155551234')).toBe('anthropic')
+    expect(await normalize('PAYPAL *SPOTIFY')).toBe('spotify')
+    expect(await normalize('SQ *BLUE BOTTLE COFFEE')).toBe('blue bottle coffee')
+    expect(await normalize('AMZN MKTP SE*A12B34CD5')).toBe('amzn mktp')
     // Never strips to empty: keeps the last token.
     expect(await normalize('SEB')).toBe('seb')
     // NULL-safe.

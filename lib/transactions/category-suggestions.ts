@@ -1,5 +1,6 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
+import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { findMatchingTemplates, getTemplateById, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
 import type { Transaction, TransactionCategory, EntityType, MappingRule, LinePatternEntry } from '@/types'
 
@@ -39,16 +40,28 @@ const CATEGORY_LABELS: Record<string, string> = {
  */
 export type MerchantHistoryMap = Map<string, Record<string, number>>
 
-function normalizeMerchantKey(name: string | null | undefined): string {
-  return (name ?? '').toLowerCase().trim()
+/**
+ * History keys share the counterparty-template normalization so card
+ * descriptors ("ANTHROPIC* CLAUDE SUB SAN FRANCISCO") and clean merchant
+ * names ("Anthropic") aggregate under one key. merchant_name is null on card
+ * purchases (bank feeds only carry counterparty names for transfers), so the
+ * description is the fallback identity: without it, card merchants have no
+ * history at all and every recurring foreign SaaS line reads as no-signal.
+ */
+function normalizeMerchantKey(
+  merchantName: string | null | undefined,
+  description?: string | null,
+): string {
+  const raw = (merchantName ?? '').trim() || (description ?? '').trim()
+  return raw ? normalizeCounterpartyName(raw) : ''
 }
 
 export function buildMerchantHistory(
-  rows: Array<{ merchant_name: string | null; category: string | null }>,
+  rows: Array<{ merchant_name: string | null; description?: string | null; category: string | null }>,
 ): MerchantHistoryMap {
   const map: MerchantHistoryMap = new Map()
   for (const row of rows) {
-    const key = normalizeMerchantKey(row.merchant_name)
+    const key = normalizeMerchantKey(row.merchant_name, row.description)
     if (!key || !row.category) continue
     const bucket = map.get(key) ?? {}
     bucket[row.category] = (bucket[row.category] || 0) + 1
@@ -60,8 +73,9 @@ export function buildMerchantHistory(
 export function merchantHistoryFor(
   map: MerchantHistoryMap,
   merchantName: string | null | undefined,
+  description?: string | null,
 ): Record<string, number> {
-  const key = normalizeMerchantKey(merchantName)
+  const key = normalizeMerchantKey(merchantName, description)
   return key ? (map.get(key) ?? {}) : {}
 }
 
