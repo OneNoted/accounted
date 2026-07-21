@@ -7,6 +7,7 @@ import { createLogger } from '@/lib/logger'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import { buildSandboxCustomers } from './customers'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -211,50 +212,7 @@ export async function POST(request: Request) {
     // 5. Create customers
     const { data: customers, error: custError } = await supabase
       .from('customers')
-      .insert([
-        {
-          user_id: userId,
-          company_id: companyId,
-          name: 'Björk & Partner AB',
-          customer_type: 'swedish_business',
-          email: 'faktura@bjorkpartner.se',
-          org_number: '5566778899',
-          vat_number: 'SE556677889901',
-          vat_number_validated: true,
-          address_line1: 'Storgatan 10',
-          postal_code: '111 44',
-          city: 'Stockholm',
-          country: 'SE',
-          default_payment_terms: 30,
-        },
-        {
-          user_id: userId,
-          company_id: companyId,
-          name: 'Schmidt GmbH',
-          customer_type: 'eu_business',
-          email: 'billing@schmidt.de',
-          org_number: 'HRB 12345',
-          vat_number: 'DE123456789',
-          vat_number_validated: true,
-          address_line1: 'Hauptstraße 5',
-          postal_code: '10115',
-          city: 'Berlin',
-          country: 'DE',
-          default_payment_terms: 30,
-        },
-        {
-          user_id: userId,
-          company_id: companyId,
-          name: 'Anna Lindström',
-          customer_type: 'individual',
-          email: 'anna.lindstrom@example.com',
-          address_line1: 'Lillgatan 3',
-          postal_code: '222 33',
-          city: 'Malmö',
-          country: 'SE',
-          default_payment_terms: 30,
-        },
-      ])
+      .insert(buildSandboxCustomers(userId, companyId))
       .select('id, name')
 
     if (custError) throw custError

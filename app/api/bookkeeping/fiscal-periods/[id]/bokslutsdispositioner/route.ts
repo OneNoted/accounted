@@ -230,10 +230,11 @@ async function computeProposal(
         companyId,
         fiscalPeriodId,
       )
-      return calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
+      const proposal = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
         resultBeforeTaxOverride: incomeStatement.net_result + dispositionsEffect.total,
         manualAdjustments: item.manualAdjustments,
       })
+      return proposal && proposal.amount > 0 ? proposal : null
     }
     case 'sarskild_loneskatt': {
       // Already posted in this period (resumed run / duplicate POST): the

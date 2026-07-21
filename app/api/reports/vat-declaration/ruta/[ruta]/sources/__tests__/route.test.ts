@@ -16,12 +16,14 @@ import { GET } from '../route'
 
 interface SupabaseShape {
   from: ReturnType<typeof vi.fn>
+  rpc: ReturnType<typeof vi.fn>
 }
 
 function buildSupabase(
   linesResult: { data: unknown; error: unknown }
 ): SupabaseShape {
   return {
+    rpc: vi.fn().mockResolvedValue(linesResult),
     from: vi.fn().mockImplementation(() => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -32,7 +34,6 @@ function buildSupabase(
       limit: vi.fn().mockReturnThis(),
       or: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-      // journal_entry_lines terminates on `.range()` (fetchAllRows).
       range: vi.fn().mockResolvedValue(linesResult),
       then: (resolve: (v: unknown) => void) => resolve(linesResult),
     })),
@@ -88,18 +89,14 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
   it('happy path: returns mapped lines for ruta10', async () => {
     const linesData = [
       {
-        account_number: '2611',
+        line_id: 'line-1',
+        journal_entry_id: 'je-1',
+        voucher_number: 12,
+        voucher_series: 'A',
+        entry_date: '2026-05-12',
+        description: 'Faktura 1001',
         debit_amount: 0,
         credit_amount: 250,
-        journal_entries: {
-          id: 'je-1',
-          voucher_number: 12,
-          voucher_series: 'A',
-          entry_date: '2026-05-12',
-          description: 'Faktura 1001',
-          status: 'posted',
-          company_id: 'company-1',
-        },
       },
     ]
     authOk(buildSupabase({ data: linesData, error: null }))
@@ -143,52 +140,37 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
     expect(res.status).toBe(400)
   })
 
-  it('sorts lines by entry_date ASC then voucher_number ASC regardless of DB return order', async () => {
-    // Regression: this endpoint relied on `.order({ foreignTable })`, which
-    // sorts the embedded resource (not the parent) so lines came back in
-    // arbitrary order and the drill-down showed "different rows on reload".
+  it('preserves the stable chronological order returned by the paged RPC', async () => {
     const linesData = [
       {
-        account_number: '2611',
-        debit_amount: 0,
-        credit_amount: 500,
-        journal_entries: {
-          id: 'je-late',
-          voucher_number: 30,
-          voucher_series: 'A',
-          entry_date: '2026-05-20',
-          description: 'Late',
-          status: 'posted',
-          company_id: 'company-1',
-        },
-      },
-      {
-        account_number: '2611',
+        line_id: 'line-early',
+        journal_entry_id: 'je-early',
+        voucher_number: 4,
+        voucher_series: 'A',
+        entry_date: '2026-05-02',
+        description: 'Early',
         debit_amount: 0,
         credit_amount: 100,
-        journal_entries: {
-          id: 'je-early',
-          voucher_number: 4,
-          voucher_series: 'A',
-          entry_date: '2026-05-02',
-          description: 'Early',
-          status: 'posted',
-          company_id: 'company-1',
-        },
       },
       {
-        account_number: '2611',
+        line_id: 'line-mid',
+        journal_entry_id: 'je-mid',
+        voucher_number: 18,
+        voucher_series: 'A',
+        entry_date: '2026-05-11',
+        description: 'Mid',
         debit_amount: 0,
         credit_amount: 250,
-        journal_entries: {
-          id: 'je-mid',
-          voucher_number: 18,
-          voucher_series: 'A',
-          entry_date: '2026-05-11',
-          description: 'Mid',
-          status: 'posted',
-          company_id: 'company-1',
-        },
+      },
+      {
+        line_id: 'line-late',
+        journal_entry_id: 'je-late',
+        voucher_number: 30,
+        voucher_series: 'A',
+        entry_date: '2026-05-20',
+        description: 'Late',
+        debit_amount: 0,
+        credit_amount: 500,
       },
     ]
     authOk(buildSupabase({ data: linesData, error: null }))

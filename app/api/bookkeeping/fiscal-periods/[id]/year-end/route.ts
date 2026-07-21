@@ -44,7 +44,6 @@ export const POST = withRouteContext(
       const result = await executeYearEndClosing(supabase, companyId!, user.id, id)
       return NextResponse.json({ data: result })
     } catch (err) {
-      opLog.error('year-end execution failed', err as Error)
       const message = err instanceof Error ? err.message : ''
       // The downstream errors below are matched on stable English keywords
       // emitted by year-end-service. Do NOT include the raw message in
@@ -52,6 +51,12 @@ export const POST = withRouteContext(
       // the structured message_sv / message_en pair.
       if (/Next fiscal period already has opening balance/i.test(message)) {
         return errorResponseFromCode('YEAR_END_NEXT_PERIOD_HAS_IB', opLog, { requestId })
+      }
+      if (/No result accounts to close: period has no activity/i.test(message)) {
+        return errorResponseFromCode('YEAR_END_NO_ACTIVITY', opLog, {
+          requestId,
+          reason: 'year-end blocked because the period has no posted result activity',
+        })
       }
       if (/prior.*open/i.test(message)) {
         return errorResponseFromCode('YEAR_END_PRIOR_PERIOD_OPEN', opLog, { requestId })
@@ -62,12 +67,10 @@ export const POST = withRouteContext(
       if (/not found/i.test(message)) {
         return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
       }
-      // Fall through bookkeeping/Zod/etc to errorResponse, but cap to YEAR_END_FAILED.
-      const fallback = errorResponse(err, opLog, { requestId })
-      if (fallback.status === 500) {
-        return errorResponseFromCode('YEAR_END_FAILED', opLog, { requestId })
-      }
-      return fallback
+      // Unknown failures stay 5xx and retain the original Error object and
+      // stack in the log. Expected domain outcomes above are structured 4xx
+      // warnings, so Vercel runtime-error clusters remain actionable.
+      return errorResponse(err, opLog, { requestId })
     }
   },
   { requireWrite: true },

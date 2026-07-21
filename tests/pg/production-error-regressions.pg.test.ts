@@ -1,0 +1,165 @@
+import { randomUUID } from 'node:crypto'
+import { describe, expect, it } from 'vitest'
+import { getPool } from './setup'
+import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
+
+async function insertEntry(params: {
+  userId: string
+  companyId: string
+  fiscalPeriodId: string
+  voucherNumber: number
+  entryDate: string
+  lines: Array<{ account: string; debit: number; credit: number }>
+}): Promise<string> {
+  const entryId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.journal_entries
+       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+        entry_date, description, source_type, status)
+     VALUES ($1, $2, $3, $4, $5, 'A', $6, 'Production regression test', 'manual', 'posted')`,
+    [
+      entryId,
+      params.userId,
+      params.companyId,
+      params.fiscalPeriodId,
+      params.voucherNumber,
+      params.entryDate,
+    ],
+  )
+
+  for (const line of params.lines) {
+    await getPool().query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, $2, $3, $4)`,
+      [entryId, line.account, line.debit, line.credit],
+    )
+  }
+  return entryId
+}
+
+async function seedCompany() {
+  const userId = await insertAuthUser()
+  const companyId = await insertCompany({ createdBy: userId })
+  const fiscalPeriodId = await insertFiscalPeriod({
+    userId,
+    companyId,
+    periodStart: '2026-01-01',
+    periodEnd: '2026-12-31',
+  })
+  return { userId, companyId, fiscalPeriodId }
+}
+
+describe('production error regressions', () => {
+  it('registers PendingOperationApproved in the processing history catalog', async () => {
+    const { rows } = await getPool().query(
+      `SELECT event_type
+       FROM public.processing_event_types
+       WHERE event_type = 'PendingOperationApproved'`,
+    )
+
+    expect(rows).toEqual([{ event_type: 'PendingOperationApproved' }])
+  })
+
+  it('aggregates period activity and excludes a specified opening entry', async () => {
+    const ctx = await seedCompany()
+    const openingId = await insertEntry({
+      ...ctx,
+      voucherNumber: 1,
+      entryDate: '2026-01-01',
+      lines: [
+        { account: '1930', debit: 1_000, credit: 0 },
+        { account: '2010', debit: 0, credit: 1_000 },
+      ],
+    })
+    await insertEntry({
+      ...ctx,
+      voucherNumber: 2,
+      entryDate: '2026-03-15',
+      lines: [
+        { account: '1930', debit: 250, credit: 0 },
+        { account: '3001', debit: 0, credit: 250 },
+      ],
+    })
+
+    const { rows } = await getPool().query(
+      `SELECT account_number, debit::text, credit::text
+       FROM public.get_account_period_activity($1, $2, $3, $4, $5)`,
+      [ctx.companyId, '2026-01-01', '2026-12-31', ['1930', '3001'], openingId],
+    )
+
+    expect(rows).toEqual([
+      { account_number: '1930', debit: '250', credit: '0' },
+      { account_number: '3001', debit: '0', credit: '250' },
+    ])
+  })
+
+  it('pages VAT source lines with a stable entry and line cursor', async () => {
+    const ctx = await seedCompany()
+    await insertEntry({
+      ...ctx,
+      voucherNumber: 1,
+      entryDate: '2026-03-01',
+      lines: [
+        { account: '1930', debit: 125, credit: 0 },
+        { account: '2611', debit: 0, credit: 25 },
+        { account: '3001', debit: 0, credit: 100 },
+      ],
+    })
+    await insertEntry({
+      ...ctx,
+      voucherNumber: 2,
+      entryDate: '2026-03-02',
+      lines: [
+        { account: '1930', debit: 250, credit: 0 },
+        { account: '2611', debit: 0, credit: 50 },
+        { account: '3001', debit: 0, credit: 200 },
+      ],
+    })
+
+    const first = await getPool().query(
+      `SELECT * FROM public.get_vat_ruta_source_lines(
+         $1, $2, $3, $4, NULL, NULL, NULL, NULL, 1
+       )`,
+      [ctx.companyId, '2026-03-01', '2026-03-31', ['2611']],
+    )
+    expect(first.rows).toHaveLength(1)
+    expect(first.rows[0].voucher_number).toBe(1)
+
+    const second = await getPool().query(
+      `SELECT * FROM public.get_vat_ruta_source_lines(
+         $1, $2, $3, $4, $5, $6, $7, $8, 1
+       )`,
+      [
+        ctx.companyId,
+        '2026-03-01',
+        '2026-03-31',
+        ['2611'],
+        first.rows[0].entry_date,
+        first.rows[0].voucher_number,
+        first.rows[0].journal_entry_id,
+        first.rows[0].line_id,
+      ],
+    )
+    expect(second.rows).toHaveLength(1)
+    expect(second.rows[0].voucher_number).toBe(2)
+  })
+
+  it('installs the covering indexes used by the timeout fixes', async () => {
+    const { rows } = await getPool().query(
+      `SELECT indexname
+       FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND indexname IN (
+           'idx_audit_log_company_created_id',
+           'idx_journal_entries_company_posted_date_id'
+         )
+       ORDER BY indexname`,
+    )
+
+    expect(rows.map((row) => row.indexname)).toEqual([
+      'idx_audit_log_company_created_id',
+      'idx_journal_entries_company_posted_date_id',
+    ])
+  })
+})

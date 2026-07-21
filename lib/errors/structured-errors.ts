@@ -1181,6 +1181,14 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_sv: 'Nästa räkenskapsperiod har redan ingående balanser bokförda. Storno dem innan du kör om bokslutet.',
     message_en: 'Next fiscal period already has opening balances posted; reverse them before re-running year-end.',
   },
+  YEAR_END_NO_ACTIVITY: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsperioden saknar bokförd aktivitet och kan därför inte skapa en bokslutsverifikation. Bokför eller importera periodens affärshändelser innan du kör bokslutet.',
+    message_en:
+      'The fiscal period has no posted activity, so no year-end voucher can be created. Post or import the period activity before running year-end closing.',
+    retryable: false,
+  },
 }
 
 const OPENING_BAL: Record<string, StructuredErrorEntry> = {

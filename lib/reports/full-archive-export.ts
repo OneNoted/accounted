@@ -1131,9 +1131,14 @@ async function fetchAllAuditEntries(
   const pageSize = 500
 
   while (true) {
-    const result = await getAuditLog(supabase, companyId, { ...filters, page, pageSize })
+    const result = await getAuditLog(supabase, companyId, {
+      ...filters,
+      page,
+      pageSize,
+      includeCount: false,
+    })
     all.push(...result.data)
-    if (all.length >= result.count || result.data.length < pageSize) {
+    if (result.data.length < pageSize) {
       break
     }
     page++
