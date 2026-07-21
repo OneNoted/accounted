@@ -107,6 +107,16 @@ describe('calculateBolagsskatt', () => {
     expect(generateIncomeStatement).not.toHaveBeenCalled()
   })
 
+  it('calculates Miles tax after both non-deductible account addbacks', async () => {
+    const result = await calculateBolagsskatt(NOOP_CLIENT, 'co', 'fp', {
+      resultBeforeTaxOverride: 592_722.21,
+      manualAdjustments: { nonDeductibleExpenses: 2_994 + 2_250 },
+    })
+
+    expect(result?.computation?.taxableResultClamped).toBe(597_960)
+    expect(result?.amount).toBe(123_180)
+  })
+
   /** Table-keyed FIFO client: consumption order per table mirrors the
    *  two-step entry-lines fetch plus the reversed-ids lookup. */
   function makeQueuedClient(queues: Record<string, { data: unknown; error: unknown }[]>) {
@@ -150,6 +160,7 @@ describe('calculateBolagsskatt', () => {
     const effect = await sumPostedYearEndDispositions(client, 'co', 'fp')
     expect(effect.total).toBe(-174_000) // -150k + 20k - 39k - 5k
     expect(effect.slpPortion).toBe(-5_000)
+    expect(effect.taxProvisionPortion).toBe(123_600)
   })
 
   it('sumPostedYearEndDispositions counts the replacement of a corrected year_end entry', async () => {
@@ -177,16 +188,17 @@ describe('calculateBolagsskatt', () => {
     const effect = await sumPostedYearEndDispositions(client, 'co', 'fp')
     expect(effect.total).toBe(-90_000)
     expect(effect.slpPortion).toBe(0)
+    expect(effect.taxProvisionPortion).toBe(0)
   })
 
-  it('truncates taxable result to whole krona before applying tax', async () => {
+  it('rounds taxable result down to a whole 10 SEK before applying tax', async () => {
     vi.mocked(generateIncomeStatement).mockResolvedValue({
       net_result: 100_999.99,
     } as Awaited<ReturnType<typeof generateIncomeStatement>>)
 
     const result = await calculateBolagsskatt(NOOP_CLIENT, 'co', 'fp')
 
-    // floor(100_999.99) = 100_999, × 0.206 = 20805.794 → round = 20_806
-    expect(result!.amount).toBe(20_806)
+    expect(result?.computation?.taxableResultClamped).toBe(100_990)
+    expect(result!.amount).toBe(20_804)
   })
 })

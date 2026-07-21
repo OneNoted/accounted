@@ -49,6 +49,8 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7650': 302000,
       '7750': 0,
       '7651': 0,
+      '7653': 0,
+      '7754': 0,
       '8020': 302000,
       '8021': 0,
     },
@@ -246,6 +248,22 @@ describe('INK2 SRU Generator', () => {
       // 7750 and 8021 are 0, should not appear
       expect(ink2sBlock).not.toContain('#UPPGIFT 7750')
       expect(ink2sBlock).not.toContain('#UPPGIFT 8021')
+    })
+
+    it('includes saved non-deductible and non-taxable adjustments in INK2S', () => {
+      const base = makeDeclaration()
+      const declaration = makeDeclaration({
+        ink2s: {
+          ...base.ink2s,
+          '7653': 5_244,
+          '7754': 1_000,
+        },
+      })
+      const submission = generateSRUSubmission(declaration)
+      const ink2sBlock = extractBlock(submission.blanketterSru, 'INK2S')
+
+      expect(ink2sBlock).toContain('#UPPGIFT 7653 5244')
+      expect(ink2sBlock).toContain('#UPPGIFT 7754 1000')
     })
 
     it('INK2 block includes överskott', () => {

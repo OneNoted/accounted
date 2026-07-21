@@ -101,7 +101,7 @@ export interface INK2Rutor {
 
 /**
  * INK2S: Skattemässiga justeringar (page 4)
- * Auto-derived fields only. Manual tax adjustments are handled by the accountant.
+ * Auto-derived fields plus the tax adjustments saved in the year-end flow.
  */
 export interface INK2SRutor {
   '7011': string  // Räkenskapsår fr.o.m. (YYYYMMDD)
@@ -109,6 +109,8 @@ export interface INK2SRutor {
   '7650': number  // 4.1  Årets resultat, vinst
   '7750': number  // 4.2  Årets resultat, förlust
   '7651': number  // 4.3a Skatt på årets resultat (ej avdragsgill)
+  '7653': number  // 4.3c Andra ej avdragsgilla kostnader
+  '7754': number  // 4.5c Andra ej skattepliktiga intäkter
   '8020': number  // 4.15 Överskott → punkt 1.1
   '8021': number  // 4.16 Underskott → punkt 1.2
 }

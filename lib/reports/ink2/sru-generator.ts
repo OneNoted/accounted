@@ -200,7 +200,15 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push(`#UPPGIFT 7012 ${declaration.ink2s['7012']}`)
 
   // INK2S numeric fields: emit non-zero values only
-  const ink2sNumericFields: (keyof INK2SRutor)[] = ['7650', '7750', '7651', '8020', '8021']
+  const ink2sNumericFields: (keyof INK2SRutor)[] = [
+    '7650',
+    '7750',
+    '7651',
+    '7653',
+    '7754',
+    '8020',
+    '8021',
+  ]
   for (const code of ink2sNumericFields) {
     const value = declaration.ink2s[code]
     if (typeof value === 'number' && value !== 0) {
