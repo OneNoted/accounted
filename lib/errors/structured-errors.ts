@@ -2783,6 +2783,90 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
     message_en:
       'No Bolagsverket event subscription exists for this company yet. One is created on the first submission.',
   },
+  BOLAGSVERKET_NOT_RELEASED: {
+    httpStatus: 503,
+    message_sv:
+      'Direktinlämning till Bolagsverket är inte öppnad i den här installationen. Använd pappersflödet tills anslutningen är godkänd.',
+    message_en:
+      'Connected filing to Bolagsverket is not enabled for this installation. Use the paper flow until acceptance is complete.',
+    retryable: false,
+  },
+  BOLAGSVERKET_VERSION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den valda versionen av årsredovisningen finns inte.',
+    message_en: 'The selected annual report version was not found.',
+    retryable: false,
+  },
+  BOLAGSVERKET_VERSION_NOT_SIGNED: {
+    httpStatus: 409,
+    message_sv: 'Årsredovisningsversionen måste vara låst och undertecknad före inlämning.',
+    message_en: 'The annual report version must be finalized and signed before submission.',
+    retryable: false,
+  },
+  BOLAGSVERKET_DIGITAL_INELIGIBLE: {
+    httpStatus: 409,
+    message_sv:
+      'Den låsta årsredovisningsversionen är inte godkänd för digital inlämning. Använd pappersflödet och följ kontrollpunkterna i årsredovisningsstudion.',
+    message_en:
+      'The locked annual report version is not eligible for connected filing. Use the paper workflow and review the Annual Report Studio checks.',
+    retryable: false,
+  },
+  BOLAGSVERKET_SIGNATURE_EVIDENCE_INCOMPLETE: {
+    httpStatus: 409,
+    message_sv: 'Verifierbart underskriftsunderlag saknas för en eller flera undertecknare.',
+    message_en: 'Verifiable signature evidence is missing for one or more required signers.',
+    retryable: false,
+  },
+  BOLAGSVERKET_CERTIFICATE_SIGNER_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Undertecknaren av fastställelseintyget stämmer inte med den person som låstes i årsredovisningsversionen.',
+    message_en:
+      'The certificate signer does not match the person locked into the annual report version.',
+    retryable: false,
+  },
+  BOLAGSVERKET_ARELLE_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv:
+      'Taxonomivalideringen med Arelle är inte tillgänglig. Inlämningen har stoppats innan något skickades.',
+    message_en:
+      'Arelle taxonomy validation is unavailable. Filing was stopped before anything was sent.',
+    retryable: true,
+  },
+  BOLAGSVERKET_ARELLE_FAILED: {
+    httpStatus: 409,
+    message_sv:
+      'Arelle hittade blockerande fel i iXBRL-dokumentet. Rätta felen och skapa en ny version.',
+    message_en:
+      'Arelle found blocking errors in the iXBRL document. Correct them and create a new version.',
+    retryable: false,
+  },
+  ARSREDOVISNING_INCOMPLETE: {
+    httpStatus: 409,
+    message_sv: 'Årsredovisningen har blockerande kontrollfel och kan inte låsas ännu.',
+    message_en: 'The annual report has blocking validation errors and cannot be finalized yet.',
+    retryable: false,
+  },
+  ARSREDOVISNING_VERSION_NOT_SIGNABLE: {
+    httpStatus: 409,
+    message_sv: 'Den valda årsredovisningsversionen är inte öppen för underskrift.',
+    message_en: 'The selected annual report version is not open for signing.',
+    retryable: false,
+  },
+  ARSREDOVISNING_SIGNER_ROSTER_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Undertecknarlistan är låst eftersom en årsredovisningsversion redan väntar på underskrift.',
+    message_en:
+      'The signer roster is locked because an annual report version is already awaiting signatures.',
+    retryable: false,
+  },
+  ARSREDOVISNING_SIGNER_ALREADY_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Undertecknaren finns redan i den aktuella undertecknarlistan.',
+    message_en: 'The signer is already present in the current signer roster.',
+    retryable: false,
+  },
   ARSREDOVISNING_REGISTERED: {
     httpStatus: 409,
     message_sv:

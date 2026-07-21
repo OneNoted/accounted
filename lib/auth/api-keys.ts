@@ -326,6 +326,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_propose_accruals:                     'reports:read',
   gnubok_propose_annual_depreciation:          'reports:read',
   gnubok_preview_arsredovisning:               'reports:read',
+  gnubok_validate_arsredovisning:              'reports:read',
+  gnubok_list_arsredovisning_versions:         'reports:read',
+  gnubok_get_arsredovisning_filing_status:     'reports:read',
   gnubok_preview_ef_declaration:               'reports:read',
   // Deliberately UNSCOPED (available to any authenticated key):
   // gnubok_search_tools, gnubok_list_skills, gnubok_load_skill,
