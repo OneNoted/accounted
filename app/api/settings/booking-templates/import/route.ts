@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const ImportLineSchema = z.object({
   account: z.string().regex(/^\d{4}$/),
@@ -70,7 +71,7 @@ export const POST = withRouteContext(
       .insert(rows)
       .select()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data, imported: data?.length ?? 0 }, { status: 201 })
   },

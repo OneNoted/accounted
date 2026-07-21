@@ -6,6 +6,7 @@ import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // PATCH /api/pending-operations/[id]
 //
@@ -56,7 +57,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       body = PatchSchema.parse(await request.json())
     } catch (err) {
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Invalid body' },
+        { error: err instanceof Error ? getUserErrorMessage(err) : 'Invalid body' },
         { status: 400 },
       )
     }
@@ -162,7 +163,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     } catch (err) {
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Ogiltig momsjustering' },
+        { error: err instanceof Error ? getUserErrorMessage(err) : 'Ogiltig momsjustering' },
         { status: 400 },
       )
     }
@@ -210,7 +211,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .select('id, params, preview_data, title, status')
       .single()
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data: updated })
   },

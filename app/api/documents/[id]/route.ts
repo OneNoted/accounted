@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { deleteDocument } from '@/lib/core/documents/document-service'
 import { eventBus } from '@/lib/events'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -34,7 +35,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (signError) {
       return NextResponse.json(
-        { error: `Failed to create download URL: ${signError.message}` },
+        { error: `Failed to create download URL: ${getUserErrorMessage(signError)}` },
         { status: 500 }
       )
     }
@@ -80,7 +81,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (error) {
       console.error('[documents/DELETE] Failed to delete document:', error)
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : 'Failed to delete document' },
+        { error: error instanceof Error ? getUserErrorMessage(error) : 'Failed to delete document' },
         { status: 500 }
       )
     }

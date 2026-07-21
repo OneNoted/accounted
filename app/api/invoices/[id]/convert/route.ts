@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import type { Invoice } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -82,7 +83,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (invoiceError) {
-    return NextResponse.json({ error: invoiceError.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(invoiceError) }, { status: 500 })
   }
 
   const items = (proforma.items || []).map((item: { sort_order: number; line_type?: 'product' | 'text'; description: string; quantity: number; unit: string; unit_price: number; line_total: number; dimensions?: Record<string, string> }) => ({
@@ -104,7 +105,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     if (itemsError) {
       await supabase.from('invoices').delete().eq('id', invoice.id)
-      return NextResponse.json({ error: itemsError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(itemsError) }, { status: 500 })
     }
   }
 
@@ -119,7 +120,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   if (cancelError) {
     await supabase.from('invoices').delete().eq('id', invoice.id)
-    return NextResponse.json({ error: cancelError.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(cancelError) }, { status: 500 })
   }
 
   // Allocate the F-series number last. If allocation fails, restore the
@@ -134,7 +135,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('id', id)
     await supabase.from('invoices').delete().eq('id', invoice.id)
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to assign invoice number' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to assign invoice number' },
       { status: 500 }
     )
   }

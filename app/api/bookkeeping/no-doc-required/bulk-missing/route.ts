@@ -6,6 +6,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // A real calendar date in YYYY-MM-DD form. Rejects shaped-but-invalid values
 // (e.g. 9999-99-99 or 2026-02-30) that a bare /^\d{4}-\d{2}-\d{2}$/ regex would
@@ -106,10 +107,10 @@ export const POST = withRouteContext(
           .in('journal_entry_id', chunk),
       ])
       if (docRes.error) {
-        return NextResponse.json({ error: docRes.error.message }, { status: 400 })
+        return NextResponse.json({ error: getUserErrorMessage(docRes.error) }, { status: 400 })
       }
       if (exemptRes.error) {
-        return NextResponse.json({ error: exemptRes.error.message }, { status: 400 })
+        return NextResponse.json({ error: getUserErrorMessage(exemptRes.error) }, { status: 400 })
       }
       for (const r of (docRes.data ?? []) as { journal_entry_id: string }[]) {
         withDoc.add(r.journal_entry_id)

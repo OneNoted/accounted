@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const SetNoDocSchema = z.object({
   reason: z.string().trim().max(200).nullable().optional(),
@@ -39,7 +40,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     )
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 400 })
   }
 
   return NextResponse.json({ data: { exempted: true } })
@@ -64,7 +65,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     .eq('company_id', companyId)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 400 })
   }
 
   return NextResponse.json({ data: { exempted: false } })

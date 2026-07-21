@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * DELETE /api/settings/oauth-clients/[id]: revoke a redirect URI
@@ -26,7 +27,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select('id, redirect_uri, client_name')
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     if (!rows || rows.length === 0) {

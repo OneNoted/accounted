@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateSIEExport, encodeSIEToCP437 } from '@/lib/reports/sie-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'report.sie_export',
@@ -53,7 +54,7 @@ export const GET = withRouteContext(
       opLog.error('sie export generation failed', err as Error)
       return errorResponseFromCode('SIE_EXPORT_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

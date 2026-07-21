@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
@@ -95,7 +96,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   } catch (error) {
     console.error('PDF generation error:', error)
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'PDF generation failed' },
+      { error: error instanceof Error ? getUserErrorMessage(error) : 'PDF generation failed' },
       { status: 500 }
     )
   }

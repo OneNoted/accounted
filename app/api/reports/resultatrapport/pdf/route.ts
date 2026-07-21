@@ -6,6 +6,7 @@ import { ResultatrapportPDF } from '@/lib/reports/operational-report-pdf-templat
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.resultatrapport.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -77,7 +78,7 @@ export const GET = withRouteContext('report.resultatrapport.pdf', async (request
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera resultatrapport' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera resultatrapport' },
       { status: 500 }
     )
   }

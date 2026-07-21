@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 export const POST = withRouteContext(
@@ -27,7 +28,7 @@ export const POST = withRouteContext(
       if (/draft/i.test(message)) {
         return errorResponseFromCode('PERIOD_LOCK_HAS_DRAFTS', opLog, {
           requestId,
-          details: { reason: message },
+          details: { reason: getErrorMessage(err) },
         })
       }
       // lockPeriod() refuses to lock a period that still has uncategorized
@@ -36,7 +37,7 @@ export const POST = withRouteContext(
       if (/saknar bokföring|okategoriserade affärstransaktion/i.test(message)) {
         return errorResponseFromCode('PERIOD_HAS_UNBOOKED_TRANSACTIONS', opLog, {
           requestId,
-          details: { reason: message },
+          details: { reason: getErrorMessage(err) },
         })
       }
       return errorResponse(err, opLog, { requestId })

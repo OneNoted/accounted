@@ -7,6 +7,7 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { createLogger } from '@/lib/logger'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const log = createLogger('api/company/current')
 
@@ -124,7 +125,7 @@ export const PATCH = withRouteContext(
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   // When opting in to K3, ensure the two latent-tax (uppskjuten skatt)

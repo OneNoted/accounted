@@ -9,6 +9,7 @@ import type {
   SupplierImportParseResult,
   DetectedSupplierColumns,
 } from '@/lib/import/suppliers/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.ods']
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -106,7 +107,7 @@ export const POST = withRouteContext(
       opLog.error('supplier import parse failed', err as Error)
       return errorResponseFromCode('REG_IMPORT_PARSE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

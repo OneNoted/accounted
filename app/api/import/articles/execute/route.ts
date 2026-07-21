@@ -10,6 +10,7 @@ import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { checkRevenueAccount, type RevenueAccountStatus } from '@/lib/articles/validate-revenue-account'
 import type { Article } from '@/types'
 import type { ArticleImportExecuteResult } from '@/lib/import/articles/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -140,7 +141,7 @@ export const POST = withRouteContext(
             .single()
 
           if (error) {
-            errors.push({ row_index: row.row_index, name: row.name, reason: error.message })
+            errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
             continue
           }
           if (data) updated.push(data as Article)
@@ -176,7 +177,7 @@ export const POST = withRouteContext(
             skipped++
             continue
           }
-          errors.push({ row_index: row.row_index, name: row.name, reason: error.message })
+          errors.push({ row_index: row.row_index, name: row.name, reason: getUserErrorMessage(error) })
           continue
         }
 
@@ -225,7 +226,7 @@ export const POST = withRouteContext(
       opLog.error('article import execute failed', err as Error)
       return errorResponseFromCode('REG_IMPORT_EXECUTE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

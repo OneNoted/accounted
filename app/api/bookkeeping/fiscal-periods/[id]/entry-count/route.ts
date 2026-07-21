@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'period.entry_count',
@@ -26,7 +27,7 @@ export const GET = withRouteContext(
       .in('status', ['posted', 'reversed'])
 
     if (countError) {
-      return NextResponse.json({ error: countError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(countError) }, { status: 500 })
     }
 
     return NextResponse.json({ data: { posted_count: count ?? 0 } })

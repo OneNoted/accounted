@@ -5,6 +5,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -42,7 +43,7 @@ export const GET = withCronContext('cron.accrual_postings', async (_request, ctx
   } catch (error) {
     ctx.log.error('failed to load due accrual installments', error as Error)
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'unknown' },
+      { success: false, error: error instanceof Error ? getUserErrorMessage(error) : 'unknown' },
       { status: 500 },
     )
   }

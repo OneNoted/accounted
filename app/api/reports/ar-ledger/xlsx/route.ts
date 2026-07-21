@@ -9,6 +9,7 @@ import {
   integerColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AgingRow {
   customer_name: string
@@ -146,7 +147,7 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera kundreskontra' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera kundreskontra' },
       { status: 500 }
     )
   }

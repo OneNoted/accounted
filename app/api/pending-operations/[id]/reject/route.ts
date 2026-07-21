@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const RejectBodySchema = z.object({
   rejection_category: z
@@ -89,7 +90,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('id', id)
 
     if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(updateError) }, { status: 500 })
     }
 
     return NextResponse.json({ data: { id, status: 'rejected' } })

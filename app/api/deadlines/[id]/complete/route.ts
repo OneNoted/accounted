@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/deadlines/[id]/complete
@@ -23,7 +24,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (fetchError.code === 'PGRST116') {
         return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
       }
-      return NextResponse.json({ error: fetchError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
     }
 
     // Toggle completion
@@ -40,7 +41,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })

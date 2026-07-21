@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import type { CreateJournalEntryLineInput, JournalEntryLine } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/reports/vat-declaration/rc-basis-gaps/fix
@@ -175,7 +176,7 @@ export const POST = withRouteContext(
       log.error('rc-basis-gap fix failed', err as Error, { entryId })
       return errorResponseFromCode('VAT_REPORT_GENERATION_FAILED', log, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

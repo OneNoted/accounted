@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateAccountSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // DELETE hard-deletes an unused, non-system account; accounts referenced by
 // this company's journal entries must be deactivated instead (PUT is_active).
@@ -57,7 +58,7 @@ export const DELETE = withRouteContext(
       .eq('company_id', companyId)
 
     if (deleteError) {
-      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(deleteError) }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })
@@ -95,7 +96,7 @@ export const PUT = withRouteContext(
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Kontot hittades inte' }, { status: 404 })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })

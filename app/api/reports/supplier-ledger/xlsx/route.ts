@@ -7,6 +7,7 @@ import {
   currencyColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AgingRow {
   supplier_name: string
@@ -79,7 +80,7 @@ export const GET = withRouteContext('report.supplier_ledger.xlsx', async (reques
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera leverantörsreskontra' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera leverantörsreskontra' },
       { status: 500 }
     )
   }

@@ -4,6 +4,7 @@ import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-durati
 import { validateBody } from '@/lib/api/validate'
 import { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Response shapes are legacy `{ error: string }` (plus one envelope code for
 // the blocked-by-open-periods dialog) — kept for the räkenskapsår UI.
@@ -18,7 +19,7 @@ export const GET = withRouteContext('period.list', async (_request, ctx) => {
     .order('period_start', { ascending: false })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data })
@@ -202,7 +203,7 @@ export const POST = withRouteContext(
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   // Keep the continuity chain intact for the period that now follows the new one:

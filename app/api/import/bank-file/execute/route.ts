@@ -9,6 +9,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ParsedBankTransaction, BankFileFormatId } from '@/lib/import/bank-file/types'
 import type { Transaction } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -87,7 +88,7 @@ export const POST = withRouteContext(
         opLog.error('failed to create bank_file_imports record', importError)
         return errorResponseFromCode('BANK_FILE_IMPORT_RECORD_FAILED', opLog, {
           requestId,
-          details: { reason: importError.message },
+          details: { reason: getUserErrorMessage(importError) },
         })
       }
 
@@ -164,7 +165,7 @@ export const POST = withRouteContext(
       opLog.error('bank file execute failed', err as Error)
       return errorResponseFromCode('BANK_FILE_EXECUTE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const log = createLogger('api/account/password')
 
@@ -85,7 +86,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          updateError.message ||
+          getUserErrorMessage(updateError) ||
           'Kunde inte uppdatera lösenord. Försök igen.',
       },
       { status: 400 },

@@ -4,6 +4,7 @@ import { decodeFileContent } from '@/lib/import/shared/encoding'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/import/bank-file/parse
@@ -91,7 +92,7 @@ export const POST = withRouteContext(
       opLog.error('bank file parse failed', err as Error)
       return errorResponseFromCode('BANK_FILE_PARSE_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

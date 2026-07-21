@@ -194,7 +194,7 @@ describe('POST /api/account/password', () => {
       )
 
       expect(status).toBe(400)
-      expect(body.error).toContain('Password too weak')
+      expect(body.error).toBe('Något gick fel. Försök igen.')
       expect(updateUser).not.toHaveBeenCalled()
       expect(flagFlipCall(updateUserById)).toBeUndefined()
     })
@@ -273,7 +273,7 @@ describe('POST /api/account/password', () => {
       )
 
       expect(status).toBe(400)
-      expect(body.error).toContain('Password too similar')
+      expect(body.error).toBe('Något gick fel. Försök igen.')
       expect(updateUser).toHaveBeenCalledWith({ password: STRONG_PASSWORD })
       expect(flagFlipCall(updateUserById)).toBeUndefined()
     })

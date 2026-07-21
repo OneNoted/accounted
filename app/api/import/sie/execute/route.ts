@@ -6,6 +6,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { AccountMapping, SIEAccountMappingRecord } from '@/lib/import/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // SIE imports with many vouchers need extended execution time
 export const maxDuration = 300
@@ -125,7 +126,7 @@ export const POST = withRouteContext(
       opLog.error('sie execute unexpected error', err as Error)
       return errorResponseFromCode('SIE_IMPORT_UNEXPECTED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

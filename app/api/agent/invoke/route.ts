@@ -10,6 +10,7 @@ import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Make sure extensions are loaded: the chat loop dispatches against the
 // agent tool registry which is populated by the mcp-server extension at load.
@@ -87,7 +88,7 @@ export async function POST(request: Request) {
     body = BodySchema.parse(await request.json())
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid body' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Invalid body' },
       { status: 400 },
     )
   }
@@ -164,7 +165,7 @@ export async function POST(request: Request) {
       .single()
     if (convErr || !newConv) {
       return NextResponse.json(
-        { error: convErr?.message ?? 'Failed to create conversation' },
+        { error: getUserErrorMessage(convErr) ?? 'Failed to create conversation' },
         { status: 500 },
       )
     }
@@ -202,7 +203,7 @@ export async function POST(request: Request) {
         {
           error:
             err instanceof Error
-              ? `Capture failed: ${err.message}`
+              ? `Capture failed: ${getUserErrorMessage(err)}`
               : 'Capture failed',
         },
         { status: 500 },

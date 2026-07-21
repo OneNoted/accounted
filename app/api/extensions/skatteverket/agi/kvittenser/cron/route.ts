@@ -11,6 +11,7 @@ import { reconcileAgiDeclaration } from '@/extensions/general/skatteverket/lib/a
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -204,7 +205,7 @@ export async function GET(request: Request) {
       }
 
       log.error('Reconciliation failed', { declarationId, companyId, period, message })
-      results.push({ declarationId, period, status: 'error', error: message })
+      results.push({ declarationId, period, status: 'error', error: getErrorMessage(err) })
     }
   }
 

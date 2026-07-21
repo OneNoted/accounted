@@ -8,6 +8,7 @@ import {
   UpsertWorkedDaySchema,
   WorkedHoursRangeQuerySchema,
 } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 
@@ -50,7 +51,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .order('work_date', { ascending: true })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     const totalHours = (data ?? []).reduce(
@@ -87,7 +88,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('work_date', body.work_date)
 
     if (deleteError) {
-      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(deleteError) }, { status: 500 })
     }
 
     const { data, error } = await supabase
@@ -107,9 +108,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       // The 24h cap trigger raises check_violation when worked + absence > 24h
       // for the same date. Surface a clean 409 with a Swedish message.
       if (error.message?.includes('Total tid') || error.code === '23514') {
-        return NextResponse.json({ error: error.message }, { status: 409 })
+        return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 409 })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data }, { status: 201 })
@@ -161,7 +162,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { error } = await q
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data: { ok: true } })

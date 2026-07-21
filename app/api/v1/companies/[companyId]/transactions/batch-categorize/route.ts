@@ -346,7 +346,7 @@ async function categorizeOne(
       ok: false,
       request_index: index,
       transaction_id: transactionId,
-      error: { code: 'INTERNAL_ERROR', message: updateErr.message },
+      error: { code: 'INTERNAL_ERROR', message: getErrorMessage(updateErr) },
     }
   }
   if ((!updated || updated.length === 0) && journalEntryId) {

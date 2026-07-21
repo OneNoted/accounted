@@ -37,6 +37,7 @@ import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const SalaryRunBooked = z.object({
   id: z.string().uuid(),
@@ -272,7 +273,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       return v1ErrorResponseFromCode('SALARY_RUN_BOOK_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 

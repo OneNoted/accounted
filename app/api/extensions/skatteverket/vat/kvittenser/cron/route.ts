@@ -12,6 +12,7 @@ import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { SkatteverketInlamnatResponse } from '@/extensions/general/skatteverket/types'
 import type { VatPeriodType } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -183,7 +184,7 @@ export async function GET(request: Request) {
           companyId,
           period,
           status: 'error',
-          error: `Failed to persist signed state: ${updateError.message}`,
+          error: `Failed to persist signed state: ${getUserErrorMessage(updateError)}`,
         })
         continue
       }
@@ -283,7 +284,7 @@ export async function GET(request: Request) {
       }
 
       console.error('[vat-kvittenser-cron] Reconciliation failed', { companyId, period, message })
-      results.push({ companyId, period, status: 'error', error: message })
+      results.push({ companyId, period, status: 'error', error: getUserErrorMessage(err) })
     }
   }
 

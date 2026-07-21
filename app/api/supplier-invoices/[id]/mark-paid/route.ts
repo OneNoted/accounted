@@ -19,6 +19,7 @@ import {
   escapeLikePattern,
 } from '@/lib/invoices/duplicate-payment-guard'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -203,7 +204,7 @@ export const POST = withRouteContext(
       opLog.error('failed to create payment journal entry', err as Error)
       return errorResponseFromCode('SI_PAID_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 
@@ -325,7 +326,7 @@ export const POST = withRouteContext(
         opLog.warn('failed to link supplier invoice document to cash payment JE', {
           documentId: invoiceDocumentId,
           journalEntryId,
-          error: linkErr instanceof Error ? linkErr.message : String(linkErr),
+          error: linkErr instanceof Error ? getUserErrorMessage(linkErr) : getUserErrorMessage(linkErr),
         })
       }
     }

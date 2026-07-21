@@ -4,6 +4,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Response shapes are legacy `{ data }` / `{ error: string }` — several pages
 // (import, supplier-invoices, article form) consume the list directly.
@@ -46,7 +47,7 @@ export const GET = withRouteContext('bookkeeping.accounts.list', async (request,
     return NextResponse.json({ data })
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to fetch accounts' },
+      { error: error instanceof Error ? getUserErrorMessage(error) : 'Failed to fetch accounts' },
       { status: 500 },
     )
   }
@@ -93,7 +94,7 @@ export const POST = withRouteContext(
           { status: 409 },
         )
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })

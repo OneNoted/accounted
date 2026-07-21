@@ -7,6 +7,7 @@ import {
   currencyColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.monthly_breakdown.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -60,7 +61,7 @@ export const GET = withRouteContext('report.monthly_breakdown.xlsx', async (requ
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera månadsbrytning' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera månadsbrytning' },
       { status: 500 }
     )
   }

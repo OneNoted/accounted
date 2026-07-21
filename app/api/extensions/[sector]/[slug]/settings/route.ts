@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext<{ params: Promise<{ sector: string; slug: string }> }>(
   'extension.settings.get',
@@ -55,7 +56,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ sector: string; slug: 
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data: data.value })

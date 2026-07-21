@@ -10,6 +10,7 @@ import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -151,7 +152,7 @@ export const POST = withRouteContext(
       log.error('invoice insert failed', invoiceError)
       return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', log, {
         requestId,
-        details: { pgCode: invoiceError.code, pgMessage: invoiceError.message },
+        details: { pgCode: invoiceError.code, pgMessage: getUserErrorMessage(invoiceError) },
       })
     }
 
@@ -167,7 +168,7 @@ export const POST = withRouteContext(
       })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, {
         requestId,
-        details: { pgCode: itemsError.code, pgMessage: itemsError.message },
+        details: { pgCode: itemsError.code, pgMessage: getUserErrorMessage(itemsError) },
       })
     }
 
@@ -391,7 +392,7 @@ async function createCreditNote(
     log.error('credit note insert failed', creditNoteError)
     return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', log, {
       requestId,
-      details: { pgCode: creditNoteError.code, pgMessage: creditNoteError.message },
+      details: { pgCode: creditNoteError.code, pgMessage: getUserErrorMessage(creditNoteError) },
     })
   }
 
@@ -418,7 +419,7 @@ async function createCreditNote(
     })
     return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', log, {
       requestId,
-      details: { pgCode: itemsError.code, pgMessage: itemsError.message },
+      details: { pgCode: itemsError.code, pgMessage: getUserErrorMessage(itemsError) },
     })
   }
 

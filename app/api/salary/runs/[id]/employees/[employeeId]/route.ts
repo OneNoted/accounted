@@ -6,6 +6,7 @@ import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 import { removeEmployeeFromRun } from '@/lib/salary/run-employees'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -25,7 +26,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
       .maybeSingle()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
     if (!data) {
       return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
@@ -118,7 +119,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
         .select('id, employment_degree, salary_type, monthly_salary')
         .maybeSingle()
 
-      if (sreErr) return NextResponse.json({ error: sreErr.message }, { status: 400 })
+      if (sreErr) return NextResponse.json({ error: getUserErrorMessage(sreErr) }, { status: 400 })
       if (!sre) {
         return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })
       }
@@ -173,7 +174,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string; employeeId
       .maybeSingle()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 400 })
     }
     if (!data) {
       return NextResponse.json({ error: 'Anställd hittades inte i lönekörningen' }, { status: 404 })

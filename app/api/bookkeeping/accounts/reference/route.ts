@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/bookkeeping/accounts/reference
@@ -33,6 +34,6 @@ export const GET = withRouteContext('bookkeeping.accounts.reference', async (_re
 
     return NextResponse.json({ data: userAccounts })
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to fetch accounts' }, { status: 500 })
+    return NextResponse.json({ error: error instanceof Error ? getUserErrorMessage(error) : 'Failed to fetch accounts' }, { status: 500 })
   }
 })

@@ -5,6 +5,7 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'customer.get',
@@ -27,7 +28,7 @@ export const GET = withRouteContext(
       opLog.error('customer fetch failed', error)
       return errorResponseFromCode('INTERNAL_ERROR', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 
@@ -120,7 +121,7 @@ export const PATCH = withRouteContext(
       opLog.error('customer update failed', error)
       return errorResponseFromCode('CUSTOMER_UPDATE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 
@@ -181,7 +182,7 @@ export const DELETE = withRouteContext(
       opLog.error('customer delete failed', error)
       return errorResponseFromCode('CUSTOMER_DELETE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

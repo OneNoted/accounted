@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
 import type { KPIPreferences } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const EXTENSION_ID = 'core/kpi'
 const KEY = 'preferences'
@@ -69,7 +70,7 @@ export const PUT = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data: data.value })

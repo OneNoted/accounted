@@ -21,6 +21,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { DimensionTaggingApplySchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -53,7 +54,7 @@ export const POST = withRouteContext(
       })
 
       if (error) {
-        failed.push({ line_id: lineId, error: error.message })
+        failed.push({ line_id: lineId, error: getUserErrorMessage(error) })
         continue
       }
 

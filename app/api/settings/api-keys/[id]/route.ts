@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * DELETE /api/settings/api-keys/[id]: Revoke an API key (soft delete)
@@ -18,7 +19,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .is('revoked_at', null)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })

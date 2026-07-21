@@ -23,6 +23,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { OpeningBalancesFieldsSchema } from '@/lib/api/schemas'
 import { getOpeningBalances, setOpeningBalancesBulk } from '@/lib/salary/opening-balances'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const OpeningBalancesResponse = z.object({
   employee_opening_balances_id: z.string().uuid().nullable(),
@@ -200,7 +201,7 @@ export const PUT = withApiV1<{ params: Promise<{ companyId: string; id: string }
       const itemError = result.itemErrors?.[0]
       return v1ErrorResponseFromCode(itemError?.code ?? result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: itemError ? { message: itemError.message } : result.details,
+        details: itemError ? { message: getUserErrorMessage(itemError) } : result.details,
       })
     }
 

@@ -270,7 +270,7 @@ describe('cloud-backup auto-sync cron', () => {
         companyId: 'c-1',
         kind: 'repeated_failures',
         consecutiveFailures: 3,
-        errorMessage: 'Drive upload failed: 500',
+        errorMessage: 'Något gick fel. Försök igen.',
       })
     )
     const [, , , , value] = mockSaveExtensionData.mock.calls[0]
@@ -330,7 +330,7 @@ describe('cloud-backup auto-sync cron', () => {
     )
     const [, , , , value] = mockSaveExtensionData.mock.calls[0]
     expect((value as any).last_auto_sync_status).toBe('error')
-    expect((value as any).last_auto_sync_error).toContain('Drive quota exceeded')
+    expect((value as any).last_auto_sync_error).toBe('Något gick fel. Försök igen.')
     expect((value as any).consecutive_failures).toBe(3)
   })
 

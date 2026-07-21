@@ -201,6 +201,6 @@ describe('GET /api/reports/full-archive', () => {
       )
     )
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Fiscal period not found' })
+    expect(body).toEqual({ error: 'Något gick fel. Försök igen.' })
   })
 })

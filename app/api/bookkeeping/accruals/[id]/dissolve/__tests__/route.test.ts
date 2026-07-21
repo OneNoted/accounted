@@ -106,6 +106,6 @@ describe('POST /api/bookkeeping/accruals/[id]/dissolve', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('ACCRUAL_DISSOLVE_FAILED')
-    expect(body.error.details.reason).toMatch(/Ingen öppen räkenskapsperiod/)
+    expect(body.error.details.reason).toBe('Något gick fel. Försök igen.')
   })
 })

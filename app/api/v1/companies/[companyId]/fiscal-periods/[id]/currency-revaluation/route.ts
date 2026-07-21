@@ -18,6 +18,7 @@ import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { startOperation, completeOperation, failOperation } from '@/lib/api/v1/operations'
 import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const Body = z
   .object({ as_of_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })
@@ -177,7 +178,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           id: operationId,
           error: {
             code: msg.includes('already exists') ? 'CURRENCY_REVALUATION_ALREADY_EXISTS' : 'CURRENCY_REVALUATION_FAILED',
-            message: msg,
+            message: getErrorMessage(err, { locale: 'en' }),
           },
         },
         ctx.log,

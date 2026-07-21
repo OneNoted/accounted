@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDeadlineSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Sparse update: every Create field, optional. Validated — the previous
 // implementation type-asserted the raw JSON, so malformed values reached
@@ -29,7 +30,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })
@@ -80,7 +81,7 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })
@@ -112,7 +113,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .maybeSingle()
 
     if (fetchError) {
-      return NextResponse.json({ error: fetchError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
     }
     if (!existing) {
       return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
@@ -128,7 +129,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
         .select('id')
 
       if (dismissError) {
-        return NextResponse.json({ error: dismissError.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(dismissError) }, { status: 500 })
       }
       // The row can vanish between lookup and update (generator cleanup
       // during a concurrent regeneration); report 404 rather than a
@@ -146,7 +147,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
     // Zero rows = wrong id / another company's deadline — not a success.
     if (count === 0) {
