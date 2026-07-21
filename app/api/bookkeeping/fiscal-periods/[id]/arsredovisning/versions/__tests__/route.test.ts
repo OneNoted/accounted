@@ -84,6 +84,19 @@ describe('annual report versions route', () => {
     expect(response.status).toBe(400)
   })
 
+  it('rejects a client-supplied dividend override', async () => {
+    setup()
+    const response = await POST(
+      createMockRequest('/x', {
+        method: 'POST',
+        body: { action: 'finalize', proposed_dividend: 100 },
+      }),
+      params,
+    )
+    expect(response.status).toBe(400)
+    expect(buildCanonicalAnnualReport).not.toHaveBeenCalled()
+  })
+
   it('returns 404 for another company period', async () => {
     const { enqueue } = setup()
     enqueue({ data: null })

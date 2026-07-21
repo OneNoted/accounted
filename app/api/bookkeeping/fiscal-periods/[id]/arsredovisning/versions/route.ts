@@ -11,22 +11,24 @@ import {
   listAnnualReportVersions,
 } from '@/lib/bokslut/arsredovisning/version-service'
 
-const PostSchema = z.object({
-  action: z.enum(['snapshot', 'finalize']),
-  proposed_dividend: z.number().min(0).max(1_000_000_000_000).optional(),
-  certificate_signer: z
-    .object({
-      first_name: z.string().min(1).max(100),
-      last_name: z.string().min(1).max(100),
-      role: z.enum([
-        'Styrelseledamot',
-        'Styrelseordförande',
-        'VD',
-        'Verkställande direktör',
-      ]),
-    })
-    .optional(),
-})
+const PostSchema = z
+  .object({
+    action: z.enum(['snapshot', 'finalize']),
+    certificate_signer: z
+      .object({
+        first_name: z.string().min(1).max(100),
+        last_name: z.string().min(1).max(100),
+        role: z.enum([
+          'Styrelseledamot',
+          'Styrelseordförande',
+          'VD',
+          'Verkställande direktör',
+        ]),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
 
 async function ownsPeriod(
   supabase: SupabaseClient,
@@ -73,7 +75,6 @@ export const POST = withRouteContext(
       const signer = validation.data.certificate_signer
       const model = await buildCanonicalAnnualReport(supabase, companyId, id, {
         stage: validation.data.action === 'finalize' ? 'signing' : 'draft',
-        proposedDividend: validation.data.proposed_dividend,
         undertecknare: signer
           ? {
               firstName: signer.first_name,

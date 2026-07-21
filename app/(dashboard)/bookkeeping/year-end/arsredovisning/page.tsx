@@ -25,6 +25,9 @@ import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-se
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
+  /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
+
 export default function ArsredovisningPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -79,7 +82,7 @@ export default function ArsredovisningPage() {
   const [parentCompanyConfirmed, setParentCompanyConfirmed] = useState(false)
   const [savedParentCompanyConfirmed, setSavedParentCompanyConfirmed] = useState(false)
   const [savingNarrative, setSavingNarrative] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const [narrativeRevision, setNarrativeRevision] = useState<string | null>(null)
 
   // Add-signer form
   const [signerName, setSignerName] = useState('')
@@ -281,7 +284,9 @@ export default function ArsredovisningPage() {
       setSavedSecuritiesPledgedConfirmed(securitiesPledgedConfirmed)
       setSavedContingentLiabilitiesConfirmed(contingentLiabilitiesConfirmed)
       setSavedParentCompanyConfirmed(parentCompanyConfirmed)
-      setSavedAt(Date.now())
+      setNarrativeRevision(
+        typeof body.data?.updated_at === 'string' ? body.data.updated_at : null,
+      )
     } catch (err) {
       toast({
         title: 'Kunde inte spara texten',
@@ -316,11 +321,15 @@ export default function ArsredovisningPage() {
   const handleMarkSigned = useCallback(
     async (signatureId: string) => {
       if (!periodId) return
-      if (!selectedSignatureVersionId || !signatureEvidence.trim() || !signatureDate) {
+      if (
+        !selectedSignatureVersionId ||
+        !SIGNATURE_EVIDENCE_REFERENCE_PATTERN.test(signatureEvidence.trim()) ||
+        !signatureDate
+      ) {
         toast({
           title: 'Underskriftsbevis saknas',
           description:
-            'Välj en låst version och ange datum samt en referens till originalet eller e-signaturkvittot.',
+            'Välj en låst version och ange datum samt en strukturerad referens, till exempel archive:AR-2026-001.',
           variant: 'destructive',
         })
         return
@@ -540,7 +549,7 @@ export default function ArsredovisningPage() {
         periodEnd={data.fiscal_period.period_end}
         framework={data.accounting_framework}
         hasUnsavedNarrative={hasUnsavedNarrative}
-        contentRevision={savedAt ?? 0}
+        narrativeRevision={narrativeRevision}
         onVersionsChanged={handleVersionsChanged}
       />
 
@@ -762,7 +771,7 @@ export default function ArsredovisningPage() {
             <div className="text-xs text-muted-foreground">
               {hasUnsavedNarrative ? (
                 <span>Ändringar sparas inte automatiskt.</span>
-              ) : savedAt ? (
+              ) : narrativeRevision ? (
                 <span className="inline-flex items-center gap-1 text-success">
                   <CheckCircle2 className="h-3.5 w-3.5" /> Sparat
                 </span>
@@ -890,8 +899,9 @@ export default function ArsredovisningPage() {
                 className="min-h-11"
                 value={signatureEvidence}
                 onChange={(event) => setSignatureEvidence(event.target.value)}
-                placeholder="Arkivplats, dokument-id eller signeringskvitto"
-                maxLength={500}
+                placeholder="archive:AR-2026-001"
+                maxLength={128}
+                autoComplete="off"
               />
             </div>
             <p className="text-xs text-muted-foreground md:col-span-2">
@@ -939,7 +949,7 @@ export default function ArsredovisningPage() {
                       onClick={() => void handleMarkSigned(sig.id)}
                       disabled={
                         !selectedSignatureVersionId ||
-                        !signatureEvidence.trim() ||
+                        !SIGNATURE_EVIDENCE_REFERENCE_PATTERN.test(signatureEvidence.trim()) ||
                         !signatureDate
                       }
                     >

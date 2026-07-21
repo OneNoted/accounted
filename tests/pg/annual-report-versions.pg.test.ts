@@ -247,6 +247,66 @@ describe('annual report profile and version enforcement', () => {
     ).rejects.toThrow(/complete server validation snapshot/i)
   })
 
+  it('keeps signature evidence transitions behind the trusted service boundary', async () => {
+    const owner = await seedCompany()
+    const signatureId = randomUUID()
+
+    const directInsert = await withUserContext(owner.userId, (client) =>
+      client.query(
+        `INSERT INTO public.arsredovisning_signature_requests
+           (id, user_id, company_id, fiscal_period_id, role, signer_name)
+         VALUES ($1, $2, $3, $4, 'Styrelseledamot', 'Anna Andersson')
+         RETURNING id`,
+        [signatureId, owner.userId, owner.companyId, owner.fiscalPeriodId],
+      ),
+    )
+    expect(directInsert.rowCount).toBe(1)
+    await getPool().query(
+      `INSERT INTO public.arsredovisning_signature_requests
+         (id, user_id, company_id, fiscal_period_id, role, signer_name)
+       VALUES ($1, $2, $3, $4, 'Styrelseledamot', 'Anna Andersson')`,
+      [signatureId, owner.userId, owner.companyId, owner.fiscalPeriodId],
+    )
+    const version = await createVersion({ ...owner, status: 'ready_for_signature' })
+
+    const directUpdate = await withUserContext(owner.userId, (client) =>
+      client.query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET status = 'signed', signed_at = now(),
+             signing_method = 'paper_original', evidence_reference = 'archive:A-1',
+             evidence_recorded_by = $2, evidence_recorded_at = now()
+         WHERE id = $1
+         RETURNING id`,
+        [signatureId, owner.userId],
+      ),
+    )
+    expect(directUpdate.rowCount).toBe(0)
+
+    const directDelete = await withUserContext(owner.userId, (client) =>
+      client.query(
+        `DELETE FROM public.arsredovisning_signature_requests
+         WHERE id = $1
+         RETURNING id`,
+        [signatureId],
+      ),
+    )
+    expect(directDelete.rowCount).toBe(0)
+
+    await expect(
+      withUserContext(owner.userId, (client) =>
+        client.query(
+          `INSERT INTO public.arsredovisning_signature_requests
+             (user_id, company_id, fiscal_period_id, role, signer_name, status,
+              annual_report_version_id, signed_at, signing_method, evidence_reference,
+              evidence_recorded_by, evidence_recorded_at)
+           VALUES ($1, $2, $3, 'VD', 'Erik Eriksson', 'signed', $4, now(),
+                   'paper_original', 'archive:A-2', $1, now())`,
+          [owner.userId, owner.companyId, owner.fiscalPeriodId, version.rows[0].id],
+        ),
+      ),
+    ).rejects.toThrow(/row-level security policy/i)
+  })
+
   it('invalidates representative confirmation when the draft signer roster changes', async () => {
     const owner = await seedCompany()
     await getPool().query(
@@ -355,10 +415,32 @@ describe('annual report profile and version enforcement', () => {
       ),
     ).rejects.toThrow(/signature_evidence_consistency|check constraint/i)
 
+    await expect(
+      getPool().query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET status = 'signed', signed_at = now() - interval '1 day',
+             signing_method = 'paper_original', evidence_reference = 'archive:A-1',
+             evidence_recorded_by = $2, evidence_recorded_at = now()
+         WHERE id = $1`,
+        [signatureId, owner.userId],
+      ),
+    ).rejects.toThrow(/signature date must be between version finalization and today/i)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET status = 'signed', signed_at = now() + interval '1 day',
+             signing_method = 'paper_original', evidence_reference = 'archive:A-1',
+             evidence_recorded_by = $2, evidence_recorded_at = now()
+         WHERE id = $1`,
+        [signatureId, owner.userId],
+      ),
+    ).rejects.toThrow(/signature date must be between version finalization and today/i)
+
     await getPool().query(
       `UPDATE public.arsredovisning_signature_requests
        SET status = 'signed', signed_at = now(), annual_report_version_id = $2,
-           signing_method = 'paper_original', evidence_reference = 'Arkiv A-1',
+           signing_method = 'paper_original', evidence_reference = 'archive:A-1',
            evidence_recorded_by = $3, evidence_recorded_at = now()
        WHERE id = $1`,
       [signatureId, version.rows[0].id, owner.userId],
@@ -377,6 +459,35 @@ describe('annual report profile and version enforcement', () => {
     ).rejects.toThrow(/cannot modify a signed signature request/i)
   })
 
+  it('rejects signature evidence after the linked version stops accepting signatures', async () => {
+    const owner = await seedCompany()
+    const signatureId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.arsredovisning_signature_requests
+         (id, user_id, company_id, fiscal_period_id, role, signer_name)
+       VALUES ($1, $2, $3, $4, 'Styrelseledamot', 'Anna Andersson')`,
+      [signatureId, owner.userId, owner.companyId, owner.fiscalPeriodId],
+    )
+    const version = await createVersion({ ...owner, status: 'ready_for_signature' })
+    await getPool().query(
+      `UPDATE public.annual_report_versions
+       SET status = 'superseded'
+       WHERE id = $1`,
+      [version.rows[0].id],
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.arsredovisning_signature_requests
+         SET status = 'signed', signed_at = now(),
+             signing_method = 'paper_original', evidence_reference = 'archive:A-1',
+             evidence_recorded_by = $2, evidence_recorded_at = now()
+         WHERE id = $1`,
+        [signatureId, owner.userId],
+      ),
+    ).rejects.toThrow(/annual report version is not ready for signature evidence/i)
+  })
+
   it('supersedes an older signed version when a corrected version is locked', async () => {
     const owner = await seedCompany()
     const signatureId = randomUUID()
@@ -390,7 +501,7 @@ describe('annual report profile and version enforcement', () => {
     await getPool().query(
       `UPDATE public.arsredovisning_signature_requests
        SET status = 'signed', signed_at = now(),
-           signing_method = 'paper_original', evidence_reference = 'Arkiv A-1',
+           signing_method = 'paper_original', evidence_reference = 'archive:A-1',
            evidence_recorded_by = $2, evidence_recorded_at = now()
        WHERE id = $1`,
       [signatureId, owner.userId],

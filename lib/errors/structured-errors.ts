@@ -2853,6 +2853,14 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
     message_en: 'The selected annual report version is not open for signing.',
     retryable: false,
   },
+  ARSREDOVISNING_SIGNATURE_DATE_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Underskriftsdatumet måste vara samma dag som eller senare än versionens låsdatum och får inte ligga i framtiden.',
+    message_en:
+      'The signature date must be on or after the version finalization date and cannot be in the future.',
+    retryable: false,
+  },
   ARSREDOVISNING_SIGNER_ROSTER_LOCKED: {
     httpStatus: 409,
     message_sv:

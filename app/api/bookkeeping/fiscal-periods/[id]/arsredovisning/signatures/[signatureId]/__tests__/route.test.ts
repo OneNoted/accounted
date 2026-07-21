@@ -4,6 +4,7 @@ import { createMockRequest, createQueuedMockSupabase, parseJsonResponse } from '
 
 const requireAuthMock = vi.fn()
 const requireWriteMock = vi.fn()
+const createServiceClientMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
@@ -13,6 +14,9 @@ vi.mock('@/lib/company/context', () => ({
 }))
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
+}))
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => createServiceClientMock(),
 }))
 
 import { DELETE, PATCH } from '../route'
@@ -25,7 +29,7 @@ const signedBody = {
   status: 'signed',
   annual_report_version_id: versionId,
   signing_method: 'paper_original',
-  evidence_reference: 'Original i arkiv A-1',
+  evidence_reference: 'archive:A-1',
   signed_at: '2026-03-01T10:00:00.000Z',
 }
 
@@ -36,6 +40,7 @@ function setup() {
     supabase: mock.supabase,
     error: null,
   })
+  createServiceClientMock.mockReturnValue(mock.supabase)
   return mock
 }
 
@@ -70,6 +75,18 @@ describe('annual report signature transition', () => {
     expect(response.status).toBe(400)
   })
 
+  it('returns 400 for a free-text evidence reference', async () => {
+    setup()
+    const response = await PATCH(
+      createMockRequest('/x', {
+        method: 'PATCH',
+        body: { ...signedBody, evidence_reference: 'Original i arkiv A-1' },
+      }),
+      params,
+    )
+    expect(response.status).toBe(400)
+  })
+
   it('returns 409 when the version is not ready for signature', async () => {
     const { enqueue } = setup()
     enqueue({ data: null })
@@ -82,7 +99,13 @@ describe('annual report signature transition', () => {
 
   it('stores version-bound signature evidence', async () => {
     const { enqueue } = setup()
-    enqueue({ data: { id: versionId, status: 'ready_for_signature' } })
+    enqueue({
+      data: {
+        id: versionId,
+        status: 'ready_for_signature',
+        finalized_at: '2026-03-01T08:00:00.000Z',
+      },
+    })
     enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending' } })
     enqueue({
       data: {
@@ -91,7 +114,7 @@ describe('annual report signature transition', () => {
         fiscal_period_id: 'period-1',
         status: 'signed',
         signing_method: 'paper_original',
-        evidence_reference: 'Original i arkiv A-1',
+        evidence_reference: 'archive:A-1',
       },
     })
     const { status, body } = await parseJsonResponse<{
@@ -104,7 +127,49 @@ describe('annual report signature transition', () => {
     )
     expect(status).toBe(200)
     expect(body.data.status).toBe('signed')
-    expect(body.data.evidence_reference).toBe('Original i arkiv A-1')
+    expect(body.data.evidence_reference).toBe('archive:A-1')
+    expect(createServiceClientMock).toHaveBeenCalledOnce()
+  })
+
+  it('rejects a signature date before the version was finalized', async () => {
+    const { enqueue } = setup()
+    enqueue({
+      data: {
+        id: versionId,
+        status: 'ready_for_signature',
+        finalized_at: '2026-03-02T08:00:00.000Z',
+      },
+    })
+    enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending' } })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await PATCH(
+        createMockRequest('/x', { method: 'PATCH', body: signedBody }),
+        params,
+      ),
+    )
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ARSREDOVISNING_SIGNATURE_DATE_INVALID')
+    expect(createServiceClientMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a future signature date', async () => {
+    const { enqueue } = setup()
+    enqueue({
+      data: {
+        id: versionId,
+        status: 'ready_for_signature',
+        finalized_at: '2026-03-01T08:00:00.000Z',
+      },
+    })
+    enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending' } })
+    const response = await PATCH(
+      createMockRequest('/x', {
+        method: 'PATCH',
+        body: { ...signedBody, signed_at: '2999-03-01T10:00:00.000Z' },
+      }),
+      params,
+    )
+    expect(response.status).toBe(400)
   })
 })
 

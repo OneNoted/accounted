@@ -39,7 +39,7 @@ interface AnnualReportStudioProps {
   periodEnd: string
   framework: 'k2' | 'k3'
   hasUnsavedNarrative: boolean
-  contentRevision: number
+  narrativeRevision: string | null
   onVersionsChanged?: (versions: AnnualReportVersionSummary[]) => void
 }
 
@@ -82,7 +82,7 @@ export function AnnualReportStudio({
   periodEnd,
   framework,
   hasUnsavedNarrative,
-  contentRevision,
+  narrativeRevision,
   onVersionsChanged,
 }: AnnualReportStudioProps) {
   const t = useTranslations('annualReportStudio')
@@ -128,7 +128,7 @@ export function AnnualReportStudio({
 
   useEffect(() => {
     void load()
-  }, [load, contentRevision])
+  }, [load, narrativeRevision])
 
   const showNewK2Questions =
     periodStart > '2025-12-31' || (periodStart > '2025-06-30' && periodEnd >= '2026-12-31')

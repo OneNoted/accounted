@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { markSignatureSigned } from '@/lib/bokslut/arsredovisning/signature-service'
+import { createServiceClient } from '@/lib/supabase/server'
 
 // PATCH transitions: pending → signed (manual entry for the paper / outside-
 // BankID flow) or pending → declined. Real BankID wiring lands in a future
@@ -15,16 +16,39 @@ import { markSignatureSigned } from '@/lib/bokslut/arsredovisning/signature-serv
 //     /periods/A/signatures/SIG_FROM_B can't bypass the path scope
 //   - .eq('status', 'pending'): state-machine guard so a signed or declined
 //     row can't be flipped back
+const EvidenceReferenceSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/)
+
 const PatchSchema = z.discriminatedUnion('status', [
   z.object({
     status: z.literal('signed'),
     annual_report_version_id: z.string().uuid(),
     signing_method: z.enum(['paper_original', 'advanced_e_signature', 'bankid']),
-    evidence_reference: z.string().min(1).max(500),
+    evidence_reference: EvidenceReferenceSchema,
     signed_at: z.string().datetime().optional(),
-  }),
-  z.object({ status: z.literal('declined') }),
+  }).strict(),
+  z.object({ status: z.literal('declined') }).strict(),
 ])
+
+function stockholmDate(instant: string | Date): string {
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Stockholm',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(typeof instant === 'string' ? new Date(instant) : instant)
+}
+
+function isSignatureDateAllowed(signedAt: string, finalizedAt: string): boolean {
+  const signedDate = stockholmDate(signedAt)
+  const finalizedDate = stockholmDate(finalizedAt)
+  const today = stockholmDate(new Date())
+  return signedDate >= finalizedDate && signedDate <= today
+}
 
 export const PATCH = withRouteContext(
   'period.arsredovisning_signature_patch',
@@ -42,7 +66,7 @@ export const PATCH = withRouteContext(
       if (validation.data.status === 'signed') {
         const { data: version, error: versionError } = await supabase
           .from('annual_report_versions')
-          .select('id, status')
+          .select('id, status, finalized_at')
           .eq('id', validation.data.annual_report_version_id)
           .eq('company_id', companyId)
           .eq('fiscal_period_id', fiscalPeriodId)
@@ -51,11 +75,10 @@ export const PATCH = withRouteContext(
         if (versionError) {
           throw new Error(`Failed to load annual report version: ${versionError.message}`)
         }
-        if (!version) {
-          return NextResponse.json(
-            { error: { code: 'ARSREDOVISNING_VERSION_NOT_SIGNABLE' } },
-            { status: 409 },
-          )
+        if (!version?.finalized_at) {
+          return errorResponseFromCode('ARSREDOVISNING_VERSION_NOT_SIGNABLE', log, {
+            requestId,
+          })
         }
         const { data: requestRow, error: requestError } = await supabase
           .from('arsredovisning_signature_requests')
@@ -78,18 +101,24 @@ export const PATCH = withRouteContext(
             { status: 409 },
           )
         }
-        const data = await markSignatureSigned(supabase, companyId, signatureId, {
+        const signedAt = validation.data.signed_at ?? new Date().toISOString()
+        if (!isSignatureDateAllowed(signedAt, version.finalized_at)) {
+          return errorResponseFromCode('ARSREDOVISNING_SIGNATURE_DATE_INVALID', log, {
+            requestId,
+          })
+        }
+        const data = await markSignatureSigned(createServiceClient(), companyId, signatureId, {
           fiscalPeriodId,
           annualReportVersionId: validation.data.annual_report_version_id,
           signingMethod: validation.data.signing_method,
           evidenceReference: validation.data.evidence_reference,
           evidenceRecordedBy: ctx.user.id,
-          signedAt: validation.data.signed_at,
+          signedAt,
         })
         return NextResponse.json({ data })
       }
 
-      const { data, error } = await supabase
+      const { data, error } = await createServiceClient()
         .from('arsredovisning_signature_requests')
         .update({ status: 'declined' as const })
         .eq('id', signatureId)

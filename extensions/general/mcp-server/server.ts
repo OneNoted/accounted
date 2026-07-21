@@ -13057,10 +13057,26 @@ export const tools: McpTool[] = [
         .order('created_at', { ascending: false })
         .limit(50)
       if (error) throw new Error(`Failed to list annual report filings: ${error.message}`)
-      const submissions = ((data ?? []) as Array<Record<string, unknown>>).map((submission) => {
-        const { idnummer: _idnummer, ...publicSubmission } = submission
-        return publicSubmission
-      })
+      const publicFields = [
+        'id',
+        'annual_report_version_id',
+        'handling_typ',
+        'environment',
+        'status',
+        'archive_status',
+        'bolagsverket_url',
+        'error_message',
+        'uploaded_at',
+        'registered_at',
+        'created_at',
+      ] as const
+      const submissions = (data ?? []).map((submission) =>
+        Object.fromEntries(
+          publicFields.flatMap((field) =>
+            field in submission ? [[field, submission[field]]] : [],
+          ),
+        ),
+      )
       return { fiscal_period_id: fiscalPeriodId, submissions }
     },
   },

@@ -55,10 +55,8 @@ export const ACTIVE_SUBMISSION_STATUSES = [
   'komplettering',
 ] as const
 
-export function hashPnr(companyId: string, pnr: string, secret?: string): string {
-  const key = secret ?? process.env.BOLAGSVERKET_PNR_HASH_SECRET
-  if (!key) throw new Error('BOLAGSVERKET_PNR_HASH_SECRET is required for personnummer references')
-  return createHmac('sha256', key)
+export function hashPnr(companyId: string, pnr: string, secret: string): string {
+  return createHmac('sha256', secret)
     .update(`${companyId}:${pnr.replace(/\D/g, '')}`)
     .digest('hex')
 }

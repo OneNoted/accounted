@@ -93,7 +93,7 @@ const PostSchema = z.object({
     .nullable()
     .optional(),
   agm_disposition_decision: sanitizedText(2000).nullable().optional(),
-}).superRefine((value, ctx) => {
+}).strict().superRefine((value, ctx) => {
   if (
     value.agm_disposition_outcome === 'alternative_decision' &&
     !value.agm_disposition_decision?.trim()
