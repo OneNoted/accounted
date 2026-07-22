@@ -3,6 +3,7 @@ import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -49,8 +50,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (err) {
       const typed = bookkeepingErrorResponse(err)
       if (typed) return typed
-      const message = err instanceof Error ? err.message : 'Reversal failed'
-      return NextResponse.json({ error: message }, { status: 500 })
+      return NextResponse.json(
+        { error: getErrorMessage(err, { context: 'transaction' }) },
+        { status: 500 },
+      )
     }
 
     // Reset transaction categorization

@@ -175,6 +175,26 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       fb.arsstammaDatum !== null
         ? writer.date('Arsstamma', 'balans0', fb.arsstammaDatum)
         : escapeText('[datum för årsstämma saknas]')
+    const dispositionFact =
+      fb.resultatdispositionOutcome === 'proposal_approved'
+        ? writer.textPlain(
+            'ArsstammaResultatDispositionGodkannaStyrelsensForslag',
+            'balans0',
+            'Årsstämman beslöt att godkänna styrelsens förslag till resultatdisposition.',
+          )
+        : fb.resultatdispositionOutcome === 'alternative_decision'
+          ? writer.textPlain(
+              'ArsstammaResultatDispositionInteGodkannaStyrelsensForslag',
+              'balans0',
+              'Årsstämman beslöt att inte godkänna styrelsens förslag till resultatdisposition.',
+            ) +
+            '<br/>' +
+            writer.textPlain(
+              'ArsstammaResultatDispositionBeslutstext',
+              'balans0',
+              fb.resultatdispositionDecision ?? '[årsstämmans beslut saknas]',
+            )
+          : escapeText('[årsstämmans beslut om resultatdisposition saknas]')
     const fi = el(
       'div',
       { class: 'ar-cert', id: 'id-innehall-faststallelseintyg' },
@@ -194,11 +214,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
               ' ' +
               arsstammaFact +
               '.<br/>' +
-              writer.textPlain(
-                'ArsstammaResultatDispositionGodkannaStyrelsensForslag',
-                'balans0',
-                'Årsstämman beslöt att godkänna styrelsens förslag till resultatdisposition.',
-              ),
+              dispositionFact,
             { continuedAt: 'intygande_forts' },
           ),
         ),
@@ -1080,6 +1096,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       )
       const isPrinciples = /redovisnings.*principer/i.test(note.title)
       const isMedelantal = /medelantal.*anst/i.test(note.title)
+      const isLongTermDebt = /långfristiga skulder/i.test(note.title)
+      const isSecurities = /ställda säkerheter/i.test(note.title)
+      const isContingencies = /eventualförpliktelser/i.test(note.title)
+      const isParentCompany = /koncernförhållanden/i.test(note.title)
       if (isPrinciples) {
         parts.push(
           writer.textHtml('RedovisningsVarderingsprinciper', 'period0', paragraphs(note.body)),
@@ -1120,6 +1140,41 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
                   ),
               ),
           ),
+        )
+      } else if (isLongTermDebt) {
+        parts.push(
+          paragraphs(note.body) +
+            el(
+              'p',
+              { class: 'note-fact' },
+              'Belopp som förfaller senare än fem år efter balansdagen: ' +
+                writer.money(
+                  'LangfristigaSkulderForfallerSenare5Ar',
+                  'balans0',
+                  input.disclosures.longTermDebtOverFiveYears,
+                ) +
+                ' kr.',
+            ),
+        )
+      } else if (isSecurities) {
+        parts.push(
+          writer.textPlain(
+            'NotStalldaSakerheter',
+            'balans0',
+            input.disclosures.securitiesPledged,
+          ),
+        )
+      } else if (isContingencies) {
+        parts.push(
+          writer.textPlain(
+            'NotEventualforpliktelser',
+            'balans0',
+            input.disclosures.contingentLiabilities,
+          ),
+        )
+      } else if (isParentCompany && input.disclosures.parentCompany) {
+        parts.push(
+          writer.textPlain('NotUpplysningModerforetag', 'period0', input.disclosures.parentCompany),
         )
       } else {
         parts.push(paragraphs(note.body))

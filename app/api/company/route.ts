@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/company?owned=true&archived=false
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
   const { data, error } = await query
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   const companies = (data ?? []).map((row) => {

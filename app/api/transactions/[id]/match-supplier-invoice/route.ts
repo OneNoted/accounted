@@ -17,6 +17,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -320,7 +321,7 @@ export const POST = withRouteContext(
       }
       return errorResponseFromCode('MATCH_SI_JE_FAILED', txLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 

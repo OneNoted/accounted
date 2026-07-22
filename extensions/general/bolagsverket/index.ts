@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { validateSwedishPersonalNumber } from '@/lib/extensions/validation'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -63,6 +64,10 @@ function environmentCeiling(): BolagsverketEnvironment {
   return isBolagsverketEnvironment(raw) ? raw : 'test'
 }
 
+function filingReleaseEnabled(): boolean {
+  return process.env.BOLAGSVERKET_FILING_ENABLED === 'true'
+}
+
 /**
  * Resolve the effective Bolagsverket environment for a company.
  *
@@ -77,13 +82,16 @@ function environmentCeiling(): BolagsverketEnvironment {
  * able to point a hosted tenant at prod and ride the platform certificate).
  */
 async function resolveEnvironment(ctx: ExtensionContext): Promise<BolagsverketEnvironment> {
-  const { data } = await ctx.supabase
+  const { data, error } = await ctx.supabase
     .from('extension_data')
     .select('value')
     .eq('company_id', ctx.companyId)
     .eq('extension_id', 'general/bolagsverket')
     .eq('key', 'settings')
     .maybeSingle()
+  if (error) {
+    throw new Error(`Failed to resolve Bolagsverket environment: ${error.message}`)
+  }
   const configured = (data?.value as { environment?: unknown } | null)?.environment
   const ceiling = environmentCeiling()
   if (configured === undefined || configured === null || configured === '') {
@@ -120,11 +128,12 @@ async function clientFor(ctx: ExtensionContext): Promise<BolagsverketClient> {
 }
 
 async function companyOrgnr(ctx: ExtensionContext): Promise<string> {
-  const { data } = await ctx.supabase
+  const { data, error } = await ctx.supabase
     .from('company_settings')
     .select('org_number')
     .eq('company_id', ctx.companyId)
     .maybeSingle()
+  if (error) throw new Error(`Kunde inte läsa organisationsnummer: ${error.message}`)
   const orgNumber = (data as { org_number?: string } | null)?.org_number
   if (!orgNumber) throw new Error('Organisationsnummer saknas i företagsinställningarna.')
   return normalizeOrgnr(orgNumber)
@@ -186,18 +195,34 @@ function apiErrorResponse(err: unknown, ctx: ExtensionContext): NextResponse {
 const noContextResponse = () =>
   NextResponse.json({ error: { code: 'NO_CONTEXT', message: 'Saknar kontext' } }, { status: 500 })
 
+const PersonnummerSchema = z
+  .string()
+  .regex(/^\d{12}$/, 'Personnummer ska normaliseras till 12 siffror')
+  .refine((value) => validateSwedishPersonalNumber(value) === null, 'Ogiltigt personnummer')
+  .refine((value) => {
+    const year = Number(value.slice(0, 4))
+    const month = Number(value.slice(4, 6))
+    const day = Number(value.slice(6, 8))
+    const date = new Date(Date.UTC(year, month - 1, day))
+    return (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    )
+  }, 'Ogiltigt födelsedatum')
+
 const SubmitSchema = z.object({
   fiscal_period_id: z.string().uuid(),
-  avsandare_pnr: z.string().regex(/^\d{10,12}$/, 'Personnummer anges med 10-12 siffror'),
+  annual_report_version_id: z.string().uuid(),
+  avsandare_pnr: PersonnummerSchema,
   undertecknare: z.object({
-    pnr: z.string().regex(/^\d{10,12}$/, 'Personnummer anges med 10-12 siffror'),
+    pnr: PersonnummerSchema,
     fornamn: z.string().min(1).max(100),
     efternamn: z.string().min(1).max(100),
     roll: z.string().min(1).max(100),
     epost: z.string().email(),
   }),
   kvittens_epost: z.array(z.string().email()).max(5).optional(),
-  utdelning: z.number().min(0).optional(),
   accepted_avtalstext_andrad: z.string().optional(),
   ignore_warnings: z.boolean().optional(),
 })
@@ -226,6 +251,7 @@ export const bolagsverketExtension: Extension = {
               environment_ceiling: environmentCeiling(),
               // Certificate material is env-only; settings can never carry it.
               has_certificate: Boolean(config.clientCertPem && config.clientKeyPem),
+              filing_enabled: filingReleaseEnabled(),
             },
           })
         } catch (err) {
@@ -273,7 +299,7 @@ export const bolagsverketExtension: Extension = {
         let query = ctx.supabase
           .from('arsredovisning_submissions')
           .select(
-            'id, fiscal_period_id, handling_typ, taxonomy_version, entry_point, environment, status, undertecknare_namn, undertecknare_epost, idnummer, sha256_checksumma, kontrollsumma, bolagsverket_url, kontrollera_utfall, error_message, uploaded_at, registered_at, created_at, updated_at',
+            'id, fiscal_period_id, annual_report_version_id, handling_typ, taxonomy_version, entry_point, environment, status, archive_status, undertecknare_namn, undertecknare_epost, sha256_checksumma, kontrollsumma, bolagsverket_url, kontrollera_utfall, error_message, uploaded_at, registered_at, created_at, updated_at',
           )
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -294,6 +320,11 @@ export const bolagsverketExtension: Extension = {
       path: '/submissions',
       handler: async (request, ctx) => {
         if (!ctx) return noContextResponse()
+        if (!filingReleaseEnabled()) {
+          return errorResponseFromCode('BOLAGSVERKET_NOT_RELEASED', ctx.log, {
+            requestId: ctx.requestId,
+          })
+        }
         const forbidden = await requireWriteRole(ctx)
         if (forbidden) return forbidden
         let parsed: z.infer<typeof SubmitSchema>
@@ -326,14 +357,21 @@ export const bolagsverketExtension: Extension = {
               companyId: ctx.companyId,
               userId: ctx.userId,
               fiscalPeriodId: parsed.fiscal_period_id,
+              annualReportVersionId: parsed.annual_report_version_id,
               avsandarePnr: parsed.avsandare_pnr,
               undertecknare: parsed.undertecknare,
               kvittensEpost: parsed.kvittens_epost,
-              proposedDividend: parsed.utdelning,
               acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
               ignoreWarnings: parsed.ignore_warnings,
             },
           )
+          // Bolagsverket marks idnummer as a technical correlation value that
+          // must not be shown to end users. Keep it in the server-side filing
+          // record for webhook matching, but omit it from browser responses.
+          if (result.outcome === 'uploaded' || result.outcome === 'state_unknown') {
+            const { idnummer: _idnummer, ...publicResult } = result
+            return NextResponse.json({ data: publicResult })
+          }
           return NextResponse.json({ data: result })
         } catch (err) {
           ctx.log.error('bolagsverket submission failed', err)

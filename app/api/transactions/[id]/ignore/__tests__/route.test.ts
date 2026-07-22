@@ -121,7 +121,7 @@ describe('POST /api/transactions/[id]/ignore', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
-    expect(body).toEqual({ error: 'db down' })
+    expect(body).toEqual({ error: 'Något gick fel. Försök igen.' })
   })
 })
 
@@ -174,6 +174,6 @@ describe('DELETE /api/transactions/[id]/ignore', () => {
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
-    expect(body).toEqual({ error: 'db down' })
+    expect(body).toEqual({ error: 'Något gick fel. Försök igen.' })
   })
 })

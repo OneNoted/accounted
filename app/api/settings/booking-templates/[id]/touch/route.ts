@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/settings/booking-templates/[id]/touch
@@ -28,7 +29,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data: { success: true } })

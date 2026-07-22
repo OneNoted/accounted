@@ -2,14 +2,17 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildIxbrlInput } from '@/lib/bokslut/ixbrl/build-input'
 import { generateK2IxbrlDocument } from '@/lib/bokslut/ixbrl/document/k2-document'
+import { getVersionIxbrlInput } from '@/lib/bokslut/arsredovisning/version-ixbrl'
 
 /**
  * GET /api/bookkeeping/fiscal-periods/:id/arsredovisning/ixbrl
  *
  * Generates the iXBRL (XHTML) årsredovisning for the period. The document IS
  * the presentation (per TILLAMPNINGSANVISNING): the wizard renders it in an
- * iframe as the authoritative preview, and `?download=1` hands the same bytes
- * to the user for manual filing at bolagsverket.se (the self-hosted path).
+ * iframe as the authoritative preview, and `?download=1` exports the same
+ * bytes for validation and the company's archive. The XHTML file is not a
+ * standalone manual filing path: digital filing goes through connected
+ * software and the paper fallback is a certified copy sent by post.
  *
  * Query params:
  *   - download=1   → Content-Disposition: attachment
@@ -23,12 +26,19 @@ export const GET = withRouteContext(
     try {
       const url = new URL(request.url)
       const download = url.searchParams.get('download') === '1'
+      const versionId = url.searchParams.get('version')
       const utdelningRaw = url.searchParams.get('utdelning')
-      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : 0
+      const proposedDividend = utdelningRaw ? Number(utdelningRaw) : undefined
 
-      const input = await buildIxbrlInput(supabase, companyId, id, {
-        proposedDividend: Number.isFinite(proposedDividend) ? proposedDividend : 0,
-      })
+      const input = versionId
+        ? await getVersionIxbrlInput(supabase, companyId, id, versionId)
+        : await buildIxbrlInput(supabase, companyId, id, {
+            proposedDividend:
+              proposedDividend !== undefined && Number.isFinite(proposedDividend)
+                ? proposedDividend
+                : undefined,
+          })
+      if (!input) return errorResponseFromCode('NOT_FOUND', log, { requestId })
       const { xhtml, warnings } = generateK2IxbrlDocument(input)
 
       const safePeriodEnd = input.period.end.replace(/[^\w.-]/g, '_')
@@ -43,6 +53,7 @@ export const GET = withRouteContext(
           Pragma: 'no-cache',
           // Generation warnings surfaced without disturbing the body.
           'X-Ixbrl-Warning-Count': String(warnings.length),
+          ...(versionId ? { 'X-Annual-Report-Version': versionId } : {}),
         },
       })
     } catch (err) {

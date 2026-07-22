@@ -5,6 +5,7 @@ import {
   type ArchiveScope,
 } from '@/lib/reports/full-archive-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -81,7 +82,7 @@ export const GET = withRouteContext('report.full_archive', async (request, { sup
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to generate archive'
     const status = message.includes('not found') ? 404 : 500
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({ error: getErrorMessage(err) }, { status })
   }
 })
 

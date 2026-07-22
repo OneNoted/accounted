@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Loader2, Check, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 type SaveResult =
   | Record<string, unknown>
@@ -82,7 +83,7 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     } catch (error) {
       toast({
         title: t('wrapper_save_failed_title'),
-        description: error instanceof Error ? error.message : t('wrapper_try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('wrapper_try_again'),
         variant: 'destructive',
       })
     }

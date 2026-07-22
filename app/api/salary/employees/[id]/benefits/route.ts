@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeBenefitSchema } from '@/lib/api/schemas'
 import { calculateBikeBenefit } from '@/lib/salary/benefits'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -19,7 +20,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .order('valid_from', { ascending: false })
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data })
   },
@@ -75,7 +76,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data }, { status: 201 })
   },

@@ -1,101 +1,94 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
-  parseJsonResponse,
   createQueuedMockSupabase,
+  parseJsonResponse,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const requireAuthMock = vi.fn()
+
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
+
+vi.mock('@/lib/auth/require-write', () => ({
+  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 import { GET } from '../route'
 
 describe('GET /api/pending-operations', () => {
-  const mockUser = { id: 'user-1', email: 'test@test.se' }
-
-  const sampleOps = [
-    {
-      id: 'op-1',
-      user_id: 'user-1',
-      operation_type: 'categorize_transaction',
-      status: 'pending',
-      title: 'Kategorisera: CLAS OHLSON -523 SEK',
-      params: { transaction_id: 'tx-1', category: 'expense_office' },
-      preview_data: { debit_account: '6100', credit_account: '1930', amount: 523 },
-      result_data: null,
-      created_at: '2026-03-25T10:00:00Z',
-    },
-    {
-      id: 'op-2',
-      user_id: 'user-1',
-      operation_type: 'create_customer',
-      status: 'pending',
-      title: 'Ny kund: Acme AB',
-      params: { name: 'Acme AB', customer_type: 'swedish_business' },
-      preview_data: { name: 'Acme AB', customer_type: 'swedish_business' },
-      result_data: null,
-      created_at: '2026-03-25T10:01:00Z',
-    },
-  ]
-
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
-    const request = createMockRequest('/api/pending-operations')
-    const response = await GET(request)
-    const { status, body } = await parseJsonResponse(response)
+    const response = await GET(
+      createMockRequest('/api/pending-operations'),
+      { params: Promise.resolve({}) },
+    )
 
-    expect(status).toBe(401)
-    expect(body).toEqual({ error: 'Unauthorized' })
+    expect(response.status).toBe(401)
   })
 
-  it('returns pending operations', async () => {
-    enqueue({ data: sampleOps, count: 2 })
+  it('returns 400 for an invalid status', async () => {
+    const response = await GET(
+      createMockRequest('/api/pending-operations', {
+        searchParams: { status: 'unknown' },
+      }),
+      { params: Promise.resolve({}) },
+    )
 
-    const request = createMockRequest('/api/pending-operations')
-    const response = await GET(request)
+    expect(response.status).toBe(400)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('returns the active list and all tab counts in one response', async () => {
+    enqueue({ data: [{ id: 'operation-1', status: 'pending' }], count: 12 })
+    enqueue({ count: 3 })
+    enqueue({ count: 4 })
+
+    const response = await GET(
+      createMockRequest('/api/pending-operations'),
+      { params: Promise.resolve({}) },
+    )
     const { status, body } = await parseJsonResponse<{
-      data: typeof sampleOps
+      data: Array<{ id: string }>
       count: number
+      counts: { pending: number; committed: number; rejected: number }
     }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toHaveLength(2)
-    expect(body.count).toBe(2)
+    expect(body.data).toEqual([{ id: 'operation-1', status: 'pending' }])
+    expect(body.count).toBe(12)
+    expect(body.counts).toEqual({ pending: 12, committed: 3, rejected: 4 })
+    expect(supabase.from).toHaveBeenCalledTimes(3)
   })
 
-  it('filters by status parameter', async () => {
-    enqueue({ data: [], count: 0 })
+  it('returns 500 when the list query fails', async () => {
+    enqueue({ error: { message: 'database unavailable' } })
+    enqueue({ count: 0 })
+    enqueue({ count: 0 })
 
-    const request = createMockRequest('/api/pending-operations', {
-      searchParams: { status: 'committed' },
-    })
-    const response = await GET(request)
-    const { status } = await parseJsonResponse(response)
+    const response = await GET(
+      createMockRequest('/api/pending-operations'),
+      { params: Promise.resolve({}) },
+    )
 
-    expect(status).toBe(200)
-  })
-
-  it('rejects invalid status parameter', async () => {
-    const request = createMockRequest('/api/pending-operations', {
-      searchParams: { status: 'invalid' },
-    })
-    const response = await GET(request)
-    const { status } = await parseJsonResponse(response)
-
-    expect(status).toBe(400)
+    expect(response.status).toBe(500)
   })
 })

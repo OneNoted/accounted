@@ -4,10 +4,16 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import {
   calculateBolagsskatt,
+  getBookedBolagsskatt,
   sumPostedYearEndDispositions,
 } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
+import {
+  loadTaxAdjustmentSnapshot,
+  saveTaxAdjustments,
+} from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import {
   getPeriodiseringsfondCohortAccount,
@@ -76,21 +82,68 @@ export const GET = withRouteContext(
   },
 )
 
+const PutBodySchema = z.object({
+  manualAdjustments: z.object({
+    nonDeductibleExpenses: z.number().nonnegative().max(1_000_000_000_000),
+    nonTaxableIncome: z.number().nonnegative().max(1_000_000_000_000),
+  }),
+  detectedAccounts: z.object({
+    '6992': z.boolean(),
+    '8423': z.boolean(),
+  }),
+})
+
+export const PUT = withRouteContext(
+  'period.bokslutsdispositioner_adjustments',
+  async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { user, supabase, companyId, log, requestId } = ctx
+    const opLog = log.child({ periodId: id })
+    const validation = await validateBody(request, PutBodySchema)
+    if (!validation.success) return validation.response
+
+    try {
+      const { data: period, error: periodError } = await supabase
+        .from('fiscal_periods')
+        .select('id, is_closed, locked_at, closing_entry_id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .single()
+
+      if (periodError || !period) {
+        return errorResponseFromCode('PERIOD_NOT_FOUND', opLog, { requestId })
+      }
+      if (period.is_closed || period.locked_at || period.closing_entry_id) {
+        return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
+      }
+
+      await saveTaxAdjustments(
+        supabase,
+        companyId,
+        id,
+        user.id,
+        validation.data,
+      )
+      const data = await buildDispositionsProposal(supabase, companyId, id)
+      return NextResponse.json({ data })
+    } catch (err) {
+      if (err instanceof Error && /locked for tax adjustments/i.test(err.message)) {
+        return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
+      }
+      opLog.error('bokslutsdispositioner adjustments failed', err as Error)
+      return errorResponse(err, opLog, { requestId })
+    }
+  },
+  { requireWrite: true },
+)
+
 // ============================================================
 // POST: commit a list of dispositions chosen by the user
 // ============================================================
 const ItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('bolagsskatt'),
-    manualAdjustments: z
-      .object({
-        nonDeductibleExpenses: z.number().optional(),
-        nonTaxableIncome: z.number().optional(),
-        schablonintaktPeriodiseringsfond: z.number().optional(),
-        other: z.number().optional(),
-      })
-      .optional(),
-  }),
+  }).strict(),
   z.object({
     kind: z.literal('sarskild_loneskatt'),
     manualAdjustment: z.number().optional(),
@@ -181,6 +234,7 @@ export const POST = withRouteContext(
           entry_date: period.period_end,
           description: `Bokslutsdisposition: ${proposal.label}`,
           source_type: 'year_end',
+          source_id: item.kind === 'bolagsskatt' ? id : undefined,
           voucher_series: 'A',
           lines: proposal.lines,
         })
@@ -189,6 +243,30 @@ export const POST = withRouteContext(
 
       return NextResponse.json({ data: { created } })
     } catch (err) {
+      if (err instanceof TaxProvisionConflictError) {
+        return errorResponseFromCode('CONFLICT', opLog, {
+          requestId,
+          messageSv:
+            'Bolagsskatt finns redan bokförd med ett annat belopp. Rätta den befintliga verifikationen med en ändringsverifikation innan du fortsätter.',
+          messageEn:
+            'Corporate tax is already posted with a different amount. Correct the existing voucher before continuing.',
+          details: {
+            bookedAmount: err.bookedAmount,
+            expectedAmount: err.expectedAmount,
+          },
+        })
+      }
+      if (
+        err instanceof BookkeepingDatabaseError
+        && err.operation === 'create_draft_entry'
+        && err.cause?.includes('uq_year_end_corporate_tax_per_period')
+      ) {
+        return errorResponseFromCode('CONFLICT', opLog, {
+          requestId,
+          messageSv: 'Bolagsskatten bokförs redan. Ladda om sidan innan du fortsätter.',
+          messageEn: 'Corporate tax is already being posted. Reload the page before continuing.',
+        })
+      }
       opLog.error('bokslutsdispositioner post failed', err as Error)
       return errorResponse(err, opLog, { requestId })
     }
@@ -208,6 +286,15 @@ interface ValidatedPeriod {
   opening_balance_entry_id: string | null
 }
 
+class TaxProvisionConflictError extends Error {
+  constructor(
+    readonly bookedAmount: number,
+    readonly expectedAmount: number,
+  ) {
+    super('Booked corporate tax differs from the current calculation')
+  }
+}
+
 async function computeProposal(
   item: PostItem,
   supabase: Parameters<typeof calculateBolagsskatt>[0],
@@ -224,16 +311,42 @@ async function computeProposal(
       // SLP −, överavskrivningar −); bolagsskatt is sorted LAST so they are
       // committed by now. Without this the booked tax ignores the avsättning
       // (the original customer bug, too-high tax, ÅR/INK2 mismatch).
-      const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
-      const dispositionsEffect = await sumPostedYearEndDispositions(
-        supabase,
-        companyId,
-        fiscalPeriodId,
+      const [incomeStatement, dispositionsEffect, taxAdjustments, bookedTax, existingFonder] =
+        await Promise.all([
+          generateIncomeStatement(supabase, companyId, fiscalPeriodId),
+          sumPostedYearEndDispositions(supabase, companyId, fiscalPeriodId),
+          loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+          getBookedBolagsskatt(supabase, companyId, fiscalPeriodId),
+          listExistingPeriodiseringsfonder(
+            supabase,
+            companyId,
+            period.period_end,
+            period.period_start,
+            period.opening_balance_entry_id,
+          ),
+        ])
+      const schablonintakt = existingFonder.reduce(
+        (sum, fund) =>
+          sum + Math.max(0, fund.opening_balance) * getSchablonintaktRate(fiscalYear),
+        0,
       )
-      return calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
-        resultBeforeTaxOverride: incomeStatement.net_result + dispositionsEffect.total,
-        manualAdjustments: item.manualAdjustments,
+      const manuallyBookedTax = Math.max(
+        0,
+        bookedTax - dispositionsEffect.taxProvisionPortion,
+      )
+      const proposal = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
+        resultBeforeTaxOverride:
+          incomeStatement.net_result + dispositionsEffect.total + manuallyBookedTax,
+        manualAdjustments: {
+          nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
+          nonTaxableIncome: taxAdjustments.nonTaxableIncome,
+          schablonintaktPeriodiseringsfond: Math.round(schablonintakt),
+        },
       })
+      const expectedTax = proposal?.amount ?? 0
+      if (bookedTax > 0 && bookedTax === expectedTax) return null
+      if (bookedTax > 0) throw new TaxProvisionConflictError(bookedTax, expectedTax)
+      return proposal && proposal.amount > 0 ? proposal : null
     }
     case 'sarskild_loneskatt': {
       // Already posted in this period (resumed run / duplicate POST): the
@@ -278,6 +391,10 @@ async function computeProposal(
       const alreadyProvisioned = currentCohort
         ? Math.max(0, currentCohort.balance - Math.max(0, currentCohort.opening_balance))
         : 0
+      // A posted current-year allocation is a completed user decision. New
+      // tax adjustments may increase the legal ceiling, but must never cause
+      // the page to propose an unsolicited incremental allocation on reload.
+      if (alreadyProvisioned > 0) return null
       // Dispositions posted earlier in this batch (återföring, över-
       // avskrivningar, SLP: all sorted before avsättning) are year_end-typed
       // and thus invisible in net_result, yet they move the cap base. Add
@@ -289,9 +406,15 @@ async function computeProposal(
         companyId,
         fiscalPeriodId,
       )
+      const taxAdjustments = await loadTaxAdjustmentSnapshot(
+        supabase,
+        companyId,
+        fiscalPeriodId,
+      )
       const base =
         incomeStatement.net_result + postedEffect.total + alreadyProvisioned
         + Math.round(schablonintakt)
+        + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
       return proposeAvsattning({
         skattemassigtResultatBeforeAvsattning: base,
         desiredAmount: item.desiredAmount,

@@ -30,6 +30,7 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     intrastat_enabled: false,
     punktskatt_enabled: false,
     fyllnadsinbetalning_enabled: false,
+    tax_assessment_notices: [],
     ...overrides,
   }
 }
@@ -276,6 +277,29 @@ describe('rot_rut_begaran: 31 January after the payment year (Lag 2009:194 8 §)
 })
 
 describe('long-tail opt-in deadlines', () => {
+  it('kvarskatt copies the exact notice date and never applies a banking-day shift', () => {
+    const config = getConfig('kvarskatt')
+    const settings = makeSettings({
+      tax_assessment_notices: [{
+        id: 'notice-1',
+        fiscalPeriodName: '2029',
+        decisionType: 'final',
+        paymentDueDate: '2030-03-31',
+      }],
+    })
+
+    expect(config.condition(settings)).toBe(true)
+    expect(config.skipBankingDayAdjustment).toBe(true)
+    expect(config.generateDates(2030, settings)).toEqual([{
+      day: 31,
+      month: 2,
+      year: 2030,
+      period: 'notice:notice-1',
+      periodLabel: 'slutskattebesked, 2029',
+      taxAssessmentNoticeId: 'notice-1',
+    }])
+  })
+
   it('OSS: quarterly, last day of the month after the quarter, opt-in, no banking-day shift', () => {
     const config = getConfig('oss_quarterly')
     expect(config.condition(makeSettings())).toBe(false)

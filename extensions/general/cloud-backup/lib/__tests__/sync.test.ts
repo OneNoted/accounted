@@ -153,7 +153,7 @@ function makeSupabase(data: MockData) {
         return resolve({ data: [], error: null })
       },
     }
-    const passthrough = ['select', 'eq', 'in', 'order', 'range', 'limit']
+    const passthrough = ['select', 'eq', 'neq', 'in', 'order', 'range', 'limit']
     for (const method of passthrough) {
       chain[method] = vi.fn().mockImplementation((col?: string, val?: string) => {
         if (method === 'eq' && col === 'key') key = val ?? null
@@ -162,7 +162,7 @@ function makeSupabase(data: MockData) {
     }
     return chain
   })
-  return { supabase: { from } as any, upsert }
+  return { supabase: { from } as any, from, upsert }
 }
 
 function syncParams(supabase: any, overrides: Record<string, unknown> = {}) {
@@ -310,6 +310,22 @@ describe('performSync needs_reauth handling', () => {
 })
 
 describe('performSync per-fiscal-year layout', () => {
+  it('ignores extension runtime state when fingerprinting Grunddata', async () => {
+    const { supabase, from } = makeSupabase({
+      connection: makeConnection(),
+      lastSync: upToDateLastSync(),
+    })
+
+    await performSync(syncParams(supabase))
+
+    const auditCallIndex = from.mock.calls.findIndex(([table]) => table === 'audit_log')
+    expect(auditCallIndex).toBeGreaterThanOrEqual(0)
+    const auditQuery = from.mock.results[auditCallIndex].value
+    expect(auditQuery.neq).toHaveBeenCalledWith('table_name', 'extension_data')
+    expect(auditQuery.order).toHaveBeenNthCalledWith(1, 'created_at', { ascending: false })
+    expect(auditQuery.order).toHaveBeenNthCalledWith(2, 'id', { ascending: false })
+  })
+
   it('uploads one archive per period plus Grunddata and the folder README on first sync', async () => {
     const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
 

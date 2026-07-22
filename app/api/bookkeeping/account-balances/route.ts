@@ -3,7 +3,6 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { AccountBalancesQuerySchema } from '@/lib/api/schemas'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Per-account saldo as of a date. Used by the journal-entry form to show
@@ -90,46 +89,32 @@ export const GET = withRouteContext('bookkeeping.account_balances', async (reque
 
   // Sum activity from period_start through as_of, excluding the OB entry
   // (its lines are already in openingBalances).
-  let lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
-  try {
-    lines = await fetchAllRows<{
-      account_number: string
-      debit_amount: number
-      credit_amount: number
-    }>(({ from, to }) => {
-      let query = supabase
-        .from('journal_entry_lines')
-        .select(
-          'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, status, entry_date)'
-        )
-        .eq('journal_entries.company_id', companyId)
-        .in('account_number', accounts)
-        .in('journal_entries.status', ['posted', 'reversed'])
-        .gte('journal_entries.entry_date', period.period_start)
-        .lte('journal_entries.entry_date', as_of)
+  const { data: activityRows, error: activityError } = await supabase.rpc(
+    'get_account_period_activity',
+    {
+      p_company_id: companyId,
+      p_start: period.period_start,
+      p_end: as_of,
+      p_accounts: accounts,
+      p_exclude_journal_entry_id: obEntryId,
+    },
+  )
 
-      if (obEntryId) {
-        query = query.neq('journal_entry_id', obEntryId)
-      }
-
-      // Stable total order for correct paging (see fetch-all.ts).
-      return query.order('id', { ascending: true }).range(from, to)
-    })
-  } catch (err) {
+  if (activityError) {
     log.error('period activity lookup failed', {
       companyId,
       period_id: period.id,
-      error: err instanceof Error ? err.message : String(err),
+      error: activityError.message,
     })
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 
   const periodActivity = new Map<string, { debit: number; credit: number }>()
-  for (const line of lines) {
-    const existing = periodActivity.get(line.account_number) || { debit: 0, credit: 0 }
-    existing.debit += Number(line.debit_amount) || 0
-    existing.credit += Number(line.credit_amount) || 0
-    periodActivity.set(line.account_number, existing)
+  for (const row of activityRows ?? []) {
+    periodActivity.set(row.account_number, {
+      debit: Number(row.debit) || 0,
+      credit: Number(row.credit) || 0,
+    })
   }
 
   return NextResponse.json({

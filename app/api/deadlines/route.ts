@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDeadlineSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/deadlines
@@ -52,7 +53,7 @@ export const GET = withRouteContext('deadline.list', async (request, ctx) => {
   const { data, error } = await query.order('due_date', { ascending: true })
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data })
@@ -89,7 +90,7 @@ export const POST = withRouteContext(
     .single()
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data })

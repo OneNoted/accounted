@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/bookkeeping/accounts/activate
@@ -41,7 +42,7 @@ export const POST = withRouteContext(
       .in('account_number', uniqueNumbers)
 
     if (fetchError) {
-      return NextResponse.json({ error: fetchError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(fetchError) }, { status: 500 })
     }
 
     const existingByNumber = new Map<string, boolean>(
@@ -79,7 +80,7 @@ export const POST = withRouteContext(
         .in('account_number', toReactivate)
         .select('account_number')
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
       }
       reactivatedRows = data || []
     }
@@ -91,7 +92,7 @@ export const POST = withRouteContext(
         .insert(toInsert)
         .select('account_number')
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
       }
       insertedRows = data || []
     }

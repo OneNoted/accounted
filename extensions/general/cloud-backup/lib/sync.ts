@@ -494,12 +494,18 @@ async function fetchLatestAuditAt(
   supabase: SupabaseClient,
   companyId: string
 ): Promise<string> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('audit_log')
     .select('created_at')
     .eq('company_id', companyId)
+    // extension_data is non-portable runtime state and includes this sync's
+    // own progress snapshots. Letting those rows advance the watermark makes
+    // every completed backup invalidate Grunddata for the next run.
+    .neq('table_name', 'extension_data')
     .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
     .limit(1)
+  if (error) throw new Error(`Failed to fetch backup audit watermark: ${error.message}`)
   const rows = (data as { created_at: string }[] | null) ?? []
   return rows[0]?.created_at ?? ''
 }

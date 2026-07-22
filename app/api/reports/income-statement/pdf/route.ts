@@ -6,6 +6,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
 // into three named blocks with subtotals:
@@ -219,7 +220,7 @@ export const GET = withRouteContext('report.income_statement.pdf', async (reques
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera resultaträkning' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera resultaträkning' },
       { status: 500 }
     )
   }

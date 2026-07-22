@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -114,7 +115,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { data: employees, error: employeesError } = employeesResult
     if (employeesError) {
       return NextResponse.json(
-        { error: `Kunde inte läsa anställda för lönekörningen: ${employeesError.message}` },
+        { error: `Kunde inte läsa anställda för lönekörningen: ${getUserErrorMessage(employeesError)}` },
         { status: 500 },
       )
     }
@@ -206,7 +207,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data: updated })
@@ -254,7 +255,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data: { id, deleted: true } })

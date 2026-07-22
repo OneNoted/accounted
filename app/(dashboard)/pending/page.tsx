@@ -688,45 +688,26 @@ export default function PendingOperationsPage() {
       const res = await fetch(`/api/pending-operations?status=${activeTab}`)
       const json = await res.json()
       setOperations(json.data ?? [])
-      setCounts((prev) => ({ ...prev, [activeTab]: json.count ?? json.data?.length ?? 0 }))
+      setCounts((prev) => ({
+        ...prev,
+        ...(json.counts ?? {}),
+        [activeTab]: json.count ?? json.data?.length ?? 0,
+      }))
     } catch {
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
     }
     setIsLoading(false)
   }, [activeTab, toast])
 
-  const fetchAllCounts = useCallback(async () => {
-    const statuses: TabStatus[] = ['pending', 'committed', 'rejected']
-    try {
-      const results = await Promise.all(
-        statuses.map((s) =>
-          fetch(`/api/pending-operations?status=${s}&limit=1`).then((r) => r.json())
-        )
-      )
-      setCounts({
-        pending: results[0]?.count ?? 0,
-        committed: results[1]?.count ?? 0,
-        rejected: results[2]?.count ?? 0,
-      })
-    } catch {
-      // Counts are best-effort; the active tab's count will still update via fetchOperations
-    }
-  }, [])
-
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
-
-  useEffect(() => {
-    fetchAllCounts()
-  }, [fetchAllCounts])
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
   // this company. RLS scopes the channel automatically: we don't see other
   // tenants' events. We refetch the whole list (rather than patching state
   // in-place) so server-side filtering, sorting, and computed fields stay in
-  // sync with whatever the API route returned. The counts endpoint isn't
-  // pushed by the same trigger, so we also refresh counts on every change.
+  // sync with whatever the API route returned, including all tab counts.
   // Trailing debounce: bulk actions emit one event per row, which previously
   // stampeded 4 requests per event (list + 3 counts); the burst now collapses
   // into a single refetch after the last event.
@@ -742,7 +723,6 @@ export default function PendingOperationsPage() {
           if (debounce) clearTimeout(debounce)
           debounce = setTimeout(() => {
             fetchOperations()
-            fetchAllCounts()
           }, 400)
         }
       )
@@ -751,7 +731,7 @@ export default function PendingOperationsPage() {
       if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
-  }, [fetchOperations, fetchAllCounts])
+  }, [fetchOperations])
 
   // Clear selection when filters/tab change
   useEffect(() => {
@@ -772,11 +752,10 @@ export default function PendingOperationsPage() {
       setShowCommitDialog(false)
       setSelectedOp(null)
       fetchOperations()
-      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Misslyckades',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }
@@ -818,11 +797,10 @@ export default function PendingOperationsPage() {
       setShowBulkDialog(false)
       setSelectedIds(new Set())
       fetchOperations()
-      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Misslyckades',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }
@@ -887,11 +865,10 @@ export default function PendingOperationsPage() {
 
       setRejectTarget(null)
       fetchOperations()
-      fetchAllCounts()
     } catch (err) {
       toast({
         title: 'Kunde inte avvisa',
-        description: err instanceof Error ? err.message : 'Okänt fel',
+        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
     }

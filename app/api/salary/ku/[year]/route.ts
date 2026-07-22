@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateKU10Xml } from '@/lib/salary/ku/ku10-generator'
 import type { KU10EmployeeData, KU10CompanyData } from '@/lib/salary/ku/ku10-generator'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -57,7 +58,7 @@ export const GET = withRouteContext<{ params: Promise<{ year: string }> }>(
       `)
       .eq('company_id', companyId)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     // Filter to booked runs for the year
     const bookedForYear = (runEmployees || []).filter(sre => {

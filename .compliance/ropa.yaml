@@ -364,15 +364,96 @@ processing_activities:
       - error_message_truncated_500_chars
       - no_tool_args_or_results_persisted
 
+  - id: mcp.company_customer_tools
+    name: MCP-verktyg för företagsinställningar och kunder
+    purpose: >-
+      Låta en uttryckligen behörig användare läsa nödvändiga företags- och
+      kunduppgifter samt förbereda ändringar för användarens godkännande.
+      Verktygssökningen gnubok_search_tools returnerar endast verktygsmetadata
+      och JSON-schema, aldrig företags- eller kundposter. Läsresultat begränsas
+      till det aktiva företaget och till verktygets dokumenterade fält.
+    lawful_basis: art_6_1_b
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+      - company_member
+      - customer
+    data_categories:
+      - user.name
+      - user.contact
+      - user.financial.bank_account
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: pending_operation_lifecycle
+      basis: contract_and_user_approval
+      stored_in:
+        - pending_operations
+    security_measures:
+      - api_key_scope_companies_read_or_write
+      - api_key_scope_customers_read_or_write
+      - active_company_filter_on_every_query
+      - rls_company_scoped
+      - search_returns_tool_metadata_only
+      - writes_staged_for_explicit_user_approval
+      - plaintext_personnummer_blocked_from_staging
+
+  - id: arsredovisning.signature_evidence
+    name: Underskriftsbevis för årsredovisning
+    purpose: >-
+      Bevara vem som undertecknade en låst årsredovisningsversion, i vilken
+      roll, med vilken metod och på vilket datum. Bevisreferensen är endast en
+      ogenomskinlig identifierare med prefix archive:, document: eller receipt:.
+      Den får inte innehålla namn, e-post, personnummer eller fritext.
+    lawful_basis: art_6_1_c
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - company_signatory
+    data_categories:
+      - user.name
+      - user.professional_role
+      - user.activity_timestamp
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: 7y
+      basis: bfl_7_kap_and_arl_signing_evidence
+      stored_in:
+        - arsredovisning_signature_requests
+        - annual_report_versions
+    security_measures:
+      - rls_company_scoped
+      - service_role_only_signature_transitions
+      - version_company_period_and_state_validation
+      - signed_rows_immutable
+      - structured_opaque_evidence_reference
+      - future_and_pre_finalization_dates_rejected
+
   - id: arsredovisning.bolagsverket.submit
     name: Digital inlämning av årsredovisning till Bolagsverket
     purpose: >-
       Lämna in årsredovisningen (iXBRL) digitalt till Bolagsverkets eget
       utrymme (ÅRL 8 kap.). Avsändarens och undertecknarens personnummer
       krävs av Bolagsverkets API (skapa-inlamningtoken, lamna-in) och
-      används transient i anropen; i databasen sparas endast
-      företagssaltade SHA-256-hashar. Fastställelseintyget signeras med
-      e-legitimation hos Bolagsverket, aldrig i appen.
+      används endast transient i anropen. Varken personnummer eller hash av
+      personnummer sparas i inlämningsposten. Fastställelseintyget signeras
+      med e-legitimation hos Bolagsverket, aldrig i appen.
     lawful_basis: art_6_1_c   # legal obligation (ÅRL filing duty)
     special_category_basis: null
     controller: gnubok-tenant
@@ -380,7 +461,7 @@ processing_activities:
     data_subjects:
       - business_owner        # avsändare/undertecknare (styrelseledamot, VD)
     data_categories:
-      - user.government_id    # personnummer (transient; at rest only salted SHA-256 hash)
+      - user.government_id    # personnummer, endast transient till Bolagsverket
       - user.name             # undertecknarens namn
       - user.contact          # undertecknarens/kvittens e-post
       - user.financial        # årsredovisningens finansiella innehåll
@@ -396,13 +477,13 @@ processing_activities:
       duration: 7y
       basis: bfl_7_kap        # filed .xhtml archived as räkenskapsinformation
       stored_in:
-        - arsredovisning_submissions   # status, idnummer, checksums, PNR hashes only
+        - arsredovisning_submissions   # status, idnummer and checksums, no PNR values or hashes
         - document_attachments         # the exact filed iXBRL bytes (WORM)
     security_measures:
       - mtls_client_certificate_to_bolagsverket
       - mtls_key_env_only_injected_from_secret_manager   # never in settings/DB; see .env.example custody note
       - pinned_endpoint_allowlist_per_environment        # HOSTS map in client.ts; not env-configurable
-      - personnummer_never_persisted_plaintext_salted_sha256_only
+      - personnummer_and_hash_never_persisted
       - personnummer_never_logged
       - webhook_secret_constant_time_validation
       - rls_company_scoped

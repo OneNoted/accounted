@@ -12,6 +12,7 @@ import {
   getApplicableDeadlineConfigs,
   type CompanySettingsForDeadlines,
   type DeadlineInstance,
+  type TaxAssessmentNoticeForDeadline,
 } from './deadline-config'
 import { adjustDeadlineToNextBankingDay } from './swedish-holidays'
 
@@ -136,7 +137,62 @@ export function toDeadlineSettings(
     intrastat_enabled: settings.intrastat_enabled ?? false,
     punktskatt_enabled: settings.punktskatt_enabled ?? false,
     fyllnadsinbetalning_enabled: settings.fyllnadsinbetalning_enabled ?? false,
+    tax_assessment_notices: settings.tax_assessment_notices,
   }
+}
+
+interface TaxAssessmentNoticeRow {
+  id: string
+  company_id: string
+  decision_type: 'final' | 'reassessment'
+  payment_due_date: string
+  fiscal_periods: { name: string } | Array<{ name: string }> | null
+}
+
+async function fetchActiveTaxAssessmentNotices(
+  supabase: SupabaseClient,
+  companyId?: string,
+): Promise<TaxAssessmentNoticeRow[]> {
+  return fetchAllRows<TaxAssessmentNoticeRow>(({ from, to }) => {
+    let query = supabase
+      .from('tax_assessment_notices')
+      .select('id, company_id, decision_type, payment_due_date, fiscal_periods(name)')
+      .is('archived_at', null)
+      .order('id', { ascending: true })
+      .range(from, to)
+
+    if (companyId) query = query.eq('company_id', companyId)
+    return query
+  })
+}
+
+function toDeadlineNotice(row: TaxAssessmentNoticeRow): TaxAssessmentNoticeForDeadline {
+  const fiscalPeriod = Array.isArray(row.fiscal_periods)
+    ? row.fiscal_periods[0]
+    : row.fiscal_periods
+  return {
+    id: row.id,
+    fiscalPeriodName: fiscalPeriod?.name ?? '',
+    decisionType: row.decision_type,
+    paymentDueDate: row.payment_due_date,
+  }
+}
+
+async function hydrateTaxAssessmentNotices(
+  supabase: SupabaseClient,
+  settingsRows: DeadlineSettingsRow[],
+): Promise<DeadlineSettingsRow[]> {
+  const notices = await fetchActiveTaxAssessmentNotices(supabase)
+  const byCompany = new Map<string, TaxAssessmentNoticeForDeadline[]>()
+  for (const notice of notices) {
+    const current = byCompany.get(notice.company_id) ?? []
+    current.push(toDeadlineNotice(notice))
+    byCompany.set(notice.company_id, current)
+  }
+  return settingsRows.map((settings) => ({
+    ...settings,
+    tax_assessment_notices: byCompany.get(settings.company_id) ?? [],
+  }))
 }
 
 /**
@@ -175,10 +231,23 @@ export async function generateTaxDeadlinesForUser(
   settings: CompanySettingsForDeadlines,
   years: number[] = []
 ): Promise<{ created: number; deleted: number }> {
-  // Default to current and next year if not specified
+  if (settings.tax_assessment_notices === undefined) {
+    const notices = await fetchActiveTaxAssessmentNotices(supabase, companyId)
+    settings = {
+      ...settings,
+      tax_assessment_notices: notices.map(toDeadlineNotice),
+    }
+  }
+
+  // Recurring deadlines use the current rolling window. Explicit tax notices
+  // also include their own due-date years so a newly entered overdue notice is
+  // represented instead of disappearing only because its exact date has passed.
   if (years.length === 0) {
     const currentYear = new Date().getFullYear()
-    years = [currentYear, currentYear + 1]
+    const noticeYears = (settings.tax_assessment_notices ?? [])
+      .map((notice) => Number(notice.paymentDueDate.slice(0, 4)))
+      .filter(Number.isInteger)
+    years = Array.from(new Set([currentYear, currentYear + 1, ...noticeYears]))
   }
 
   // The ROT/RUT begäran deadline is data-dependent: a row for year Y only
@@ -289,6 +358,7 @@ export async function generateTaxDeadlinesForUser(
     linked_report_period: Record<string, unknown> | null
     reminder_offsets: number[]
     is_auto_generated: boolean
+    tax_assessment_notice_id: string | null
   }> = []
 
   for (const config of applicableConfigs) {
@@ -308,7 +378,7 @@ export async function generateTaxDeadlinesForUser(
         const dueDate = formatDateISO(adjustedDate)
 
         // Skip if the deadline is in the past
-        if (adjustedDate < today) {
+        if (adjustedDate < today && !instance.taxAssessmentNoticeId) {
           continue
         }
 
@@ -351,6 +421,7 @@ export async function generateTaxDeadlinesForUser(
           linked_report_period: linkedReportPeriod,
           reminder_offsets: [14, 7, 1, 0],
           is_auto_generated: true,
+          tax_assessment_notice_id: instance.taxAssessmentNoticeId ?? null,
         })
       }
     }
@@ -598,7 +669,10 @@ export async function generateNewYearDeadlines(
   supabase: SupabaseClient
 ): Promise<{ usersProcessed: number; totalCreated: number }> {
   const newYear = new Date().getFullYear()
-  const allSettings = await fetchAllDeadlineSettings(supabase)
+  const allSettings = await hydrateTaxAssessmentNotices(
+    supabase,
+    await fetchAllDeadlineSettings(supabase),
+  )
 
   let usersProcessed = 0
   let totalCreated = 0
@@ -634,7 +708,7 @@ export async function backfillMissingTaxDeadlines(
   // refuses to recreate a filed obligation. Matches the generator's own
   // completed-row floor.
   const pastFloor = `${new Date().getFullYear() - 1}-01-01`
-  const [allSettings, upcomingDeadlineRows] = await Promise.all([
+  const [rawSettings, upcomingDeadlineRows] = await Promise.all([
     fetchAllDeadlineSettings(supabase),
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
       supabase
@@ -647,6 +721,7 @@ export async function backfillMissingTaxDeadlines(
         .range(from, to),
     ),
   ])
+  const allSettings = await hydrateTaxAssessmentNotices(supabase, rawSettings)
 
   const missingSettings = findSettingsMissingUpcomingDeadlines(allSettings, upcomingDeadlineRows)
   let companiesRepaired = 0

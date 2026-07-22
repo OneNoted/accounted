@@ -5,6 +5,7 @@ import { BalansrapportPDF } from '@/lib/reports/operational-report-pdf-template'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.balansrapport.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -68,7 +69,7 @@ export const GET = withRouteContext('report.balansrapport.pdf', async (request, 
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera balansrapport' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera balansrapport' },
       { status: 500 }
     )
   }

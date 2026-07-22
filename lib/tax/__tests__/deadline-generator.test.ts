@@ -33,6 +33,7 @@ const SETTINGS: CompanySettingsForDeadlines = {
   intrastat_enabled: false,
   punktskatt_enabled: false,
   fyllnadsinbetalning_enabled: false,
+  tax_assessment_notices: [],
 }
 
 // Current + next year (the generator's own default): with the rolling
@@ -230,6 +231,34 @@ describe('generateTaxDeadlinesForUser', () => {
     )
     expect(other?.status).not.toBe('in_progress')
   })
+
+  it('links a kvarskatt deadline to the notice that supplied its exact date', async () => {
+    const due = new Date()
+    due.setDate(due.getDate() + 30)
+    const paymentDueDate = [
+      due.getFullYear(),
+      String(due.getMonth() + 1).padStart(2, '0'),
+      String(due.getDate()).padStart(2, '0'),
+    ].join('-')
+    const { supabase, getInsertPayload } = makeRecordingSupabase()
+
+    await generateTaxDeadlinesForUser(supabase, 'company-1', {
+      ...SETTINGS,
+      tax_assessment_notices: [{
+        id: 'notice-1',
+        fiscalPeriodName: '2025',
+        decisionType: 'reassessment',
+        paymentDueDate,
+      }],
+    }, GEN_YEARS)
+
+    expect(getInsertPayload()).toContainEqual(expect.objectContaining({
+      tax_deadline_type: 'kvarskatt',
+      tax_period: 'notice:notice-1',
+      due_date: paymentDueDate,
+      tax_assessment_notice_id: 'notice-1',
+    }))
+  })
 })
 
 describe('getExpectedUpcomingDeadlineKeys: banking-day handling', () => {
@@ -252,6 +281,21 @@ describe('getExpectedUpcomingDeadlineKeys: banking-day handling', () => {
     const keys = getExpectedUpcomingDeadlineKeys(SETTINGS, [2030], new Date(2030, 0, 1))
     expect(keys.has('f_skatt:2030-05:2030-05-13')).toBe(true)
     expect(keys.has('f_skatt:2030-05:2030-05-12')).toBe(false)
+  })
+
+  it('keeps an exact kvarskatt notice date on a Sunday', () => {
+    const keys = getExpectedUpcomingDeadlineKeys({
+      ...SETTINGS,
+      tax_assessment_notices: [{
+        id: 'notice-1',
+        fiscalPeriodName: '2029',
+        decisionType: 'final',
+        paymentDueDate: '2030-03-31',
+      }],
+    }, [2030], new Date(2030, 0, 1))
+
+    expect(keys.has('kvarskatt:notice:notice-1:2030-03-31')).toBe(true)
+    expect(keys.has('kvarskatt:notice:notice-1:2030-04-01')).toBe(false)
   })
 })
 

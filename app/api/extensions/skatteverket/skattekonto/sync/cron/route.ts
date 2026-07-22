@@ -12,6 +12,7 @@ import { SkatteverketSkattekontoError } from '@/extensions/general/skatteverket/
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { listVerifiedCompanies, markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 
 ensureInitialized()
@@ -261,7 +262,7 @@ export async function GET(request: Request) {
         message,
         felkod,
       })
-      results.push({ userId, companyId, source, status: 'error', error: message })
+      results.push({ userId, companyId, source, status: 'error', error: getErrorMessage(err) })
     }
   }
 

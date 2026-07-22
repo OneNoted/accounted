@@ -3,6 +3,7 @@ import { generateDimensionPnl } from '@/lib/reports/dimension-pnl'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over one
 // SIE dimension. ?dim_no picks the dimension (default 6, projekt).
@@ -49,7 +50,7 @@ export const GET = withRouteContext(
       log.error('dimension pnl generation failed', err as Error, { periodId, dimNo })
       return errorResponseFromCode('REPORT_GENERATION_FAILED', log, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

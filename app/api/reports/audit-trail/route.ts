@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import type { AuditLogEntry, AuditAction } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const CSV_HEADERS = 'timestamp,action,table_name,record_id,description,old_state,new_state'
 
@@ -80,7 +81,7 @@ export const GET = withRouteContext('report.audit_trail', async (request, { supa
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate audit trail report' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to generate audit trail report' },
       { status: 500 }
     )
   }

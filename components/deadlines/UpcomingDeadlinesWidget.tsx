@@ -13,6 +13,7 @@ import {
   STATUS_LABELS,
 } from '@/lib/calendar/utils'
 import { Calendar, ChevronRight, AlertTriangle, Clock, Check, Send, Loader2 } from 'lucide-react'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface UpcomingDeadlinesWidgetProps {
   deadlines: Deadline[]
@@ -85,7 +86,7 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
       onStatusChange?.(deadlineId, newStatus)
     } catch (error) {
       toast({
-        title: error instanceof Error ? error.message : t('toast_status_update_failed'),
+        title: error instanceof Error ? getUserErrorMessage(error) : t('toast_status_update_failed'),
         variant: 'destructive',
       })
     } finally {

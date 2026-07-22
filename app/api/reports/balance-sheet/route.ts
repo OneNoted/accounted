@@ -3,6 +3,7 @@ import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'report.balance_sheet',
@@ -49,7 +50,7 @@ export const GET = withRouteContext(
       opLog.error('balance sheet generation failed', err as Error)
       return errorResponseFromCode('REPORT_GENERATION_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

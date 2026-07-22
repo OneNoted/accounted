@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // GET /api/documents/:id/extraction-status
 //
@@ -29,7 +30,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
       .maybeSingle()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     const extractedAt = data.extracted_at as string | null

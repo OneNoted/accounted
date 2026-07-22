@@ -15,6 +15,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -187,7 +188,7 @@ export const POST = withRouteContext(
       log.error('arrival number generation failed', arrivalError)
       return errorResponseFromCode('SI_CREATE_FAILED', log, {
         requestId,
-        details: { reason: arrivalError.message, step: 'arrival_number' },
+        details: { reason: getUserErrorMessage(arrivalError), step: 'arrival_number' },
       })
     }
 
@@ -355,7 +356,7 @@ export const POST = withRouteContext(
       log.error('supplier invoice insert failed', invoiceError)
       return errorResponseFromCode('SI_CREATE_FAILED', log, {
         requestId,
-        details: { reason: invoiceError?.message || 'unknown' },
+        details: { reason: getUserErrorMessage(invoiceError) || 'unknown' },
       })
     }
 
@@ -377,7 +378,7 @@ export const POST = withRouteContext(
       })
       return errorResponseFromCode('SI_CREATE_FAILED', log, {
         requestId,
-        details: { reason: itemsError.message, step: 'items_insert' },
+        details: { reason: getUserErrorMessage(itemsError), step: 'items_insert' },
       })
     }
 
@@ -459,7 +460,7 @@ export const POST = withRouteContext(
         return errorResponseFromCode('SI_CREATE_FAILED', log, {
           requestId,
           details: {
-            reason: err instanceof Error ? err.message : 'unknown',
+            reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
             step: 'privately_paid_journal_entry',
           },
         })
@@ -537,7 +538,7 @@ export const POST = withRouteContext(
         return errorResponseFromCode('SI_CREATE_FAILED', log, {
           requestId,
           details: {
-            reason: err instanceof Error ? err.message : 'unknown',
+            reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
             step: 'registration_journal_entry',
           },
         })

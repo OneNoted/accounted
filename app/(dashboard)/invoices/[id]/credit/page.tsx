@@ -20,6 +20,7 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import type { Invoice, InvoiceItem, Customer } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -136,7 +137,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     } catch (error) {
       toast({
         title: t('create_failed_title'),
-        description: error instanceof Error ? error.message : t('try_again'),
+        description: error instanceof Error ? getUserErrorMessage(error) : t('try_again'),
         variant: 'destructive',
       })
     }

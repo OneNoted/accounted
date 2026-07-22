@@ -4,6 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { PruneAccountsSchema } from '@/lib/api/schemas'
 import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // POST /api/bookkeeping/accounts/prune — bulk cleanup of unused accounts
 // ("Rensa oanvända konton"), for charts bloated by an import from an old
@@ -78,7 +79,7 @@ export const POST = withRouteContext(
         { p_company_id: companyId },
       )
       if (usageError) {
-        return NextResponse.json({ error: usageError.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(usageError) }, { status: 500 })
       }
 
       const usageByAccount = new Map<string, number>(
@@ -134,7 +135,7 @@ export const POST = withRouteContext(
           // Report what was already deleted so the UI can refresh honestly.
           return NextResponse.json(
             {
-              error: deleteError.message,
+              error: getUserErrorMessage(deleteError),
               data: { deleted: toDelete.slice(0, i), skipped, not_found: notFound },
             },
             { status: 500 },
@@ -153,7 +154,7 @@ export const POST = withRouteContext(
       })
     } catch (error) {
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : 'Failed to prune accounts' },
+        { error: error instanceof Error ? getUserErrorMessage(error) : 'Failed to prune accounts' },
         { status: 500 },
       )
     }

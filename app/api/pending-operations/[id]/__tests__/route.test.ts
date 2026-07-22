@@ -416,7 +416,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     )
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(400)
-    expect(body.error).toMatch(/exceeds the maximum/)
+    expect(body.error).toBe('Något gick fel. Försök igen.')
   })
 
   it('returns 400 when mapping yields no accounts', async () => {

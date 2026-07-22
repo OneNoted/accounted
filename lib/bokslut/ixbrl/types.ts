@@ -109,6 +109,12 @@ export interface IxbrlArsredovisningInput {
   }
 
   noter: IxbrlNote[]
+  disclosures: {
+    longTermDebtOverFiveYears: number
+    securitiesPledged: string
+    contingentLiabilities: string
+    parentCompany: string | null
+  }
   /** Medelantal anställda (FTE) for current + previous year. */
   medelantalAnstallda: { current: number; previous: number | null }
 
@@ -129,6 +135,8 @@ export interface IxbrlArsredovisningInput {
      *  placeholder instead of a fabricated date and preflight 1103 blocks
      *  filing (Bolagsverket kontrollera 1103 semantics). */
     arsstammaDatum: string | null
+    resultatdispositionOutcome: 'proposal_approved' | 'alternative_decision' | null
+    resultatdispositionDecision: string | null
     /** The företrädare who will sign at Bolagsverket. */
     signerFirstName: string
     signerLastName: string

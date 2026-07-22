@@ -30,6 +30,7 @@ import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookke
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const SI_PAID_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id'
@@ -409,7 +410,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       return v1ErrorResponseFromCode('SI_PAID_FAILED', ctx.log, {
         requestId: ctx.requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
 

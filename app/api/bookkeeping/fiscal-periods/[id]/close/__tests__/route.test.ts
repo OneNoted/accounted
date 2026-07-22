@@ -57,13 +57,13 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/close', () => {
     expect(mockClosePeriod).not.toHaveBeenCalled()
   })
 
-  it('maps a service refusal to 400 with the message', async () => {
+  it('maps a service refusal to 400 with a safe message', async () => {
     mockClosePeriod.mockRejectedValue(new Error('Period contains draft entries'))
     const { status, body } = await parseJsonResponse<{ error: string }>(
       await POST(createMockRequest('/x', { method: 'POST', body: {} }), idParams)
     )
     expect(status).toBe(400)
-    expect(body.error).toBe('Period contains draft entries')
+    expect(body.error).toBe('Något gick fel. Försök igen.')
   })
 
   it('closes the period on the happy path', async () => {

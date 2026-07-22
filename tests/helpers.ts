@@ -595,6 +595,8 @@ export function makeCompanySettings(
     invoice_primary_color: '#1a1a1a',
     invoice_accent_color: '#666666',
     invoice_font_family: 'Helvetica',
+    invoice_custom_font_path: null,
+    invoice_custom_font_name: null,
     invoice_header_text: null,
     invoice_footer_text: null,
     invoice_email_texts: null,

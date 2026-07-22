@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generatePain001 } from '@/lib/salary/payment/pain001-generator'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
 import { normalizeBankNumber, lookupBicByClearing, lookupBicByBankName } from '@/lib/salary/payment/bank-account'
@@ -141,8 +142,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         periodLabel,
       })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Kunde inte generera betalfil'
-      return NextResponse.json({ error: msg }, { status: 400 })
+      return NextResponse.json({ error: getErrorMessage(err, { context: 'salary' }) }, { status: 400 })
     }
 
     await supabase

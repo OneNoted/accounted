@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/documents/counts?journal_entry_ids=id1,id2,...
@@ -34,7 +35,7 @@ export const GET = withRouteContext('document.counts', async (request, ctx) => {
     .in('journal_entry_id', ids)
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   // Group and count by journal_entry_id

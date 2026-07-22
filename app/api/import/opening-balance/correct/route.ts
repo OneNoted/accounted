@@ -11,6 +11,7 @@ import {
 } from '@/lib/import/opening-balance/execute-helpers'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -244,7 +245,11 @@ export const POST = withRouteContext(
 
         return errorResponseFromCode('OB_CORRECT_FAILED', opLog, {
           requestId,
-          details: { reason, newEntryId: newEntry.id, oldEntryId },
+          details: {
+            reason: getUserErrorMessage(seqErr),
+            newEntryId: newEntry.id,
+            oldEntryId,
+          },
         })
       }
 
@@ -267,7 +272,7 @@ export const POST = withRouteContext(
       if (/Bokföringen är låst/i.test(message)) {
         return errorResponseFromCode('OB_COMPANY_LOCK_DATE', opLog, {
           requestId,
-          details: { reason: message },
+          details: { reason: getUserErrorMessage(err) },
         })
       }
       if (isBookkeepingError(err)) {
@@ -276,7 +281,7 @@ export const POST = withRouteContext(
       opLog.error('opening balance correct failed', err as Error)
       return errorResponseFromCode('OB_CORRECT_FAILED', opLog, {
         requestId,
-        details: { reason: err instanceof Error ? err.message : 'unknown' },
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
       })
     }
   },

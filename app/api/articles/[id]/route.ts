@@ -8,6 +8,7 @@ import { checkRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Article } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -32,7 +33,7 @@ export const GET = withRouteContext(
       opLog.error('article fetch failed', error)
       return errorResponseFromCode('INTERNAL_ERROR', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 
@@ -97,7 +98,7 @@ export const PATCH = withRouteContext(
       opLog.error('article update failed', error)
       return errorResponseFromCode('ARTICLE_UPDATE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 
@@ -135,7 +136,7 @@ export const DELETE = withRouteContext(
       opLog.error('article lookup before delete failed', articleError)
       return errorResponseFromCode('ARTICLE_DELETE_FAILED', opLog, {
         requestId,
-        details: { reason: articleError.message },
+        details: { reason: getUserErrorMessage(articleError) },
       })
     }
 
@@ -149,7 +150,7 @@ export const DELETE = withRouteContext(
       opLog.error('article usage check failed', usageError)
       return errorResponseFromCode('ARTICLE_DELETE_FAILED', opLog, {
         requestId,
-        details: { reason: usageError.message },
+        details: { reason: getUserErrorMessage(usageError) },
       })
     }
 
@@ -170,7 +171,7 @@ export const DELETE = withRouteContext(
       opLog.error('article delete failed', deleteError)
       return errorResponseFromCode('ARTICLE_DELETE_FAILED', opLog, {
         requestId,
-        details: { reason: deleteError.message },
+        details: { reason: getUserErrorMessage(deleteError) },
       })
     }
 

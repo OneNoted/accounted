@@ -23,6 +23,7 @@ import {
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import type { InvoiceExtractionResult } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // TransactionMatchPicker
 //
@@ -227,7 +228,7 @@ export default function TransactionMatchPicker({
       if (error) {
         toast({
           title: 'Kunde inte hämta transaktioner',
-          description: error.message,
+          description: getUserErrorMessage(error),
           variant: 'destructive',
         })
         setRawRows([])

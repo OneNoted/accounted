@@ -19,6 +19,7 @@ import {
   integerColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface KpiKv {
   label: string
@@ -231,7 +232,7 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
     })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Kunde inte generera nyckeltalsrapport' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera nyckeltalsrapport' },
       { status: 500 }
     )
   }

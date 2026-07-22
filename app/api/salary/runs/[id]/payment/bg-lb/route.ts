@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -130,8 +131,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         periodLabel,
       })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Kunde inte generera Bankgirot LB-fil'
-      return NextResponse.json({ error: msg }, { status: 400 })
+      return NextResponse.json({ error: getErrorMessage(err, { context: 'salary' }) }, { status: 400 })
     }
 
     await supabase

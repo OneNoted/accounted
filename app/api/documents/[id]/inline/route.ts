@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { contentDisposition } from '@/lib/api/content-disposition'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET /api/documents/:id/inline
@@ -83,7 +84,7 @@ export async function GET(
 
   if (downloadError || !blob) {
     return NextResponse.json(
-      { error: `Failed to download document: ${downloadError?.message ?? 'unknown error'}` },
+      { error: `Failed to download document: ${getUserErrorMessage(downloadError) ?? 'unknown error'}` },
       { status: 500 }
     )
   }

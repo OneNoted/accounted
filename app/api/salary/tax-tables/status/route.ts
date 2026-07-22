@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchTaxTableRates, TaxTableUnavailableError } from '@/lib/salary/tax-tables'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * Probe Skatteverket's open data API to confirm tax tables are reachable.
@@ -28,7 +29,7 @@ export const GET = withRouteContext('salary.tax_tables.status', async (request) 
           source: 'unavailable' as const,
           reachable: false,
           checkedAt: new Date().toISOString(),
-          message: err.message,
+          message: getUserErrorMessage(err),
         },
       })
     }

@@ -19,28 +19,11 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 
-// Bank file import components
-import BankFileUploadStep from '@/components/import/BankFileUploadStep'
-import BankFilePreviewStep from '@/components/import/BankFilePreviewStep'
-import BankFileColumnMappingStep from '@/components/import/BankFileColumnMappingStep'
-import BankFileConfirmStep from '@/components/import/BankFileConfirmStep'
-import BankFileResultStep from '@/components/import/BankFileResultStep'
-
-// Opening balance import components
-import OpeningBalanceUploadStep from '@/components/import/OpeningBalanceUploadStep'
-import OpeningBalanceColumnMappingStep from '@/components/import/OpeningBalanceColumnMappingStep'
-import OpeningBalanceEditStep from '@/components/import/OpeningBalanceEditStep'
-import OpeningBalancePeriodStep from '@/components/import/OpeningBalancePeriodStep'
-import OpeningBalanceResultStep from '@/components/import/OpeningBalanceResultStep'
 import type { OpeningBalanceParseResult, OpeningBalanceExecuteResult, DetectedColumns } from '@/lib/import/opening-balance/types'
 
 // Register import (customers/suppliers) components
-import RegisterUploadStep from '@/components/import/RegisterUploadStep'
 import RegisterColumnMappingStep, { type RegisterColumnSpec } from '@/components/import/RegisterColumnMappingStep'
-import CustomersEditStep from '@/components/import/CustomersEditStep'
-import SuppliersEditStep from '@/components/import/SuppliersEditStep'
-import ArticlesEditStep from '@/components/import/ArticlesEditStep'
-import RegisterResultStep, { type RegisterResult } from '@/components/import/RegisterResultStep'
+import type { RegisterResult } from '@/components/import/RegisterResultStep'
 import type {
   CustomerImportParseResult,
   AnnotatedCustomerRow,
@@ -57,12 +40,7 @@ import type {
   DetectedArticleColumns,
 } from '@/lib/import/articles/types'
 
-// SIE import components
-import SIEUploadStep from '@/components/import/SIEUploadStep'
-import SIEPreviewStep from '@/components/import/SIEPreviewStep'
-import AccountMappingStep from '@/components/import/AccountMappingStep'
-import ImportReviewStep, { type ImportExecuteOptions } from '@/components/import/ImportReviewStep'
-import ImportResultStep from '@/components/import/ImportResultStep'
+import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import { applyMappingOverride } from '@/lib/import/account-mapper'
 import type { BankFileParseResult, BankFileFormatId, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { IngestResult } from '@/lib/transactions/ingest'
@@ -85,6 +63,35 @@ const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
   { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><Loader2 className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
 )
+
+function ImportStepLoading() {
+  return (
+    <div className="flex min-h-48 items-center justify-center" role="status">
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+    </div>
+  )
+}
+
+const BankFileUploadStep = dynamic(() => import('@/components/import/BankFileUploadStep'), { loading: ImportStepLoading })
+const BankFilePreviewStep = dynamic(() => import('@/components/import/BankFilePreviewStep'), { loading: ImportStepLoading })
+const BankFileColumnMappingStep = dynamic(() => import('@/components/import/BankFileColumnMappingStep'), { loading: ImportStepLoading })
+const BankFileConfirmStep = dynamic(() => import('@/components/import/BankFileConfirmStep'), { loading: ImportStepLoading })
+const BankFileResultStep = dynamic(() => import('@/components/import/BankFileResultStep'), { loading: ImportStepLoading })
+const OpeningBalanceUploadStep = dynamic(() => import('@/components/import/OpeningBalanceUploadStep'), { loading: ImportStepLoading })
+const OpeningBalanceColumnMappingStep = dynamic(() => import('@/components/import/OpeningBalanceColumnMappingStep'), { loading: ImportStepLoading })
+const OpeningBalanceEditStep = dynamic(() => import('@/components/import/OpeningBalanceEditStep'), { loading: ImportStepLoading })
+const OpeningBalancePeriodStep = dynamic(() => import('@/components/import/OpeningBalancePeriodStep'), { loading: ImportStepLoading })
+const OpeningBalanceResultStep = dynamic(() => import('@/components/import/OpeningBalanceResultStep'), { loading: ImportStepLoading })
+const RegisterUploadStep = dynamic(() => import('@/components/import/RegisterUploadStep'), { loading: ImportStepLoading })
+const CustomersEditStep = dynamic(() => import('@/components/import/CustomersEditStep'), { loading: ImportStepLoading })
+const SuppliersEditStep = dynamic(() => import('@/components/import/SuppliersEditStep'), { loading: ImportStepLoading })
+const ArticlesEditStep = dynamic(() => import('@/components/import/ArticlesEditStep'), { loading: ImportStepLoading })
+const RegisterResultStep = dynamic(() => import('@/components/import/RegisterResultStep'), { loading: ImportStepLoading })
+const SIEUploadStep = dynamic(() => import('@/components/import/SIEUploadStep'), { loading: ImportStepLoading })
+const SIEPreviewStep = dynamic(() => import('@/components/import/SIEPreviewStep'), { loading: ImportStepLoading })
+const AccountMappingStep = dynamic(() => import('@/components/import/AccountMappingStep'), { loading: ImportStepLoading })
+const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
+const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 
 // ============================================================
 // Bank File Import Wizard Steps
@@ -185,7 +192,7 @@ function BankFileImportWizard() {
                 'Exportera en ny fil från banken om du vill lägga till fler transaktioner.'
             )
           } else {
-            setBankError(err.message || 'Kunde inte läsa filen')
+            setBankError(getErrorMessage(err) || 'Kunde inte läsa filen')
           }
         } else {
           setBankError(typeof err === 'string' ? err : 'Kunde inte läsa filen')
@@ -219,7 +226,7 @@ function BankFileImportWizard() {
         setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
       }
     } catch (err) {
-      setBankError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setBankError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setBankIsLoading(false)
     }
@@ -267,7 +274,7 @@ function BankFileImportWizard() {
         description: `${data.data.imported} transaktioner importerades`,
       })
     } catch (err) {
-      setBankError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setBankError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setBankIsLoading(false)
     }
@@ -524,7 +531,7 @@ function SIEImportWizard() {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const message = isNetworkError
         ? 'Kunde inte nå servern. Kontrollera din internetanslutning och försök igen.'
-        : err instanceof Error ? err.message : 'Ett oväntat fel uppstod.'
+        : getErrorMessage(err)
       setErrorType(isNetworkError ? 'network' : 'parse')
       setError(message)
       toast({ title: isNetworkError ? 'Anslutningsfel' : 'Ett fel uppstod', description: message, variant: 'destructive' })
@@ -677,7 +684,7 @@ function SIEImportWizard() {
         setBasAccounts(accountsData.data || [])
       }
     } catch (err) {
-      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? err.message : 'Försök igen.', variant: 'destructive' })
+      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
@@ -739,7 +746,7 @@ function SIEImportWizard() {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const msg = isNetworkError
         ? 'Tappade anslutningen till servern under importen. Kontrollera din internetanslutning och se om importen genomfördes under Bokföring.'
-        : err instanceof Error ? err.message : 'Ett oväntat fel uppstod.'
+        : getErrorMessage(err)
       setError(msg)
       toast({ title: 'Import avbröts', description: msg, variant: 'destructive' })
     } finally {
@@ -886,7 +893,7 @@ function OpeningBalanceFlow() {
         setObStep('edit')
       }
     } catch (err) {
-      setObError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setObError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setObIsLoading(false)
     }
@@ -918,7 +925,7 @@ function OpeningBalanceFlow() {
       setParseResult(data.data)
       setObStep('edit')
     } catch (err) {
-      setObError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setObError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setObIsLoading(false)
     }
@@ -979,7 +986,7 @@ function OpeningBalanceFlow() {
         })
       }
     } catch (err) {
-      setObError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setObError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setObIsLoading(false)
     }
@@ -1156,7 +1163,7 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
         return
       }
 
@@ -1175,7 +1182,7 @@ function CustomersFlow() {
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1217,14 +1224,14 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen med de valda kolumnerna')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1249,7 +1256,7 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
         return
       }
 
@@ -1263,7 +1270,7 @@ function CustomersFlow() {
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setIsLoading(false)
     }
@@ -1407,7 +1414,7 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
         return
       }
 
@@ -1426,7 +1433,7 @@ function SuppliersFlow() {
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1474,14 +1481,14 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen')
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1506,7 +1513,7 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
         return
       }
 
@@ -1520,7 +1527,7 @@ function SuppliersFlow() {
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setIsLoading(false)
     }
@@ -1657,7 +1664,7 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
         return
       }
 
@@ -1676,7 +1683,7 @@ function ArticlesFlow() {
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1717,14 +1724,14 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Kunde inte tolka filen med de valda kolumnerna')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setIsLoading(false)
     }
@@ -1749,7 +1756,7 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || data.error?.message || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
         return
       }
 
@@ -1763,7 +1770,7 @@ function ArticlesFlow() {
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
     } finally {
       setIsLoading(false)
     }

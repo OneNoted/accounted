@@ -5,6 +5,7 @@ import {
 } from '@/lib/bookkeeping/currency-revaluation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /** GET: preview currency revaluation for a fiscal period. */
 export const GET = withRouteContext(
@@ -76,7 +77,7 @@ export const POST = withRouteContext(
       if (fallback.status === 500) {
         return errorResponseFromCode('FX_FAILED', opLog, {
           requestId,
-          details: { reason: err instanceof Error ? err.message : 'unknown' },
+          details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
         })
       }
       return fallback

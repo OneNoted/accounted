@@ -19,6 +19,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { Loader2, Search, Trash2 } from 'lucide-react'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface PruneCandidate {
   account_number: string
@@ -188,7 +189,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
       onOpenChange(false)
     } catch (err) {
       toast({
-        title: err instanceof Error && err.message ? err.message : t('toast_prune_failed'),
+        title: err instanceof Error && getUserErrorMessage(err) ? getUserErrorMessage(err) : t('toast_prune_failed'),
         variant: 'destructive',
       })
     } finally {

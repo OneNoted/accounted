@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * POST /api/transactions/[id]/ignore
@@ -47,7 +48,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
 
     if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(updateError) }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })
@@ -74,7 +75,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', companyId)
 
     if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(updateError) }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })

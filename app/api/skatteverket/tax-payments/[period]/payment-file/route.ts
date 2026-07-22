@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -95,8 +96,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   try {
     ocr = generateSkattekontoOcr(company.org_number)
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Kunde inte generera OCR-nummer'
-    return NextResponse.json({ error: msg }, { status: 400 })
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
   }
 
   // Payment date = AGI deadline, which is the 12th of the following month
@@ -116,8 +116,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       { paymentDate, periodLabel: period }
     )
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Kunde inte generera betalfil'
-    return NextResponse.json({ error: msg }, { status: 400 })
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
   }
 
   await supabase

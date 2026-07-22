@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import type {
   FiscalPeriod,
   JournalEntry,
@@ -727,6 +728,12 @@ export async function generateINK2Declaration(
     throw new Error('INK2 declaration is only for aktiebolag (limited company)')
   }
 
+  const taxAdjustments = await loadTaxAdjustmentSnapshot(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
+
   // Fetch all posted journal entries with lines for this period.
   // Paginated: a period can exceed PostgREST's 1000-row cap, and a silent
   // truncation here would under-report the INK2 tax declaration. PostgREST
@@ -890,10 +897,17 @@ export async function generateINK2Declaration(
   const fyEnd = (period.period_end as string).replace(/-/g, '')
 
   // Build INK2 (huvudblankett)
-  // Auto-derive from INK2S result (simplified: result + non-deductible tax)
+  // Auto-derive from INK2S result and the saved tax-only adjustments.
   // 7528 is already positive per Skatteverket convention
   const taxAmount = ink2r['7528']
-  const taxableResult = resultAfterFinancial + taxAmount
+  // INK2/SRU amounts are declared in whole kronor with ören omitted. Use the
+  // same whole-krona values in both the adjustment fields and the tax result
+  // so the worksheet remains internally consistent.
+  const nonDeductibleExpenses = Math.trunc(taxAdjustments.nonDeductibleExpenses)
+  const nonTaxableIncome = Math.trunc(taxAdjustments.nonTaxableIncome)
+  const taxableResult =
+    resultAfterFinancial + taxAmount
+    + nonDeductibleExpenses - nonTaxableIncome
 
   const ink2: INK2Rutor = {
     '7011': fyStart,
@@ -909,6 +923,8 @@ export async function generateINK2Declaration(
     '7650': resultAfterFinancial >= 0 ? resultAfterFinancial : 0,
     '7750': resultAfterFinancial < 0 ? Math.abs(resultAfterFinancial) : 0,
     '7651': taxAmount, // Skatt (ej avdragsgill)
+    '7653': nonDeductibleExpenses,
+    '7754': nonTaxableIncome,
     '8020': taxableResult >= 0 ? taxableResult : 0,
     '8021': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }

@@ -262,7 +262,51 @@ export const TaxDeadlineTypeSchema = z.enum([
   'arsredovisning',
   'arsstamma',
   'periodisk_sammanstallning',
+  'kvarskatt',
 ])
+
+export const TaxAssessmentDecisionTypeSchema = z.enum(['final', 'reassessment'])
+
+export const CreateTaxAssessmentNoticeSchema = z
+  .object({
+    fiscal_period_id: uuid,
+    decision_type: TaxAssessmentDecisionTypeSchema,
+    decision_date: saneIsoDate,
+    payment_due_date: saneIsoDate,
+  })
+  .refine((data) => data.payment_due_date >= data.decision_date, {
+    message: 'Förfallodagen får inte vara tidigare än beslutsdagen',
+    path: ['payment_due_date'],
+  })
+
+export const UpdateTaxAssessmentNoticeSchema = z
+  .object({
+    fiscal_period_id: uuid.optional(),
+    decision_type: TaxAssessmentDecisionTypeSchema.optional(),
+    decision_date: saneIsoDate.optional(),
+    payment_due_date: saneIsoDate.optional(),
+    archived: z.boolean().optional(),
+  })
+  .refine((data) => Object.values(data).some((value) => value !== undefined), {
+    message: 'Minst ett fält måste anges',
+  })
+  .refine(
+    (data) => !data.decision_date || !data.payment_due_date || data.payment_due_date >= data.decision_date,
+    {
+      message: 'Förfallodagen får inte vara tidigare än beslutsdagen',
+      path: ['payment_due_date'],
+    },
+  )
+
+export const UpdateInitialSetupStateSchema = z
+  .object({
+    path: z.enum(['migration', 'bank', 'fresh']).nullable().optional(),
+    completed: z.boolean().optional(),
+    dismissed: z.boolean().optional(),
+  })
+  .refine((data) => Object.values(data).some((value) => value !== undefined), {
+    message: 'Minst ett fält måste anges',
+  })
 
 export const DeadlineSourceSchema = z.enum(['system', 'user'])
 
@@ -1574,7 +1618,9 @@ export const UpdateSettingsSchema = z.object({
     .string()
     .regex(/^#[0-9A-Fa-f]{6}$/, 'Ange en giltig hex-färg (#RRGGBB)')
     .optional(),
-  invoice_font_family: z.enum(['Helvetica', 'Times-Roman', 'Courier']).optional(),
+  invoice_font_family: z
+    .enum(['Helvetica', 'Times-Roman', 'Courier', 'Source Sans 3', 'Source Serif 4', 'Custom'])
+    .optional(),
   invoice_header_text: z.string().max(200).nullable().optional(),
   invoice_footer_text: z.string().max(500).nullable().optional(),
   // Automation

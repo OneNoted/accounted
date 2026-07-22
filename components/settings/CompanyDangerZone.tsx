@@ -19,6 +19,7 @@ import { RetentionNotice } from '@/components/ui/retention-notice'
 import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const branding = getBranding()
 
@@ -72,7 +73,7 @@ export function CompanyDangerZone() {
     } catch (err) {
       toast({
         title: t('danger_delete_failed_title'),
-        description: err instanceof Error ? err.message : t('danger_try_again'),
+        description: err instanceof Error ? getUserErrorMessage(err) : t('danger_try_again'),
         variant: 'destructive',
       })
       setIsDeleting(false)

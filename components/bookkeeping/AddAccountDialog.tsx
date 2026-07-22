@@ -18,6 +18,7 @@ import { Loader2, AlertTriangle } from 'lucide-react'
 import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import type { BASAccount } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AddAccountDialogProps {
   open: boolean
@@ -107,7 +108,7 @@ export function AddAccountDialog({
       onCreated(createdAccount)
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Något gick fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel')
     } finally {
       setIsSaving(false)
     }

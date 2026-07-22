@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateMappingRuleSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('mapping_rules.list', async (_request, ctx) => {
   const { supabase, companyId } = ctx
@@ -14,7 +15,7 @@ export const GET = withRouteContext('mapping_rules.list', async (_request, ctx) 
     .order('priority')
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   return NextResponse.json({ data })
@@ -59,7 +60,7 @@ export const POST = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({ data })

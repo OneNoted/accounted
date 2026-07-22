@@ -10,6 +10,7 @@ import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { formatCurrency } from '@/lib/utils'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, Employee } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /** Translation keys in the `salary_run_employee` namespace. */
 const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
@@ -86,7 +87,7 @@ export default function SalaryRunEmployeeDetailPage({
       if (!sreRes.ok) throw new Error(sreJson.error || t('error_load_employee'))
       setData({ run: runJson.data, runEmployee: sreJson.data })
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setLoading(false)
     }
@@ -108,7 +109,7 @@ export default function SalaryRunEmployeeDetailPage({
       }
       await load()
     } catch (e) {
-      setError(e instanceof Error ? e.message : t('unknown_error'))
+      setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
     } finally {
       setCalculating(false)
     }

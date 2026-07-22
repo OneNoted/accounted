@@ -1,6 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateSalaryJournal } from '@/lib/reports/salary-journal'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * Lönejournal report, per BFNAR 2013:2 behandlingshistorik requirement.
@@ -16,7 +17,6 @@ export const GET = withRouteContext('report.salary_journal', async (request, { s
     const report = await generateSalaryJournal(supabase, companyId, year, monthFrom, monthTo)
     return NextResponse.json({ data: report })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Kunde inte generera lönejournal'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
   }
 })

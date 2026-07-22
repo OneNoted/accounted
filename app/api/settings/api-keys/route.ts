@@ -8,6 +8,7 @@ import {
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /** GET /api/settings/api-keys: list the company's API keys (key value never returned). */
 export const GET = withRouteContext(
@@ -123,7 +124,7 @@ export const POST = withRouteContext(
       log.error('api_key insert failed', error)
       return errorResponseFromCode('API_KEY_CREATE_FAILED', log, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

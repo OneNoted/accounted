@@ -1,6 +1,7 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateVacationLiability } from '@/lib/reports/vacation-liability'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * Semesterlöneskuld report, per BFNAR 2016:10 kap 16.
@@ -15,7 +16,6 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     const report = await generateVacationLiability(supabase, companyId, year)
     return NextResponse.json({ data: report })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Kunde inte generera semesterlöneskuld'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
   }
 })

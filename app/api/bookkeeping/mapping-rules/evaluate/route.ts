@@ -4,6 +4,7 @@ import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { validateBody } from '@/lib/api/validate'
 import { EvaluateMappingRulesSchema } from '@/lib/api/schemas'
 import type { Transaction } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const POST = withRouteContext('mapping_rules.evaluate', async (request, ctx) => {
   const { supabase, companyId, log } = ctx
@@ -42,7 +43,7 @@ export const POST = withRouteContext('mapping_rules.evaluate', async (request, c
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Evaluation failed' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Evaluation failed' },
       { status: 500 }
     )
   }

@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { getActiveCompanyId } from '@/lib/company/context'
 import ChatNewStarter from '@/components/agent/ChatNewStarter'
 import { getIntent } from '@/lib/agent/intents/registry'
+import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,11 +16,11 @@ interface PageProps {
 // caller-chosen intent/seed, so suggestion chips and ⌘K can route here
 // inline instead of opening the slide-in sheet.
 export default async function ChatNewPage({ searchParams }: PageProps) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const [{ user }, companyId] = await Promise.all([
+    getDashboardAuthContext(),
+    getDashboardCompanyId(),
+  ])
   if (!user) redirect('/login')
-
-  const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
   const sp = await searchParams

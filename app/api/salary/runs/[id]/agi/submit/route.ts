@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { eventBus } from '@/lib/events'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -137,7 +138,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (err) {
       log.error('[salary/agi/submit] Error', err as Error)
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Kunde inte skicka AGI till Skatteverket' },
+        { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte skicka AGI till Skatteverket' },
         { status: 500 }
       )
     }

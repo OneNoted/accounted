@@ -5,6 +5,7 @@ import { scopeTransactionsToAccount } from '@/lib/reconciliation/bank-reconcilia
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateTransactionSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const MAX_ROWS = 500
 
@@ -98,7 +99,7 @@ export async function GET(request: Request) {
   const { data, error } = await query
 
   if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   const rows = data || []
@@ -147,7 +148,7 @@ export const POST = withRouteContext(
       // is invalid input, not a server fault: surface it as 400 with the PG
       // code so the client maps it to a friendly message.
       return NextResponse.json(
-        { error: error.message, code: error.code, type: 'database_error' },
+        { error: getUserErrorMessage(error), code: error.code, type: 'database_error' },
         { status: 400 },
       )
     }

@@ -1,7 +1,9 @@
 'use client'
 
 import { createContext, useCallback, useContext, useMemo, useState } from 'react'
-import AgentSheet from './AgentSheet'
+import dynamic from 'next/dynamic'
+
+const AgentSheet = dynamic(() => import('./AgentSheet'))
 
 export interface AgentIdentity {
   displayName: string | null

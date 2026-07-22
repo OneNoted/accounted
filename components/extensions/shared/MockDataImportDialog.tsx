@@ -16,6 +16,7 @@ import {
   Upload, FileJson, FileSpreadsheet, Download, AlertCircle, Check,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -192,7 +193,7 @@ export default function MockDataImportDialog<T>({
       await onImport(report, { source: 'csv', fileName, rowCount: mappedRows.length })
       handleOpenChange(false)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import misslyckades')
+      setError(e instanceof Error ? getUserErrorMessage(e) : 'Import misslyckades')
       setStep('map-csv')
     }
   }, [csvRows, csvHeaders, mappings, parseCsvRows, onImport, fileName, handleOpenChange])
@@ -206,7 +207,7 @@ export default function MockDataImportDialog<T>({
       await onImport(jsonReport, { source: 'json', fileName, rowCount: 0 })
       handleOpenChange(false)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import misslyckades')
+      setError(e instanceof Error ? getUserErrorMessage(e) : 'Import misslyckades')
       setStep('preview-json')
     }
   }, [jsonReport, onImport, fileName, handleOpenChange])

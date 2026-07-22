@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { BatchUpsertWorkedDaysSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -44,7 +45,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .in('work_date', uniqueDates)
 
     if (deleteError) {
-      return NextResponse.json({ error: deleteError.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(deleteError) }, { status: 500 })
     }
 
     // Per-row insert so we can isolate trigger failures (24h cap on a date with
@@ -68,11 +69,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         // 24h cap trigger uses ERRCODE check_violation (23514) and a Swedish
         // message starting with "Total tid". Other failures are unexpected.
         if (error.message?.includes('Total tid') || error.code === '23514') {
-          conflicts.push({ date, reason: error.message })
+          conflicts.push({ date, reason: getUserErrorMessage(error) })
           continue
         }
         return NextResponse.json(
-          { error: error.message, inserted, conflicts },
+          { error: getUserErrorMessage(error), inserted, conflicts },
           { status: 500 },
         )
       }

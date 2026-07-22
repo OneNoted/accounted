@@ -16,6 +16,8 @@ export interface AuditLogFilters {
   to_date?: string
   page?: number
   pageSize?: number
+  /** Full exports can skip the expensive exact count and stop on a short page. */
+  includeCount?: boolean
 }
 
 /**
@@ -28,13 +30,16 @@ export async function getAuditLog(
 ): Promise<{ data: AuditLogEntry[]; count: number }> {
   const page = filters.page ?? 1
   const pageSize = filters.pageSize ?? 50
+  const includeCount = filters.includeCount ?? true
   const offset = (page - 1) * pageSize
 
-  let query = supabase
-    .from('audit_log')
-    .select('*', { count: 'exact' })
+  const auditTable = supabase.from('audit_log')
+  let query = (includeCount
+    ? auditTable.select('*', { count: 'exact' })
+    : auditTable.select('*'))
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
     .range(offset, offset + pageSize - 1)
 
   if (filters.action) {
@@ -61,7 +66,7 @@ export async function getAuditLog(
 
   return {
     data: (data as AuditLogEntry[]) || [],
-    count: count ?? 0,
+    count: includeCount ? count ?? 0 : 0,
   }
 }
 

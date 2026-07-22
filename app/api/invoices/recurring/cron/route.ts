@@ -13,6 +13,7 @@ import type {
   RecurringInvoiceSchedule,
   RecurringInvoiceScheduleItem,
 } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
 
@@ -57,7 +58,7 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
   if (error) {
     ctx.log.error('failed to load due recurring schedules', error)
     return NextResponse.json(
-      { success: false, error: error.message },
+      { success: false, error: getUserErrorMessage(error) },
       { status: 500 },
     )
   }

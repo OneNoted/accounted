@@ -3,8 +3,10 @@ import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import {
   calculateBolagsskatt,
+  getBookedBolagsskatt,
   sumPostedYearEndDispositions,
 } from './tax-provision/bolagsskatt-calculator'
+import { loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-service'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
 import {
   computeLatentTax,
@@ -19,7 +21,7 @@ import {
   proposeAvsattning,
   proposeAteforing,
 } from './reserves/periodiseringsfond-service'
-import type { DispositionsProposal, ProposedDisposition } from './types'
+import type { CompletedDisposition, DispositionsProposal, ProposedDisposition } from './types'
 import type { AccountingFramework } from '@/types'
 
 /**
@@ -86,6 +88,7 @@ export async function buildDispositionsProposal(
   const resultBeforeTax = incomeStatement.net_result
 
   const proposals: ProposedDisposition[] = []
+  const completedDispositions: CompletedDisposition[] = []
 
   // Dispositions already POSTED in this period (a partially completed
   // bokslut run) are excluded from resultBeforeTax like all year_end
@@ -97,6 +100,15 @@ export async function buildDispositionsProposal(
     companyId,
     fiscalPeriodId,
   )
+  const [taxAdjustments, bookedTax] = await Promise.all([
+    loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+    getBookedBolagsskatt(supabase, companyId, fiscalPeriodId),
+  ])
+  // Income statement excludes tax posted by this year-end flow, but includes
+  // manually posted 8910. Add back only the latter to get a stable pre-tax
+  // result on reload.
+  const manuallyBookedTax = Math.max(0, bookedTax - postedEffect.taxProvisionPortion)
+  const normalizedResultBeforeTax = resultBeforeTax + manuallyBookedTax
 
   const existingFonder = await listExistingPeriodiseringsfonder(
     supabase,
@@ -137,14 +149,25 @@ export async function buildDispositionsProposal(
   // headroom effect is alreadyProvisioned, not a base reduction), plus
   // proposed återföringar and schablonintäkt, minus deductible SLP.
   const taxableBeforeAvsattning =
-    resultBeforeTax + postedEffect.total + alreadyProvisioned + ateforingTotal
+    normalizedResultBeforeTax + postedEffect.total + alreadyProvisioned + ateforingTotal
     + ateforing.schablonintaktAmount - (slp?.amount ?? 0)
-  const avsattning = proposeAvsattning({
-    skattemassigtResultatBeforeAvsattning: taxableBeforeAvsattning,
-    fiscalYear,
-    alreadyProvisioned,
-  })
+    + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
+  const avsattning = alreadyProvisioned > 0
+    ? null
+    : proposeAvsattning({
+        skattemassigtResultatBeforeAvsattning: taxableBeforeAvsattning,
+        fiscalYear,
+      })
   if (avsattning) proposals.push(avsattning)
+  if (alreadyProvisioned > 0) {
+    completedDispositions.push({
+      kind: 'periodiseringsfond_avsattning',
+      label: 'Avsättning till periodiseringsfond',
+      amount: alreadyProvisioned,
+      status: 'booked',
+      warnings: [],
+    })
+  }
 
   if (slp) proposals.push(slp)
 
@@ -158,16 +181,34 @@ export async function buildDispositionsProposal(
   // Without this, the previewed tax ignores the avsättning (tax too high) and
   // diverges from what the sequential commit books and from ÅR/INK2.
   const resultAfterDispositions =
-    resultBeforeTax + postedEffect.total + ateforingTotal
+    normalizedResultBeforeTax + postedEffect.total + ateforingTotal
     - (avsattning?.amount ?? 0) - (slp?.amount ?? 0)
 
   const bolagsskatt = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
     resultBeforeTaxOverride: resultAfterDispositions,
     manualAdjustments: {
+      nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
+      nonTaxableIncome: taxAdjustments.nonTaxableIncome,
       schablonintaktPeriodiseringsfond: ateforing.schablonintaktAmount,
     },
   })
-  if (bolagsskatt) proposals.push(bolagsskatt)
+  if (bookedTax > 0) {
+    const expectedTax = bolagsskatt?.amount ?? 0
+    const matches = bookedTax === expectedTax
+    completedDispositions.push({
+      kind: 'bolagsskatt',
+      label: 'Bolagsskatt 20,6 %',
+      amount: bookedTax,
+      status: matches ? 'booked' : 'needs_correction',
+      warnings: matches
+        ? []
+        : [
+            `Bokförd skatt är ${bookedTax} kr, men aktuellt underlag ger ${expectedTax} kr. Rätta den bokförda skatten innan bokslutet verkställs.`,
+          ],
+    })
+  } else if (bolagsskatt && bolagsskatt.amount > 0) {
+    proposals.push(bolagsskatt)
+  }
 
   // K3 only: split obeskattade reserver into the 79.4 % equity portion and
   // the 20.6 % uppskjuten skatteskuld. We sum the projected 21xx balance
@@ -187,8 +228,10 @@ export async function buildDispositionsProposal(
   return {
     entityType,
     fiscalPeriod: period,
-    netResultBefore: resultBeforeTax,
+    netResultBefore: normalizedResultBeforeTax,
     proposals,
+    taxAdjustments,
+    completedDispositions,
   }
 }
 

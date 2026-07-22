@@ -10,7 +10,7 @@ export const API_KEY_SCOPES = {
   'transactions:read':  { label: 'Transaktioner: läs',  description: 'Lista transaktioner, mallförslag, kategoriförslag (3 verktyg)' },
   'transactions:write': { label: 'Transaktioner: skriv', description: 'Kategorisera, av-kategorisera, kvittomatchning, koppling mot faktura (4 verktyg)' },
   'customers:read':     { label: 'Kunder: läs',         description: 'Lista kunder (1 verktyg)' },
-  'customers:write':    { label: 'Kunder: skriv',       description: 'Skapa kunder (1 verktyg)' },
+  'customers:write':    { label: 'Kunder: skriv',       description: 'Skapa och uppdatera kunder (2 verktyg)' },
   'articles:read':      { label: 'Artiklar: läs',       description: 'Lista artiklar i artikelregistret (1 verktyg)' },
   'articles:write':     { label: 'Artiklar: skriv',     description: 'Skapa och uppdatera artiklar (2 verktyg)' },
   'invoices:read':      { label: 'Fakturor: läs',       description: 'Lista fakturor (1 verktyg)' },
@@ -23,6 +23,7 @@ export const API_KEY_SCOPES = {
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
   // v1 REST API: added Phase 1
   'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
+  'companies:write':    { label: 'Företag: skriv',      description: 'Uppdatera företagsinställningar via stagade verktyg' },
   'events:read':        { label: 'Händelser: läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },
@@ -119,6 +120,7 @@ export const STAGING_SCOPES: ApiKeyScope[] = [
   'bookkeeping:write',
   'payroll:write',
   'documents:write',
+  'companies:write',
   // Skatteverket submit tools stage submit_vat_declaration / submit_agi, so a
   // key holding both this and pending_operations:approve is a SoD conflict:
   // findStageApproveConflict picks it up automatically from this list.
@@ -143,6 +145,7 @@ export function findStageApproveConflict(scopes: ApiKeyScope[]): ApiKeyScope | n
 
 /** Scope domain groups for UI rendering */
 export const SCOPE_GROUPS = [
+  { domain: 'companies',           label: 'Företag',              read: 'companies:read' as const,           write: 'companies:write' as const },
   { domain: 'transactions',        label: 'Transaktioner',        read: 'transactions:read' as const,        write: 'transactions:write' as const },
   { domain: 'customers',           label: 'Kunder',               read: 'customers:read' as const,           write: 'customers:write' as const },
   { domain: 'articles',            label: 'Artiklar',             read: 'articles:read' as const,            write: 'articles:write' as const },
@@ -160,6 +163,8 @@ export const SCOPE_GROUPS = [
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Companies
   gnubok_list_companies:                  'companies:read',
+  gnubok_get_company_settings:            'companies:read',
+  gnubok_update_company_settings:         'companies:write',
   // Transactions
   gnubok_list_uncategorized_transactions:     'transactions:read',
   gnubok_list_transactions_without_documents: 'transactions:read',
@@ -177,6 +182,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Customers
   gnubok_list_customers:                  'customers:read',
   gnubok_create_customer:                 'customers:write',
+  gnubok_update_customer:                 'customers:write',
   // Articles (artikelregister)
   gnubok_list_articles:                   'articles:read',
   gnubok_create_article:                  'articles:write',
@@ -320,6 +326,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_propose_accruals:                     'reports:read',
   gnubok_propose_annual_depreciation:          'reports:read',
   gnubok_preview_arsredovisning:               'reports:read',
+  gnubok_validate_arsredovisning:              'reports:read',
+  gnubok_list_arsredovisning_versions:         'reports:read',
+  gnubok_get_arsredovisning_filing_status:     'reports:read',
   gnubok_preview_ef_declaration:               'reports:read',
   // Deliberately UNSCOPED (available to any authenticated key):
   // gnubok_search_tools, gnubok_list_skills, gnubok_load_skill,

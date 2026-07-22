@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useState } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -14,23 +15,46 @@ import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
-import { NEDeclarationView } from '@/components/reports/NEDeclarationView'
-import { PeriodiskSammanstallningView } from '@/components/reports/PeriodiskSammanstallningView'
-import { INK2DeclarationView } from '@/components/reports/INK2DeclarationView'
-import { BankReconciliationView } from '@/components/reports/BankReconciliationView'
-import {
-  TrialBalanceView,
-  IncomeStatementView,
-  BalanceSheetView,
-  ResultatrapportView,
-  BalansrapportView,
-  VatDeclarationView,
-  SupplierLedgerView,
-  GeneralLedgerView,
-  JournalRegisterView,
-  ARLedgerView,
-  DimensionPnlView,
-} from '@/components/reports/views'
+import type { FiscalPeriod } from '@/types'
+
+function ReportViewLoading() {
+  return (
+    <Card>
+      <CardContent className="space-y-4 p-6">
+        <Skeleton className="h-5 w-32" />
+        <Skeleton className="h-64" />
+      </CardContent>
+    </Card>
+  )
+}
+
+const TrialBalanceView = dynamic(() => import('./lazy-views/TrialBalanceView'), { loading: ReportViewLoading })
+const IncomeStatementView = dynamic(() => import('./lazy-views/IncomeStatementView'), { loading: ReportViewLoading })
+const BalanceSheetView = dynamic(() => import('./lazy-views/BalanceSheetView'), { loading: ReportViewLoading })
+const ResultatrapportView = dynamic(() => import('./lazy-views/ResultatrapportView'), { loading: ReportViewLoading })
+const BalansrapportView = dynamic(() => import('./lazy-views/BalansrapportView'), { loading: ReportViewLoading })
+const VatDeclarationView = dynamic(() => import('./lazy-views/VatDeclarationView'), { loading: ReportViewLoading })
+const SupplierLedgerView = dynamic(() => import('./lazy-views/SupplierLedgerView'), { loading: ReportViewLoading })
+const GeneralLedgerView = dynamic(() => import('./lazy-views/GeneralLedgerView'), { loading: ReportViewLoading })
+const JournalRegisterView = dynamic(() => import('./lazy-views/JournalRegisterView'), { loading: ReportViewLoading })
+const ARLedgerView = dynamic(() => import('./lazy-views/ARLedgerView'), { loading: ReportViewLoading })
+const DimensionPnlView = dynamic(() => import('./lazy-views/DimensionPnlView'), { loading: ReportViewLoading })
+const NEDeclarationView = dynamic(() =>
+  import('./NEDeclarationView').then((module) => ({ default: module.NEDeclarationView })),
+  { loading: ReportViewLoading },
+)
+const PeriodiskSammanstallningView = dynamic(() =>
+  import('./PeriodiskSammanstallningView').then((module) => ({ default: module.PeriodiskSammanstallningView })),
+  { loading: ReportViewLoading },
+)
+const INK2DeclarationView = dynamic(() =>
+  import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
+  { loading: ReportViewLoading },
+)
+const BankReconciliationView = dynamic(() =>
+  import('./BankReconciliationView').then((module) => ({ default: module.BankReconciliationView })),
+  { loading: ReportViewLoading },
+)
 
 /**
  * The focused single-report experience at /reports/[slug]. Carries one report:
@@ -39,7 +63,15 @@ import {
  * optional date-range control, and the report body. Drilling into an account
  * navigates to /reports/huvudbok?account=…: drill state lives in the URL.
  */
-function FocusedReportInner({ slug }: { slug: string }) {
+function FocusedReportInner({
+  slug,
+  initialPeriods,
+  initialCompanyId,
+}: {
+  slug: string
+  initialPeriods: FiscalPeriod[]
+  initialCompanyId: string | null
+}) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { company } = useCompany()
@@ -97,6 +129,8 @@ function FocusedReportInner({ slug }: { slug: string }) {
               includeAllOption={false}
               hideFuturePeriods
               onReady={() => setIsReady(true)}
+              initialPeriods={initialPeriods}
+              initialCompanyId={initialCompanyId}
             />
           )
         }
@@ -203,10 +237,22 @@ function FocusedView({
   }
 }
 
-export function FocusedReport({ slug }: { slug: string }) {
+export function FocusedReport({
+  slug,
+  initialPeriods,
+  initialCompanyId,
+}: {
+  slug: string
+  initialPeriods: FiscalPeriod[]
+  initialCompanyId: string | null
+}) {
   return (
     <Suspense fallback={<div className="space-y-8" />}>
-      <FocusedReportInner slug={slug} />
+      <FocusedReportInner
+        slug={slug}
+        initialPeriods={initialPeriods}
+        initialCompanyId={initialCompanyId}
+      />
     </Suspense>
   )
 }

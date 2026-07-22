@@ -21,11 +21,15 @@ The accounting rules are Swedish law, enforced by DB triggers. Code that violate
 General prohibitions:
 
 - **Never modify an existing migration**: schemas already shipped; create a new migration. Never touch the enforcement triggers (migration 017); they are legally required.
+- **Apply migrations only to the `erpbase` Supabase project's `staging` branch.** Never apply migrations to a local database or a locally hosted Supabase instance.
+- **Never write to the `erpbase` Supabase production database without Emil's explicit approval for the specific write.** Production reads are allowed, including fetching data for a requested account, but no INSERT, UPDATE, DELETE, DDL, migration, mutating RPC, repair, seed, or other state-changing operation may run until Emil has clearly said okay. Do not infer approval from a request to investigate, diagnose, fix code, or fetch data.
+- **Never write directly to the `main` branch without Emil's explicit approval.** Do not commit, push, merge, or otherwise update `main`; use a feature branch unless Emil clearly approves the specific main-branch write.
 - **Never leave a remote DB ahead of the repo.** If you `apply_migration` (or run any DDL) against prod, staging, or a preview branch, write the byte-identical SQL into `supabase/migrations/` under the exact applied version in the same change. An applied version with no committed file is an orphan: Supabase branching aborts the next merge to `main` with "Remote migration versions not found in local migrations directory" and blocks every pending migration behind it. The PR preview passes anyway (preview branches fork from prod's history, which already has the orphan), so this only surfaces at merge.
 - **Core code must never import from `@/extensions/`.** CI builds core with zero extensions enabled; a direct import breaks that build. Extensions cannot use dynamic imports (the registry generates static imports via `setup:extensions`).
 - **Don't add dependencies without asking.** This is an AGPL-3.0 project; license compatibility matters, and the dependency surface is audited.
 - **Don't "finish" the gnubok → Accounted rename.** Wire-format identifiers keep the old name on purpose: `gnubok-company-id` cookie, `gnubok_sk_`/`gnubok_inv_` prefixes, `gnubok-mcp` npm package. Renaming them breaks live sessions, API keys, and invites.
 - **Treat `.env.local` as pointing at the production database.** Never run seed/cleanup/repair scripts against it without explicit confirmation.
+- **Never open, start, or run Docker locally.** Do not run Docker commands or commands that start Docker-managed services.
 - **Keep the diff scoped to the request.** No drive-by refactors of untouched code.
 - **Never use em dashes (—) or en dashes (–)** in code, comments, commit messages, or docs. Use a colon, comma, semicolon, or plain hyphen instead, whichever fits the sentence. Exception: a dash character that is the literal subject being parsed, matched, or documented (e.g. mojibake byte-mapping tables, a date-range separator regex) stays as-is; don't launder those into a colon.
 - Never create a NUL/nul file: `\Accounted\NUL`.

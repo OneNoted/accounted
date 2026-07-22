@@ -17,6 +17,7 @@ import {
 import { ArrowLeft, Download, FileSpreadsheet, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 function formatAmount(n: number): string {
   return n.toLocaleString('sv-SE', {
@@ -72,7 +73,7 @@ export function KassaflodesanalysClient() {
       const { data } = await res.json()
       setReport(data)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
       setReport(null)
     } finally {
       setIsLoadingReport(false)

@@ -21,6 +21,7 @@ export type RiskLevel = 'low' | 'medium' | 'high'
 export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // ── Low: pure data, no booking impact ─────────────────────────────
   create_customer: 'low',
+  update_customer: 'low',
   // Article catalog (artikelregister) is app-level master data: no journal
   // impact, no external side-effect. Unlike create_supplier it carries no
   // payment-routing fields, so there's no BEC/fraud surface; both create and
@@ -66,6 +67,10 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (silently rerouting payment), so always require explicit human approval
   // rather than auto-commit.
   create_supplier: 'medium',
+  // Company payment settings control where customers send money on future
+  // invoices. Treat changes like supplier payment-routing data: reversible,
+  // but never eligible for silent low-risk auto-commit.
+  update_company_settings: 'medium',
   // Pinning a doc to a tx is reversible while pre-categorization, but the link
   // becomes part of the verifikation underlag (BFL 5 kap 6 §) once categorize
   // propagates it. A wrong attachment requires a rättelse, so require human

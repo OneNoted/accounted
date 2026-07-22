@@ -846,7 +846,13 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'journal_entry_no_doc_required', file: 'journal_entry_no_doc_required.json', pageKey: 'journal_entry_id' },
   { name: 'rot_rut_payout_requests', file: 'rot_rut_payout_requests.json', orderBy: 'created_at' },
   { name: 'rot_rut_payout_request_items', file: 'rot_rut_payout_request_items.json', via: { parent: 'rot_rut_payout_requests', fk: 'request_id' } },
+  { name: 'fiscal_period_tax_adjustments', file: 'fiscal_period_tax_adjustments.json', orderBy: 'created_at' },
+  { name: 'tax_assessment_notices', file: 'tax_assessment_notices.json', orderBy: 'created_at' },
   { name: 'arsredovisning_narratives', file: 'arsredovisning_narratives.json' },
+  { name: 'annual_report_profiles', file: 'annual_report_profiles.json', orderBy: 'created_at' },
+  { name: 'annual_report_versions', file: 'annual_report_versions.json', orderBy: 'created_at' },
+  { name: 'annual_report_validation_runs', file: 'annual_report_validation_runs.json', orderBy: 'created_at' },
+  { name: 'arsredovisning_signature_requests', file: 'arsredovisning_signature_requests.json', orderBy: 'created_at' },
   { name: 'arsredovisning_submissions', file: 'arsredovisning_submissions.json' },
   // Settings
   { name: 'company_settings', file: 'company_settings.json' },
@@ -877,7 +883,6 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   agent_memory: 'AI assistant state, not räkenskapsinformation',
   agent_profiles: 'AI assistant state, not räkenskapsinformation',
   api_keys: 'secrets',
-  arsredovisning_signature_requests: 'signing workflow state',
   bank_connections: 'PSD2 connection state and tokens, not portable',
   bolagsverket_avtal_acceptances: 'service agreement acceptance state',
   bolagsverket_subscriptions: 'integration subscription state',
@@ -1131,9 +1136,14 @@ async function fetchAllAuditEntries(
   const pageSize = 500
 
   while (true) {
-    const result = await getAuditLog(supabase, companyId, { ...filters, page, pageSize })
+    const result = await getAuditLog(supabase, companyId, {
+      ...filters,
+      page,
+      pageSize,
+      includeCount: false,
+    })
     all.push(...result.data)
-    if (all.length >= result.count || result.data.length < pageSize) {
+    if (result.data.length < pageSize) {
       break
     }
     page++
@@ -1189,10 +1199,17 @@ async function buildSystemDoc(
       rls_aktiv: true,
     },
     arkivering: {
-      lagringstid_ar: 7,
+      lagringsregel: 'Till och med utgången av det sjunde kalenderåret efter det kalenderår då räkenskapsåret avslutades',
+      gallring_tidigare_an: '1 januari det åttonde efterföljande kalenderåret',
       format: 'WORM (Write Once, Read Many)',
       integritetskontroll: 'SHA-256 hashning vid uppladdning, regelbunden verifiering',
       lagringsplats: 'Supabase Storage (krypterad)',
+    },
+    arsredovisning: {
+      versionering: 'Låsta versioner är oföränderliga och SHA-256-hashade',
+      kontrollunderlag: 'Regelverksprofil, upplysningsbekräftelser och valideringsresultat sparas med versionen',
+      underskrifter: 'Undertecknarlista, metod, datum och bevisreferens binds till exakt version',
+      inlamning: 'Exakt skickad iXBRL-fil och Bolagsverkets kvittens arkiveras före och efter överföring',
     },
     integrationer: {
       bank: 'Enable Banking (PSD2)',

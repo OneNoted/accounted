@@ -11,6 +11,7 @@ import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 type Environment = 'test' | 'prod'
 
@@ -227,7 +228,7 @@ function SkatteverketPersonalConnectionCard() {
     } catch (err) {
       toast({
         title: t('toast_disconnect_failed'),
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {

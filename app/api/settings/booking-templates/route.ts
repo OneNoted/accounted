@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // The GET scope below builds a PostgREST .or() filter by string interpolation.
 // Guard every interpolated id against a strict UUID shape so a tainted value
@@ -87,7 +88,7 @@ export const GET = withRouteContext(
     ])
 
     if (templatesRes.error) {
-      return NextResponse.json({ error: templatesRes.error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(templatesRes.error) }, { status: 500 })
     }
     // usage lookup failing is non-fatal: we just fall back to default ordering
     const usageByTemplate = new Map<string, string>()
@@ -155,7 +156,7 @@ export const POST = withRouteContext(
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data }, { status: 201 })
   },
@@ -186,7 +187,7 @@ export const DELETE = withRouteContext(
       .update({ is_active: false })
       .eq('id', id)
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
 
     return NextResponse.json({ data: { success: true } })
   },

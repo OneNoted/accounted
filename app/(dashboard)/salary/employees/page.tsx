@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -13,8 +14,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, ArrowLeft, UserCircle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
-import NewEmployeeDialog from '@/components/salary/NewEmployeeDialog'
+import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { Employee } from '@/types'
+
+const NewEmployeeDialog = dynamic(
+  () => import('@/components/salary/NewEmployeeDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 
 const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
   employee: 'employment_employee',
@@ -142,16 +148,18 @@ export default function EmployeesPage() {
         </Card>
       )}
 
-      <NewEmployeeDialog
-        open={showNewEmployee}
-        onOpenChange={(open) => {
-          if (!open) closeNewEmployee()
-        }}
-        onCreated={() => {
-          closeNewEmployee()
-          setRefreshKey((k) => k + 1)
-        }}
-      />
+      {showNewEmployee && (
+        <NewEmployeeDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) closeNewEmployee()
+          }}
+          onCreated={() => {
+            closeNewEmployee()
+            setRefreshKey((k) => k + 1)
+          }}
+        />
+      )}
     </div>
   )
 }

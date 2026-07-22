@@ -3,6 +3,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'supplier.get',
@@ -101,7 +102,7 @@ export const PUT = withRouteContext(
       opLog.error('supplier update failed', error)
       return errorResponseFromCode('SUPPLIER_UPDATE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 
@@ -140,7 +141,7 @@ export const DELETE = withRouteContext(
       opLog.error('supplier delete failed', error)
       return errorResponseFromCode('SUPPLIER_DELETE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: getUserErrorMessage(error) },
       })
     }
 

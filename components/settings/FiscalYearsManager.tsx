@@ -16,6 +16,7 @@ import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /** Status of a fiscal period, in legal precedence: closed > locked > open. */
 function periodStatus(p: FiscalPeriod): 'closed' | 'locked' | 'open' {
@@ -81,7 +82,7 @@ export function FiscalYearsManager() {
     } catch (err) {
       toast({
         title: t('fy_action_error'),
-        description: err instanceof Error ? err.message : undefined,
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
     } finally {

@@ -9,6 +9,7 @@ import {
 } from '@/lib/tax/deadline-generator'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
   'settings.get',
@@ -20,7 +21,7 @@ export const GET = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     // Fall back to companies.entity_type if company_settings.entity_type is null
@@ -99,7 +100,7 @@ export const PUT = withRouteContext(
       // Fail closed: a failed check must not let the basis change through
       // and orphan open vacation-ledger rows.
       if (openRowsError) {
-        return NextResponse.json({ error: openRowsError.message }, { status: 500 })
+        return NextResponse.json({ error: getUserErrorMessage(openRowsError) }, { status: 500 })
       }
       if ((openRows ?? 0) > 0) {
         return NextResponse.json(
@@ -182,7 +183,7 @@ export const PUT = withRouteContext(
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Inställningarna hittades inte.' }, { status: 404 })
       }
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     // Regenerate when the save touches tax-relevant fields: the statutory

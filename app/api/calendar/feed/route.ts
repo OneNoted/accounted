@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // Only the two content toggles are user-settable. Strict: the previous
 // implementation passed the raw JSON body into .update(), which would have
@@ -41,7 +42,7 @@ export const GET = withRouteContext('calendar_feed.get', async (_request, ctx) =
 
   if (error && error.code !== 'PGRST116') {
     // PGRST116 = no rows returned, which is fine
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
   if (feed) {
@@ -90,7 +91,7 @@ export const POST = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({
@@ -123,7 +124,7 @@ export const PUT = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({
@@ -155,7 +156,7 @@ export const DELETE = withRouteContext(
       .single()
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
     return NextResponse.json({

@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/categories'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BatchNoDocSchema = z.object({
   journal_entry_ids: z.array(z.string().uuid()).min(1).max(500),
@@ -40,7 +41,7 @@ export const POST = withRouteContext(
         .in('id', chunk)
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 400 })
+        return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 400 })
       }
       ownedIds.push(...(data ?? []).map((r) => r.id))
     }

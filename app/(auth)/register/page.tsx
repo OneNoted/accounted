@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, Suspense } from 'react'
+import dynamic from 'next/dynamic'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -13,20 +14,21 @@ import { Loader2, Mail, ArrowLeft, ExternalLink } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
-import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
+import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 
 const branding = getBranding()
 
+const BankIdAuth = dynamic(
+  () => import('@/components/auth/BankIdAuth').then((module) => module.BankIdAuth),
+  { ssr: false },
+)
+
 export default function RegisterPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    }>
+    <Suspense fallback={<AuthPageSkeleton />}>
       <RegisterPageContent />
     </Suspense>
   )

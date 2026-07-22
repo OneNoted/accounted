@@ -3,6 +3,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import type { ProposedDisposition } from '../types'
 
 /** Bolagsskatt rate. 20.6 % since 2021 (gäller räkenskapsår påbörjat efter 31 dec 2020). */
@@ -45,7 +46,7 @@ export interface BolagsskattComputation {
   schablonintaktPeriodiseringsfond: number
   otherAdjustments: number
   taxableResult: number
-  /** Taxable result before tax: equals max(taxableResult, 0). */
+  /** Taxable result before tax, floored to a whole 10 SEK and clamped at zero. */
   taxableResultClamped: number
   taxRate: number
   taxAmount: number
@@ -59,6 +60,9 @@ export interface PostedDispositionsEffect {
    *  detect an already-posted SLP so it is neither re-proposed nor
    *  double-counted on a resumed bokslut run. Negative when SLP is posted. */
   slpPortion: number
+  /** Tax provision booked by the year-end flow. This is excluded from
+   *  `total`, but lets callers distinguish it from manually posted 8910. */
+  taxProvisionPortion: number
 }
 
 /**
@@ -148,17 +152,38 @@ export async function sumPostedYearEndDispositions(
   }
   let effect = 0
   let slp = 0
+  let taxProvision = 0
   for (const row of data) {
     const acc = row.account_number
-    if (!(acc.startsWith('88') || acc === '7533')) continue
     const delta = (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
-    effect += delta
-    if (acc === '7533') slp += delta
+    if (acc.startsWith('88') || acc === '7533') {
+      effect += delta
+      if (acc === '7533') slp += delta
+    }
+    if (acc === '8910') taxProvision += -delta
   }
   return {
     total: roundOre(effect),
     slpPortion: roundOre(slp),
+    taxProvisionPortion: roundOre(taxProvision),
   }
+}
+
+/**
+ * Return the effective tax expense on 8910 for an open fiscal period.
+ * Trial balance already nets storno and correction entries, which makes this
+ * suitable as the idempotency check before a new tax voucher is posted.
+ */
+export async function getBookedBolagsskatt(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<number> {
+  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const amount = trialBalance.rows
+    .filter((row) => row.account_number === '8910')
+    .reduce((sum, row) => sum + row.closing_debit - row.closing_credit, 0)
+  return roundOre(Math.max(0, amount))
 }
 
 /**
@@ -166,8 +191,8 @@ export async function sumPostedYearEndDispositions(
  *
  * Reads income-statement result before tax and adds the manual adjustments
  * the user provided (non-deductible expenses, schablonintäkt, etc.). The
- * resulting taxable result is rounded down to nearest whole krona before
- * applying the tax rate, per SFL 22 kap 1 §.
+ * resulting taxable result is rounded down to the nearest whole 10 SEK before
+ * applying the tax rate, per IL 1 kap 7 §.
  *
  * If the period shows a loss, no tax is proposed: Swedish AB accumulate
  * inrullat underskott for future offset, but that bookkeeping is handled
@@ -199,9 +224,9 @@ export async function calculateBolagsskatt(
     schablonintaktPeriodiseringsfond +
     otherAdjustments
 
-  // Truncate to whole krona before applying rate. Negative taxable result =
-  // no tax provision (handled as inrullat underskott in INK2, not here).
-  const taxableResultClamped = Math.max(0, Math.floor(taxableResult))
+  // Round down to a whole 10 SEK before applying the rate. Negative taxable
+  // result means no tax provision (handled as inrullat underskott in INK2).
+  const taxableResultClamped = Math.floor(Math.max(0, taxableResult) / 10) * 10
   const taxAmount = Math.round(taxableResultClamped * BOLAGSSKATT_RATE)
 
   const computation: BolagsskattComputation = {

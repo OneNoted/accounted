@@ -91,6 +91,7 @@ export default function SupplierInvoiceDetailPage() {
   const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [paymentAccount, setPaymentAccount] = useState('1930')
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const [areAccountsLoading, setAreAccountsLoading] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [duplicateCandidates, setDuplicateCandidates] = useState<
     Array<{
@@ -245,31 +246,27 @@ export default function SupplierInvoiceDetailPage() {
     }
   }, [isPayDialogOpen, invoice, payAmount, paymentAccount])
 
-  // Load chart of accounts and remember the last picked payment account so the
-  // dialog defaults to the user's previous choice instead of re-defaulting to
-  // 1930 every time.
+  // The chart of accounts is only needed by the payment dialog. Defer the
+  // request until the user opens it instead of blocking the detail page.
   useEffect(() => {
+    if (!isPayDialogOpen || accounts.length > 0) return
+
     let cancelled = false
     ;(async () => {
-      const [accountsRes, settingsRes] = await Promise.all([
-        fetch('/api/bookkeeping/accounts'),
-        fetch('/api/settings'),
-      ])
-      if (cancelled) return
-      if (accountsRes.ok) {
-        const { data } = await accountsRes.json()
+      setAreAccountsLoading(true)
+      try {
+        const response = await fetch('/api/bookkeeping/accounts')
+        if (cancelled || !response.ok) return
+        const { data } = await response.json()
         if (Array.isArray(data)) setAccounts(data as BASAccount[])
-      }
-      if (settingsRes.ok) {
-        const { data } = await settingsRes.json()
-        const last = (data as { last_supplier_payment_account?: string | null } | null)?.last_supplier_payment_account
-        if (last) setPaymentAccount(last)
+      } finally {
+        if (!cancelled) setAreAccountsLoading(false)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [accounts.length, isPayDialogOpen])
 
   async function handleApprove() {
     setIsProcessing(true)
@@ -898,6 +895,9 @@ export default function SupplierInvoiceDetailPage() {
         open={isPayDialogOpen}
         onOpenChange={(open) => {
           setIsPayDialogOpen(open)
+          if (open && companySettings?.last_supplier_payment_account) {
+            setPaymentAccount(companySettings.last_supplier_payment_account)
+          }
           if (!open) setPayTab('new')
         }}
       >
@@ -938,11 +938,15 @@ export default function SupplierInvoiceDetailPage() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="payment-account">Betalkonto</Label>
-                  <AccountCombobox
-                    value={paymentAccount}
-                    accounts={accounts}
-                    onChange={setPaymentAccount}
-                  />
+                  {areAccountsLoading ? (
+                    <Skeleton className="h-10 w-full" />
+                  ) : (
+                    <AccountCombobox
+                      value={paymentAccount}
+                      accounts={accounts}
+                      onChange={setPaymentAccount}
+                    />
+                  )}
                   <p className="text-xs text-muted-foreground">
                     T.ex. 1930 bankkonto, 1940 övrigt bankkonto, 2018 egna uttag (EF), 2893 ägarlån (AB).
                   </p>

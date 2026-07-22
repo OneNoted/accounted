@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { DocumentUploadSource } from '@/types'
 
@@ -78,7 +79,7 @@ export const POST = withRouteContext(
       if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
         return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
           requestId,
-          details: { reason: message },
+          details: { reason: getErrorMessage(err) },
         })
       }
       // Magic-byte validation rejections (validateDocumentMagicBytes) are a
@@ -88,7 +89,7 @@ export const POST = withRouteContext(
         opLog.warn('document upload rejected by content validation', { reason: message })
         return errorResponseFromCode('DOC_UPLOAD_INVALID_CONTENT', opLog, {
           requestId,
-          details: { reason: message },
+          details: { reason: getErrorMessage(err) },
         })
       }
       // Full error is logged above; the raw message can leak storage-layer

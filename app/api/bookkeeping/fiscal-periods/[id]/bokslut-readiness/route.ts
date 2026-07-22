@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildBokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 
@@ -27,7 +28,7 @@ export const GET = withRouteContext(
       }
       return errorResponseFromCode('YEAR_END_PREVIEW_FAILED', opLog, {
         requestId,
-        details: { reason: message },
+        details: { reason: getErrorMessage(err) },
       })
     }
   },

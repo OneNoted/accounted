@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateBalansrapport } from '@/lib/reports/balansrapport'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseReportDateRange } from '@/lib/reports/date-range'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('report.balansrapport', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -32,7 +33,7 @@ export const GET = withRouteContext('report.balansrapport', async (request, { su
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate balansrapport' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to generate balansrapport' },
       { status: 500 }
     )
   }

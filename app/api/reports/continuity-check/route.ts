@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
  * GET: Validate IB/UB continuity for a fiscal period.
@@ -19,7 +20,7 @@ export const GET = withRouteContext('report.continuity_check', async (request, {
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to validate continuity' },
+      { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to validate continuity' },
       { status: 400 }
     )
   }
