@@ -30,6 +30,41 @@ let uploadCounter = 0
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const ACCEPTED_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
 const ACCEPTED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.webp'
+const FILE_NAME_TAIL_LENGTH = 16
+
+function TruncatedFileName({ fileName }: { fileName: string }) {
+  const characters = Array.from(fileName)
+
+  if (characters.length <= FILE_NAME_TAIL_LENGTH * 2) {
+    return (
+      <span className="min-w-0 flex-1 truncate" title={fileName}>
+        {fileName}
+      </span>
+    )
+  }
+
+  const splitAt = characters.length - FILE_NAME_TAIL_LENGTH
+  const start = characters.slice(0, splitAt).join('')
+  const end = characters.slice(splitAt).join('')
+
+  return (
+    <span
+      className="flex min-w-0 flex-1"
+      title={fileName}
+    >
+      <span className="sr-only">{fileName}</span>
+      <span aria-hidden="true" className="min-w-0 flex-1 truncate">
+        {start}
+      </span>
+      <span
+        aria-hidden="true"
+        className="max-w-1/2 shrink overflow-hidden whitespace-nowrap text-right"
+      >
+        {end}
+      </span>
+    </span>
+  )
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -208,7 +243,7 @@ export default function DocumentUploadZone({
   const isUploading = files.some((f) => f.status === 'uploading')
 
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2">
       {/* Drop zone */}
       <div
         className={`
@@ -253,14 +288,14 @@ export default function DocumentUploadZone({
           {files.map((file, index) => (
             <div
               key={file.uploadKey}
-              className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
+              className="flex min-w-0 items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
             >
               {isImageType(file.file.type) ? (
                 <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               ) : (
                 <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
-              <span className="truncate flex-1">{file.fileName}</span>
+              <TruncatedFileName fileName={file.fileName} />
               <span className="text-xs text-muted-foreground shrink-0">
                 {formatFileSize(file.fileSize)}
               </span>
