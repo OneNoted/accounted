@@ -87,6 +87,7 @@ function makeInput(supabase: SupabaseClient, emailService: EmailService) {
     deliveryId: 'delivery-1',
     to: 'customer@example.com',
     cc: ['accounting@example.com'],
+    bcc: ['archive@example.com'],
     replyTo: 'sender@example.com',
     fromName: 'Example AB',
     subject: 'Faktura F-1001',
@@ -97,7 +98,7 @@ function makeInput(supabase: SupabaseClient, emailService: EmailService) {
   }
 }
 
-function makeEmailService(sendEmail: ReturnType<typeof vi.fn>): EmailService {
+function makeEmailService(sendEmail: EmailService['sendEmail']): EmailService {
   return { isConfigured: () => true, sendEmail }
 }
 
@@ -127,6 +128,7 @@ describe('invoice delivery tracking', () => {
       status: 'pending',
       to_addresses: ['customer@example.com'],
       cc_addresses: ['accounting@example.com'],
+      bcc_addresses: ['archive@example.com'],
       subject: 'Faktura F-1001',
       body_text: 'Hej!',
       body_html: '<p>Hej!</p>',
@@ -138,6 +140,7 @@ describe('invoice delivery tracking', () => {
       subject: 'Faktura F-1001',
       text: 'Hej!',
       html: '<p>Hej!</p>',
+      bcc: ['archive@example.com'],
       attachments: [expect.objectContaining({
         filename: 'faktura-f-1001.pdf',
         content: Buffer.from('exact-pdf'),

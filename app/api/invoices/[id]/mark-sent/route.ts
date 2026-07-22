@@ -359,8 +359,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         settings as CompanySettings,
+        renderableInvoice.currency,
       )
-      const swishQrDataUrl = await buildSwishQrDataUrl(settings as CompanySettings, renderableInvoice)
+      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
       const pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,

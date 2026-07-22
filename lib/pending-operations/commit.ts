@@ -73,6 +73,10 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import {
+  hasUsableInvoicePaymentAccount,
+  resolveInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -1503,6 +1507,22 @@ async function commitSendInvoice(
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
+  const invoiceCurrency = (invoice as Invoice).currency
+  if (
+    invoiceCurrency !== 'SEK'
+    && !hasUsableInvoicePaymentAccount(
+      resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
+      invoiceCurrency,
+    )
+  ) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
+        ?? 'Betalningskonto saknas för fakturans valuta.',
+      status: 400,
+    }
+  }
+
   const items = (invoice.items as InvoiceItem[]).sort(
     (a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order
   )
@@ -1523,7 +1543,10 @@ async function commitSendInvoice(
   const isFreshAllocation = !invoice.invoice_number
   if (isFreshAllocation) {
     try {
-      const preflight = await prepareInvoicePdfRender(company as CompanySettings)
+      const preflight = await prepareInvoicePdfRender(
+        company as CompanySettings,
+        (invoice as Invoice).currency,
+      )
       await renderToBuffer(
         InvoicePDF({
           invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
@@ -1578,8 +1601,9 @@ async function commitSendInvoice(
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
+    renderableInvoice.currency,
   )
-  const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
+  const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,

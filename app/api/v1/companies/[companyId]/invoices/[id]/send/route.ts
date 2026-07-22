@@ -64,12 +64,29 @@ import {
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
+import {
+  MAX_INVOICE_EMAIL_RECIPIENTS,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
+import {
+  hasUsableInvoicePaymentAccount,
+  resolveInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+
+const InvoiceSendBody = z.object({
+  additional_cc: z.array(z.string().trim().email().max(254))
+    .max(MAX_INVOICE_EMAIL_RECIPIENTS)
+    .optional(),
+  additional_bcc: z.array(z.string().trim().email().max(254))
+    .max(MAX_INVOICE_EMAIL_RECIPIENTS)
+    .optional(),
+})
 
 const InvoiceSendResponse = z.object({
   id: z.string().uuid(),
@@ -79,6 +96,8 @@ const InvoiceSendResponse = z.object({
   message_id: z.string().nullable(),
   sent_to: z.string(),
   cc: z.string().nullable(),
+  cc_addresses: z.array(z.string()),
+  bcc_addresses: z.array(z.string()),
   journal_entry_id: z.string().uuid().nullable(),
   warnings: z
     .array(z.object({ code: z.string(), message: z.string() }))
@@ -105,6 +124,10 @@ registerEndpoint({
     'After the email succeeds, journal-entry/archive/event failures become warnings on the response; the invoice IS marked sent regardless.',
   ],
   example: {
+    request: {
+      additional_cc: ['case-owner@company.test'],
+      additional_bcc: ['invoice-archive@company.test'],
+    },
     response: {
       data: {
         id: '0e9c…',
@@ -124,13 +147,27 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
+  request: { body: InvoiceSendBody },
   response: { success: dataEnvelope(InvoiceSendResponse) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'invoices.send',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
+
+    let rawBody: unknown = {}
+    const bodyText = await request.text()
+    if (bodyText) {
+      try {
+        rawBody = JSON.parse(bodyText)
+      } catch {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'body', message: 'Body is not valid JSON.' },
+        })
+      }
+    }
 
     const idParse = z.string().uuid().safeParse(id)
     if (!idParse.success) {
@@ -211,6 +248,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const bodyResult = InvoiceSendBody.safeParse(rawBody)
+    if (!bodyResult.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: bodyResult.error.issues.map((issue) => ({
+            field: issue.path.join('.'),
+            message: issue.message,
+          })),
+        },
+      })
+    }
+
     // Reject delivery notes: they have a different (D-series) lifecycle.
     if (typed.document_type === 'delivery_note') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -278,6 +328,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    if (
+      typed.currency !== 'SEK'
+      && !hasUsableInvoicePaymentAccount(
+        resolveInvoicePaymentAccount(settings, typed.currency),
+        typed.currency,
+      )
+    ) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: typed.currency },
+      })
+    }
+    const recipients = resolveInvoiceEmailRecipients({
+      to: customer.email,
+      configuredCc: settings.invoice_email_cc_addresses,
+      configuredBcc: settings.invoice_email_bcc_addresses,
+      legacyCc: settings.email,
+      additionalCc: bodyResult.data.additional_cc,
+      additionalBcc: bodyResult.data.additional_bcc,
+    })
 
     const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
     // Credit notes are rejected above, so originalInvoiceNumber is never
@@ -290,7 +360,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(settings)
+        const preflight = await prepareInvoicePdfRender(settings, typed.currency)
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
@@ -321,7 +391,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           status: 'sent' as const,
           invoice_number: typed.invoice_number ?? '(allocated atomically on commit)',
           would_send_to: customer.email,
-          would_cc: settings.email || null,
+          would_cc: recipients.cc,
+          would_bcc: recipients.bcc,
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             (settings.accounting_method ?? 'accrual') === 'accrual',
@@ -419,8 +490,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let pdfBuffer: Buffer
     try {
-      const { branding, company: renderCompany } = await prepareInvoicePdfRender(settings)
-      const swishQrDataUrl = await buildSwishQrDataUrl(settings, renderableInvoice)
+      const { branding, company: renderCompany } = await prepareInvoicePdfRender(
+        settings,
+        renderableInvoice.currency,
+      )
+      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
       const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
@@ -457,7 +531,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       documentType: typed.document_type,
     })
 
-    const ccAddress = settings.email ?? null
     const emailData = { invoice: renderableInvoice, customer, company: settings }
     const subject = generateInvoiceEmailSubject(emailData)
     const html = generateInvoiceEmailHtml(emailData)
@@ -471,8 +544,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         userId: ctx.userId,
         invoiceId,
         deliveryId,
-        to: customer.email,
-        cc: ccAddress ?? undefined,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
         subject,
         html,
         text,
@@ -671,7 +745,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         total: typed.total,
         message_id: result.messageId ?? null,
         sent_to: customer.email,
-        cc: ccAddress,
+        cc: recipients.cc[0] ?? null,
+        cc_addresses: recipients.cc,
+        bcc_addresses: recipients.bcc,
         journal_entry_id: journalEntryId,
         ...(warnings.length > 0 ? { warnings } : {}),
       },

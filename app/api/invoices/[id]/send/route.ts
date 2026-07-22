@@ -27,7 +27,13 @@ import {
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
+import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
+import {
+  hasUsableInvoicePaymentAccount,
+  resolveInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -118,7 +124,18 @@ export const POST = withRouteContext(
       })
     }
 
-    const linesResult = parseCustomIssuanceLines(rawBody)
+    const bodyResult = SendInvoiceSchema.safeParse(rawBody ?? {})
+    if (!bodyResult.success) {
+      opLog.warn('send validation failed')
+      return NextResponse.json(
+        { error: 'Ogiltig förfrågan', details: bodyResult.error.flatten() },
+        { status: 400 },
+      )
+    }
+
+    const linesResult = parseCustomIssuanceLines(
+      bodyResult.data.lines ? { lines: bodyResult.data.lines } : undefined,
+    )
     if (!linesResult.ok) {
       if (linesResult.error === 'invalid_body') {
         opLog.warn('send validation failed')
@@ -164,6 +181,20 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
     }
 
+    const invoiceCurrency = (invoice as Invoice).currency
+    if (
+      invoiceCurrency !== 'SEK'
+      && !hasUsableInvoicePaymentAccount(
+        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
+        invoiceCurrency,
+      )
+    ) {
+      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
+        requestId,
+        details: { currency: invoiceCurrency },
+      })
+    }
+
     const items = (invoice.items as InvoiceItem[]).sort((a, b) => a.sort_order - b.sort_order)
 
     let originalInvoice: CreditNoteOriginalInvoice | undefined
@@ -190,7 +221,10 @@ export const POST = withRouteContext(
     const isFreshAllocation = !invoice.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(company as CompanySettings)
+        const preflight = await prepareInvoicePdfRender(
+          company as CompanySettings,
+          (invoice as Invoice).currency,
+        )
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
@@ -253,8 +287,9 @@ export const POST = withRouteContext(
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
+      renderableInvoice.currency,
     )
-    const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
+    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
@@ -285,7 +320,14 @@ export const POST = withRouteContext(
       isCreditNote,
     })
 
-    const ccAddress = company.email || user.email
+    const recipients = resolveInvoiceEmailRecipients({
+      to: customer.email,
+      configuredCc: company.invoice_email_cc_addresses,
+      configuredBcc: company.invoice_email_bcc_addresses,
+      legacyCc: company.email || user.email,
+      additionalCc: bodyResult.data.additional_cc,
+      additionalBcc: bodyResult.data.additional_bcc,
+    })
     const partialFailures: Array<{ step: string; reason: string }> = []
     if (paymentLinkFailure) {
       // The failure string is a raw provider/DB message: log it, but the
@@ -377,8 +419,9 @@ export const POST = withRouteContext(
         userId: user.id,
         invoiceId: id,
         deliveryId,
-        to: customer.email,
-        cc: ccAddress,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
         subject,
         html,
         text,
@@ -577,7 +620,7 @@ export const POST = withRouteContext(
 
     return NextResponse.json({
       success: true,
-      message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email} (kopia till ${ccAddress})`,
+      message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
       messageId: result.messageId,
       deliveryId: result.deliveryId,
       ...(partialFailures.length > 0

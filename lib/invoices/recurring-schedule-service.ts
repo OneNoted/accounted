@@ -40,6 +40,11 @@ import {
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '@/lib/invoices/invoice-deliveries'
+import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
+import {
+  hasUsableInvoicePaymentAccount,
+  resolveInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { createLogger } from '@/lib/logger'
 import type {
   Invoice,
@@ -456,6 +461,19 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
+  if (
+    invoice.currency !== 'SEK'
+    && !hasUsableInvoicePaymentAccount(
+      resolveInvoicePaymentAccount(company, invoice.currency),
+      invoice.currency,
+    )
+  ) {
+    log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      currency: invoice.currency,
+    })
+    return false
+  }
 
   let deliveryId: string
   try {
@@ -498,8 +516,11 @@ async function sendInvoiceFromSchedule(
   // Render PDF with status overridden to 'sent' so the customer doesn't
   // receive a "UTKAST" stamp.
   const renderableInvoice = { ...invoice, status: 'sent' as const }
-  const { branding, company: renderCompany } = await prepareInvoicePdfRender(company)
-  const swishQrDataUrl = await buildSwishQrDataUrl(company, renderableInvoice)
+  const { branding, company: renderCompany } = await prepareInvoicePdfRender(
+    company,
+    renderableInvoice.currency,
+  )
+  const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
@@ -522,7 +543,12 @@ async function sendInvoiceFromSchedule(
     invoiceDate: invoice.invoice_date,
     documentType: invoice.document_type,
   })
-  const ccAddress = company.email || undefined
+  const recipients = resolveInvoiceEmailRecipients({
+    to: invoice.customer.email,
+    configuredCc: company.invoice_email_cc_addresses,
+    configuredBcc: company.invoice_email_bcc_addresses,
+    legacyCc: company.email,
+  })
 
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)
@@ -536,8 +562,9 @@ async function sendInvoiceFromSchedule(
       userId,
       invoiceId: invoice.id,
       deliveryId,
-      to: invoice.customer.email,
-      cc: ccAddress,
+      to: recipients.to,
+      cc: recipients.cc,
+      bcc: recipients.bcc,
       subject,
       html,
       text,

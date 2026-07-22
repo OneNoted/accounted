@@ -890,6 +890,14 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Företagsinställningar saknas.',
     message_en: 'Company settings are missing.',
   },
+  INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Fakturering innan du skickar.',
+    message_en: 'The invoice has no payment account for its currency. Add the account under Invoicing before sending.',
+    remediation: {
+      description: 'Configure an invoice payment account with an IBAN for the invoice currency.',
+    },
+  },
   INVOICE_SEND_NUMBER_ASSIGN_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte tilldela fakturanummer.',

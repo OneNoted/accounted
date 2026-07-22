@@ -153,8 +153,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     try {
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         company as CompanySettings,
+        typed.currency,
       )
-      const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, typed as Invoice)
+      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, typed as Invoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: typed as Invoice,

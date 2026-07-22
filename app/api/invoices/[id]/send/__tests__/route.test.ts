@@ -58,6 +58,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
   to: string | string[]
   cc?: string | string[]
+  bcc?: string | string[]
   subject: string
   html: string
   text: string
@@ -69,6 +70,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   ...(await input.emailService.sendEmail({
     to: input.to,
     cc: input.cc,
+    bcc: input.bcc,
     subject: input.subject,
     html: input.html,
     text: input.text,
@@ -328,11 +330,37 @@ describe('POST /api/invoices/[id]/send', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_COMPANY_SETTINGS_MISSING')
   })
 
+  it('does not allocate a number or send a foreign invoice without a matching payment account', async () => {
+    const eurInvoice = makeInvoice({
+      ...invoice,
+      invoice_number: null,
+      currency: 'EUR',
+    })
+    enqueue({ data: eurInvoice, error: null })
+    enqueue({ data: company, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('sends invoice email, updates status, creates journal entry for accrual', async () => {
     // Fetch invoice
     enqueue({ data: invoice, error: null })
     // Fetch company settings
-    enqueue({ data: company, error: null })
+    enqueue({
+      data: {
+        ...company,
+        invoice_email_cc_addresses: ['fixed-copy@test.se'],
+        invoice_email_bcc_addresses: ['fixed-archive@test.se'],
+      },
+      error: null,
+    })
 
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
@@ -344,7 +372,13 @@ describe('POST /api/invoices/[id]/send', () => {
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 
-    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: {
+        additional_cc: ['case-owner@test.se'],
+        additional_bcc: ['extra-archive@test.se'],
+      },
+    })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
     const { status, body } = await parseJsonResponse<{
       success: boolean
@@ -355,11 +389,18 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(body.success).toBe(true)
     expect(body.messageId).toBe('msg-1')
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: 'company-1', invoiceId: 'inv-1' }),
+      expect.objectContaining({
+        companyId: 'company-1',
+        invoiceId: 'inv-1',
+        cc: ['fixed-copy@test.se', 'case-owner@test.se'],
+        bcc: ['fixed-archive@test.se', 'extra-archive@test.se'],
+      }),
     )
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: 'kund@test.se',
+        to: ['kund@test.se'],
+        cc: ['fixed-copy@test.se', 'case-owner@test.se'],
+        bcc: ['fixed-archive@test.se', 'extra-archive@test.se'],
         subject: 'Faktura F-2024001',
       })
     )

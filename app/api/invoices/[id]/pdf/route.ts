@@ -61,8 +61,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Generate PDF
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
+      (invoice as Invoice).currency,
     )
-    const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, invoice as Invoice)
+    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({

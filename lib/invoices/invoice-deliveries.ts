@@ -21,6 +21,7 @@ export interface TrackedInvoiceEmailInput {
   deliveryId: string
   to: string | string[]
   cc?: string | string[]
+  bcc?: string | string[]
   replyTo?: string
   fromName?: string
   subject: string
@@ -94,6 +95,7 @@ export async function sendTrackedInvoiceEmail(
     deliveryId,
     to,
     cc,
+    bcc,
     replyTo,
     fromName,
     subject,
@@ -122,6 +124,7 @@ export async function sendTrackedInvoiceEmail(
       status: 'pending',
       to_addresses: addresses(to),
       cc_addresses: addresses(cc),
+      bcc_addresses: addresses(bcc),
       reply_to: replyTo || null,
       from_name: fromName || null,
       subject,
@@ -154,6 +157,7 @@ export async function sendTrackedInvoiceEmail(
   const emailOptions: SendEmailOptions = {
     to,
     cc,
+    bcc,
     subject,
     html,
     text,

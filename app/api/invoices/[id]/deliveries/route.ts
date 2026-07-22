@@ -11,6 +11,7 @@ type DeliveryListRow = Pick<
   | 'status'
   | 'to_addresses'
   | 'cc_addresses'
+  | 'bcc_addresses'
   | 'provider'
   | 'error_code'
   | 'document_attachment_id'
@@ -25,6 +26,7 @@ const DELIVERY_COLUMNS = [
   'status',
   'to_addresses',
   'cc_addresses',
+  'bcc_addresses',
   'provider',
   'error_code',
   'document_attachment_id',
@@ -86,6 +88,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       status: delivery.status,
       to_addresses: delivery.to_addresses.map(maskRecipientDomain),
       cc_addresses: delivery.cc_addresses.map(maskRecipientDomain),
+      bcc_addresses: delivery.bcc_addresses.map(maskRecipientDomain),
       provider: delivery.provider,
       error_code: delivery.error_code,
       document_attachment_id: delivery.document_attachment_id,

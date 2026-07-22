@@ -68,6 +68,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
   to: string | string[]
   cc?: string | string[]
+  bcc?: string | string[]
   subject: string
   html: string
   text: string
@@ -79,6 +80,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   ...(await input.emailService.sendEmail({
     to: input.to,
     cc: input.cc,
+    bcc: input.bcc,
     subject: input.subject,
     html: input.html,
     text: input.text,
@@ -168,13 +170,15 @@ const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const USER_ID = 'user-1'
 
-function makeRequest(url: string): Request {
+function makeRequest(url: string, body?: unknown): Request {
   return new Request(url, {
     method: 'POST',
     headers: {
       Authorization: 'Bearer test-fixture-not-a-real-key',
       'Idempotency-Key': 'idem1234-3030-4abc-8def-1234567890ab',
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
+    body: body === undefined ? undefined : JSON.stringify(body),
   })
 }
 function detailParams(companyId: string, id: string) {
@@ -209,6 +213,8 @@ const COMPANY_SETTINGS = {
   company_id: COMPANY_ID,
   company_name: 'Test AB',
   email: 'support@test-ab.example',
+  invoice_email_cc_addresses: ['fixed-copy@test-ab.example'],
+  invoice_email_bcc_addresses: ['fixed-archive@test-ab.example'],
   accounting_method: 'accrual',
   entity_type: 'enskild_firma',
 }
@@ -241,7 +247,13 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     )
 
     const res = await sendInvoice(
-      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`,
+        {
+          additional_cc: ['case-owner@test-ab.example'],
+          additional_bcc: ['extra-archive@test-ab.example'],
+        },
+      ),
       detailParams(COMPANY_ID, INVOICE_ID),
     )
 
@@ -251,6 +263,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.invoice_number).toBe('2026-0042')
     expect(body.data.message_id).toBe('re_abc123')
     expect(body.data.sent_to).toBe('billing@acme.test')
+    expect(body.data.cc_addresses).toEqual([
+      'fixed-copy@test-ab.example',
+      'case-owner@test-ab.example',
+    ])
+    expect(body.data.bcc_addresses).toEqual([
+      'fixed-archive@test-ab.example',
+      'extra-archive@test-ab.example',
+    ])
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
@@ -258,6 +278,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     )
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
+        cc: ['fixed-copy@test-ab.example', 'case-owner@test-ab.example'],
+        bcc: ['fixed-archive@test-ab.example', 'extra-archive@test-ab.example'],
         attachments: [
           expect.objectContaining({
             filename: 'Test AB x Acme AB Faktura nr 2026-0042 20260512.pdf',
@@ -388,7 +410,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview.status).toBe('sent')
     expect(body.data.preview.would_send_to).toBe('billing@acme.test')
-    expect(body.data.preview.would_cc).toBe('support@test-ab.example')
+    expect(body.data.preview.would_cc).toEqual(['fixed-copy@test-ab.example'])
+    expect(body.data.preview.would_bcc).toEqual(['fixed-archive@test-ab.example'])
     expect(body.data.preview.preflight_pdf_render).toBe('ok')
     expect(mockSendEmail).not.toHaveBeenCalled()
   })

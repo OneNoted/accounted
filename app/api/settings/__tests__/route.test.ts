@@ -97,6 +97,49 @@ describe('PUT /api/settings', () => {
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
   })
 
+  it('updates invoice email recipients and payment accounts', async () => {
+    const updates = {
+      invoice_email_cc_addresses: ['info@example.com', 'owner@example.com'],
+      invoice_email_bcc_addresses: ['archive@example.com'],
+      invoice_payment_accounts: {
+        EUR: {
+          bank_name: 'Example Bank',
+          iban: 'SE0022222222222222222222',
+          bic: 'EXAMSESS',
+        },
+      },
+    }
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { id: 's1', ...updates } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: updates,
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: typeof updates }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject(updates)
+  })
+
+  it('rejects invalid invoice recipients and foreign payment accounts without IBAN', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: {
+        invoice_email_cc_addresses: ['not-an-email'],
+        invoice_payment_accounts: { EUR: { bank_name: 'Example Bank' } },
+      },
+    }), { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
   it('regenerates deadlines when unchanged tax settings are saved', async () => {
     const settings = {
       company_id: 'company-1',

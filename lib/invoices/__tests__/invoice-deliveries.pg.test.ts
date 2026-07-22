@@ -68,11 +68,11 @@ async function insertPendingEmailDelivery(params: {
   await getPool().query(
     `INSERT INTO public.invoice_deliveries
        (id, user_id, company_id, invoice_id, channel, status,
-        to_addresses, cc_addresses, reply_to, from_name, subject,
+        to_addresses, cc_addresses, bcc_addresses, reply_to, from_name, subject,
         body_text, body_html, document_attachment_id, attachment_filename,
         attachment_content_type, attachment_sha256, retention_expires_at)
      VALUES ($1, $2, $3, $4, 'email', 'pending',
-             ARRAY['customer@example.com'], ARRAY['copy@example.com'],
+             ARRAY['customer@example.com'], ARRAY['copy@example.com'], ARRAY['archive@example.com'],
              'sender@example.com', 'Example AB', 'Faktura F-1001',
              'Exact plain text', '<p>Exact HTML</p>', $5,
              'invoice.pdf', 'application/pdf', $6, $7)`,
@@ -151,6 +151,16 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
       getPool().query(
         `UPDATE public.invoice_deliveries
             SET status = 'sent', sent_at = now(), subject = 'Changed subject'
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/invoice delivery payload is immutable/i)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET status = 'sent', sent_at = now(),
+                bcc_addresses = ARRAY['changed@example.com']
           WHERE id = $1`,
         [deliveryId],
       ),
@@ -340,7 +350,7 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     await getPool().query(`SELECT public.redact_expired_invoice_delivery_pii()`)
 
     const delivery = await getPool().query(
-      `SELECT to_addresses, body_text, subject, provider_message_id,
+      `SELECT to_addresses, cc_addresses, bcc_addresses, body_text, subject, provider_message_id,
               attachment_filename, attachment_sha256, pii_redacted_at
          FROM public.invoice_deliveries
         WHERE id = $1`,
@@ -348,6 +358,8 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     )
     expect(delivery.rows[0]).toMatchObject({
       to_addresses: [],
+      cc_addresses: [],
+      bcc_addresses: [],
       body_text: null,
       subject: null,
       provider_message_id: null,

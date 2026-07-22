@@ -5,6 +5,7 @@ import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
+import { MAX_INVOICE_EMAIL_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import type { AuditAction } from '@/types'
 
 // ============================================================
@@ -32,6 +33,19 @@ const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactl
 
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
+
+const invoiceEmailAddress = z
+  .string()
+  .trim()
+  .email('Ange en giltig e-postadress')
+  .max(254, 'E-postadressen får vara max 254 tecken')
+
+const invoiceEmailAddressList = z
+  .array(invoiceEmailAddress)
+  .max(
+    MAX_INVOICE_EMAIL_RECIPIENTS,
+    `Högst ${MAX_INVOICE_EMAIL_RECIPIENTS} mottagare är tillåtna`,
+  )
 
 /** BAS class-3 revenue account: exactly 4 digits starting with 3 (försäljning/intäkt). */
 const revenueAccount = z
@@ -726,6 +740,11 @@ export const MarkInvoiceSentSchema = z.object({
     line_description: z.string().optional(),
     dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
+})
+
+export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
+  additional_cc: invoiceEmailAddressList.optional(),
+  additional_bcc: invoiceEmailAddressList.optional(),
 })
 
 // ============================================================
@@ -1499,6 +1518,39 @@ export const InvoiceEmailTextsSchema = z.object({
   en: InvoiceEmailTextsLangSchema.optional(),
 })
 
+const InvoicePaymentAccountSchema = z.object({
+  bank_name: z.string().trim().max(100).nullable().optional(),
+  clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').nullable().optional(),
+  account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').nullable().optional(),
+  bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer').nullable().optional(),
+  plusgiro: z.string().regex(/^\d{1,7}-\d$/, 'Ogiltigt plusgironummer').nullable().optional(),
+  swish: z.string().transform(normaliseSwish).pipe(z.string().refine(isValidSwish, 'Ogiltigt Swish-nummer')).nullable().optional(),
+  iban: z.string()
+    .transform((value) => value.replace(/\s/g, '').toUpperCase())
+    .pipe(z.string().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, 'Ogiltigt IBAN'))
+    .nullable()
+    .optional(),
+  bic: z.string()
+    .transform((value) => value.replace(/\s/g, '').toUpperCase())
+    .pipe(z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT'))
+    .nullable()
+    .optional(),
+})
+
+const InvoicePaymentAccountsSchema = z
+  .partialRecord(CurrencySchema, InvoicePaymentAccountSchema)
+  .superRefine((accounts, ctx) => {
+    for (const [currency, account] of Object.entries(accounts)) {
+      if (currency !== 'SEK' && account && !account.iban) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [currency, 'iban'],
+          message: `IBAN krävs för betalningskonto i ${currency}`,
+        })
+      }
+    }
+  })
+
 export const UpdateSettingsSchema = z.object({
   entity_type: EntityTypeSchema.optional(),
   company_name: z.string().optional(),
@@ -1553,6 +1605,7 @@ export const UpdateSettingsSchema = z.object({
     .optional(),
   iban: z.string().regex(/^SE\d{22}$/, 'Ogiltigt IBAN (SE följt av 22 siffror)').nullable().optional().or(z.literal('')),
   bic: z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT (8 eller 11 tecken)').nullable().optional().or(z.literal('')),
+  invoice_payment_accounts: InvoicePaymentAccountsSchema.optional(),
   accounting_method: AccountingMethodSchema.optional(),
   // #967: register/send invoices without booking; booking is a separate step.
   defer_invoice_booking: z.boolean().optional(),
@@ -1606,6 +1659,8 @@ export const UpdateSettingsSchema = z.object({
   // all overrides. Without this entry the generic PUT would silently strip
   // the field (the schema is the de-facto column whitelist).
   invoice_email_texts: InvoiceEmailTextsSchema.nullable().optional(),
+  invoice_email_cc_addresses: invoiceEmailAddressList.nullable().optional(),
+  invoice_email_bcc_addresses: invoiceEmailAddressList.nullable().optional(),
   // Invoice branding: colors enforced as #RRGGBB at the DB level too
   // (see migration 20260526120200_invoice_branding.sql). The dedicated
   // /api/settings/invoicing/branding route is the primary path; these

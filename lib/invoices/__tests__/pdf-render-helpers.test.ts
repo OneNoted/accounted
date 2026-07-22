@@ -66,6 +66,30 @@ describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
     vi.restoreAllMocks()
   })
 
+  it('renders only the payment account matching the invoice currency', async () => {
+    const company = makeCompanySettings({
+      iban: 'SE0011111111111111111111',
+      invoice_payment_accounts: {
+        EUR: {
+          bank_name: 'EUR Bank',
+          clearing_number: null,
+          account_number: null,
+          bankgiro: null,
+          plusgiro: null,
+          swish: null,
+          iban: 'SE0022222222222222222222',
+          bic: 'EURRSESS',
+        },
+      },
+    })
+
+    const { company: resolved } = await prepareInvoicePdfRender(company, 'EUR')
+
+    expect(resolved.bank_name).toBe('EUR Bank')
+    expect(resolved.iban).toBe('SE0022222222222222222222')
+    expect(resolved.bankgiro).toBeNull()
+  })
+
   it('embeds an SVG logo as a PNG data URL so @react-pdf can draw it', async () => {
     const fetchMock = mockFetchOnce(SVG_LOGO, 'image/svg+xml')
     const company = makeCompanySettings({

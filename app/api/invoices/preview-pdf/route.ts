@@ -183,8 +183,9 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, { su
   try {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
+      previewInvoice.currency,
     )
-    const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, previewInvoice)
+    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, previewInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(previewInvoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({

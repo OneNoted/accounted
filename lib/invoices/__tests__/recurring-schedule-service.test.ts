@@ -49,6 +49,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
   to: string | string[]
   cc?: string | string[]
+  bcc?: string | string[]
   subject: string
   html: string
   text: string
@@ -60,6 +61,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   ...(await input.emailService.sendEmail({
     to: input.to,
     cc: input.cc,
+    bcc: input.bcc,
     subject: input.subject,
     html: input.html,
     text: input.text,
@@ -220,6 +222,8 @@ describe('executeRecurringSchedule auto-send', () => {
   const company = makeCompanySettings({
     company_name: 'Oppy Sverige',
     accounting_method: 'accrual',
+    invoice_email_cc_addresses: ['fixed-copy@test.se'],
+    invoice_email_bcc_addresses: ['fixed-archive@test.se'],
   })
 
   function makeSchedule() {
@@ -329,7 +333,12 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(result.autoSent).toBe(true)
     expect(result.warning).toBeNull()
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: 'company-1', invoiceId: 'inv-1' }),
+      expect.objectContaining({
+        companyId: 'company-1',
+        invoiceId: 'inv-1',
+        cc: ['fixed-copy@test.se'],
+        bcc: ['fixed-archive@test.se'],
+      }),
     )
     expect(mockApplyPaymentLink).toHaveBeenCalledTimes(1)
     expect(mockApplyPaymentLink).toHaveBeenCalledWith(

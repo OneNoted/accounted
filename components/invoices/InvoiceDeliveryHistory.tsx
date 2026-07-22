@@ -14,6 +14,7 @@ export type InvoiceDeliveryView = Pick<
   | 'channel'
   | 'to_addresses'
   | 'cc_addresses'
+  | 'bcc_addresses'
   | 'provider'
   | 'error_code'
   | 'document_attachment_id'
@@ -110,6 +111,12 @@ export function InvoiceDeliveryHistory({
                             <>
                               <dt className="text-muted-foreground">{t('delivery_cc_label')}</dt>
                               <dd className="break-words">{delivery.cc_addresses.join(', ')}</dd>
+                            </>
+                          )}
+                          {delivery.bcc_addresses.length > 0 && (
+                            <>
+                              <dt className="text-muted-foreground">{t('delivery_bcc_label')}</dt>
+                              <dd className="break-words">{delivery.bcc_addresses.join(', ')}</dd>
                             </>
                           )}
                         </dl>
