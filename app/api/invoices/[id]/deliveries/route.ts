@@ -12,9 +12,14 @@ type DeliveryListRow = Pick<
   | 'to_addresses'
   | 'cc_addresses'
   | 'bcc_addresses'
+  | 'reply_to'
+  | 'from_name'
+  | 'subject'
+  | 'body_text'
   | 'provider'
   | 'error_code'
   | 'document_attachment_id'
+  | 'attachment_filename'
   | 'sent_at'
   | 'failed_at'
   | 'created_at'
@@ -27,25 +32,24 @@ const DELIVERY_COLUMNS = [
   'to_addresses',
   'cc_addresses',
   'bcc_addresses',
+  'reply_to',
+  'from_name',
+  'subject',
+  'body_text',
   'provider',
   'error_code',
   'document_attachment_id',
+  'attachment_filename',
   'sent_at',
   'failed_at',
   'created_at',
 ].join(', ')
 
-function maskRecipientDomain(address: string): string {
-  const separator = address.lastIndexOf('@')
-  if (separator <= 0 || separator === address.length - 1) return '***'
-  return `***@${address.slice(separator + 1)}`
-}
-
 /**
  * GET /api/invoices/[id]/deliveries
  *
- * Returns minimized delivery metadata for an invoice. Exact message content,
- * provider identifiers, checksums, and full recipient addresses stay server-side.
+ * Returns delivery evidence needed on the active company's invoice page.
+ * Provider identifiers, HTML content, and checksums stay server-side.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.deliveries.list',
@@ -82,23 +86,28 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       throw error
     }
 
-    const minimized = ((deliveries || []) as unknown as DeliveryListRow[]).map((delivery) => ({
+    const visibleDeliveries = ((deliveries || []) as unknown as DeliveryListRow[]).map((delivery) => ({
       id: delivery.id,
       channel: delivery.channel,
       status: delivery.status,
-      to_addresses: delivery.to_addresses.map(maskRecipientDomain),
-      cc_addresses: delivery.cc_addresses.map(maskRecipientDomain),
-      bcc_addresses: delivery.bcc_addresses.map(maskRecipientDomain),
+      to_addresses: delivery.to_addresses,
+      cc_addresses: delivery.cc_addresses,
+      bcc_addresses: delivery.bcc_addresses,
+      reply_to: delivery.reply_to,
+      from_name: delivery.from_name,
+      subject: delivery.subject,
+      body_text: delivery.body_text,
       provider: delivery.provider,
       error_code: delivery.error_code,
       document_attachment_id: delivery.document_attachment_id,
+      attachment_filename: delivery.attachment_filename,
       sent_at: delivery.sent_at,
       failed_at: delivery.failed_at,
       created_at: delivery.created_at,
     }))
 
     return NextResponse.json(
-      { data: minimized },
+      { data: visibleDeliveries },
       { headers: { 'Cache-Control': 'private, no-store' } },
     )
   },

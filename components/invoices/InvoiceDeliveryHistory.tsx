@@ -15,9 +15,14 @@ export type InvoiceDeliveryView = Pick<
   | 'to_addresses'
   | 'cc_addresses'
   | 'bcc_addresses'
+  | 'reply_to'
+  | 'from_name'
+  | 'subject'
+  | 'body_text'
   | 'provider'
   | 'error_code'
   | 'document_attachment_id'
+  | 'attachment_filename'
   | 'sent_at'
   | 'failed_at'
   | 'created_at'
@@ -119,7 +124,34 @@ export function InvoiceDeliveryHistory({
                               <dd className="break-words">{delivery.bcc_addresses.join(', ')}</dd>
                             </>
                           )}
+                          {delivery.reply_to && (
+                            <>
+                              <dt className="text-muted-foreground">{t('delivery_reply_to_label')}</dt>
+                              <dd className="break-words">{delivery.reply_to}</dd>
+                            </>
+                          )}
+                          {delivery.from_name && (
+                            <>
+                              <dt className="text-muted-foreground">{t('delivery_from_label')}</dt>
+                              <dd className="break-words">{delivery.from_name}</dd>
+                            </>
+                          )}
+                          {delivery.subject && (
+                            <>
+                              <dt className="text-muted-foreground">{t('delivery_subject_label')}</dt>
+                              <dd className="break-words">{delivery.subject}</dd>
+                            </>
+                          )}
                         </dl>
+
+                        {delivery.body_text && (
+                          <div className="space-y-2">
+                            <p className="text-muted-foreground">{t('delivery_message_label')}</p>
+                            <p className="whitespace-pre-wrap break-words rounded-lg border border-border bg-muted/30 p-4">
+                              {delivery.body_text}
+                            </p>
+                          </div>
+                        )}
 
                         {delivery.document_attachment_id && (
                           <Button asChild variant="outline" size="sm" className="max-w-full">
@@ -130,7 +162,9 @@ export function InvoiceDeliveryHistory({
                             >
                               <ExternalLink className="mr-2 h-4 w-4" />
                               <span className="truncate">
-                                {t('delivery_open_pdf', { filename: t('delivery_pdf_fallback') })}
+                                {t('delivery_open_pdf', {
+                                  filename: delivery.attachment_filename || t('delivery_pdf_fallback'),
+                                })}
                               </span>
                             </a>
                           </Button>
