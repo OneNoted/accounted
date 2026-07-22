@@ -117,6 +117,54 @@ describe('mapTrialBalancesToK2', () => {
     )
   })
 
+  it('maps account 7833 depreciation from the statutory pre-closing balance', () => {
+    const full = [
+      row('1250', 'Computers', 50, 0),
+      row('1259', 'Accumulated depreciation', 0, 10),
+      row('1930', 'Bank', 100, 0),
+      row('2081', 'Share capital', 0, 50),
+      row('2099', 'Current-year result', 0, 90),
+    ]
+    const preClosing = [
+      ...full.filter((balance) => balance.account_number !== '2099'),
+      row('3010', 'Revenue', 0, 100),
+      row('7833', 'Depreciation of computers', 10, 0),
+    ]
+
+    const res = mapTrialBalancesToK2({ full, preClosing }, null)
+
+    expect(
+      res.rr['AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar']
+        .current,
+    ).toBe(10)
+    expect(res.totals.aretsResultat.current).toBe(90)
+    expect(res.br['AretsResultatEgetKapital'].current).toBe(90)
+    expect(res.totals.tillgangar.current).toBe(res.totals.egetKapitalSkulder.current)
+  })
+
+  it('presents a debit on account 2650 as a receivable for each comparison year', () => {
+    const current = [
+      row('1930', 'Bank', 75, 0),
+      row('2081', 'Share capital', 0, 100),
+      row('2650', 'VAT settlement account', 25, 0),
+    ]
+    const previous = [
+      row('1930', 'Bank', 100, 0),
+      row('2081', 'Share capital', 0, 75),
+      row('2650', 'VAT settlement account', 0, 25),
+    ]
+
+    const res = mapTrialBalancesToK2(
+      { full: current, preClosing: current },
+      { full: previous, preClosing: previous },
+    )
+
+    expect(res.br['OvrigaFordringarKortfristiga']).toEqual({ current: 25, previous: 0 })
+    expect(res.br['OvrigaKortfristigaSkulder']).toEqual({ current: 0, previous: 25 })
+    expect(res.totals.tillgangar).toEqual({ current: 100, previous: 100 })
+    expect(res.totals.egetKapitalSkulder).toEqual({ current: 100, previous: 100 })
+  })
+
   it('nets paid preliminary tax against the current tax liability', () => {
     const rows = [
       row('1930', 'Bank', 100, 0),
