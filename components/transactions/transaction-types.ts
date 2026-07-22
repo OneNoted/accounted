@@ -9,6 +9,7 @@ export interface TransactionWithInvoice extends Transaction {
 // Page view modes
 export type ViewMode = 'inbox' | 'history'
 export type HistoryFilter = 'all' | 'business' | 'private'
+export type SourceFilter = 'all' | 'bank' | 'skatteverket'
 
 // Handler types
 // Returns the journal_entry_id on success, null on failure
