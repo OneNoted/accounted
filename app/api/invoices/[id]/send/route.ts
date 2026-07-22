@@ -13,7 +13,7 @@ import {
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
-import { uploadDocument } from '@/lib/core/documents/document-service'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -21,6 +21,10 @@ import {
   type CreditNoteOriginalInvoice,
 } from '@/lib/invoices/issue-credit-note'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
+import {
+  sendTrackedInvoiceEmail,
+  InvoiceDeliverySnapshotError,
+} from '@/lib/invoices/invoice-deliveries'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -343,28 +347,48 @@ export const POST = withRouteContext(
       }
     }
 
-    const result = await emailService.sendEmail({
-      to: customer.email,
-      cc: ccAddress,
-      subject: generateInvoiceEmailSubject(emailData),
-      html: generateInvoiceEmailHtml(emailData),
-      text: generateInvoiceEmailText(emailData),
-      replyTo: company.email || undefined,
-      fromName: company.company_name,
-      attachments: [
-        {
-          filename,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
-        },
-      ],
-    })
+    const subject = generateInvoiceEmailSubject(emailData)
+    const html = generateInvoiceEmailHtml(emailData)
+    const text = generateInvoiceEmailText(emailData)
+
+    let result
+    try {
+      result = await sendTrackedInvoiceEmail({
+        supabase,
+        emailService,
+        companyId: companyId!,
+        userId: user.id,
+        invoiceId: id,
+        to: customer.email,
+        cc: ccAddress,
+        subject,
+        html,
+        text,
+        replyTo: company.email || undefined,
+        fromName: company.company_name,
+        filename,
+        pdfBuffer,
+      })
+    } catch (err) {
+      opLog.error('failed to persist invoice delivery snapshot before send', err as Error)
+      return errorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', opLog, {
+        requestId,
+        details: { retryable: err instanceof InvoiceDeliverySnapshotError },
+      })
+    }
 
     if (!result.success) {
       opLog.error('email provider failed to send invoice', new Error(result.error || 'Unknown'))
       return errorResponseFromCode('INVOICE_SEND_PROVIDER_FAILED', opLog, {
         requestId,
         details: { retryable: true },
+      })
+    }
+
+    if (result.trackingWarning) {
+      partialFailures.push({
+        step: 'delivery_history',
+        reason: 'Utskicket sparades men kunde inte färdigmarkeras i historiken.',
       })
     }
 
@@ -488,22 +512,19 @@ export const POST = withRouteContext(
       }
     }
 
-    if (statusFlipped && isRealInvoice) {
+    if (statusFlipped && isRealInvoice && createdJournalEntryId) {
       try {
-        const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
-        await uploadDocument(supabase, user.id, companyId!, {
-          name: filename,
-          buffer: pdfArrayBuffer,
-          type: 'application/pdf',
-        }, {
-          upload_source: 'system',
-          journal_entry_id: createdJournalEntryId,
-        })
+        await linkToJournalEntry(
+          supabase,
+          companyId!,
+          result.documentId,
+          createdJournalEntryId,
+        )
       } catch (err) {
-        opLog.error('failed to store invoice PDF as underlag', err as Error)
+        opLog.error('failed to link archived invoice PDF to journal entry', err as Error)
         partialFailures.push({
-          step: 'pdf_archive',
-          reason: 'Fakturans PDF kunde inte arkiveras.',
+          step: 'pdf_link',
+          reason: 'Fakturans arkiverade PDF kunde inte kopplas till verifikationen.',
         })
       }
     }
@@ -529,6 +550,7 @@ export const POST = withRouteContext(
       success: true,
       message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email} (kopia till ${ccAddress})`,
       messageId: result.messageId,
+      deliveryId: result.deliveryId,
       ...(partialFailures.length > 0
         ? { partial: true, partial_failures: partialFailures }
         : {}),

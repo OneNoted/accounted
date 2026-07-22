@@ -54,6 +54,45 @@ vi.mock('@/lib/email/service', () => ({
   }),
 }))
 
+const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
+  emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
+  to: string | string[]
+  cc?: string | string[]
+  subject: string
+  html: string
+  text: string
+  replyTo?: string
+  fromName?: string
+  filename: string
+  pdfBuffer: Buffer
+}) => ({
+  ...(await input.emailService.sendEmail({
+    to: input.to,
+    cc: input.cc,
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+    replyTo: input.replyTo,
+    fromName: input.fromName,
+    attachments: [{
+      filename: input.filename,
+      content: input.pdfBuffer,
+      contentType: 'application/pdf',
+    }],
+  })),
+  deliveryId: 'delivery-1',
+  documentId: 'document-1',
+}))
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
+  sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
+}))
+
+const mockLinkToJournalEntry = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/core/documents/document-service', () => ({
+  linkToJournalEntry: (...args: unknown[]) => mockLinkToJournalEntry(...args),
+}))
+
 vi.mock('@/lib/email/invoice-templates', () => ({
   generateInvoiceEmailHtml: vi.fn().mockReturnValue('<html>Invoice</html>'),
   generateInvoiceEmailText: vi.fn().mockReturnValue('Invoice text'),
@@ -313,6 +352,9 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.messageId).toBe('msg-1')
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', invoiceId: 'inv-1' }),
+    )
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         to: 'kund@test.se',
@@ -612,6 +654,20 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(status).toBe(502)
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_PROVIDER_FAILED')
     expect((body.error as unknown as { details?: { retryable?: boolean } }).details?.retryable).toBe(true)
+  })
+
+  it('does not call the provider when delivery history cannot be saved', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockSendTrackedInvoiceEmail.mockRejectedValueOnce(new Error('snapshot insert failed'))
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: unknown }>(response)
+
+    expect(status).toBe(500)
+    expect((body.error as { code: string }).code).toBe('INVOICE_SEND_SNAPSHOT_FAILED')
+    expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('returns 400 on malformed lines before any email is sent', async () => {

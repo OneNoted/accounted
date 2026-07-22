@@ -43,6 +43,7 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn().mockResolvedValue({}),
+  linkToJournalEntry: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@react-pdf/renderer', () => ({
@@ -62,6 +63,40 @@ vi.mock('@/lib/email/service', async (importOriginal) => {
     }),
   }
 })
+
+const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
+  emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
+  to: string | string[]
+  cc?: string | string[]
+  subject: string
+  html: string
+  text: string
+  replyTo?: string
+  fromName?: string
+  filename: string
+  pdfBuffer: Buffer
+}) => ({
+  ...(await input.emailService.sendEmail({
+    to: input.to,
+    cc: input.cc,
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+    replyTo: input.replyTo,
+    fromName: input.fromName,
+    attachments: [{
+      filename: input.filename,
+      content: input.pdfBuffer,
+      contentType: 'application/pdf',
+    }],
+  })),
+  deliveryId: 'delivery-1',
+  documentId: 'document-1',
+}))
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
+  sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
+}))
 
 vi.mock('@/lib/email/invoice-templates', () => ({
   generateInvoiceEmailHtml: vi.fn().mockReturnValue('<html>...</html>'),
@@ -216,6 +251,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.sent_to).toBe('billing@acme.test')
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: COMPANY_ID, invoiceId: INVOICE_ID }),
+    )
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: [

@@ -45,6 +45,40 @@ vi.mock('@/lib/email/service', () => ({
   }),
 }))
 
+const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
+  emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
+  to: string | string[]
+  cc?: string | string[]
+  subject: string
+  html: string
+  text: string
+  replyTo?: string
+  fromName?: string
+  filename: string
+  pdfBuffer: Buffer
+}) => ({
+  ...(await input.emailService.sendEmail({
+    to: input.to,
+    cc: input.cc,
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+    replyTo: input.replyTo,
+    fromName: input.fromName,
+    attachments: [{
+      filename: input.filename,
+      content: input.pdfBuffer,
+      contentType: 'application/pdf',
+    }],
+  })),
+  deliveryId: 'delivery-1',
+  documentId: 'document-1',
+}))
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
+  sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
+}))
+
 vi.mock('@/lib/email/invoice-templates', () => ({
   generateInvoiceEmailHtml: vi.fn().mockReturnValue('<html>Invoice</html>'),
   generateInvoiceEmailText: vi.fn().mockReturnValue('Invoice text'),
@@ -74,6 +108,7 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 const mockUploadDocument = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
+  linkToJournalEntry: vi.fn().mockResolvedValue(undefined),
 }))
 
 describe('computeNextRunDate', () => {
@@ -291,6 +326,9 @@ describe('executeRecurringSchedule auto-send', () => {
 
     expect(result.autoSent).toBe(true)
     expect(result.warning).toBeNull()
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', invoiceId: 'inv-1' }),
+    )
     expect(mockApplyPaymentLink).toHaveBeenCalledTimes(1)
     expect(mockApplyPaymentLink).toHaveBeenCalledWith(
       expect.anything(),

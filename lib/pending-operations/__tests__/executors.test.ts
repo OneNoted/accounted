@@ -54,6 +54,12 @@ vi.mock('@/lib/transactions/categorize-core', async () => {
   }
 })
 
+const mockRecordManualInvoiceDelivery = vi.fn().mockResolvedValue({ id: 'delivery-1' })
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
+  sendTrackedInvoiceEmail: vi.fn(),
+}))
+
 import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { parseSIEFile } from '@/lib/import/sie-parser'
@@ -172,6 +178,43 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
     expect(result.error).toContain('Credit notes must be issued')
+  })
+
+  it('records delivery history when a regular invoice is marked as sent', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: 'F-2026001',
+        credited_invoice_id: null,
+      }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // status update
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher update
+
+    const op = makePendingOp({
+      operation_type: 'mark_invoice_sent',
+      params: { invoice_id: 'invoice-1' },
+    })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      op,
+    )
+
+    expect(result.status).toBe('committed')
+    expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledWith({
+      supabase,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+    })
   })
 })
 

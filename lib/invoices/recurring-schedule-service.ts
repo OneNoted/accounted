@@ -35,7 +35,8 @@ import {
   generateInvoiceEmailText,
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
-import { uploadDocument } from '@/lib/core/documents/document-service'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { sendTrackedInvoiceEmail } from '@/lib/invoices/invoice-deliveries'
 import { createLogger } from '@/lib/logger'
 import type {
   Invoice,
@@ -493,7 +494,7 @@ async function sendInvoiceFromSchedule(
     }),
   )
 
-  const emailData = { invoice, customer: invoice.customer, company }
+  const emailData = { invoice: renderableInvoice, customer: invoice.customer, company }
   const filename = invoicePdfFilename({
     companyName: company.company_name,
     customerName: invoice.customer.name,
@@ -504,18 +505,33 @@ async function sendInvoiceFromSchedule(
   })
   const ccAddress = company.email || undefined
 
-  const result = await emailService.sendEmail({
-    to: invoice.customer.email,
-    cc: ccAddress,
-    subject: generateInvoiceEmailSubject(emailData),
-    html: generateInvoiceEmailHtml(emailData),
-    text: generateInvoiceEmailText(emailData),
-    replyTo: company.email || undefined,
-    fromName: company.company_name ?? undefined,
-    attachments: [
-      { filename, content: pdfBuffer, contentType: 'application/pdf' },
-    ],
-  })
+  const subject = generateInvoiceEmailSubject(emailData)
+  const html = generateInvoiceEmailHtml(emailData)
+  const text = generateInvoiceEmailText(emailData)
+  let result
+  try {
+    result = await sendTrackedInvoiceEmail({
+      supabase,
+      emailService,
+      companyId,
+      userId,
+      invoiceId: invoice.id,
+      to: invoice.customer.email,
+      cc: ccAddress,
+      subject,
+      html,
+      text,
+      replyTo: company.email || undefined,
+      fromName: company.company_name ?? undefined,
+      filename,
+      pdfBuffer,
+    })
+  } catch (err) {
+    log.error('failed to persist recurring invoice delivery before send', err as Error, {
+      invoiceId: invoice.id,
+    })
+    return false
+  }
 
   if (!result.success) {
     log.error(
@@ -524,6 +540,14 @@ async function sendInvoiceFromSchedule(
       { invoiceId: invoice.id },
     )
     return false
+  }
+
+  if (result.trackingWarning) {
+    log.error(
+      'recurring invoice delivery snapshot could not be finalized',
+      new Error(result.trackingWarning),
+      { invoiceId: invoice.id, deliveryId: result.deliveryId },
+    )
   }
 
   // Email delivered: flip status, create JE, archive PDF. Treat downstream
@@ -559,19 +583,15 @@ async function sendInvoiceFromSchedule(
     }
   }
 
-  try {
-    const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
-    await uploadDocument(
-      supabase,
-      userId,
-      companyId,
-      { name: filename, buffer: pdfArrayBuffer, type: 'application/pdf' },
-      { upload_source: 'system', journal_entry_id: journalEntryId },
-    )
-  } catch (err) {
-    log.error('failed to archive recurring invoice PDF', err as Error, {
-      invoiceId: invoice.id,
-    })
+  if (journalEntryId) {
+    try {
+      await linkToJournalEntry(supabase, companyId, result.documentId, journalEntryId)
+    } catch (err) {
+      log.error('failed to link recurring invoice PDF to journal entry', err as Error, {
+        invoiceId: invoice.id,
+        documentId: result.documentId,
+      })
+    }
   }
 
   await eventBus.emit({

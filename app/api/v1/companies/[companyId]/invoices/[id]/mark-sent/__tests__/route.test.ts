@@ -41,6 +41,11 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
   }),
 }))
 
+const mockRecordManualInvoiceDelivery = vi.fn().mockResolvedValue({ id: 'delivery-1' })
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   createInvoiceJournalEntry as mockedCreateEntry,
@@ -127,6 +132,7 @@ beforeEach(() => {
     scopes: ['invoices:write'],
     mode: 'live',
   })
+  mockRecordManualInvoiceDelivery.mockResolvedValue({ id: 'delivery-1' })
 })
 
 describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
@@ -156,6 +162,12 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.data.invoice_number).toBe('2026-0042')
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
     expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledWith({
+      supabase: expect.anything(),
+      companyId: COMPANY_ID,
+      userId: USER_ID,
+      invoiceId: INVOICE_ID,
+    })
   })
 
   it('returns 409 INVOICE_UPDATE_NOT_DRAFT when the invoice is already sent', async () => {

@@ -73,6 +73,11 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
 }))
 
+const mockRecordManualInvoiceDelivery = vi.fn()
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
@@ -117,6 +122,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
       journalEntryRequired: true,
       failures: [],
     })
+    mockRecordManualInvoiceDelivery.mockResolvedValue({ id: 'delivery-1' })
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -175,6 +181,12 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBe('je-7')
+    expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledWith({
+      supabase: mockSupabase,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'inv-1',
+    })
 
     expect(mockRenderToBuffer).toHaveBeenCalledTimes(1)
     expect(mockUploadDocument).toHaveBeenCalledTimes(1)
