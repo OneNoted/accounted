@@ -15,6 +15,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type {
@@ -371,9 +372,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       )
 
-      const filename = invoice.credited_invoice_id
-        ? `kreditfaktura-${invoice.invoice_number}.pdf`
-        : `faktura-${invoice.invoice_number}.pdf`
+      const filename = invoicePdfFilename({
+        companyName: settings.company_name,
+        customerName: (invoice.customer as Customer).name,
+        invoiceNumber: invoice.invoice_number,
+        invoiceId: invoice.id,
+        invoiceDate: invoice.invoice_date,
+        documentType: invoice.document_type,
+        isCreditNote: !!invoice.credited_invoice_id,
+      })
 
       const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
       await uploadDocument(supabase, user.id, companyId, {

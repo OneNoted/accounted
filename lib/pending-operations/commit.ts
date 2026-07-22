@@ -73,6 +73,7 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
@@ -1560,12 +1561,15 @@ async function commitSendInvoice(
   )
 
   const isCreditNote = !!invoice.credited_invoice_id
-  const docType = invoice.document_type || 'invoice'
-  let filename: string
-  if (isCreditNote) filename = `kreditfaktura-${invoice.invoice_number}.pdf`
-  else if (docType === 'proforma') filename = `proformafaktura-${invoice.invoice_number}.pdf`
-  else if (docType === 'delivery_note') filename = `foljesedel-${invoice.invoice_number}.pdf`
-  else filename = `faktura-${invoice.invoice_number}.pdf`
+  const filename = invoicePdfFilename({
+    companyName: company.company_name,
+    customerName: customer.name,
+    invoiceNumber: invoice.invoice_number,
+    invoiceId: invoice.id,
+    invoiceDate: invoice.invoice_date,
+    documentType: invoice.document_type,
+    isCreditNote,
+  })
 
   const ccAddress = company.email || userEmail
   const emailData = { invoice: invoice as Invoice, customer, company: company as CompanySettings }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { contentDisposition } from '../content-disposition'
+import { contentDisposition, contentDispositionFilename } from '../content-disposition'
 
 describe('contentDisposition', () => {
   it('passes a plain ASCII filename through unchanged in both forms', () => {
@@ -87,5 +87,27 @@ describe('contentDisposition', () => {
     const header = contentDisposition('inline', 'r😀.pdf')
     expect(header).toBe(`inline; filename="r__.pdf"; filename*=UTF-8''r%F0%9F%98%80.pdf`)
     expect(() => new Headers({ 'Content-Disposition': header })).not.toThrow()
+  })
+})
+
+describe('contentDispositionFilename', () => {
+  it('prefers and decodes the UTF-8 filename', () => {
+    const header = contentDisposition(
+      'attachment',
+      'Företag x Kund AB Faktura nr 2621 20260721.pdf',
+    )
+
+    expect(contentDispositionFilename(header))
+      .toBe('Företag x Kund AB Faktura nr 2621 20260721.pdf')
+  })
+
+  it('falls back to the quoted ASCII filename', () => {
+    expect(contentDispositionFilename('attachment; filename="faktura-2621.pdf"'))
+      .toBe('faktura-2621.pdf')
+  })
+
+  it('returns null for a missing or malformed filename', () => {
+    expect(contentDispositionFilename(null)).toBeNull()
+    expect(contentDispositionFilename('attachment')).toBeNull()
   })
 })

@@ -10,7 +10,7 @@
  *     PDF is still rendered: useful for "preview before send" workflows.
  *   - Sent / paid / overdue / cancelled / credit notes: full PDF with the
  *     persisted invoice number.
- *   - Credit notes: filename uses `kreditfaktura-` prefix and the original
+ *   - Credit notes: the filename identifies the document as a kreditfaktura and the original
  *     invoice's löpnummer is embedded (ML 17 kap 22-23§ back-reference).
  *   - Delivery notes: PDF is permitted (read-only, no compliance side effect).
  *
@@ -21,6 +21,8 @@ import { z } from 'zod'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import { contentDisposition } from '@/lib/api/content-disposition'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -44,7 +46,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/pdf',
   summary: 'Download the rendered invoice PDF.',
   description:
-    'Returns the invoice as application/pdf. The filename in Content-Disposition reflects the document type: faktura-<number>.pdf for sent invoices, kreditfaktura-<number>.pdf for credit notes, utkast-<id-slice>.pdf for drafts. This endpoint is byte-equivalent to the dashboard download.',
+    'Returns the invoice as application/pdf. The descriptive filename contains company, customer, document type, invoice number or draft identifier, and invoice date. This endpoint is byte-equivalent to the dashboard download.',
   useWhen:
     'You need to fetch an invoice PDF for archival, forwarding to a customer outside the Accounted send flow, or attaching to an external workflow.',
   doNotUseFor:
@@ -175,21 +177,22 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
 
     const isCreditNote = !!typed.credited_invoice_id
-    const filenameNumber = typed.invoice_number ?? `utkast-${invoiceId.slice(0, 8)}`
-    const filename = isCreditNote
-      ? `kreditfaktura-${filenameNumber}.pdf`
-      : typed.document_type === 'proforma'
-        ? `proformafaktura-${filenameNumber}.pdf`
-        : typed.document_type === 'delivery_note'
-          ? `följesedel-${filenameNumber}.pdf`
-          : `faktura-${filenameNumber}.pdf`
+    const filename = invoicePdfFilename({
+      companyName: (company as CompanySettings).company_name,
+      customerName: typed.customer?.name,
+      invoiceNumber: typed.invoice_number,
+      invoiceId,
+      invoiceDate: typed.invoice_date,
+      documentType: typed.document_type,
+      isCreditNote,
+    })
 
     const uint8Array = new Uint8Array(pdfBuffer)
     return new Response(uint8Array, {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
         'X-Request-Id': ctx.requestId,
       },

@@ -175,8 +175,15 @@ describe('executeRecurringSchedule auto-send', () => {
   const client = supabase as unknown as SupabaseClient
   const today = new Date('2026-07-06T06:30:00Z')
 
-  const customer = makeCustomer({ id: 'cust-1', email: 'kund@test.se' })
-  const company = makeCompanySettings({ accounting_method: 'accrual' })
+  const customer = makeCustomer({
+    id: 'cust-1',
+    name: 'Kund ÅÄÖ AB',
+    email: 'kund@test.se',
+  })
+  const company = makeCompanySettings({
+    company_name: 'Oppy Sverige',
+    accounting_method: 'accrual',
+  })
 
   function makeSchedule() {
     return {
@@ -223,6 +230,7 @@ describe('executeRecurringSchedule auto-send', () => {
     return {
       id: 'inv-1',
       invoice_number: 'F-1',
+      invoice_date: '2026-07-06',
       status: 'draft',
       document_type: 'invoice',
       currency: 'SEK',
@@ -302,6 +310,11 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockInvoicePDF).toHaveBeenCalledWith(
       expect.objectContaining({ paymentLinkQrDataUrl: 'data:image/png;base64,QR' }),
     )
+    expect(mockSendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({
+        filename: 'Oppy Sverige x Kund ÅÄÖ AB Faktura nr F-1 20260706.pdf',
+      })],
+    }))
   })
 
   it('a payment link failure never blocks the send', async () => {

@@ -16,6 +16,7 @@ import { eventBus } from '@/lib/events'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
@@ -493,7 +494,14 @@ async function sendInvoiceFromSchedule(
   )
 
   const emailData = { invoice, customer: invoice.customer, company }
-  const filename = `faktura-${invoice.invoice_number}.pdf`
+  const filename = invoicePdfFilename({
+    companyName: company.company_name,
+    customerName: invoice.customer.name,
+    invoiceNumber: invoice.invoice_number,
+    invoiceId: invoice.id,
+    invoiceDate: invoice.invoice_date,
+    documentType: invoice.document_type,
+  })
   const ccAddress = company.email || undefined
 
   const result = await emailService.sendEmail({

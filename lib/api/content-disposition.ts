@@ -41,3 +41,19 @@ export function contentDisposition(
 
   return `${type}; filename="${fallback}"; filename*=UTF-8''${encoded}`
 }
+
+/** Read the preferred UTF-8 filename from a Content-Disposition header. */
+export function contentDispositionFilename(header: string | null): string | null {
+  if (!header) return null
+
+  const extended = header.match(/(?:^|;)\s*filename\*=UTF-8''([^;]*)/i)
+  if (extended?.[1]) {
+    try {
+      return decodeURIComponent(extended[1])
+    } catch {
+      // Fall through to the ASCII quoted-string form.
+    }
+  }
+
+  return header.match(/(?:^|;)\s*filename="([^"]*)"/i)?.[1] ?? null
+}

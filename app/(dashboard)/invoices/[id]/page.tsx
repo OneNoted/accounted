@@ -18,6 +18,7 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import { contentDispositionFilename } from '@/lib/api/content-disposition'
 import {
   Loader2,
   ArrowLeft,
@@ -420,7 +421,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
+      a.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
+        ?? `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)

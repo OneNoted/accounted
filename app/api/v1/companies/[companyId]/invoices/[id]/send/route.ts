@@ -58,6 +58,7 @@ import {
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -423,11 +424,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 8: send the email. Delivery notes AND credit notes were rejected
     // earlier so docType is 'invoice' or 'proforma' here.
-    const docType = typed.document_type ?? 'invoice'
-    const filename =
-      docType === 'proforma'
-        ? `proformafaktura-${finalInvoiceNumber}.pdf`
-        : `faktura-${finalInvoiceNumber}.pdf`
+    const filename = invoicePdfFilename({
+      companyName: settings.company_name,
+      customerName: customer.name,
+      invoiceNumber: finalInvoiceNumber,
+      invoiceId: typed.id,
+      invoiceDate: typed.invoice_date,
+      documentType: typed.document_type,
+    })
 
     const ccAddress = settings.email ?? null
     const emailData = { invoice: renderableInvoice, customer, company: settings }

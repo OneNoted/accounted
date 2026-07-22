@@ -4,6 +4,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getVatRules } from '@/lib/invoices/vat-rules'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 
 /**
@@ -196,11 +198,19 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, { su
         paymentLinkQrDataUrl,
       })
     )
+    const filename = invoicePdfFilename({
+      companyName: (company as CompanySettings).company_name,
+      customerName: customer.name,
+      invoiceNumber: previewInvoice.invoice_number,
+      invoiceId: previewInvoice.id,
+      invoiceDate: previewInvoice.invoice_date,
+      documentType: previewInvoice.document_type,
+    })
 
     return new Response(new Uint8Array(pdfBuffer), {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': 'inline; filename="forhandsvisning.pdf"',
+        'Content-Disposition': contentDisposition('inline', filename),
       },
     })
   } catch (error) {

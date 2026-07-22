@@ -385,7 +385,9 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: [
-          expect.objectContaining({ filename: 'kreditfaktura-KR-F-2024001.pdf' }),
+          expect.objectContaining({
+            filename: 'Test Firma x Test AB Kreditfaktura nr KR-F-2024001 20240615.pdf',
+          }),
         ],
       }),
     )

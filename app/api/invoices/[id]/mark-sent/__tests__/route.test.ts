@@ -183,7 +183,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
       'user-1',
       'company-1',
       expect.objectContaining({
-        name: 'faktura-F-2026010.pdf',
+        name: 'Test Firma x Test AB Faktura nr F-2026010 20240615.pdf',
         type: 'application/pdf',
       }),
       expect.objectContaining({
@@ -290,7 +290,9 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
       expect.anything(),
       'user-1',
       'company-1',
-      expect.objectContaining({ name: 'kreditfaktura-KR-F-2026010.pdf' }),
+      expect.objectContaining({
+        name: 'Test Firma x Test AB Kreditfaktura nr KR-F-2026010 20240615.pdf',
+      }),
       expect.anything()
     )
   })

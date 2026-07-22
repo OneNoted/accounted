@@ -15,6 +15,7 @@ import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   issueCreditNote,
   type CreditNoteOriginalInvoice,
@@ -253,17 +254,15 @@ export const POST = withRouteContext(
       company: company as CompanySettings,
     }
 
-    const docType = invoice.document_type || 'invoice'
-    let filename: string
-    if (isCreditNote) {
-      filename = `kreditfaktura-${invoice.invoice_number}.pdf`
-    } else if (docType === 'proforma') {
-      filename = `proformafaktura-${invoice.invoice_number}.pdf`
-    } else if (docType === 'delivery_note') {
-      filename = `foljesedel-${invoice.invoice_number}.pdf`
-    } else {
-      filename = `faktura-${invoice.invoice_number}.pdf`
-    }
+    const filename = invoicePdfFilename({
+      companyName: company.company_name,
+      customerName: customer.name,
+      invoiceNumber: invoice.invoice_number,
+      invoiceId: invoice.id,
+      invoiceDate: invoice.invoice_date,
+      documentType: invoice.document_type,
+      isCreditNote,
+    })
 
     const ccAddress = company.email || user.email
     const partialFailures: Array<{ step: string; reason: string }> = []

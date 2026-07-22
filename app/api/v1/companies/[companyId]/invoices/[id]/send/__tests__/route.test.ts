@@ -216,6 +216,15 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.sent_to).toBe('billing@acme.test')
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            filename: 'Test AB x Acme AB Faktura nr 2026-0042 20260512.pdf',
+          }),
+        ],
+      }),
+    )
   })
 
   it('returns 503 when email service is not configured', async () => {

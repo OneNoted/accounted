@@ -78,6 +78,78 @@ describe('proposeSendLines', () => {
     })
   })
 
+  it('does not create zero-value revenue rows for informational invoice items', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        items: [
+          makeItem(),
+          makeItem({
+            id: 'text-1',
+            line_type: 'text',
+            description: 'Information shown on the invoice',
+            quantity: 0,
+            unit_price: 0,
+            line_total: 0,
+            vat_rate: 0,
+            vat_amount: 0,
+          }),
+        ],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.map((line) => line.account_number)).toEqual(['1510', '3001', '2611'])
+    expect(lines.some((line) =>
+      (parseFloat(line.debit_amount) || 0) === 0
+      && (parseFloat(line.credit_amount) || 0) === 0
+    )).toBe(false)
+  })
+
+  it('ignores informational rows when selecting the legacy invoice VAT treatment', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        items: [
+          makeItem({ vat_rate: undefined }),
+          makeItem({
+            id: 'text-1',
+            line_type: 'text',
+            quantity: 0,
+            unit_price: 0,
+            line_total: 0,
+            vat_rate: 0,
+            vat_amount: 0,
+          }),
+        ],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.map((line) => line.account_number)).toEqual(['1510', '3001', '2611'])
+  })
+
+  it('returns no booking proposal for an invoice containing only informational rows', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        total: 0,
+        subtotal: 0,
+        vat_amount: 0,
+        items: [
+          makeItem({
+            line_type: 'text',
+            quantity: 0,
+            unit_price: 0,
+            line_total: 0,
+            vat_rate: 0,
+            vat_amount: 0,
+          }),
+        ],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toEqual([])
+  })
+
   it('credit note uses positive amounts on the reversed sides', () => {
     const lines = proposeSendLines({
       invoice: makeInvoiceInput({
