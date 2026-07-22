@@ -129,7 +129,7 @@ export default function TransactionHistoryList({
     return a.source === 'bank' ? -1 : 1
   })
 
-  const showSourceFilter = skvRows.length > 0 && transactions.length > 0
+  const showSourceFilter = sourceFilter !== 'all' || (skvRows.length > 0 && transactions.length > 0)
   const filtered = merged
   const showHeader = showSourceFilter
 

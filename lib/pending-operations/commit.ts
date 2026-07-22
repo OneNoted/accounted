@@ -76,6 +76,7 @@ import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   recordManualInvoiceDelivery,
+  reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '@/lib/invoices/invoice-deliveries'
 import { createLogger } from '@/lib/logger'
@@ -1538,6 +1539,23 @@ async function commitSendInvoice(
     }
   }
 
+  let deliveryId: string
+  try {
+    deliveryId = await reserveInvoiceDelivery({
+      supabase,
+      companyId,
+      userId,
+      invoiceId,
+    })
+  } catch (err) {
+    log.error('failed to reserve invoice delivery before agent number assignment', err as Error, {
+      companyId,
+      userId,
+      invoiceId,
+    })
+    return { error: 'Utskicksinformationen kunde inte sparas. Ingen e-post skickades.', status: 500 }
+  }
+
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
@@ -1588,6 +1606,7 @@ async function commitSendInvoice(
       companyId,
       userId,
       invoiceId,
+      deliveryId,
       to: customer.email,
       cc: ccAddress,
       subject,
@@ -1605,6 +1624,16 @@ async function commitSendInvoice(
       invoiceId,
     })
     return { error: 'Utskicksinformationen kunde inte sparas. Ingen e-post skickades.', status: 500 }
+  }
+
+  if (result.trackingWarning) {
+    log.warn('agent invoice delivery snapshot requires reconciliation', {
+      companyId,
+      userId,
+      invoiceId,
+      deliveryId: result.deliveryId,
+      warning: result.trackingWarning,
+    })
   }
 
   if (!result.success) return { error: `Failed to send email: ${result.error}`, status: 500 }
@@ -1635,7 +1664,14 @@ async function commitSendInvoice(
 
   await eventBus.emit({ type: 'invoice.sent', payload: { invoice: invoice as Invoice, userId, companyId } })
 
-  return { data: { message: `Invoice ${invoice.invoice_number} sent to ${customer.email}` } }
+  return {
+    data: {
+      message: `Invoice ${invoice.invoice_number} sent to ${customer.email}`,
+      ...(result.trackingWarning
+        ? { warning: 'Delivery history requires reconciliation.' }
+        : {}),
+    },
+  }
 }
 
 async function commitMarkInvoiceSent(

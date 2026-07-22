@@ -2233,14 +2233,15 @@ export default function TransactionsPage() {
           ))}
         </DataList>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 && !searchTerm ? (
+        inboxItems.length === 0 && !searchTerm && sourceFilter === 'all' ? (
           <InboxZeroState
             hasTransactions={transactions.length > 0 || skvRows.length > 0}
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
           <DataList>
-            {skvUnmatched.length > 0 && uncategorizedTransactions.length > 0 && (
+            {(sourceFilter !== 'all'
+              || (skvUnmatched.length > 0 && uncategorizedTransactions.length > 0)) && (
               <DataListHeader>
                 <span className="text-xs uppercase tracking-wider text-muted-foreground">
                   {t('source_label')}
@@ -2275,10 +2276,10 @@ export default function TransactionsPage() {
                 </DropdownMenu>
               </DataListHeader>
             )}
-            {inboxItems.length === 0 && searchTerm ? (
+            {inboxItems.length === 0 && (searchTerm || sourceFilter !== 'all') ? (
               <DataListEmpty
                 title="Inga träffar"
-                description={t('no_search_results')}
+                description={searchTerm ? t('no_search_results') : t('source_empty')}
               />
             ) : null}
             <AnimatePresence mode="popLayout">

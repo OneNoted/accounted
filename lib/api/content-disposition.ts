@@ -28,9 +28,9 @@ export function contentDisposition(
   const normalized = filename.toWellFormed().normalize('NFC')
 
   // ASCII fallback for the quoted-string form: anything outside printable
-  // ASCII, plus the quoted-string specials " and \, becomes _. This also
-  // neutralizes CR/LF header injection.
-  const fallback = normalized.replace(/[^\x20-\x7e]|["\\]/g, '_')
+  // ASCII, plus structurally significant header characters, becomes _. This
+  // also neutralizes CR/LF header injection.
+  const fallback = normalized.replace(/[^\x20-\x7e]|["\\;]/g, '_')
 
   // RFC 5987 value-chars: encodeURIComponent covers everything except
   // ! ' ( ) * which it leaves bare but RFC 5987 forbids unencoded.

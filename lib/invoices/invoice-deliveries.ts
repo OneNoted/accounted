@@ -18,6 +18,7 @@ export interface TrackedInvoiceEmailInput {
   companyId: string
   userId: string
   invoiceId: string
+  deliveryId: string
   to: string | string[]
   cc?: string | string[]
   replyTo?: string
@@ -32,12 +33,53 @@ export interface TrackedInvoiceEmailInput {
 export interface TrackedInvoiceEmailResult extends SendEmailResult {
   deliveryId: string
   documentId: string
-  trackingWarning?: 'finalize_failed' | 'failure_record_failed'
+  trackingWarning?: 'finalize_failed' | 'failure_record_failed' | 'failure_cleanup_failed'
 }
 
 function addresses(value?: string | string[]): string[] {
   if (!value) return []
   return Array.isArray(value) ? value : [value]
+}
+
+/**
+ * Persist a reusable delivery attempt before allocating an invoice number.
+ * The unique preparing row is also the concurrency lock for one invoice send.
+ */
+export async function reserveInvoiceDelivery(args: {
+  supabase: SupabaseClient
+  companyId: string
+  userId: string
+  invoiceId: string
+}): Promise<string> {
+  const { data, error } = await args.supabase
+    .from('invoice_deliveries')
+    .insert({
+      company_id: args.companyId,
+      user_id: args.userId,
+      invoice_id: args.invoiceId,
+      channel: 'email',
+      status: 'preparing',
+    })
+    .select('id')
+    .single()
+
+  if (data?.id) return data.id
+
+  if ((error as { code?: string } | null)?.code === '23505') {
+    const { data: existing, error: existingError } = await args.supabase
+      .from('invoice_deliveries')
+      .select('id')
+      .eq('company_id', args.companyId)
+      .eq('invoice_id', args.invoiceId)
+      .eq('status', 'preparing')
+      .maybeSingle()
+
+    if (!existingError && existing?.id) return existing.id
+  }
+
+  throw new InvoiceDeliverySnapshotError(
+    `Failed to reserve invoice delivery: ${error?.message || 'unknown error'}`,
+  )
 }
 
 export async function sendTrackedInvoiceEmail(
@@ -49,6 +91,7 @@ export async function sendTrackedInvoiceEmail(
     companyId,
     userId,
     invoiceId,
+    deliveryId,
     to,
     cc,
     replyTo,
@@ -75,11 +118,7 @@ export async function sendTrackedInvoiceEmail(
 
   const { data: delivery, error: deliveryError } = await supabase
     .from('invoice_deliveries')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      invoice_id: invoiceId,
-      channel: 'email',
+    .update({
       status: 'pending',
       to_addresses: addresses(to),
       cc_addresses: addresses(cc),
@@ -93,6 +132,10 @@ export async function sendTrackedInvoiceEmail(
       attachment_content_type: PDF_CONTENT_TYPE,
       attachment_sha256: document.sha256_hash,
     })
+    .eq('id', deliveryId)
+    .eq('company_id', companyId)
+    .eq('invoice_id', invoiceId)
+    .eq('status', 'preparing')
     .select('*')
     .single()
 
@@ -132,19 +175,34 @@ export async function sendTrackedInvoiceEmail(
       .update({
         status: 'failed',
         provider: result.provider || null,
-        provider_message_id: result.messageId || null,
+        provider_message_id: null,
         error_code: 'provider_failed',
+        document_attachment_id: null,
         failed_at: new Date().toISOString(),
       })
       .eq('id', delivery.id)
       .eq('company_id', companyId)
       .eq('status', 'pending')
 
+    let cleanupFailed = false
+    if (!failureRecordError) {
+      try {
+        const cleanup = await deleteDocument(supabase, companyId, document.id)
+        cleanupFailed = !cleanup.ok
+      } catch {
+        cleanupFailed = true
+      }
+    }
+
     return {
       ...result,
       deliveryId: delivery.id,
       documentId: document.id,
-      ...(failureRecordError ? { trackingWarning: 'failure_record_failed' as const } : {}),
+      ...(failureRecordError
+        ? { trackingWarning: 'failure_record_failed' as const }
+        : cleanupFailed
+          ? { trackingWarning: 'failure_cleanup_failed' as const }
+          : {}),
     }
   }
 

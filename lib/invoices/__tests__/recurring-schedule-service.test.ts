@@ -74,8 +74,10 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   deliveryId: 'delivery-1',
   documentId: 'document-1',
 }))
+const mockReserveInvoiceDelivery = vi.fn().mockResolvedValue('delivery-1')
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
+  reserveInvoiceDelivery: (...args: unknown[]) => mockReserveInvoiceDelivery(...args),
   sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
 }))
 

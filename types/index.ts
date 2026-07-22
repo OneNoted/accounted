@@ -998,7 +998,7 @@ export interface Invoice {
 }
 
 export type InvoiceDeliveryChannel = 'email' | 'manual'
-export type InvoiceDeliveryStatus = 'pending' | 'sent' | 'failed' | 'marked_sent'
+export type InvoiceDeliveryStatus = 'preparing' | 'pending' | 'sent' | 'failed' | 'marked_sent'
 
 export interface InvoiceDelivery {
   id: string
@@ -1023,6 +1023,8 @@ export interface InvoiceDelivery {
   attachment_sha256: string | null
   sent_at: string | null
   failed_at: string | null
+  retention_expires_at: string
+  pii_redacted_at: string | null
   created_at: string
   updated_at: string
 }

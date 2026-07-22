@@ -60,6 +60,7 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
+  reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
@@ -331,6 +332,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
+    let deliveryId: string
+    try {
+      deliveryId = await reserveInvoiceDelivery({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        invoiceId,
+      })
+    } catch (err) {
+      ctx.log.error('invoices.send: delivery reservation failed', err as Error, {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      return v1ErrorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { retryable: err instanceof InvoiceDeliverySnapshotError },
+      })
+    }
+
     // Step 6: allocate F-series number atomically.
     try {
       await ensureInvoiceNumber(ctx.supabase, ctx.companyId!, typed as Invoice)
@@ -450,6 +470,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         companyId: ctx.companyId!,
         userId: ctx.userId,
         invoiceId,
+        deliveryId,
         to: customer.email,
         cc: ccAddress ?? undefined,
         subject,
@@ -472,6 +493,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (!result.success) {
+      if (result.trackingWarning) {
+        ctx.log.warn('invoices.send: failed delivery snapshot not reconciled', {
+          invoiceId,
+          companyId: ctx.companyId,
+          deliveryId: result.deliveryId,
+          warning: result.trackingWarning,
+        })
+      }
       ctx.log.error('invoices.send: email provider failed', new Error(result.error ?? 'unknown'), {
         invoiceId,
         companyId: ctx.companyId,
@@ -486,6 +515,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const warnings: { code: string; message: string }[] = []
 
     if (result.trackingWarning) {
+      ctx.log.warn('invoices.send: delivery snapshot not finalized', {
+        invoiceId,
+        companyId: ctx.companyId,
+        deliveryId: result.deliveryId,
+      })
       warnings.push({
         code: 'DELIVERY_HISTORY_FINALIZE_FAILED',
         message: 'The delivery snapshot exists but could not be finalized. Reconcile the pending delivery record.',

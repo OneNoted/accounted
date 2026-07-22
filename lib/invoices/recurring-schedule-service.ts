@@ -36,7 +36,10 @@ import {
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { sendTrackedInvoiceEmail } from '@/lib/invoices/invoice-deliveries'
+import {
+  reserveInvoiceDelivery,
+  sendTrackedInvoiceEmail,
+} from '@/lib/invoices/invoice-deliveries'
 import { createLogger } from '@/lib/logger'
 import type {
   Invoice,
@@ -454,6 +457,22 @@ async function sendInvoiceFromSchedule(
     throw new Error('company settings missing: cannot send invoice')
   }
 
+  let deliveryId: string
+  try {
+    deliveryId = await reserveInvoiceDelivery({
+      supabase,
+      companyId,
+      userId,
+      invoiceId: invoice.id,
+    })
+  } catch (err) {
+    log.error('failed to reserve recurring invoice delivery', err as Error, {
+      invoiceId: invoice.id,
+      companyId,
+    })
+    return false
+  }
+
   const items = (invoice.items || []).slice().sort((a, b) => a.sort_order - b.sort_order)
 
   // Auto-create an online payment link (extension-provided, e.g. Stripe) so
@@ -516,6 +535,7 @@ async function sendInvoiceFromSchedule(
       companyId,
       userId,
       invoiceId: invoice.id,
+      deliveryId,
       to: invoice.customer.email,
       cc: ccAddress,
       subject,
@@ -533,6 +553,14 @@ async function sendInvoiceFromSchedule(
     return false
   }
 
+  if (result.trackingWarning) {
+    log.error(
+      'recurring invoice delivery snapshot requires reconciliation',
+      new Error(result.trackingWarning),
+      { invoiceId: invoice.id, deliveryId: result.deliveryId },
+    )
+  }
+
   if (!result.success) {
     log.error(
       'email provider failed in recurring schedule auto-send',
@@ -540,14 +568,6 @@ async function sendInvoiceFromSchedule(
       { invoiceId: invoice.id },
     )
     return false
-  }
-
-  if (result.trackingWarning) {
-    log.error(
-      'recurring invoice delivery snapshot could not be finalized',
-      new Error(result.trackingWarning),
-      { invoiceId: invoice.id, deliveryId: result.deliveryId },
-    )
   }
 
   // Email delivered: flip status, create JE, archive PDF. Treat downstream

@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-06-03
+            Senast uppdaterad: 2026-07-22
           </p>
         </div>
 
@@ -49,6 +49,7 @@ export default function PrivacyPolicyPage() {
               <li><strong>Bokföringsdata:</strong> Verifikationer, fakturor, kvitton, transaktioner, kontoplaner</li>
               <li><strong>Bankdata:</strong> Kontosaldon och transaktioner (via PSD2-koppling)</li>
               <li><strong>Dokument:</strong> Uppladdade kvitton, fakturor och andra bokföringsunderlag</li>
+              <li><strong>Fakturaleverans:</strong> Mottagaradress, leveransstatus, tidpunkt och innehållet i skickade fakturamejl</li>
               <li><strong>Tekniska uppgifter:</strong> IP-adress, enhetstyp, användningsstatistik</li>
             </ul>
           </CardContent>
@@ -199,6 +200,11 @@ export default function PrivacyPolicyPage() {
                 <strong>Bokföringsmaterial:</strong> 7 år från räkenskapsårets slut, i enlighet
                 med Bokföringslagen (BFL) 7 kap. 2 §. Systemet hindrar radering av material
                 kopplat till bokförda verifikationer under denna period.
+              </li>
+              <li>
+                <strong>Fakturaleverans:</strong> Leveransbevis och den skickade PDF-filen bevaras
+                under bokföringslagens lagringstid. Därefter raderas mottagaradresser,
+                meddelandeinnehåll och andra personuppgifter automatiskt från leveranshistoriken.
               </li>
               <li>
                 <strong>Kontouppgifter:</strong> Så länge kontot är aktivt, plus 30 dagar efter

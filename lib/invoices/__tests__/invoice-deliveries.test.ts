@@ -12,35 +12,63 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 import {
   InvoiceDeliverySnapshotError,
   recordManualInvoiceDelivery,
+  reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '../invoice-deliveries'
 
 function makeSupabase(options?: {
   insertData?: Record<string, unknown> | null
-  insertError?: { message: string } | null
-  updateError?: { message: string } | null
+  insertError?: { message: string; code?: string } | null
+  existingData?: Record<string, unknown> | null
+  snapshotData?: Record<string, unknown> | null
+  snapshotError?: { message: string } | null
+  terminalError?: { message: string } | null
 }) {
   const insertResult = {
     data: options?.insertData === undefined ? { id: 'delivery-1' } : options.insertData,
     error: options?.insertError ?? null,
   }
-  const updateResult = { data: null, error: options?.updateError ?? null }
+  const updateResults = [
+    {
+      data: options?.snapshotData === undefined ? { id: 'delivery-1' } : options.snapshotData,
+      error: options?.snapshotError ?? null,
+    },
+    { data: null, error: options?.terminalError ?? null },
+  ]
 
   const insertSpy = vi.fn(() => ({
     select: vi.fn(() => ({
       single: vi.fn().mockResolvedValue(insertResult),
     })),
   }))
-  const updateChain: {
+  const updateSpy = vi.fn(() => {
+    const result = updateResults.shift() ?? { data: null, error: null }
+    const chain: Record<string, unknown> & {
+      eq: ReturnType<typeof vi.fn>
+      select: ReturnType<typeof vi.fn>
+      single: ReturnType<typeof vi.fn>
+      then: (resolve: (value: typeof result) => void) => void
+    } = {
+      eq: vi.fn(),
+      select: vi.fn(),
+      single: vi.fn().mockResolvedValue(result),
+      then: (resolve) => resolve(result),
+    }
+    chain.eq.mockReturnValue(chain)
+    chain.select.mockReturnValue(chain)
+    return chain
+  })
+  const existingResult = { data: options?.existingData ?? null, error: null }
+  const selectChain: Record<string, unknown> & {
     eq: ReturnType<typeof vi.fn>
-    then: (resolve: (value: typeof updateResult) => void) => void
+    maybeSingle: ReturnType<typeof vi.fn>
   } = {
     eq: vi.fn(),
-    then: (resolve) => resolve(updateResult),
+    maybeSingle: vi.fn().mockResolvedValue(existingResult),
   }
-  updateChain.eq.mockReturnValue(updateChain)
-  const updateSpy = vi.fn(() => updateChain)
-  const from = vi.fn(() => ({ insert: insertSpy, update: updateSpy }))
+  selectChain.eq.mockReturnValue(selectChain)
+  const selectSpy = vi.fn(() => selectChain)
+  const from = vi.fn(() => ({ insert: insertSpy, update: updateSpy, select: selectSpy }))
 
   return {
     supabase: { from } as unknown as SupabaseClient,
@@ -56,6 +84,7 @@ function makeInput(supabase: SupabaseClient, emailService: EmailService) {
     companyId: 'company-1',
     userId: 'user-1',
     invoiceId: 'invoice-1',
+    deliveryId: 'delivery-1',
     to: 'customer@example.com',
     cc: ['accounting@example.com'],
     replyTo: 'sender@example.com',
@@ -66,6 +95,10 @@ function makeInput(supabase: SupabaseClient, emailService: EmailService) {
     filename: 'faktura-f-1001.pdf',
     pdfBuffer: Buffer.from('exact-pdf'),
   }
+}
+
+function makeEmailService(sendEmail: ReturnType<typeof vi.fn>): EmailService {
+  return { isConfigured: () => true, sendEmail }
 }
 
 describe('invoice delivery tracking', () => {
@@ -79,7 +112,7 @@ describe('invoice delivery tracking', () => {
   })
 
   it('persists the exact payload before sending and records provider success', async () => {
-    const { supabase, insertSpy, updateSpy } = makeSupabase()
+    const { supabase, updateSpy } = makeSupabase()
     const sendEmail = vi.fn().mockResolvedValue({
       success: true,
       provider: 'resend',
@@ -87,13 +120,10 @@ describe('invoice delivery tracking', () => {
     })
 
     const result = await sendTrackedInvoiceEmail(
-      makeInput(supabase, { sendEmail } as EmailService),
+      makeInput(supabase, makeEmailService(sendEmail)),
     )
 
-    expect(insertSpy).toHaveBeenCalledWith(expect.objectContaining({
-      company_id: 'company-1',
-      invoice_id: 'invoice-1',
-      channel: 'email',
+    expect(updateSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({
       status: 'pending',
       to_addresses: ['customer@example.com'],
       cc_addresses: ['accounting@example.com'],
@@ -113,7 +143,7 @@ describe('invoice delivery tracking', () => {
         content: Buffer.from('exact-pdf'),
       })],
     }))
-    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+    expect(updateSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({
       status: 'sent',
       provider: 'resend',
       provider_message_id: 'provider-message-1',
@@ -127,13 +157,13 @@ describe('invoice delivery tracking', () => {
 
   it('does not call the provider when the immutable snapshot cannot be saved', async () => {
     const { supabase } = makeSupabase({
-      insertData: null,
-      insertError: { message: 'insert failed' },
+      snapshotData: null,
+      snapshotError: { message: 'update failed' },
     })
     const sendEmail = vi.fn()
 
     await expect(
-      sendTrackedInvoiceEmail(makeInput(supabase, { sendEmail } as EmailService)),
+      sendTrackedInvoiceEmail(makeInput(supabase, makeEmailService(sendEmail))),
     ).rejects.toBeInstanceOf(InvoiceDeliverySnapshotError)
     expect(sendEmail).not.toHaveBeenCalled()
     expect(mockDeleteDocument).toHaveBeenCalledWith(
@@ -148,30 +178,49 @@ describe('invoice delivery tracking', () => {
     const sendEmail = vi.fn().mockResolvedValue({
       success: false,
       provider: 'resend',
+      messageId: 'provider-returned-on-failure',
       error: 'provider rejected the request',
     })
 
     const result = await sendTrackedInvoiceEmail(
-      makeInput(supabase, { sendEmail } as EmailService),
+      makeInput(supabase, makeEmailService(sendEmail)),
     )
 
     expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
       provider: 'resend',
+      provider_message_id: null,
       error_code: 'provider_failed',
+      document_attachment_id: null,
     }))
+    expect(mockDeleteDocument).toHaveBeenCalledWith(supabase, 'company-1', 'document-1')
     expect(result.success).toBe(false)
   })
 
   it('surfaces a warning if a successful provider result cannot be finalized', async () => {
-    const { supabase } = makeSupabase({ updateError: { message: 'update failed' } })
+    const { supabase } = makeSupabase({ terminalError: { message: 'update failed' } })
     const sendEmail = vi.fn().mockResolvedValue({ success: true })
 
     const result = await sendTrackedInvoiceEmail(
-      makeInput(supabase, { sendEmail } as EmailService),
+      makeInput(supabase, makeEmailService(sendEmail)),
     )
 
     expect(result.trackingWarning).toBe('finalize_failed')
+  })
+
+  it('reuses an existing preparing reservation after a unique conflict', async () => {
+    const { supabase } = makeSupabase({
+      insertData: null,
+      insertError: { message: 'duplicate', code: '23505' },
+      existingData: { id: 'delivery-existing' },
+    })
+
+    await expect(reserveInvoiceDelivery({
+      supabase,
+      companyId: 'company-1',
+      userId: 'user-1',
+      invoiceId: 'invoice-1',
+    })).resolves.toBe('delivery-existing')
   })
 
   it('records manual delivery without inventing recipient or content details', async () => {

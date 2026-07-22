@@ -57,6 +57,7 @@ vi.mock('@/lib/transactions/categorize-core', async () => {
 const mockRecordManualInvoiceDelivery = vi.fn().mockResolvedValue({ id: 'delivery-1' })
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
+  reserveInvoiceDelivery: vi.fn().mockResolvedValue('delivery-1'),
   sendTrackedInvoiceEmail: vi.fn(),
 }))
 

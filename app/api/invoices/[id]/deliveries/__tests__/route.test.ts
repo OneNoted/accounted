@@ -65,7 +65,7 @@ describe('GET /api/invoices/[id]/deliveries', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns delivery metadata without stored HTML', async () => {
+  it('returns minimized delivery metadata with masked recipient domains', async () => {
     const delivery = {
       id: 'delivery-1',
       channel: 'email',
@@ -97,8 +97,28 @@ describe('GET /api/invoices/[id]/deliveries', () => {
     const { body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(response)
 
     expect(response.status).toBe(200)
-    expect(body.data).toEqual([delivery])
+    expect(body.data).toEqual([{
+      id: 'delivery-1',
+      channel: 'email',
+      status: 'sent',
+      to_addresses: ['***@example.com'],
+      cc_addresses: [],
+      provider: 'resend',
+      error_code: null,
+      document_attachment_id: 'document-1',
+      sent_at: '2026-07-22T10:30:00.000Z',
+      failed_at: null,
+      created_at: '2026-07-22T10:29:59.000Z',
+    }])
+    expect(body.data[0]).not.toHaveProperty('body_text')
     expect(body.data[0]).not.toHaveProperty('body_html')
+    expect(body.data[0]).not.toHaveProperty('subject')
+    expect(body.data[0]).not.toHaveProperty('reply_to')
+    expect(body.data[0]).not.toHaveProperty('provider_message_id')
+    expect(body.data[0]).not.toHaveProperty('attachment_filename')
+    expect(body.data[0]).not.toHaveProperty('attachment_content_type')
+    expect(body.data[0]).not.toHaveProperty('attachment_sha256')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockSupabase.from).toHaveBeenCalledWith('invoice_deliveries')
   })
 })

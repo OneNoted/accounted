@@ -4390,6 +4390,7 @@
     "source_skatteverket": "Skatteverket ({count})",
     "search_placeholder": "Search transactions...",
     "no_search_results": "No transactions match your search.",
+    "source_empty": "The selected source has no transactions. Choose All to show the other sources.",
     "skv_reconnect_title": "The Skatteverket connection needs to be renewed",
     "skv_reconnect_body": "Tax account transactions are not fetched until you reconnect with BankID and approve all permissions.",
     "skv_reconnect_cta": "Reconnect",

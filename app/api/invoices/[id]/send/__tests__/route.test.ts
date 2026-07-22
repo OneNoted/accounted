@@ -83,8 +83,10 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   deliveryId: 'delivery-1',
   documentId: 'document-1',
 }))
+const mockReserveInvoiceDelivery = vi.fn().mockResolvedValue('delivery-1')
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
+  reserveInvoiceDelivery: (...args: unknown[]) => mockReserveInvoiceDelivery(...args),
   sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
 }))
 
@@ -667,6 +669,22 @@ describe('POST /api/invoices/[id]/send', () => {
 
     expect(status).toBe(500)
     expect((body.error as { code: string }).code).toBe('INVOICE_SEND_SNAPSHOT_FAILED')
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('does not allocate an invoice number when delivery reservation fails', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    mockReserveInvoiceDelivery.mockRejectedValueOnce(new Error('reservation failed'))
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INVOICE_SEND_SNAPSHOT_FAILED')
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+    expect(mockSendTrackedInvoiceEmail).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 

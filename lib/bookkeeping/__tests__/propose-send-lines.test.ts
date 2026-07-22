@@ -150,6 +150,26 @@ describe('proposeSendLines', () => {
     expect(lines).toEqual([])
   })
 
+  it('rejects a non-zero invoice containing only informational rows', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        items: [
+          makeItem({
+            line_type: 'text',
+            quantity: 0,
+            unit_price: 0,
+            line_total: 0,
+            vat_rate: 0,
+            vat_amount: 0,
+          }),
+        ],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toEqual([])
+  })
+
   it('credit note uses positive amounts on the reversed sides', () => {
     const lines = proposeSendLines({
       invoice: makeInvoiceInput({

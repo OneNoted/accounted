@@ -12,24 +12,17 @@ export type InvoiceDeliveryView = Pick<
   InvoiceDelivery,
   | 'id'
   | 'channel'
-  | 'status'
   | 'to_addresses'
   | 'cc_addresses'
-  | 'reply_to'
-  | 'from_name'
-  | 'subject'
-  | 'body_text'
   | 'provider'
-  | 'provider_message_id'
   | 'error_code'
   | 'document_attachment_id'
-  | 'attachment_filename'
-  | 'attachment_content_type'
-  | 'attachment_sha256'
   | 'sent_at'
   | 'failed_at'
   | 'created_at'
->
+> & {
+  status: 'pending' | 'sent' | 'failed' | 'marked_sent'
+}
 
 interface InvoiceDeliveryHistoryProps {
   deliveries: InvoiceDeliveryView[]
@@ -119,30 +112,7 @@ export function InvoiceDeliveryHistory({
                               <dd className="break-words">{delivery.cc_addresses.join(', ')}</dd>
                             </>
                           )}
-                          {delivery.reply_to && (
-                            <>
-                              <dt className="text-muted-foreground">{t('delivery_reply_to_label')}</dt>
-                              <dd className="break-words">{delivery.reply_to}</dd>
-                            </>
-                          )}
-                          {delivery.from_name && (
-                            <>
-                              <dt className="text-muted-foreground">{t('delivery_from_label')}</dt>
-                              <dd>{delivery.from_name}</dd>
-                            </>
-                          )}
-                          <dt className="text-muted-foreground">{t('delivery_subject_label')}</dt>
-                          <dd className="break-words font-medium">{delivery.subject}</dd>
                         </dl>
-
-                        {delivery.body_text && (
-                          <div>
-                            <p className="mb-2 text-muted-foreground">{t('delivery_message_label')}</p>
-                            <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-muted p-3 break-words">
-                              {delivery.body_text}
-                            </div>
-                          </div>
-                        )}
 
                         {delivery.document_attachment_id && (
                           <Button asChild variant="outline" size="sm" className="max-w-full">
@@ -153,26 +123,18 @@ export function InvoiceDeliveryHistory({
                             >
                               <ExternalLink className="mr-2 h-4 w-4" />
                               <span className="truncate">
-                                {t('delivery_open_pdf', {
-                                  filename: delivery.attachment_filename || t('delivery_pdf_fallback'),
-                                })}
+                                {t('delivery_open_pdf', { filename: t('delivery_pdf_fallback') })}
                               </span>
                             </a>
                           </Button>
                         )}
 
-                        {(delivery.provider || delivery.provider_message_id || delivery.error_code) && (
+                        {(delivery.provider || delivery.error_code) && (
                           <dl className="grid gap-2 border-t pt-3 text-xs text-muted-foreground sm:grid-cols-[8rem_minmax(0,1fr)]">
                             {delivery.provider && (
                               <>
                                 <dt>{t('delivery_provider_label')}</dt>
                                 <dd>{delivery.provider}</dd>
-                              </>
-                            )}
-                            {delivery.provider_message_id && (
-                              <>
-                                <dt>{t('delivery_message_id_label')}</dt>
-                                <dd className="break-all font-mono">{delivery.provider_message_id}</dd>
                               </>
                             )}
                             {delivery.error_code && (

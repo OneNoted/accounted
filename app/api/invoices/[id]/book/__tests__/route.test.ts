@@ -39,6 +39,11 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
   cancelOrphanedPaymentEntry: (...args: unknown[]) => mockCancelOrphan(...args),
 }))
 
+const mockLinkToJournalEntry = vi.fn()
+vi.mock('@/lib/core/documents/document-service', () => ({
+  linkToJournalEntry: (...args: unknown[]) => mockLinkToJournalEntry(...args),
+}))
+
 import { POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -68,6 +73,7 @@ describe('POST /api/invoices/[id]/book', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
+    mockLinkToJournalEntry.mockResolvedValue({ id: 'document-1' })
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -169,6 +175,7 @@ describe('POST /api/invoices/[id]/book', () => {
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null })
+    enqueue({ data: null, error: null })
 
     const { status, body } = await parseJsonResponse<{
       data: { journal_entry_id: string }
@@ -187,5 +194,24 @@ describe('POST /api/invoices/[id]/book', () => {
       'Kunden AB',
     )
     expect(mockCreateSchedules).toHaveBeenCalled()
+  })
+
+  it('links the delivered PDF to the deferred journal entry', async () => {
+    const invoice = makeUnbookedInvoice()
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null })
+    enqueue({ data: { document_attachment_id: 'document-1' }, error: null })
+
+    const { status } = await parseJsonResponse(await bookRequest())
+
+    expect(status).toBe(200)
+    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'document-1',
+      'je-1',
+    )
   })
 })

@@ -45,12 +45,13 @@ describe('contentDisposition', () => {
     ).not.toThrow()
   })
 
-  it('neutralizes quote and CRLF header injection', () => {
-    const header = contentDisposition('attachment', 'evil"\r\nSet-Cookie: x=y.pdf')
+  it('neutralizes header delimiters and CRLF injection', () => {
+    const header = contentDisposition('attachment', 'evil";\\\r\nSet-Cookie: x=y.pdf')
     expect(header).not.toContain('\r')
     expect(header).not.toContain('\n')
-    expect(header).toContain('filename="evil___Set-Cookie: x=y.pdf"')
+    expect(header).toContain('filename="evil_____Set-Cookie: x=y.pdf"')
     // The extended form percent-encodes them instead of emitting them raw.
+    expect(header).toContain('%22%3B%5C')
     expect(header).toContain('%0D%0A')
   })
 

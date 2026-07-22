@@ -22,6 +22,7 @@ import {
 } from '@/lib/invoices/issue-credit-note'
 import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import {
+  reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
@@ -206,6 +207,22 @@ export const POST = withRouteContext(
       }
     }
 
+    let deliveryId: string
+    try {
+      deliveryId = await reserveInvoiceDelivery({
+        supabase,
+        companyId: companyId!,
+        userId: user.id,
+        invoiceId: id,
+      })
+    } catch (err) {
+      opLog.error('failed to reserve invoice delivery before number assignment', err as Error)
+      return errorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', opLog, {
+        requestId,
+        details: { retryable: err instanceof InvoiceDeliverySnapshotError },
+      })
+    }
+
     // Allocate the F-series number. Idempotent: retries reuse the same number.
     try {
       await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
@@ -359,6 +376,7 @@ export const POST = withRouteContext(
         companyId: companyId!,
         userId: user.id,
         invoiceId: id,
+        deliveryId,
         to: customer.email,
         cc: ccAddress,
         subject,
@@ -378,6 +396,13 @@ export const POST = withRouteContext(
     }
 
     if (!result.success) {
+      if (result.trackingWarning) {
+        opLog.warn('invoice send: failed delivery snapshot not reconciled', {
+          invoiceId: id,
+          deliveryId: result.deliveryId,
+          warning: result.trackingWarning,
+        })
+      }
       opLog.error('email provider failed to send invoice', new Error(result.error || 'Unknown'))
       return errorResponseFromCode('INVOICE_SEND_PROVIDER_FAILED', opLog, {
         requestId,
@@ -386,6 +411,10 @@ export const POST = withRouteContext(
     }
 
     if (result.trackingWarning) {
+      opLog.warn('invoice send: delivery snapshot not finalised', {
+        invoiceId: id,
+        deliveryId: result.deliveryId,
+      })
       partialFailures.push({
         step: 'delivery_history',
         reason: 'Utskicket sparades men kunde inte färdigmarkeras i historiken.',

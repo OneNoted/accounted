@@ -73,6 +73,8 @@ export function invoicePdfFilename({
   const company = safeFilenamePart(companyName, 'Företag', MAX_NAME_PART_LENGTH)
   const customer = safeFilenamePart(customerName, 'Kund', MAX_NAME_PART_LENGTH)
   const label = documentLabel(documentType ?? 'invoice', isCreditNote)
+  // The cross-platform filename is descriptive only. The invoice body retains
+  // the authoritative number and credit-note reference, including separators.
   const number = invoiceNumber
     ? `nr ${safeFilenamePart(invoiceNumber, 'okänd', MAX_NUMBER_PART_LENGTH)}`
     : `utkast-${safeFilenamePart(invoiceId?.slice(0, 8), 'utan-nummer', MAX_NUMBER_PART_LENGTH)}`

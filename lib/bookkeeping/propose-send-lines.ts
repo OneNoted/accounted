@@ -123,6 +123,13 @@ function buildSendLines(
   const creditLines: FormLine[] = []
   const accountingItems = (invoice.items ?? []).filter((item) => item.line_type !== 'text')
 
+  // Existing informational rows are never a valid source for an invoice-level
+  // amount. Returning no proposal keeps an inconsistent text-only invoice from
+  // producing a debit-only entry; the user must correct its economic rows.
+  if (accountingItems.length === 0 && (invoice.items?.length ?? 0) > 0) {
+    return []
+  }
+
   if (accountingItems.length > 0) {
     const hasPerLineVat = accountingItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
 
