@@ -64,15 +64,9 @@ function stripTrailingNoiseTokens(s: string): string {
   return tokens.join(' ')
 }
 
-/**
- * Normalize a transaction description to a canonical counterparty name.
- *
- * Strips bank transfer prefixes, trailing dates, invoice references, trailing
- * digit sequences, and trailing period/initials tokens, then delegates to
- * normalizeMerchantName() for Swedish company suffix removal and lowercasing.
- */
-export function normalizeCounterpartyName(raw: string): string {
-  const cleaned = raw
+/** Shared first stage: bank-feed noise that is never merchant identity. */
+function stripBankNoise(raw: string): string {
+  return raw
     // Strip common bank transfer prefixes
     .replace(/^(BANKGIRO|SWISH|KORTKÖP|KORT\s*KÖP|PG|BG|AUTOGIRO|PLUSGIRO)\s*/i, '')
     // Strip dates (20240615, 2024-06-15, 24-06-15)
@@ -83,11 +77,94 @@ export function normalizeCounterpartyName(raw: string): string {
     // Strip trailing sequences of 4+ digits (card numbers, transaction refs)
     .replace(/\s+\d{4,}\s*$/g, '')
     .trim()
+}
+
+/**
+ * Payment processors whose card descriptors put the real merchant AFTER the
+ * star ("PAYPAL *SPOTIFY", "SQ *BLUE BOTTLE"). For every other star
+ * descriptor the merchant is the segment before it.
+ */
+const PROCESSOR_STAR_PREFIXES = new Set([
+  'paypal', 'klarna', 'izettle', 'zettle', 'iz', 'sq', 'sp', 'sumup',
+  'google', 'stripe', 'payu', 'mollie',
+])
+
+/**
+ * Reduce a card-network descriptor to its merchant segment. Card descriptors
+ * embed '*' between merchant identity and a per-charge tail (product, order
+ * ref, city): "ANTHROPIC* CLAUDE SUB SAN FRANCISCO" is the merchant
+ * "ANTHROPIC", not five words. The tail varies between charges, so keeping it
+ * splinters every recurring foreign SaaS subscription into a new counterparty
+ * each month. No '*' → returned unchanged.
+ *
+ * Mirrored in SQL by normalize_counterparty_key(); keep the two in sync
+ * (tests/pg/ledger-usage-stats-rpc.pg.test.ts asserts parity).
+ */
+function extractCardDescriptorCore(cleaned: string): string {
+  const starIdx = cleaned.indexOf('*')
+  if (starIdx === -1) return cleaned
+  const head = cleaned.slice(0, starIdx).trim()
+  const tail = cleaned.slice(starIdx + 1).trim()
+  const headKey = head.toLowerCase().replace(/[^a-z0-9åäöé]/g, '')
+  if (PROCESSOR_STAR_PREFIXES.has(headKey) && tail) return tail
+  if (headKey.length >= 3) return head
+  return tail || head
+}
+
+/**
+ * Normalize a transaction description to a canonical counterparty name.
+ *
+ * Strips bank transfer prefixes, trailing dates, invoice references, trailing
+ * digit sequences, card-descriptor tails, and trailing period/initials tokens,
+ * then delegates to normalizeMerchantName() for Swedish company suffix removal
+ * and lowercasing.
+ */
+export function normalizeCounterpartyName(raw: string): string {
+  const cleaned = extractCardDescriptorCore(stripBankNoise(raw))
 
   // Drop trailing month/initials tokens before merchant-name normalization so
   // "ngrok JW" and "Ngrok Mars" collapse to the same canonical "ngrok".
   return normalizeMerchantName(stripTrailingNoiseTokens(cleaned))
 }
+
+/**
+ * Full normalized token set of a descriptor WITHOUT the card-core reduction:
+ * the product segment of a card descriptor ("CLAUDE SUB") often carries the
+ * very token an existing template is named by ("claude", learned from manual
+ * bookings of the same subscription). Feeds the token_subset match tier only;
+ * canonical identity stays normalizeCounterpartyName().
+ */
+export function counterpartyTokenSet(raw: string): Set<string> {
+  const full = normalizeMerchantName(stripBankNoise(raw))
+  return new Set(full.split(' ').filter(Boolean))
+}
+
+/**
+ * Tokens too generic to identify a merchant on their own: month labels,
+ * commerce noise, and geo words that ride along on bank descriptors.
+ */
+const GENERIC_TOKENS = new Set([
+  ...TRAILING_MONTH_TOKENS,
+  'subscription', 'subscr', 'abonnemang', 'betalning', 'payment', 'purchase',
+  'online', 'store', 'shop', 'butik', 'faktura', 'invoice',
+  'sweden', 'sverige', 'stockholm', 'göteborg', 'goteborg', 'malmö', 'malmo',
+])
+
+/** Distinctive = long and specific enough to identify a merchant. */
+function distinctiveTokens(tokens: string[]): string[] {
+  return tokens.filter(
+    (t) => t.length >= 4 && !GENERIC_TOKENS.has(t) && !/^\d+$/.test(t)
+  )
+}
+
+/**
+ * A single shared token is thin evidence: require the template to be backed
+ * by real booking history before trusting it, so a template named after a
+ * common word or first name (template "anders", occurrence 1) cannot vacuum
+ * up unrelated transfers ("SWISH ANDERS JOHANSSON"). Multi-token agreement
+ * is specific enough on its own.
+ */
+const MIN_SINGLE_TOKEN_OCCURRENCES = 3
 
 // ── Confidence ─────────────────────────────────────────────────
 
@@ -204,17 +281,18 @@ function isStaleReduced12Match(
 
 export interface CounterpartyTemplateMatch {
   template: CategorizationTemplate
-  matchMethod: 'exact_alias' | 'exact_normalized' | 'fuzzy'
+  matchMethod: 'exact_alias' | 'exact_normalized' | 'token_subset' | 'fuzzy'
   confidence: number
 }
 
 /**
  * Find a counterparty template matching a transaction.
  *
- * Three-tier matching (delegated to batch version with single-element array):
+ * Four-tier matching (delegated to batch version with single-element array):
  * 1. Exact alias match
  * 2. Exact normalized name match
- * 3. Fuzzy Levenshtein: distance ≤2 for short names, ≤3 for long names
+ * 3. Token subset: every distinctive template token appears in the descriptor
+ * 4. Fuzzy Levenshtein: distance ≤2 for short names, ≤3 for long names
  */
 export async function findCounterpartyTemplate(
   supabase: SupabaseClient,
@@ -289,7 +367,49 @@ export async function findCounterpartyTemplatesBatch(
       continue
     }
 
-    // 3. Fuzzy Levenshtein match
+    // 3. Token-subset match. Bridges the gaps exact and Levenshtein tiers
+    // cannot: a template learned from manual bookings ("claude") whose token
+    // appears inside a card descriptor ("ANTHROPIC* CLAUDE SUB SAN
+    // FRANCISCO"), and a card-core descriptor ("anthropic") contained in a
+    // template learned from the full splintered string before card-core
+    // normalization existed. These differ by whole words, not typos.
+    const txTokens = counterpartyTokenSet(rawName)
+    const coreDistinct = distinctiveTokens(normalized.split(' '))
+    let tokenBest: CategorizationTemplate | null = null
+    let tokenBestShared = 0
+    for (const tmpl of templates) {
+      const tmplTokens = tmpl.counterparty_name.split(' ')
+      const tmplDistinct = distinctiveTokens(tmplTokens)
+      const templateInTx =
+        tmplDistinct.length > 0 &&
+        tmplDistinct.every((t) => txTokens.has(t)) &&
+        (tmplDistinct.length >= 2 || tmpl.occurrence_count >= MIN_SINGLE_TOKEN_OCCURRENCES)
+      const coreInTemplate =
+        coreDistinct.length > 0 &&
+        coreDistinct.every((t) => tmplTokens.includes(t)) &&
+        (coreDistinct.length >= 2 || tmpl.occurrence_count >= MIN_SINGLE_TOKEN_OCCURRENCES)
+      if (!templateInTx && !coreInTemplate) continue
+      const shared = templateInTx ? tmplDistinct.length : coreDistinct.length
+      if (
+        shared > tokenBestShared ||
+        (shared === tokenBestShared &&
+          tokenBest !== null &&
+          tmpl.occurrence_count > tokenBest.occurrence_count)
+      ) {
+        tokenBestShared = shared
+        tokenBest = tmpl
+      }
+    }
+    if (tokenBest) {
+      result.set(tx.id, {
+        template: tokenBest,
+        matchMethod: 'token_subset',
+        confidence: Math.round(Number(tokenBest.confidence) * 0.85 * 100) / 100,
+      })
+      continue
+    }
+
+    // 4. Fuzzy Levenshtein match
     let bestMatch: CategorizationTemplate | null = null
     let bestDistance = Infinity
     for (const tmpl of templates) {

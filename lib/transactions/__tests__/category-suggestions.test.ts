@@ -46,6 +46,40 @@ describe('buildMerchantHistory / merchantHistoryFor', () => {
     expect(merchantHistoryFor(map, 'Unknown Vendor')).toEqual({})
     expect(merchantHistoryFor(map, null)).toEqual({})
   })
+
+  it('falls back to the description when merchant_name is null (card purchases)', () => {
+    // Bank feeds only carry counterparty names for transfers; card purchases
+    // arrive with merchant_name null and the merchant buried in a descriptor
+    // whose tail (product, city) changes between charges. All of these are
+    // one counterparty: the reported Anthropic no-signal bug.
+    const map = buildMerchantHistory([
+      { merchant_name: null, description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO', category: 'expense_software' },
+      { merchant_name: null, description: 'ANTHROPIC*CLAUDE SUB +14155551234', category: 'expense_software' },
+      { merchant_name: 'Anthropic', description: 'irrelevant when merchant_name set', category: 'expense_software' },
+    ])
+    expect(merchantHistoryFor(map, null, 'ANTHROPIC* CLAUDE SUB LONDON')).toEqual({
+      expense_software: 3,
+    })
+    expect(merchantHistoryFor(map, 'Anthropic')).toEqual({ expense_software: 3 })
+  })
+
+  it('anchors on original_description so user renames do not sever history', () => {
+    // description is a mutable working title; a user renaming the row to
+    // "Software" must not detach it from the raw bank descriptor identity.
+    const map = buildMerchantHistory([
+      {
+        merchant_name: null,
+        description: 'Software',
+        original_description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
+        category: 'expense_software',
+      },
+    ])
+    expect(merchantHistoryFor(map, null, 'ANTHROPIC*CLAUDE SUB +14155551234')).toEqual({
+      expense_software: 1,
+    })
+    // Renamed title itself is NOT a key when the raw descriptor exists.
+    expect(merchantHistoryFor(map, null, 'Software')).toEqual({})
+  })
 })
 
 describe('getSuggestedCategories: counterparty history', () => {

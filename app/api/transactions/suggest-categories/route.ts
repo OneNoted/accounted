@@ -44,11 +44,12 @@ export const POST = withRouteContext(
     // (global frequency padding produced identical low-confidence spreads).
     const { data: historicalTxns } = await supabase
       .from('transactions')
-      .select('category, merchant_name')
+      .select('category, merchant_name, description, original_description')
       .eq('company_id', companyId)
       .not('is_business', 'is', null)
       .neq('category', 'uncategorized')
       .neq('category', 'private')
+      .order('date', { ascending: false })
       .limit(200)
 
     const merchantHistory = buildMerchantHistory(historicalTxns ?? [])
@@ -72,7 +73,11 @@ export const POST = withRouteContext(
       suggestions[tx.id] = getSuggestedCategories(
         tx as Transaction,
         mappingRules || [],
-        merchantHistoryFor(merchantHistory, (tx as Transaction).merchant_name)
+        merchantHistoryFor(
+          merchantHistory,
+          (tx as Transaction).merchant_name,
+          (tx as Transaction).original_description ?? (tx as Transaction).description,
+        )
       )
       template_suggestions[tx.id] = await getSuggestedTemplates(tx as Transaction, entityType, mappingRules || undefined)
     }

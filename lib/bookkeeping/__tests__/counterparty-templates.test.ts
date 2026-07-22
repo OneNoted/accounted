@@ -90,6 +90,21 @@ describe('counterparty-templates', () => {
       expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars: kept
       expect(normalizeCounterpartyName('KLARNA')).toBe('klarna')         // single token kept
     })
+
+    it('reduces card-network descriptors to the merchant segment', () => {
+      // The Anthropic splinter bug: the per-charge tail after '*' (product,
+      // ref, city) changes between charges, so keeping it makes every
+      // recurring foreign SaaS subscription a new counterparty each month.
+      expect(normalizeCounterpartyName('ANTHROPIC* CLAUDE SUB SAN FRANCISCO')).toBe('anthropic')
+      expect(normalizeCounterpartyName('ANTHROPIC*CLAUDE SUB +14155551234')).toBe('anthropic')
+      expect(normalizeCounterpartyName('AMZN MKTP SE*A12B34CD5')).toBe('amzn mktp')
+    })
+
+    it('keeps the merchant AFTER the star for processor descriptors', () => {
+      expect(normalizeCounterpartyName('PAYPAL *SPOTIFY')).toBe('spotify')
+      expect(normalizeCounterpartyName('SQ *BLUE BOTTLE COFFEE')).toBe('blue bottle coffee')
+      expect(normalizeCounterpartyName('KLARNA*BOOZT FASHION')).toBe('boozt fashion')
+    })
   })
 
   // ── Confidence ─────────────────────────────────────────────
@@ -218,6 +233,132 @@ describe('counterparty-templates', () => {
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
 
       expect(result).toBeNull()
+    })
+
+    it('token-subset matches a template token buried in a card descriptor', async () => {
+      // The reported Anthropic case: a template learned from manual bookings
+      // ("Claude Dec" -> "claude") must match the bank's card descriptor even
+      // though the strings differ by whole words, not typos.
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'claude',
+        confidence: 0.8,
+        counterparty_aliases: ['claude dec'],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
+      })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).not.toBeNull()
+      expect(result!.matchMethod).toBe('token_subset')
+      expect(result!.confidence).toBeCloseTo(0.68, 2) // 0.8 * 0.85
+    })
+
+    it('token-subset matches a card-core descriptor against a legacy splintered template', async () => {
+      // Templates learned before card-core normalization stored the full
+      // descriptor; the new normalized core must still find them.
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'anthropic claude sub san francisco',
+        confidence: 0.7,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'ANTHROPIC*CLAUDE SUB LONDON',
+      })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).not.toBeNull()
+      expect(result!.matchMethod).toBe('token_subset')
+    })
+
+    it('suppresses single-token matches without booking history behind them', async () => {
+      // A template named after a common first name (one prior booking) must
+      // not vacuum up an unrelated SWISH transfer that shares the name.
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'anders',
+        confidence: 0.5,
+        occurrence_count: 1,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({ merchant_name: null, description: 'SWISH ANDERS JOHANSSON' })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).toBeNull()
+    })
+
+    it('multi-token agreement matches without an occurrence floor', async () => {
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'blue bottle',
+        confidence: 0.5,
+        occurrence_count: 1,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'SQ *BLUE BOTTLE COFFEE OAKLAND',
+      })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).not.toBeNull()
+      expect(result!.matchMethod).toBe('token_subset')
+    })
+
+    it('never token-matches on generic tokens alone', async () => {
+      // A template whose name is all generic/geo words must not vacuum up
+      // every descriptor mentioning them.
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'sverige',
+        confidence: 0.9,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({ merchant_name: 'IKEA SVERIGE STOCKHOLM' })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).toBeNull()
+    })
+
+    it('prefers exact normalized over token subset', async () => {
+      const exact = makeCategorizationTemplate({
+        id: 'tmpl-exact',
+        counterparty_name: 'anthropic',
+        confidence: 0.8,
+        counterparty_aliases: [],
+      })
+      const tokenish = makeCategorizationTemplate({
+        id: 'tmpl-token',
+        counterparty_name: 'claude',
+        confidence: 0.8,
+        counterparty_aliases: [],
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [tokenish, exact] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
+      })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).not.toBeNull()
+      expect(result!.matchMethod).toBe('exact_normalized')
+      expect(result!.template.id).toBe('tmpl-exact')
     })
   })
 
