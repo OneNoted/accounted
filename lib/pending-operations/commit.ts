@@ -60,6 +60,7 @@ import {
   type SkatteverketCommitServices,
   type SkvSubmitResult,
 } from '@/lib/pending-operations/skatteverket-commit'
+import { PartialCommitError } from '@/lib/pending-operations/errors'
 import { getEmailService } from '@/lib/email/service'
 import { hasCapability, CAPABILITY_BLOCKED_MESSAGE_SV } from '@/lib/entitlements/has-capability'
 import { PAID_OPERATION_CAPABILITY_MAP } from '@/lib/entitlements/keys'
@@ -198,7 +199,16 @@ async function recordSkippedInvoiceJournalEntry(
 
 // ── Executors ────────────────────────────────────────────────────
 
-type ExecutorResult = { data?: Record<string, unknown>; error?: string; status?: number }
+type ExecutorResult = {
+  data?: Record<string, unknown>
+  error?: string
+  status?: number
+  // Set when the executor already performed an irreversible side-effect
+  // (posted voucher, persisted credit note) before the failure in `error`:
+  // the dispatcher then lands the op in 'failed_partial' instead of
+  // 'rejected' and persists these ids in result_data.posted_ids (issue #842).
+  partialPostedIds?: Record<string, string>
+}
 
 async function commitCategorizeTransaction(
   supabase: SupabaseClient,
@@ -1800,13 +1810,13 @@ async function commitMatchTransactionInvoice(
   }
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
-  if (transaction.journal_entry_id) {
-    await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
-    await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
-  }
-
   const now = new Date().toISOString()
 
+  // Read-only prevalidation, deliberately hoisted ABOVE the irreversible
+  // storno below (issue #842): resolveSettlementAccount can throw
+  // (BookkeepingDatabaseError on a failed cash_accounts lookup), and a throw
+  // here must reject the op with NOTHING posted. Behavior-preserving on the
+  // happy path: these are pure reads.
   const { data: settings } = await supabase
     .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
 
@@ -1824,6 +1834,17 @@ async function commitMatchTransactionInvoice(
   // transaction settled into. Mirrors the match-invoice route fix.
   const paymentAccount = await resolveSettlementAccount(supabase, companyId, transaction.cash_account_id, log)
 
+  // From here on the executor posts irreversible vouchers. Track their ids so
+  // a later failure can land the op in 'failed_partial' carrying them
+  // (issue #842) instead of a clean-looking 'rejected'.
+  const postedIds: Record<string, string> = {}
+
+  if (transaction.journal_entry_id) {
+    const reversal = await reverseEntry(supabase, companyId, userId, transaction.journal_entry_id)
+    postedIds.reversal_journal_entry_id = reversal.id
+    await supabase.from('transactions').update({ journal_entry_id: null }).eq('id', transactionId)
+  }
+
   let journalEntryId: string | null = null
   try {
     if (useCashEntry) {
@@ -1840,9 +1861,26 @@ async function commitMatchTransactionInvoice(
       journalEntryId = je?.id ?? null
     }
   } catch (err) {
-    if (isBookkeepingError(err)) throw err
+    // Recoverable: the dispatcher releases the op back to 'pending' and this
+    // executor is re-entrant past the storno (the transaction was unlinked
+    // above, so a retry does not post a second storno). Keep that path even
+    // when a reversal voucher was already posted.
+    if (err instanceof AccountsNotInChartError) throw err
+    if (isBookkeepingError(err)) {
+      // A reversal voucher already posted makes this a partial commit, not a
+      // clean failure: surface the storno id (issue #842).
+      if (Object.keys(postedIds).length > 0) {
+        throw new PartialCommitError(
+          `match_transaction_invoice failed after posting a reversal voucher: ${err instanceof Error ? err.message : 'journal entry creation failed'}`,
+          postedIds,
+          err,
+        )
+      }
+      throw err
+    }
     log.error('Failed to create match journal entry:', err)
   }
+  if (journalEntryId) postedIds.payment_journal_entry_id = journalEntryId
 
   const { data: updatedRows, error: updateInvError } = await supabase
     .from('invoices')
@@ -1856,9 +1894,19 @@ async function commitMatchTransactionInvoice(
     .in('status', ['sent', 'overdue', 'partially_paid'])
     .select('id')
 
-  if (updateInvError) return { error: 'Failed to update invoice status', status: 500 }
+  if (updateInvError) {
+    return {
+      error: 'Failed to update invoice status',
+      status: 500,
+      ...(Object.keys(postedIds).length > 0 ? { partialPostedIds: postedIds } : {}),
+    }
+  }
   if (!updatedRows || updatedRows.length === 0) {
-    return { error: 'Invoice has already been fully paid or is no longer matchable', status: 409 }
+    return {
+      error: 'Invoice has already been fully paid or is no longer matchable',
+      status: 409,
+      ...(Object.keys(postedIds).length > 0 ? { partialPostedIds: postedIds } : {}),
+    }
   }
 
   const paymentNotes = (accountingMethod === 'cash' && !isFullyPaid)
@@ -3112,7 +3160,19 @@ async function commitCreditInvoice(
           .eq('id', creditNote.id)
       }
     } catch (err) {
-      if (isBookkeepingError(err)) throw err
+      if (isBookkeepingError(err)) {
+        // The credit note row and the original's 'credited' flip are already
+        // persisted: a clean 'rejected' would hide them. Land the op in
+        // 'failed_partial' carrying the ids (issue #842). This intentionally
+        // covers AccountsNotInChartError too: the release-to-pending retry
+        // path cannot recover a credit_invoice op (re-running the executor
+        // auto-rejects with 409 because the original is already 'credited').
+        throw new PartialCommitError(
+          `credit_invoice failed after persisting the credit note: ${err instanceof Error ? err.message : 'journal entry creation failed'}`,
+          { credit_note_id: creditNote.id, original_invoice_id: id },
+          err,
+        )
+      }
       log.error('Failed to create credit note journal entry:', err)
     }
 
@@ -4693,6 +4753,30 @@ async function commitPendingOperationInner(
         }
     }
   } catch (err) {
+    // Partial commit (issue #842): the executor already posted an
+    // irreversible side-effect (storno voucher, credit note) before a later
+    // step failed. 'rejected' would misrepresent reality and hide the posted
+    // entity, so land the op in the terminal 'failed_partial' status with the
+    // posted ids in result_data so an operator can locate the orphan. Checked
+    // FIRST: a wrapped recoverable cause must NOT release the claim back to
+    // 'pending' (the side-effect already exists).
+    if (err instanceof PartialCommitError) {
+      await supabase
+        .from('pending_operations')
+        .update({
+          status: 'failed_partial',
+          resolved_at: new Date().toISOString(),
+          result_data: { error: err.message, threw: true, posted_ids: err.postedIds },
+        })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: err.message,
+        http_status: 500,
+        code: 'partial_commit',
+        data: { posted_ids: err.postedIds },
+      }
+    }
     // Accounts-not-in-chart is RECOVERABLE: the booking itself is valid; the
     // company's chart just lacks the (standard BAS) accounts it posts to. Do
     // NOT consume the op: release the atomic claim back to 'pending' so the
@@ -4748,6 +4832,36 @@ async function commitPendingOperationInner(
   }
 
   if (result.error) {
+    // Structured partial marker (issue #842): same semantics as the
+    // PartialCommitError branch above, for executors that report the failure
+    // via the ExecutorResult contract instead of throwing. Must run before
+    // the auto-reject branch: a 409 AFTER a voucher was posted is a partial
+    // commit, not a re-stageable rejection.
+    const partialPostedIds =
+      result.partialPostedIds && Object.keys(result.partialPostedIds).length > 0
+        ? result.partialPostedIds
+        : null
+    if (partialPostedIds) {
+      await supabase
+        .from('pending_operations')
+        .update({
+          status: 'failed_partial',
+          resolved_at: new Date().toISOString(),
+          result_data: {
+            error: result.error,
+            http_status: result.status,
+            posted_ids: partialPostedIds,
+          },
+        })
+        .eq('id', pendingOp.id)
+      return {
+        status: 'failed',
+        error: result.error,
+        http_status: result.status ?? 500,
+        code: 'partial_commit',
+        data: { posted_ids: partialPostedIds },
+      }
+    }
     const isAutoReject = result.status === 404 || result.status === 409
     await supabase
       .from('pending_operations')
@@ -4786,11 +4900,17 @@ async function commitPendingOperationInner(
 
   if (finalizeError) {
     // The executor's side-effects already committed (and are immutable); only
-    // the terminal status write failed. Without surfacing this, the row would
-    // sit in 'committing' indefinitely: the expire sweep only targets
-    // 'pending' ops, so nothing would ever reconcile it. Log loudly with the
-    // ids needed to finalize manually; the response still reports success
-    // because the actual work is done.
+    // the terminal status write failed. Log loudly with the ids needed to
+    // finalize manually; the response still reports success because the
+    // actual work is done.
+    //
+    // Runbook (#843): rows left in 'committing' by this failure are picked up
+    // by the daily recovery sweep in
+    // lib/pending-operations/recover-stuck-committing.ts (runs from the
+    // expire cron, threshold 15 min). Grep logs for 'pending_op_recovery' to
+    // see per-row outcomes: 'committed' when posted side-effects were
+    // verified, 'rejected' when no trace was detectable (nothing re-executes
+    // either way).
     log.error('failed to finalize pending_operation to committed (left in committing)', finalizeError, {
       pendingOperationId: pendingOp.id,
       operationType: pendingOp.operation_type,
