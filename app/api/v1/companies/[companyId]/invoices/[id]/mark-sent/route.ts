@@ -41,6 +41,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { eventBus } from '@/lib/events'
 import type { EntityType, Invoice } from '@/types'
 
@@ -350,7 +351,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    // Step 4: emit invoice.sent. Best-effort; escalate to error if it
+    // Step 4: preserve the manual delivery transition in immutable history.
+    try {
+      await recordManualInvoiceDelivery({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        invoiceId,
+      })
+    } catch (err) {
+      ctx.log.error('mark-sent: delivery history insert failed', err as Error, {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      warnings.push({
+        code: 'DELIVERY_HISTORY_NOT_RECORDED',
+        message: 'Invoice was marked sent, but the manual delivery transition could not be added to its history.',
+      })
+    }
+
+    // Step 5: emit invoice.sent. Best-effort; escalate to error if it
     // fails (downstream webhook delivery and audit trails depend on this).
     try {
       await eventBus.emit({

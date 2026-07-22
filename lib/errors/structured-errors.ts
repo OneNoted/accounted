@@ -900,6 +900,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'E-postleverantören kunde inte skicka meddelandet.',
     message_en: 'The email provider could not deliver the message.',
   },
+  INVOICE_SEND_SNAPSHOT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utskicksinformationen kunde inte sparas. Ingen e-post skickades.',
+    message_en: 'The delivery snapshot could not be saved. No email was sent.',
+  },
   INVOICE_SEND_PDF_RENDER_FAILED: {
     httpStatus: 500,
     message_sv:

@@ -23,3 +23,14 @@ deleted because issued invoice lines, archived invoice PDFs, journal entries,
 and audit events retain the accounting evidence independently. Any article that
 is referenced by an invoice line is protected by the application check and the
 database foreign key.
+
+## Invoice delivery history
+
+Invoice recipient addresses, subjects, and message bodies are Confidential
+personal and business data. Exact payloads are retained server-side as delivery
+evidence until `invoice_deliveries.retention_expires_at`. Browser list responses
+contain masked recipient domains and operational metadata only. After the BFL
+retention date, the daily redaction control removes recipients, message content,
+provider message IDs, filenames, and attachment checksums. Selective audit rows
+must contain delivery IDs, tenant IDs, status transitions, actors, timestamps,
+and document linkage only, never email payload content.

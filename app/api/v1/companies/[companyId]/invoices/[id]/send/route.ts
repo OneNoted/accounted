@@ -56,8 +56,14 @@ import {
   generateInvoiceEmailText,
 } from '@/lib/email/invoice-templates'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
-import { uploadDocument } from '@/lib/core/documents/document-service'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import {
+  reserveInvoiceDelivery,
+  sendTrackedInvoiceEmail,
+  InvoiceDeliverySnapshotError,
+} from '@/lib/invoices/invoice-deliveries'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -326,6 +332,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
+    let deliveryId: string
+    try {
+      deliveryId = await reserveInvoiceDelivery({
+        supabase: ctx.supabase,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        invoiceId,
+      })
+    } catch (err) {
+      ctx.log.error('invoices.send: delivery reservation failed', err as Error, {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      return v1ErrorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { retryable: err instanceof InvoiceDeliverySnapshotError },
+      })
+    }
+
     // Step 6: allocate F-series number atomically.
     try {
       await ensureInvoiceNumber(ctx.supabase, ctx.companyId!, typed as Invoice)
@@ -423,32 +448,59 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 8: send the email. Delivery notes AND credit notes were rejected
     // earlier so docType is 'invoice' or 'proforma' here.
-    const docType = typed.document_type ?? 'invoice'
-    const filename =
-      docType === 'proforma'
-        ? `proformafaktura-${finalInvoiceNumber}.pdf`
-        : `faktura-${finalInvoiceNumber}.pdf`
+    const filename = invoicePdfFilename({
+      companyName: settings.company_name,
+      customerName: customer.name,
+      invoiceNumber: finalInvoiceNumber,
+      invoiceId: typed.id,
+      invoiceDate: typed.invoice_date,
+      documentType: typed.document_type,
+    })
 
     const ccAddress = settings.email ?? null
     const emailData = { invoice: renderableInvoice, customer, company: settings }
-    const result = await emailService.sendEmail({
-      to: customer.email,
-      cc: ccAddress ?? undefined,
-      subject: generateInvoiceEmailSubject(emailData),
-      html: generateInvoiceEmailHtml(emailData),
-      text: generateInvoiceEmailText(emailData),
-      replyTo: settings.email ?? undefined,
-      fromName: settings.company_name ?? undefined,
-      attachments: [
-        {
-          filename,
-          content: pdfBuffer,
-          contentType: 'application/pdf',
-        },
-      ],
-    })
+    const subject = generateInvoiceEmailSubject(emailData)
+    const html = generateInvoiceEmailHtml(emailData)
+    const text = generateInvoiceEmailText(emailData)
+    let result
+    try {
+      result = await sendTrackedInvoiceEmail({
+        supabase: ctx.supabase,
+        emailService,
+        companyId: ctx.companyId!,
+        userId: ctx.userId,
+        invoiceId,
+        deliveryId,
+        to: customer.email,
+        cc: ccAddress ?? undefined,
+        subject,
+        html,
+        text,
+        replyTo: settings.email ?? undefined,
+        fromName: settings.company_name ?? undefined,
+        filename,
+        pdfBuffer,
+      })
+    } catch (err) {
+      ctx.log.error('invoices.send: delivery snapshot failed before email', err as Error, {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      return v1ErrorResponseFromCode('INVOICE_SEND_SNAPSHOT_FAILED', ctx.log, {
+        requestId: ctx.requestId,
+        details: { retryable: err instanceof InvoiceDeliverySnapshotError },
+      })
+    }
 
     if (!result.success) {
+      if (result.trackingWarning) {
+        ctx.log.warn('invoices.send: failed delivery snapshot not reconciled', {
+          invoiceId,
+          companyId: ctx.companyId,
+          deliveryId: result.deliveryId,
+          warning: result.trackingWarning,
+        })
+      }
       ctx.log.error('invoices.send: email provider failed', new Error(result.error ?? 'unknown'), {
         invoiceId,
         companyId: ctx.companyId,
@@ -461,6 +513,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // ── POINT OF NO RETURN ────────────────────────────────────────────
     // Email has been delivered. Subsequent failures surface as warnings.
     const warnings: { code: string; message: string }[] = []
+
+    if (result.trackingWarning) {
+      ctx.log.warn('invoices.send: delivery snapshot not finalized', {
+        invoiceId,
+        companyId: ctx.companyId,
+        deliveryId: result.deliveryId,
+      })
+      warnings.push({
+        code: 'DELIVERY_HISTORY_FINALIZE_FAILED',
+        message: 'The delivery snapshot exists but could not be finalized. Reconcile the pending delivery record.',
+      })
+    }
 
     if (paymentLinkFailure) {
       warnings.push({ code: 'PAYMENT_LINK_FAILED', message: paymentLinkFailure })
@@ -547,32 +611,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    // Step 9c: archive the PDF as underlag.
-    if (isRealInvoice) {
+    // Step 9c: link the already archived exact delivery PDF to the entry.
+    if (isRealInvoice && journalEntryId) {
       try {
-        const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
-        await uploadDocument(
+        await linkToJournalEntry(
           ctx.supabase,
-          ctx.userId,
           ctx.companyId!,
-          {
-            name: filename,
-            buffer: pdfArrayBuffer,
-            type: 'application/pdf',
-          },
-          {
-            upload_source: 'system',
-            journal_entry_id: journalEntryId ?? undefined,
-          },
+          result.documentId,
+          journalEntryId,
         )
       } catch (err) {
-        ctx.log.error('invoices.send: PDF archival failed', err as Error, {
+        ctx.log.error('invoices.send: archived PDF journal link failed', err as Error, {
           invoiceId,
           companyId: ctx.companyId,
         })
         warnings.push({
-          code: 'PDF_ARCHIVE_FAILED',
-          message: 'Invoice was sent but the PDF could not be archived as underlag. Manual upload required for BFL 7 kap retention.',
+          code: 'PDF_JOURNAL_LINK_FAILED',
+          message: 'The exact sent PDF was archived but could not be linked to the journal entry.',
         })
       }
     }

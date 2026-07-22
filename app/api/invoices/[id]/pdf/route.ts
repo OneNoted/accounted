@@ -3,6 +3,8 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -80,16 +82,21 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // Return PDF as response
     const isCreditNote = !!invoice.credited_invoice_id
-    const filenameNumber = invoice.invoice_number ?? `utkast-${String(invoice.id).slice(0, 8)}`
-    const filename = isCreditNote
-      ? `kreditfaktura-${filenameNumber}.pdf`
-      : `faktura-${filenameNumber}.pdf`
+    const filename = invoicePdfFilename({
+      companyName: (company as CompanySettings).company_name,
+      customerName: (invoice.customer as Customer).name,
+      invoiceNumber: invoice.invoice_number,
+      invoiceId: invoice.id,
+      invoiceDate: invoice.invoice_date,
+      documentType: invoice.document_type,
+      isCreditNote,
+    })
 
     return new NextResponse(uint8Array, {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': pdfBuffer.length.toString(),
       },
     })

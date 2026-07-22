@@ -69,11 +69,17 @@ import {
   generateInvoiceEmailText,
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
-import { uploadDocument, linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import {
+  recordManualInvoiceDelivery,
+  reserveInvoiceDelivery,
+  sendTrackedInvoiceEmail,
+} from '@/lib/invoices/invoice-deliveries'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
@@ -1543,6 +1549,23 @@ async function commitSendInvoice(
     }
   }
 
+  let deliveryId: string
+  try {
+    deliveryId = await reserveInvoiceDelivery({
+      supabase,
+      companyId,
+      userId,
+      invoiceId,
+    })
+  } catch (err) {
+    log.error('failed to reserve invoice delivery before agent number assignment', err as Error, {
+      companyId,
+      userId,
+      invoiceId,
+    })
+    return { error: 'Utskicksinformationen kunde inte sparas. Ingen e-post skickades.', status: 500 }
+  }
+
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
@@ -1570,25 +1593,58 @@ async function commitSendInvoice(
   )
 
   const isCreditNote = !!invoice.credited_invoice_id
-  const docType = invoice.document_type || 'invoice'
-  let filename: string
-  if (isCreditNote) filename = `kreditfaktura-${invoice.invoice_number}.pdf`
-  else if (docType === 'proforma') filename = `proformafaktura-${invoice.invoice_number}.pdf`
-  else if (docType === 'delivery_note') filename = `foljesedel-${invoice.invoice_number}.pdf`
-  else filename = `faktura-${invoice.invoice_number}.pdf`
+  const filename = invoicePdfFilename({
+    companyName: company.company_name,
+    customerName: customer.name,
+    invoiceNumber: invoice.invoice_number,
+    invoiceId: invoice.id,
+    invoiceDate: invoice.invoice_date,
+    documentType: invoice.document_type,
+    isCreditNote,
+  })
 
   const ccAddress = company.email || userEmail
-  const emailData = { invoice: invoice as Invoice, customer, company: company as CompanySettings }
-  const result = await emailService.sendEmail({
-    to: customer.email,
-    cc: ccAddress,
-    subject: generateInvoiceEmailSubject(emailData),
-    html: generateInvoiceEmailHtml(emailData),
-    text: generateInvoiceEmailText(emailData),
-    replyTo: company.email || undefined,
-    fromName: company.company_name,
-    attachments: [{ filename, content: pdfBuffer, contentType: 'application/pdf' }],
-  })
+  const emailData = { invoice: renderableInvoice, customer, company: company as CompanySettings }
+  const subject = generateInvoiceEmailSubject(emailData)
+  const html = generateInvoiceEmailHtml(emailData)
+  const text = generateInvoiceEmailText(emailData)
+  let result
+  try {
+    result = await sendTrackedInvoiceEmail({
+      supabase,
+      emailService,
+      companyId,
+      userId,
+      invoiceId,
+      deliveryId,
+      to: customer.email,
+      cc: ccAddress,
+      subject,
+      html,
+      text,
+      replyTo: company.email || undefined,
+      fromName: company.company_name,
+      filename,
+      pdfBuffer,
+    })
+  } catch (err) {
+    log.error('failed to persist invoice delivery snapshot before agent send', err as Error, {
+      companyId,
+      userId,
+      invoiceId,
+    })
+    return { error: 'Utskicksinformationen kunde inte sparas. Ingen e-post skickades.', status: 500 }
+  }
+
+  if (result.trackingWarning) {
+    log.warn('agent invoice delivery snapshot requires reconciliation', {
+      companyId,
+      userId,
+      invoiceId,
+      deliveryId: result.deliveryId,
+      warning: result.trackingWarning,
+    })
+  }
 
   if (!result.success) return { error: `Failed to send email: ${result.error}`, status: 500 }
 
@@ -1610,18 +1666,22 @@ async function commitSendInvoice(
     }
   }
 
-  if (isRealInvoice) {
+  if (isRealInvoice && createdJournalEntryId) {
     try {
-      const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
-      await uploadDocument(supabase, userId, companyId, {
-        name: filename, buffer: pdfArrayBuffer, type: 'application/pdf',
-      }, { upload_source: 'system', journal_entry_id: createdJournalEntryId })
+      await linkToJournalEntry(supabase, companyId, result.documentId, createdJournalEntryId)
     } catch { /* non-blocking */ }
   }
 
   await eventBus.emit({ type: 'invoice.sent', payload: { invoice: invoice as Invoice, userId, companyId } })
 
-  return { data: { message: `Invoice ${invoice.invoice_number} sent to ${customer.email}` } }
+  return {
+    data: {
+      message: `Invoice ${invoice.invoice_number} sent to ${customer.email}`,
+      ...(result.trackingWarning
+        ? { warning: 'Delivery history requires reconciliation.' }
+        : {}),
+    },
+  }
 }
 
 async function commitMarkInvoiceSent(
@@ -1659,6 +1719,18 @@ async function commitMarkInvoiceSent(
 
   if (updateError) return { error: 'Failed to update invoice status', status: 500 }
 
+  let deliveryHistoryWarning: string | undefined
+  try {
+    await recordManualInvoiceDelivery({ supabase, companyId, userId, invoiceId })
+  } catch (err) {
+    log.error('failed to persist manual invoice delivery from pending operation', err as Error, {
+      companyId,
+      userId,
+      invoiceId,
+    })
+    deliveryHistoryWarning = 'Fakturan markerades som skickad men utskickshistoriken kunde inte sparas.'
+  }
+
   const { data: settings } = await supabase
     .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
 
@@ -1681,7 +1753,13 @@ async function commitMarkInvoiceSent(
     }
   }
 
-  return { data: { status: 'sent', journal_entry_id: journalEntryId } }
+  return {
+    data: {
+      status: 'sent',
+      journal_entry_id: journalEntryId,
+      ...(deliveryHistoryWarning ? { warning: deliveryHistoryWarning } : {}),
+    },
+  }
 }
 
 async function commitMatchTransactionInvoice(

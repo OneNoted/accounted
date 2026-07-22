@@ -121,14 +121,22 @@ function buildSendLines(
 
   // Build credit lines per VAT rate group
   const creditLines: FormLine[] = []
+  const accountingItems = (invoice.items ?? []).filter((item) => item.line_type !== 'text')
 
-  if (invoice.items && invoice.items.length > 0) {
-    const hasPerLineVat = invoice.items.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
+  // Existing informational rows are never a valid source for an invoice-level
+  // amount. Returning no proposal keeps an inconsistent text-only invoice from
+  // producing a debit-only entry; the user must correct its economic rows.
+  if (accountingItems.length === 0 && (invoice.items?.length ?? 0) > 0) {
+    return []
+  }
+
+  if (accountingItems.length > 0) {
+    const hasPerLineVat = accountingItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
 
     if (!hasPerLineVat) {
       // Legacy: single rate from invoice level
       const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
-      const subtotal = invoice.items.reduce((sum, item) => sum + item.line_total, 0)
+      const subtotal = accountingItems.reduce((sum, item) => sum + item.line_total, 0)
       creditLines.push({
         account_number: revenueAccount,
         debit_amount: '',
@@ -136,7 +144,7 @@ function buildSendLines(
         line_description: desc,
       })
 
-      const totalVat = invoice.items.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
+      const totalVat = accountingItems.reduce((sum, item) => sum + (item.vat_amount || 0), 0)
       if (totalVat > 0) {
         const vatAccount = getOutputVatAccount(invoice.vat_treatment)
         creditLines.push({
@@ -149,7 +157,7 @@ function buildSendLines(
     } else {
       // Group items by vat_rate
       const rateGroups = new Map<number, { subtotal: number; vatAmount: number }>()
-      for (const item of invoice.items) {
+      for (const item of accountingItems) {
         const rate = item.vat_rate ?? 0
         const group = rateGroups.get(rate) || { subtotal: 0, vatAmount: 0 }
         group.subtotal += item.line_total
@@ -182,7 +190,7 @@ function buildSendLines(
         }
       }
     }
-  } else {
+  } else if (!invoice.items || invoice.items.length === 0) {
     // Fallback: invoice-level amounts
     const revenueAccount = getRevenueAccount(invoice.vat_treatment, entityType)
     const subtotalSek = resolveSekAmount(invoice.subtotal, invoice.subtotal_sek, invoice.currency, invoice.exchange_rate)
@@ -207,7 +215,7 @@ function buildSendLines(
 
   const deductionLines: FormLine[] = []
   let deductionTotal = 0
-  for (const item of invoice.items ?? []) {
+  for (const item of accountingItems) {
     if (!item.deduction_type) continue
     const deduction = computeDeduction({
       unit_price: item.unit_price,
@@ -225,12 +233,25 @@ function buildSendLines(
     })
   }
 
+  // Text-only and other informational invoice rows carry zero totals. They
+  // must not become misleading 30xx rows in the booking preview.
+  const nonZeroCreditLines = creditLines.filter(
+    (line) => roundOre(parseFloat(line.credit_amount) || 0) !== 0,
+  )
+
   // Debit: 1510 customer portion plus 1513 Skatteverket portion.
-  const totalCredits = creditLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+  const totalCredits = nonZeroCreditLines.reduce(
+    (sum, line) => sum + (parseFloat(line.credit_amount) || 0),
+    0,
+  )
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
   const customerReceivable = roundOre(debitAmount - deductionTotal)
+
+  if (customerReceivable === 0 && deductionLines.length === 0 && nonZeroCreditLines.length === 0) {
+    return []
+  }
 
   lines.push({
     account_number: '1510',
@@ -240,7 +261,7 @@ function buildSendLines(
   })
 
   lines.push(...deductionLines)
-  lines.push(...creditLines)
+  lines.push(...nonZeroCreditLines)
 
   return lines
 }

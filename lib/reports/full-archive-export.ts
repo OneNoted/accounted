@@ -792,6 +792,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'invoice_items', file: 'invoice_items.json', via: { parent: 'invoices', fk: 'invoice_id' } },
   { name: 'invoice_payments', file: 'invoice_payments.json', orderBy: 'payment_date' },
   { name: 'invoice_reminders', file: 'invoice_reminders.json' },
+  // Delivery metadata proves which recipient received the archived PDF and
+  // when, so it is räkenskapsinformation alongside the invoice itself.
+  { name: 'invoice_deliveries', file: 'invoice_deliveries.json', orderBy: 'created_at' },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useId } from 'react'
 import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
@@ -41,15 +41,19 @@ interface AccountComboboxProps {
   // to the next konteringsrad's account on Enter: see JournalEntryForm.focusAccount).
   inputRef?: React.RefCallback<HTMLInputElement>
   disabled?: boolean
+  // Optional always-visible label for compact editors where the selected
+  // account name must remain readable after the dropdown closes.
+  selectedName?: string
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const internalInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const selectedNameId = useId()
   // Whether the user has typed or arrow-navigated since the field was focused.
   // Enter only selects the highlighted item after an actual interaction: a
   // bare Enter on a freshly-focused field must not grab the first account in
@@ -236,6 +240,8 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     }, 150)
   }
 
+  const showSelectedName = Boolean(selectedName && value && search === value)
+
   return (
     <div ref={containerRef} className="relative">
       <Input
@@ -249,8 +255,14 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
         className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
         disabled={disabled}
+        aria-describedby={showSelectedName ? selectedNameId : undefined}
       />
 
+      {showSelectedName ? (
+        <p id={selectedNameId} className="mt-1 break-words px-1 text-sm leading-snug text-foreground">
+          {selectedName}
+        </p>
+      ) : null}
 
       {/* Dropdown */}
       {isOpen && !disabled && flatList.length > 0 && (

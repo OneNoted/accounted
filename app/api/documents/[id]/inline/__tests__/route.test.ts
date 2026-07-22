@@ -12,6 +12,14 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
+vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+}))
+
+vi.mock('@/lib/auth/require-write', () => ({
+  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
 const downloadMock = vi.fn()
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => ({
@@ -73,9 +81,8 @@ describe('GET /api/documents/[id]/inline', () => {
     expect(body.error).toBe('Document not found')
   })
 
-  it('returns 404 when the user is not a member of the document company', async () => {
-    enqueue({ data: makeDoc(), error: null }) // doc lookup
-    enqueue({ data: null, error: null }) // membership lookup
+  it('returns 404 when the document is outside the active company', async () => {
+    enqueue({ data: null, error: null })
     const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(404)
@@ -83,7 +90,6 @@ describe('GET /api/documents/[id]/inline', () => {
 
   it('returns 500 when the storage download fails', async () => {
     enqueue({ data: makeDoc(), error: null })
-    enqueue({ data: { company_id: 'company-1' }, error: null })
     downloadMock.mockResolvedValue({ data: null, error: { message: 'boom' } })
     const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
     const { status } = await parseJsonResponse(res)
@@ -92,7 +98,6 @@ describe('GET /api/documents/[id]/inline', () => {
 
   it('streams the file with an RFC 5987 Content-Disposition for an NFD filename', async () => {
     enqueue({ data: makeDoc(), error: null })
-    enqueue({ data: { company_id: 'company-1' }, error: null })
 
     const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
 
@@ -104,5 +109,6 @@ describe('GET /api/documents/[id]/inline', () => {
     // ASCII fallback replaces the non-ASCII character.
     expect(disposition).toContain('filename="kvitto f_rvaring.pdf"')
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

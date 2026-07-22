@@ -30,6 +30,7 @@ import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Invoice, InvoiceItem, Customer, EntityType, BASAccount } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -68,8 +69,14 @@ export default function SendInvoiceDialog({
   const [shouldBookOnIssue, setShouldBookOnIssue] = useState(true)
   const [deferBooking, setDeferBooking] = useState(false)
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
+  const accountNameByNumber = useMemo(() => {
+    const names = new Map(catalog.map((account) => [account.account_number, account.account_name]))
+    for (const account of accounts) names.set(account.account_number, account.account_name)
+    return names
+  }, [accounts, catalog])
 
   // The accrual book-at-issue path (both email send and manual mark-sent)
   // lets the user adjust the proposed lines before booking (same editor as
@@ -133,16 +140,22 @@ export default function SendInvoiceDialog({
         // Line editing needs the chart of accounts; only the accrual
         // book-at-issue path renders the editor, so skip the fetch elsewhere.
         let fetchedAccounts: BASAccount[] = []
+        let fetchedCatalog: CatalogAccount[] = []
         if (!invoice.credited_invoice_id && bookOnIssue && !hasAccrualItems) {
-          const accountsRes = await fetch('/api/bookkeeping/accounts')
+          const [accountsRes, catalogResult] = await Promise.all([
+            fetch('/api/bookkeeping/accounts'),
+            loadBasCatalog(),
+          ])
           if (!accountsRes.ok) throw new Error(t('load_chart_failed'))
           const accountsData = await accountsRes.json()
           fetchedAccounts = accountsData.data || []
+          fetchedCatalog = catalogResult
         }
 
         if (cancelled) return
 
         setAccounts(fetchedAccounts)
+        setCatalog(fetchedCatalog)
         setEntityType((settingsResult.data?.entity_type as EntityType) || 'enskild_firma')
         setPeriodName(periodResult.data?.name || '')
         setDeferBooking(!!settingsResult.data?.defer_invoice_booking)
@@ -427,6 +440,7 @@ export default function SendInvoiceDialog({
                             value={line.account_number}
                             accounts={accounts}
                             onChange={(val) => updateLine(index, 'account_number', val)}
+                            selectedName={accountNameByNumber.get(line.account_number)}
                           />
                         </div>
                         <Button
@@ -504,6 +518,7 @@ export default function SendInvoiceDialog({
                           value={line.account_number}
                           accounts={accounts}
                           onChange={(val) => updateLine(index, 'account_number', val)}
+                          selectedName={accountNameByNumber.get(line.account_number)}
                         />
                       </div>
                       <Input

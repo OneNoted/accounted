@@ -39,7 +39,12 @@ import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from 
 import { getTemplateById, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { isCounterpartyTemplateId, extractCounterpartyId } from '@/lib/bookkeeping/counterparty-templates'
 import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
-import type { TransactionWithInvoice, ViewMode, CategorizeHandler } from '@/components/transactions/transaction-types'
+import type {
+  TransactionWithInvoice,
+  ViewMode,
+  CategorizeHandler,
+  SourceFilter,
+} from '@/components/transactions/transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
@@ -97,6 +102,12 @@ const TemplatePicker = dynamic(() => import('@/components/transactions/TemplateP
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
+
+const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
+
+function isSourceFilter(value: string | null): value is SourceFilter {
+  return value === 'all' || value === 'bank' || value === 'skatteverket'
+}
 
 function buildInvoiceMap(rows: InvoiceWithCustomer[] | null): Record<string, InvoiceWithCustomer> {
   if (!rows) return {}
@@ -304,9 +315,27 @@ export default function TransactionsPage() {
   // ever visit the settings panel where the reconnect prompt lives.
   const [skvNeedsReconnect, setSkvNeedsReconnect] = useState(false)
 
-  // Source filter for the merged inbox. Defaults to 'all' so users see
-  // both sources unless they want to narrow down.
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'bank' | 'skatteverket'>('all')
+  // One browser-wide source filter shared by the inbox and history views.
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SOURCE_FILTER_STORAGE_KEY)
+      if (isSourceFilter(stored)) setSourceFilter(stored)
+    } catch {
+      // localStorage may be unavailable. Keep the default in-memory state.
+    }
+  }, [])
+
+  const handleSourceFilterChange = useCallback((next: SourceFilter) => {
+    setSourceFilter(next)
+
+    try {
+      window.localStorage.setItem(SOURCE_FILTER_STORAGE_KEY, next)
+    } catch {
+      // localStorage may be unavailable. The in-memory filter still works.
+    }
+  }, [])
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -2204,14 +2233,15 @@ export default function TransactionsPage() {
           ))}
         </DataList>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 && !searchTerm ? (
+        inboxItems.length === 0 && !searchTerm && sourceFilter === 'all' ? (
           <InboxZeroState
             hasTransactions={transactions.length > 0 || skvRows.length > 0}
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
           <DataList>
-            {skvUnmatched.length > 0 && uncategorizedTransactions.length > 0 && (
+            {(sourceFilter !== 'all'
+              || (skvUnmatched.length > 0 && uncategorizedTransactions.length > 0)) && (
               <DataListHeader>
                 <span className="text-xs uppercase tracking-wider text-muted-foreground">
                   {t('source_label')}
@@ -2230,7 +2260,7 @@ export default function TransactionsPage() {
                   <DropdownMenuContent align="start" className="min-w-[12rem]">
                     <DropdownMenuRadioGroup
                       value={sourceFilter}
-                      onValueChange={(v) => setSourceFilter(v as typeof sourceFilter)}
+                      onValueChange={(v) => handleSourceFilterChange(v as SourceFilter)}
                     >
                       <DropdownMenuRadioItem value="all">
                         {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
@@ -2246,10 +2276,10 @@ export default function TransactionsPage() {
                 </DropdownMenu>
               </DataListHeader>
             )}
-            {inboxItems.length === 0 && searchTerm ? (
+            {inboxItems.length === 0 && (searchTerm || sourceFilter !== 'all') ? (
               <DataListEmpty
                 title="Inga träffar"
-                description={t('no_search_results')}
+                description={searchTerm ? t('no_search_results') : t('source_empty')}
               />
             ) : null}
             <AnimatePresence mode="popLayout">
@@ -2294,6 +2324,8 @@ export default function TransactionsPage() {
           transactions={transactions}
           skvRows={skvRows}
           searchTerm={searchTerm}
+          sourceFilter={sourceFilter}
+          onSourceFilterChange={handleSourceFilterChange}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}

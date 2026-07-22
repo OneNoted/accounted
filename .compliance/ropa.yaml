@@ -8,6 +8,51 @@
 
 processing_activities:
 
+  - id: invoices.delivery_history
+    name: Leveranshistorik för kundfakturor
+    purpose: >-
+      Dokumentera att en kundfaktura skickades, när leveransförsöket skedde,
+      vilken mottagardomän som användes och vilken exakt PDF som skickades.
+      Dashboardens listvy visar endast maskerade mottagardomäner och
+      driftmetadata. Fullständigt meddelandeinnehåll stannar på serversidan.
+    lawful_basis: art_6_1_b_and_c
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase_and_resend
+    data_subjects:
+      - customer_contact
+      - company_member
+    data_categories:
+      - user.contact.email
+      - user.communication_content
+      - user.activity_timestamp
+      - user.document
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+      - name: Resend
+        country: US
+        role: processor
+    international_transfers:
+      applicable: true
+      mechanism: scc_2021_c2p
+      note: Resend processes the outbound delivery under SCC Module 2.
+    retention:
+      duration: through_seventh_calendar_year_after_fiscal_year_end
+      basis: bfl_7_kap_and_gdpr_storage_limitation
+      stored_in:
+        - invoice_deliveries
+        - document_attachments
+    security_measures:
+      - active_company_route_context
+      - rls_company_scoped
+      - masked_recipient_domains_in_list_api
+      - no_message_content_in_browser_list_api
+      - exact_sent_pdf_worm_protection
+      - metadata_only_immutable_audit_log
+      - daily_post_retention_pii_redaction
+
   - id: customer.private_identity
     name: Personnummer för privatkund
     purpose: >-

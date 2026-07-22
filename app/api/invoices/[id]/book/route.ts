@@ -5,6 +5,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { CompanySettings, EntityType, Invoice, InvoiceItem } from '@/types'
 
 // Statuses where the revenue entry can still be created afterwards. Paid
@@ -121,11 +122,53 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_BOOK_CONFLICT', log, { requestId })
     }
 
+    const warnings: Array<{ code: string; message: string }> = []
+
+    // The send flow archived the exact delivered PDF before this deferred
+    // journal entry existed. Attach the newest successful delivery snapshot now.
+    const { data: deliveryDocument, error: deliveryDocumentError } = await supabase
+      .from('invoice_deliveries')
+      .select('document_attachment_id')
+      .eq('invoice_id', id)
+      .eq('company_id', companyId)
+      .eq('status', 'sent')
+      .not('document_attachment_id', 'is', null)
+      .order('sent_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (deliveryDocumentError) {
+      log.error('failed to find delivered invoice PDF for deferred booking', deliveryDocumentError, {
+        invoiceId: id,
+      })
+      warnings.push({
+        code: 'PDF_LINK_FAILED',
+        message: 'Fakturan bokfördes, men den arkiverade PDF-filen kunde inte kopplas till verifikationen.',
+      })
+    } else if (deliveryDocument?.document_attachment_id) {
+      try {
+        await linkToJournalEntry(
+          supabase,
+          companyId!,
+          deliveryDocument.document_attachment_id,
+          journalEntry.id,
+        )
+      } catch (err) {
+        log.error('failed to link delivered invoice PDF on deferred booking', err as Error, {
+          invoiceId: id,
+          documentId: deliveryDocument.document_attachment_id,
+        })
+        warnings.push({
+          code: 'PDF_LINK_FAILED',
+          message: 'Fakturan bokfördes, men den arkiverade PDF-filen kunde inte kopplas till verifikationen.',
+        })
+      }
+    }
+
     // Periodiseringar ride on the revenue entry, so they can only be created
     // now. Non-blocking: the entry is committed (immutable); a schedule
     // failure is surfaced as a warning and retried from the periodiseringar
     // page.
-    const warnings: Array<{ code: string; message: string }> = []
     try {
       const accrual = await createSchedulesForCustomerInvoice(
         supabase,

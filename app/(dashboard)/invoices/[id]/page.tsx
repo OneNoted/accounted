@@ -18,6 +18,7 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import { contentDispositionFilename } from '@/lib/api/content-disposition'
 import {
   Loader2,
   ArrowLeft,
@@ -43,6 +44,10 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import {
+  InvoiceDeliveryHistory,
+  type InvoiceDeliveryView,
+} from '@/components/invoices/InvoiceDeliveryHistory'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
 import {
   Dialog,
@@ -75,7 +80,6 @@ const accrualMonth = (date: string): string => date.slice(0, 7)
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
   items: InvoiceItem[]
-  sent_at?: string
   // Optional reference to the issuance verifikation. Populated by the
   // backend when the invoice flow auto-books an entry on send; absent on
   // older invoices and on companies where issuance is not auto-booked.
@@ -94,6 +98,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<InvoiceReminder[]>([])
+  const [deliveries, setDeliveries] = useState<InvoiceDeliveryView[]>([])
   // Payment history backing the new Betalningsstatus card. Fetched alongside
   // the invoice itself so the card stays in sync with paid_amount /
   // remaining_amount on the invoice row.
@@ -150,9 +155,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           .maybeSingle()
       : Promise.resolve(null)
 
-    // Invoice, reminders, and payments all key on the route id — one
+    const deliveriesPromise = fetch(`/api/invoices/${encodeURIComponent(id)}/deliveries`)
+      .then(async (response) => {
+        if (!response.ok) return []
+        const payload = (await response.json()) as { data?: InvoiceDeliveryView[] }
+        return Array.isArray(payload.data) ? payload.data : []
+      })
+      .catch(() => [] as InvoiceDeliveryView[])
+
+    // Invoice, reminders, payments, and deliveries all key on the route id: one
     // parallel batch. Only the follow-ups below need the invoice row.
-    const [{ data, error }, { data: reminderData }, { data: paymentData }] =
+    const [{ data, error }, { data: reminderData }, { data: paymentData }, deliveryData] =
       await Promise.all([
         supabase
           .from('invoices')
@@ -179,6 +192,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )
           .eq('invoice_id', id)
           .order('payment_date', { ascending: true }),
+        deliveriesPromise,
       ])
 
     if (error || !data) {
@@ -197,6 +211,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
 
     setInvoice(data as InvoiceWithRelations)
+    setDeliveries(deliveryData)
 
     if (reminderData) {
       setReminders(reminderData as InvoiceReminder[])
@@ -410,7 +425,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsDownloading(true)
 
     try {
-      const response = await fetch(`/api/invoices/${invoice.id}/pdf`)
+      const mostRecentDelivery = deliveries.find(
+        (delivery) => delivery.status === 'sent' || delivery.status === 'marked_sent',
+      )
+      const archivedDelivery = mostRecentDelivery?.status === 'sent'
+        ? mostRecentDelivery
+        : undefined
+      const response = await fetch(
+        archivedDelivery?.document_attachment_id
+          ? `/api/documents/${archivedDelivery.document_attachment_id}/inline`
+          : `/api/invoices/${invoice.id}/pdf`,
+      )
 
       if (!response.ok) {
         throw new Error(t('pdf_generate_failed'))
@@ -420,7 +445,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
+      a.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
+        ?? `faktura-${invoice.invoice_number ?? `utkast-${invoice.id.slice(0, 8)}`}.pdf`
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
@@ -616,6 +642,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isEditableDraft = isEditableInvoiceDraft(invoice)
   const isCopyable = canCopyInvoice(invoice)
   const hasAccruedItems = invoice.items.some(itemHasAccrual)
+  const latestCompletedDelivery = deliveries.find(
+    (delivery) => delivery.status === 'sent' || delivery.status === 'marked_sent',
+  )
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -648,7 +677,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </div>
             <p className="text-muted-foreground">
               {t('created_at', { date: formatDate(invoice.created_at) })}
-              {invoice.sent_at && t('sent_at_suffix', { date: formatDate(invoice.sent_at) })}
+              {latestCompletedDelivery?.sent_at &&
+                t('sent_at_suffix', { date: formatDate(latestCompletedDelivery.sent_at) })}
             </p>
           </div>
         </div>
@@ -971,6 +1001,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </CardContent>
           </Card>
           )}
+
+        {isRealInvoice && !isSelfBilled && (
+          <InvoiceDeliveryHistory
+            deliveries={deliveries}
+            showLegacyEmptyState={[
+              'sent',
+              'paid',
+              'partially_paid',
+              'overdue',
+              'credited',
+            ].includes(invoice.status)}
+          />
+        )}
 
         {/* Sidebar */}
         <div className="lg:col-start-3 lg:row-start-1 lg:row-span-3 space-y-6">

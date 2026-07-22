@@ -72,14 +72,15 @@ export class ResendEmailService implements EmailService {
 
       if (response.error) {
         log.error('Resend error:', response.error)
-        return { success: false, error: response.error.message }
+        return { success: false, provider: 'resend', error: response.error.message }
       }
 
-      return { success: true, messageId: response.data?.id }
+      return { success: true, provider: 'resend', messageId: response.data?.id }
     } catch (error) {
       log.error('Failed to send email:', error)
       return {
         success: false,
+        provider: 'resend',
         error: error instanceof Error ? error.message : 'Unknown error',
       }
     }

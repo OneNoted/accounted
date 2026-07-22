@@ -1233,7 +1233,7 @@ export default function JournalEntryList() {
                   <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
                 )}
                 <span className="flex-1 truncate">{entry.description}</span>
-                <span className="shrink-0 w-28 text-right tabular-nums text-sm font-medium sensitive-field">
+                <span className="shrink-0 w-28 text-right tabular-nums text-sm font-medium rr-mask">
                   {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
                 </span>
                 <div className="flex shrink-0 items-center gap-1">

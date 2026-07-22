@@ -45,13 +45,11 @@ import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { JeUnderlagStatus } from '@/lib/transactions/underlag-status'
-import type { TransactionWithInvoice, HistoryFilter } from './transaction-types'
+import type { TransactionWithInvoice, HistoryFilter, SourceFilter } from './transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
 } from '@/types/skatteverket'
-
-type SourceFilter = 'all' | 'bank' | 'skatteverket'
 
 type HistoryRow =
   | { source: 'bank'; date: string; data: TransactionWithInvoice }
@@ -61,6 +59,8 @@ interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]
   skvRows?: SkattekontoTransactionWithSuggestion[]
   searchTerm?: string
+  sourceFilter: SourceFilter
+  onSourceFilterChange: (sourceFilter: SourceFilter) => void
   /** Underlag status per journal_entry_id (computeJeUnderlagStatus): drives
    *  the per-row "Underlag"/"Underlag saknas" badges on booked rows. */
   jeUnderlagStatus?: Record<string, JeUnderlagStatus>
@@ -80,6 +80,8 @@ export default function TransactionHistoryList({
   transactions,
   skvRows = [],
   searchTerm = '',
+  sourceFilter,
+  onSourceFilterChange,
   jeUnderlagStatus,
   onOpenMatchDialog,
   onOpenCategoryDialog,
@@ -93,7 +95,6 @@ export default function TransactionHistoryList({
 }: TransactionHistoryListProps) {
   const t = useTranslations('tx_history')
   const [filter, setFilter] = useState<HistoryFilter>('all')
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   // The bank/private filter doesn't apply to SKV rows: they have no
   // is_business flag. So when the filter is 'business' or 'private' we
@@ -128,7 +129,7 @@ export default function TransactionHistoryList({
     return a.source === 'bank' ? -1 : 1
   })
 
-  const showSourceFilter = skvRows.length > 0 && transactions.length > 0
+  const showSourceFilter = sourceFilter !== 'all' || (skvRows.length > 0 && transactions.length > 0)
   const filtered = merged
   const showHeader = showSourceFilter
 
@@ -163,7 +164,7 @@ export default function TransactionHistoryList({
               <DropdownMenuContent align="start" className="min-w-[12rem]">
                 <DropdownMenuRadioGroup
                   value={sourceFilter}
-                  onValueChange={(v) => setSourceFilter(v as SourceFilter)}
+                  onValueChange={(v) => onSourceFilterChange(v as SourceFilter)}
                 >
                   <DropdownMenuRadioItem value="all">{t('source_all')}</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="bank">{t('source_bank')}</DropdownMenuRadioItem>

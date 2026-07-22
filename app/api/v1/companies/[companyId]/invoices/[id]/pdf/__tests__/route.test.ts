@@ -44,6 +44,7 @@ vi.mock('@/lib/invoices/pdf-template', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { contentDispositionFilename } from '@/lib/api/content-disposition'
 import { GET as pdf } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -125,7 +126,7 @@ beforeEach(() => {
 })
 
 describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
-  it('returns a PDF for a sent invoice with the faktura-<number> filename', async () => {
+  it('returns a PDF for a sent invoice with a descriptive filename', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -141,11 +142,12 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
-    expect(res.headers.get('Content-Disposition')).toBe('attachment; filename="faktura-2026-0042.pdf"')
+    expect(contentDispositionFilename(res.headers.get('Content-Disposition')))
+      .toBe('Test AB x Acme AB Faktura nr 2026-0042 20260512.pdf')
     expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)
   })
 
-  it('uses utkast-<id-slice>.pdf filename for drafts', async () => {
+  it('uses an identifiable descriptive filename for drafts', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -163,15 +165,11 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
     )
 
     expect(res.status).toBe(200)
-    // Same composition as the dashboard's internal pdf route: the
-    // "faktura-" prefix is preserved, the number slot is the "utkast-<slice>"
-    // placeholder.
-    expect(res.headers.get('Content-Disposition')).toBe(
-      'attachment; filename="faktura-utkast-bbbbbbbb.pdf"',
-    )
+    expect(contentDispositionFilename(res.headers.get('Content-Disposition')))
+      .toBe('Test AB x Acme AB Faktura utkast-bbbbbbbb 20260512.pdf')
   })
 
-  it('uses kreditfaktura-<number>.pdf for credit notes and embeds original number', async () => {
+  it('identifies credit notes in the filename and embeds the original number', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -196,9 +194,8 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
     )
 
     expect(res.status).toBe(200)
-    expect(res.headers.get('Content-Disposition')).toBe(
-      'attachment; filename="kreditfaktura-2026-0099.pdf"',
-    )
+    expect(contentDispositionFilename(res.headers.get('Content-Disposition')))
+      .toBe('Test AB x Acme AB Kreditfaktura nr 2026-0099 20260512.pdf')
     // The template received the original number: verify via the InvoicePDF mock call.
     const call = (mockRender.mock.calls[0]?.[0] as unknown) as { props?: unknown } | undefined
     expect(call).toBeDefined()

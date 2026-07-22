@@ -997,6 +997,38 @@ export interface Invoice {
   payments?: InvoicePayment[]
 }
 
+export type InvoiceDeliveryChannel = 'email' | 'manual'
+export type InvoiceDeliveryStatus = 'preparing' | 'pending' | 'sent' | 'failed' | 'marked_sent'
+
+export interface InvoiceDelivery {
+  id: string
+  company_id: string
+  user_id: string | null
+  invoice_id: string
+  channel: InvoiceDeliveryChannel
+  status: InvoiceDeliveryStatus
+  to_addresses: string[]
+  cc_addresses: string[]
+  reply_to: string | null
+  from_name: string | null
+  subject: string | null
+  body_text: string | null
+  body_html: string | null
+  provider: string | null
+  provider_message_id: string | null
+  error_code: string | null
+  document_attachment_id: string | null
+  attachment_filename: string | null
+  attachment_content_type: string | null
+  attachment_sha256: string | null
+  sent_at: string | null
+  failed_at: string | null
+  retention_expires_at: string
+  pii_redacted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 // Invoice Item
 export interface InvoiceItem {
   id: string

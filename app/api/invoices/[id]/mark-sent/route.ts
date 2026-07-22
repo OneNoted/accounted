@@ -13,8 +13,10 @@ import {
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
+import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type {
@@ -371,9 +373,15 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       )
 
-      const filename = invoice.credited_invoice_id
-        ? `kreditfaktura-${invoice.invoice_number}.pdf`
-        : `faktura-${invoice.invoice_number}.pdf`
+      const filename = invoicePdfFilename({
+        companyName: settings.company_name,
+        customerName: (invoice.customer as Customer).name,
+        invoiceNumber: invoice.invoice_number,
+        invoiceId: invoice.id,
+        invoiceDate: invoice.invoice_date,
+        documentType: invoice.document_type,
+        isCreditNote: !!invoice.credited_invoice_id,
+      })
 
       const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
       await uploadDocument(supabase, user.id, companyId, {
@@ -389,6 +397,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       partialFailures.push({
         step: 'pdf_archive',
         reason: 'Fakturans PDF kunde inte arkiveras.',
+      })
+    }
+  }
+
+  if (statusFlipped) {
+    try {
+      await recordManualInvoiceDelivery({
+        supabase,
+        companyId,
+        userId: user.id,
+        invoiceId: id,
+      })
+    } catch (err) {
+      log.error('failed to record manual invoice delivery', err as Error)
+      partialFailures.push({
+        step: 'delivery_history',
+        reason: 'Utskicket kunde inte sparas i fakturans historik.',
       })
     }
   }

@@ -45,6 +45,42 @@ vi.mock('@/lib/email/service', () => ({
   }),
 }))
 
+const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
+  emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
+  to: string | string[]
+  cc?: string | string[]
+  subject: string
+  html: string
+  text: string
+  replyTo?: string
+  fromName?: string
+  filename: string
+  pdfBuffer: Buffer
+}) => ({
+  ...(await input.emailService.sendEmail({
+    to: input.to,
+    cc: input.cc,
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+    replyTo: input.replyTo,
+    fromName: input.fromName,
+    attachments: [{
+      filename: input.filename,
+      content: input.pdfBuffer,
+      contentType: 'application/pdf',
+    }],
+  })),
+  deliveryId: 'delivery-1',
+  documentId: 'document-1',
+}))
+const mockReserveInvoiceDelivery = vi.fn().mockResolvedValue('delivery-1')
+vi.mock('@/lib/invoices/invoice-deliveries', () => ({
+  InvoiceDeliverySnapshotError: class InvoiceDeliverySnapshotError extends Error {},
+  reserveInvoiceDelivery: (...args: unknown[]) => mockReserveInvoiceDelivery(...args),
+  sendTrackedInvoiceEmail: (...args: unknown[]) => mockSendTrackedInvoiceEmail(...args as [never]),
+}))
+
 vi.mock('@/lib/email/invoice-templates', () => ({
   generateInvoiceEmailHtml: vi.fn().mockReturnValue('<html>Invoice</html>'),
   generateInvoiceEmailText: vi.fn().mockReturnValue('Invoice text'),
@@ -74,6 +110,7 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
 const mockUploadDocument = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
+  linkToJournalEntry: vi.fn().mockResolvedValue(undefined),
 }))
 
 describe('computeNextRunDate', () => {
@@ -175,8 +212,15 @@ describe('executeRecurringSchedule auto-send', () => {
   const client = supabase as unknown as SupabaseClient
   const today = new Date('2026-07-06T06:30:00Z')
 
-  const customer = makeCustomer({ id: 'cust-1', email: 'kund@test.se' })
-  const company = makeCompanySettings({ accounting_method: 'accrual' })
+  const customer = makeCustomer({
+    id: 'cust-1',
+    name: 'Kund ÅÄÖ AB',
+    email: 'kund@test.se',
+  })
+  const company = makeCompanySettings({
+    company_name: 'Oppy Sverige',
+    accounting_method: 'accrual',
+  })
 
   function makeSchedule() {
     return {
@@ -223,6 +267,7 @@ describe('executeRecurringSchedule auto-send', () => {
     return {
       id: 'inv-1',
       invoice_number: 'F-1',
+      invoice_date: '2026-07-06',
       status: 'draft',
       document_type: 'invoice',
       currency: 'SEK',
@@ -283,6 +328,9 @@ describe('executeRecurringSchedule auto-send', () => {
 
     expect(result.autoSent).toBe(true)
     expect(result.warning).toBeNull()
+    expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', invoiceId: 'inv-1' }),
+    )
     expect(mockApplyPaymentLink).toHaveBeenCalledTimes(1)
     expect(mockApplyPaymentLink).toHaveBeenCalledWith(
       expect.anything(),
@@ -302,6 +350,11 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockInvoicePDF).toHaveBeenCalledWith(
       expect.objectContaining({ paymentLinkQrDataUrl: 'data:image/png;base64,QR' }),
     )
+    expect(mockSendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({
+        filename: 'Oppy Sverige x Kund ÅÄÖ AB Faktura nr F-1 20260706.pdf',
+      })],
+    }))
   })
 
   it('a payment link failure never blocks the send', async () => {

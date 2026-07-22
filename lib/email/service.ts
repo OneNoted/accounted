@@ -23,6 +23,7 @@ export interface SendEmailOptions {
 
 export interface SendEmailResult {
   success: boolean
+  provider?: string
   messageId?: string
   error?: string
 }

@@ -41,6 +41,7 @@ the company can read and write them, subject to their role. This includes:
 - Customers and suppliers
 - Receipts and documents
 - **Bank connections (Enable Banking PSD2)**
+- Invoice delivery metadata and archived sent PDFs
 - Mapping rules, booking templates, counterparty templates
 - Salary runs and AGI declarations
 - Company settings
@@ -50,6 +51,12 @@ operations they can perform via `lib/auth/require-write.ts`, but does not
 restrict *which records* they can act on. A viewer cannot post any journal
 entry; a member can post any journal entry their company owns, regardless
 of who originally drafted it.
+
+Invoice delivery list responses are data-minimized even for authorized
+company members. They expose masked recipient domains and operational status,
+but not message bodies, subjects, reply-to addresses, provider message IDs, or
+attachment checksums. Archived PDFs are served only when their document row
+belongs to the request's active company.
 
 ### Why this is intentional
 
