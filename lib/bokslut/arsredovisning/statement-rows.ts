@@ -21,6 +21,7 @@ import type { K2MappingResult } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type { StatementRow } from './types'
 
 const ZERO: ConceptAmount = { current: 0, previous: null }
+type StatementMapping = Pick<K2MappingResult, 'rr' | 'br' | 'totals'>
 
 function hasValue(amount: ConceptAmount): boolean {
   return amount.current !== 0 || (amount.previous ?? 0) !== 0
@@ -73,7 +74,7 @@ class RowBuilder {
 /** The mapper leaves `previous` null on every concept when the company has
  *  no previous fiscal year; any concept with a number means a jämförelseår
  *  exists. */
-function mappingHasPrevious(mapping: K2MappingResult): boolean {
+function mappingHasPrevious(mapping: StatementMapping): boolean {
   return mapping.totals.tillgangar.previous !== null
 }
 
@@ -81,7 +82,7 @@ function mappingHasPrevious(mapping: K2MappingResult): boolean {
  * Resultaträkning — kostnadsslagsindelad per ÅRL bilaga 2 / K2 risbs, in
  * uppställningsform order.
  */
-export function buildRrRows(mapping: K2MappingResult): StatementRow[] {
+export function buildRrRows(mapping: StatementMapping): StatementRow[] {
   const { rr, totals } = mapping
   const b = new RowBuilder(mappingHasPrevious(mapping))
 
@@ -182,7 +183,7 @@ export function buildRrRows(mapping: K2MappingResult): StatementRow[] {
  * kortfristiga fordringar, kassa och bank, eget kapital and kortfristiga
  * skulder always render.
  */
-export function buildBrRows(mapping: K2MappingResult): {
+export function buildBrRows(mapping: StatementMapping): {
   assets: StatementRow[]
   equityLiabilities: StatementRow[]
 } {

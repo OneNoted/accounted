@@ -37,6 +37,7 @@ export async function generateTrialBalance(
   fiscalPeriodId: string,
   options?: {
     excludeYearEndClosing?: boolean
+    excludeFinalClosingEntry?: boolean
     fromDate?: string
     toDate?: string
     dimensions?: Record<string, string>
@@ -51,7 +52,7 @@ export async function generateTrialBalance(
   // Fetch period for opening balance computation
   const { data: period } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end, opening_balance_entry_id')
+    .select('period_start, period_end, opening_balance_entry_id, closing_entry_id')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
@@ -61,17 +62,10 @@ export async function generateTrialBalance(
       ? options.dimensions
       : undefined
 
-  // Year-end exclusion must be symmetric: a reversed year_end entry stays in
-  // the ledger (status='reversed') together with its storno, but the storno
-  // carries source_type='storno' (and a correction carries 'correction'), so
-  // filtering on source_type alone drops the original while keeping its
-  // counter-entry. That inflates the P&L by exactly the reversed amount.
-  // Fetch the reversed year_end entry ids (company-wide: a storno may land in
-  // a later period than the entry it reverses) and exclude anything chained
-  // to them via reverses_id / correction_of_id. Only status='reversed'
-  // originals can be storno/correction targets (reverseEntry flips the
-  // original's status atomically), which keeps the id list short: in the
-  // common no-reversal case the chain filters are skipped entirely.
+  // Existing operational reports intentionally exclude every year_end entry.
+  // Keep that behavior separate from statutory annual-report generation,
+  // which excludes only the final result-closing entry while retaining tax
+  // and appropriations.
   let yearEndEntryIds: string[] = []
   if (options?.excludeYearEndClosing) {
     yearEndEntryIds = (
@@ -91,13 +85,19 @@ export async function generateTrialBalance(
     let q = query.neq('source_type', 'year_end')
     if (yearEndEntryIds.length > 0) {
       const idList = `(${yearEndEntryIds.join(',')})`
-      // `.not('col','in',...)` alone would also drop NULL rows (NULL NOT IN
-      // (...) is NULL), i.e. every normal entry: OR in the null branch.
       q = q.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
       q = q.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
     }
     return q
   }
+
+  const closingEntryId = options?.excludeFinalClosingEntry
+    ? period?.closing_entry_id ?? null
+    : null
+  const excludeClosingEntry = (query: EntryLinesQuery): EntryLinesQuery =>
+    closingEntryId
+      ? query.or(`id.neq.${closingEntryId},status.neq.posted`)
+      : query
 
   // ── Opening balances (IB) at period_start ──────────────────────
   const { balances: obBalances, obEntryId } = await getOpeningBalances(
@@ -144,6 +144,9 @@ export async function generateTrialBalance(
 
         if (options?.excludeYearEndClosing) {
           query = excludeYearEndChain(query)
+        }
+        if (options?.excludeFinalClosingEntry) {
+          query = excludeClosingEntry(query)
         }
 
         return query
@@ -202,6 +205,9 @@ export async function generateTrialBalance(
 
       if (options?.excludeYearEndClosing) {
         query = excludeYearEndChain(query)
+      }
+      if (options?.excludeFinalClosingEntry) {
+        query = excludeClosingEntry(query)
       }
 
       return query
