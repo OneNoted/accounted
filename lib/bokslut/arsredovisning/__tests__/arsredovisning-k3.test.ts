@@ -352,6 +352,25 @@ describe('buildArsredovisningData: K3', () => {
 })
 
 describe('buildArsredovisningData: K2 byte-equivalence', () => {
+  it('keeps tax and appropriations in the statutory pre-closing balance', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(mockedTrialBalance).toHaveBeenCalledWith(
+      expect.anything(),
+      'co1',
+      'fp1',
+      { excludeFinalClosingEntry: true },
+    )
+    expect(mockedTrialBalance).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'co1',
+      'fp1',
+      { excludeYearEndClosing: true },
+    )
+  })
+
   it('records accounting_framework=k2', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k2' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient

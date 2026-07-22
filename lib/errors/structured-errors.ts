@@ -2848,8 +2848,8 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
   },
   ARSREDOVISNING_INCOMPLETE: {
     httpStatus: 409,
-    message_sv: 'Årsredovisningen har blockerande kontrollfel och kan inte låsas ännu.',
-    message_en: 'The annual report has blocking validation errors and cannot be finalized yet.',
+    message_sv: 'Årsredovisningen har blockerande kontrollfel och kan inte versionssparas ännu.',
+    message_en: 'The annual report has blocking validation errors and cannot be versioned yet.',
     retryable: false,
   },
   ARSREDOVISNING_VERSION_NOT_SIGNABLE: {
