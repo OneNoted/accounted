@@ -76,7 +76,7 @@ describe('GET /api/reports/full-archive', () => {
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 
-  it('fails closed when the service-role membership verification disagrees', async () => {
+  it('rejects when the verified user is not a member of the selected company', async () => {
     reset()
     enqueue({ data: { role: 'admin' }, error: null })
     enqueue({ data: null, error: null })

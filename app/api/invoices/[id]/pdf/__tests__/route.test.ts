@@ -91,6 +91,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
     expect(response.status).toBe(200)
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
       .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns 400 before rendering when a foreign payment account is missing', async () => {

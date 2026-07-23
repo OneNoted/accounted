@@ -207,6 +207,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         'Content-Type': 'application/pdf',
         'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
+        'Cache-Control': 'private, no-store',
         'X-Request-Id': ctx.requestId,
       },
     })

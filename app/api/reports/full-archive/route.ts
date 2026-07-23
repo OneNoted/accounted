@@ -113,7 +113,12 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
         ? `arkiv_${periodId}.zip`
         : `arkiv_full_${companyId}_${formatDateStamp(new Date())}.zip`
 
-    log.info('full archive generated', { scope, includeDocuments })
+    log.info('full archive generated', {
+      userId: user.id,
+      companyId,
+      scope,
+      includeDocuments,
+    })
 
     return new NextResponse(zipBuffer, {
       status: 200,
@@ -124,6 +129,12 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
       },
     })
   } catch (err) {
+    log.error('full archive generation failed', err as Error, {
+      userId: user.id,
+      companyId,
+      scope,
+      includeDocuments,
+    })
     const message = err instanceof Error ? err.message : 'Failed to generate archive'
     const status = message.includes('not found') ? 404 : 500
     return NextResponse.json({ error: getErrorMessage(err) }, { status })

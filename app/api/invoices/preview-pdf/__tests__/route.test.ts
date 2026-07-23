@@ -112,6 +112,7 @@ describe('POST /api/invoices/preview-pdf', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/pdf')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
       .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
   })

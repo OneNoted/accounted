@@ -47,6 +47,8 @@ server-generated export.
   statutory exports are owner/admin-only server operations. Their exact payload
   exception is limited to the downloadable statutory archive purpose described
   above and is not reused by the routine history endpoint.
+  The summary function is defined in migration `20260723003000` and the route
+  applies domain masking again before returning its allow-listed fields.
 - Forged delivery evidence: authenticated PostgREST INSERT and UPDATE access is
   removed. Server-only functions bind reservations and state transitions to a
   verified writable company member. Payload-free crashed reservations may be

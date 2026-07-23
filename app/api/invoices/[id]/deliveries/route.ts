@@ -24,7 +24,9 @@ type DeliveryListRow = Pick<
  *
  * Returns minimized delivery metadata for an invoice. Exact message content,
  * BCC recipients, provider identifiers, checksums, and full recipient
- * addresses stay server-side.
+ * addresses stay server-side. The database allow-list and masking boundary is
+ * defined by list_invoice_delivery_summaries in migration 20260723003000; this
+ * route masks returned addresses again as defense in depth.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.deliveries.list',

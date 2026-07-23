@@ -231,6 +231,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': contentDisposition('inline', filename),
+        'Cache-Control': 'private, no-store',
       },
     })
   } catch (error) {

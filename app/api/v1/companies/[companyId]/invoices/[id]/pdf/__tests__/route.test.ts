@@ -143,6 +143,7 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(contentDispositionFilename(res.headers.get('Content-Disposition')))
       .toBe('Test AB x Acme AB Faktura nr 2026-0042 20260512.pdf')
     expect(res.headers.get('X-Request-Id')).toMatch(/^req_/)

@@ -112,6 +112,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         'Content-Type': 'application/pdf',
         'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': pdfBuffer.length.toString(),
+        'Cache-Control': 'private, no-store',
       },
     })
   } catch (error) {

@@ -158,6 +158,9 @@ They need the same administrative boundary as other company financial settings.
 All payable invoices, including SEK invoices, must resolve a usable account
 before PDF rendering or invoice-number allocation. Credit notes, proformas, and
 delivery notes remain exempt because they do not request payment.
+Resends are not exempt: the current implementation renders a new PDF from
+current company settings instead of reusing an earlier delivery snapshot, so it
+must not send a payable document with blank or obsolete remittance details.
 
 **Cross-references.**
 - OWASP ASVS V2.3: business logic integrity

@@ -201,7 +201,7 @@ export function InvoicePaymentAccountsSettings({
     const normalized = Object.fromEntries([
       [
         'SEK',
-        normalizeInvoicePaymentAccount(accounts.SEK ?? legacySekAccount),
+        normalizeInvoicePaymentAccount(accounts.SEK ?? EMPTY_ACCOUNT),
       ],
       ...configuredCurrencies.filter((currency) => currency !== 'SEK').map((currency) => [
         currency,

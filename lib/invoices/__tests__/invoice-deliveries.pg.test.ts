@@ -454,6 +454,27 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     })
   })
 
+  it('rejects service-role delivery writes for a non-member or mismatched tenant', async () => {
+    const first = await seedCompany()
+    const second = await seedCompany()
+    const outsiderId = await insertAuthUser()
+    const invoiceId = await insertInvoice(first.userId, first.companyId)
+
+    await expect(
+      withServiceRoleContext(outsiderId, (client) => client.query(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)`,
+        [first.companyId, invoiceId, outsiderId],
+      )),
+    ).rejects.toThrow(/writable company member/i)
+
+    await expect(
+      withServiceRoleContext(second.userId, (client) => client.query(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)`,
+        [second.companyId, invoiceId, second.userId],
+      )),
+    ).rejects.toThrow(/invoice not found/i)
+  })
+
   it('reclaims only stale payload-free reservations for another sender', async () => {
     const { userId, companyId } = await seedCompany()
     const otherUserId = await insertAuthUser()

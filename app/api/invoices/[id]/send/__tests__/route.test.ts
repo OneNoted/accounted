@@ -441,13 +441,13 @@ describe('POST /api/invoices/[id]/send', () => {
     const { status, body } = await parseJsonResponse<{
       success: boolean
       messageId: string
-      recipient_counts: { to: number; cc: number; bcc: number }
+      recipient_counts: { to: number; cc: number }
     }>(response)
 
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.messageId).toBe('msg-1')
-    expect(body.recipient_counts).toEqual({ to: 1, cc: 2, bcc: 2 })
+    expect(body.recipient_counts).toEqual({ to: 1, cc: 2 })
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',
