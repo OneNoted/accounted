@@ -512,6 +512,41 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('rejects fixed routing over the total limit without per-send additions', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: {
+          data: {
+            ...COMPANY_SETTINGS,
+            invoice_email_cc_addresses: Array.from(
+              { length: 19 },
+              (_, index) => `fixed-${index}@example.test`,
+            ),
+            invoice_email_bcc_addresses: ['archive@example.test'],
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_TOO_MANY_RECIPIENTS')
+    expect(body.error.details.recipient_count).toBe(21)
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('returns 503 when email service is not configured', async () => {
     mockIsConfigured.mockReturnValue(false)
     mockServiceClient.mockReturnValue(

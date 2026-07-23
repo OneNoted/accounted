@@ -669,6 +669,16 @@ export const POST = withRouteContext(
       })
     }
 
+    opLog.info('invoice sent', {
+      deliveryId: result.deliveryId,
+      messageId: result.messageId,
+      recipientCounts: {
+        to: recipients.to.length,
+        cc: recipients.cc.length,
+        bcc: recipients.bcc.length,
+      },
+    })
+
     return NextResponse.json(
       {
         success: true,

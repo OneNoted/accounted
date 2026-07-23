@@ -311,6 +311,34 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     ))
     expect(documentLookup.rows[0].id).toBe(documentId)
 
+    const other = await seedCompany()
+    const otherInvoiceId = await insertInvoice(other.userId, other.companyId)
+    const otherDocumentId = await insertDocument(other.userId, other.companyId)
+    const otherDeliveryId = await insertPendingEmailDelivery({
+      userId: other.userId,
+      companyId: other.companyId,
+      invoiceId: otherInvoiceId,
+      documentId: otherDocumentId,
+    })
+    await getPool().query(
+      `UPDATE public.invoice_deliveries SET status = 'sent', sent_at = now() WHERE id = $1`,
+      [otherDeliveryId],
+    )
+
+    const mismatchedInvoiceLookup = await withUserContext(memberId, (client) =>
+      client.query<{ id: string | null }>(
+        `SELECT public.latest_sent_invoice_delivery_document($1, $2)::text AS id`,
+        [companyId, otherInvoiceId],
+      ),
+    )
+    expect(mismatchedInvoiceLookup.rows[0].id).toBeNull()
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT public.latest_sent_invoice_delivery_document($1, $2)`,
+        [other.companyId, otherInvoiceId],
+      )),
+    ).rejects.toThrow(/not authorized to find delivered invoice document/i)
+
     await expect(
       withUserContext(memberId, (client) => client.query(
         `SELECT id FROM public.export_invoice_delivery_evidence($1)`,

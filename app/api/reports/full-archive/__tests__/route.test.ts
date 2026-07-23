@@ -17,6 +17,12 @@ vi.mock('@/lib/logger', () => ({
 }))
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const {
+  supabase: archiveSupabase,
+  enqueue: enqueueArchive,
+  reset: resetArchive,
+} = createQueuedMockSupabase()
+const createServiceClientMock = vi.fn(() => archiveSupabase)
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -34,7 +40,7 @@ vi.mock('@/lib/reports/full-archive-export', () => ({
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
-  createServiceClient: () => supabase,
+  createServiceClient: () => createServiceClientMock(),
 }))
 
 import {
@@ -61,9 +67,10 @@ function unauthed() {
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+  resetArchive()
   authed()
   enqueue({ data: { role: 'admin' }, error: null })
-  enqueue({ data: { role: 'admin' }, error: null })
+  enqueueArchive({ data: { role: 'admin' }, error: null })
 })
 
 describe('GET /api/reports/full-archive', () => {
@@ -91,14 +98,16 @@ describe('GET /api/reports/full-archive', () => {
       companyId: 'company-1',
       role: 'member',
     })
+    expect(createServiceClientMock).not.toHaveBeenCalled()
     expect(mockEstimate).not.toHaveBeenCalled()
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 
   it('rejects when the verified user is not a member of the selected company', async () => {
     reset()
+    resetArchive()
     enqueue({ data: { role: 'admin' }, error: null })
-    enqueue({ data: null, error: null })
+    enqueueArchive({ data: null, error: null })
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await GET(createMockRequest('/api/reports/full-archive')),
@@ -112,8 +121,9 @@ describe('GET /api/reports/full-archive', () => {
 
   it('returns 500 when the service-role membership verification fails', async () => {
     reset()
+    resetArchive()
     enqueue({ data: { role: 'admin' }, error: null })
-    enqueue({ data: null, error: new Error('database unavailable') })
+    enqueueArchive({ data: null, error: new Error('database unavailable') })
 
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await GET(createMockRequest('/api/reports/full-archive')),
@@ -149,6 +159,7 @@ describe('GET /api/reports/full-archive', () => {
     expect(body.data.total_bytes).toBe(10_000_000)
     expect(body.data.within_limit).toBe(true)
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(mockEstimate).toHaveBeenCalledWith(archiveSupabase, 'company-1', 'all', undefined)
     expect(mockGenerate).not.toHaveBeenCalled()
   })
 

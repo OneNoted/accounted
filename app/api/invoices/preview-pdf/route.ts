@@ -210,6 +210,9 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     updated_at: new Date().toISOString(),
   } as Invoice
 
+  // This route performs no writes or number allocation. Validate only after
+  // the complete preview invoice exists so payable-document exemptions and
+  // currency selection use the same object that is rendered.
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, previewInvoice)) {
     return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
       requestId,
