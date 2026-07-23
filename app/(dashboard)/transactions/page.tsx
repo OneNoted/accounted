@@ -2330,6 +2330,7 @@ export default function TransactionsPage() {
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}
           onOpenAttachDocument={openAttachDocumentDialog}
+          onOpenMatchVoucher={openMatchVoucherDialog}
           onDelete={handleDeleteTransaction}
           onSkvBokfor={handleSkvBokfor}
           onSkvMatch={r => setSkvMatchTarget(r)}

@@ -2658,6 +2658,7 @@
     "create_correction": "Skapa ändringsverifikation",
     "not_posted": "Ej bokförd",
     "possible_match_invoice": "Möjlig match: Faktura {number}",
+    "match_voucher": "Matcha mot befintlig verifikation",
     "attach_document": "Matcha mot underlag",
     "book": "Bokför",
     "delete": "Ta bort",

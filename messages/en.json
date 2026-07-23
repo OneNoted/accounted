@@ -2658,6 +2658,7 @@
     "create_correction": "Create correction entry",
     "not_posted": "Not posted",
     "possible_match_invoice": "Possible match: Invoice {number}",
+    "match_voucher": "Match to existing voucher",
     "attach_document": "Match to document",
     "book": "Post",
     "delete": "Delete",
