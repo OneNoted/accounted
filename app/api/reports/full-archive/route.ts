@@ -54,6 +54,22 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
   // company senders. Only this owner/admin server path receives a service-role
   // client; normal delivery history remains data-minimized by RLS.
   const archiveClient = createServiceClient()
+  const { data: verifiedMembership, error: verificationError } = await archiveClient
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (verificationError) {
+    log.error('failed to verify full archive export with service role', verificationError)
+    return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
+  }
+  if (!verifiedMembership || !['owner', 'admin'].includes(verifiedMembership.role)) {
+    return errorResponseFromCode('FORBIDDEN', log, {
+      requestId,
+      details: { required_roles: ['owner', 'admin'] },
+    })
+  }
 
   try {
     const estimate = await estimateArchiveSize(
@@ -104,6 +120,7 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
       headers: {
         'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="${filename}"`,
+        'Cache-Control': 'private, no-store',
       },
     })
   } catch (err) {

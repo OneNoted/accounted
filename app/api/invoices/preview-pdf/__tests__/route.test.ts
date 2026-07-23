@@ -8,7 +8,6 @@ import {
   makeCustomer,
 } from '@/tests/helpers'
 import { contentDispositionFilename } from '@/lib/api/content-disposition'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 const requireAuthMock = vi.fn()
@@ -118,11 +117,6 @@ describe('POST /api/invoices/preview-pdf', () => {
   })
 
   it('returns 400 when a foreign payment account is missing', async () => {
-    vi.mocked(prepareInvoicePdfRender).mockRejectedValueOnce(
-      Object.assign(new Error('missing payment account'), {
-        code: 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING',
-      }),
-    )
     enqueue({ data: customer, error: null })
     enqueue({ data: company, error: null })
 

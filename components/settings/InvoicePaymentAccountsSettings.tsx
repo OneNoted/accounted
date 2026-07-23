@@ -198,13 +198,17 @@ export function InvoicePaymentAccountsSettings({
       return
     }
 
-    const normalized = Object.fromEntries(
-      configuredCurrencies.map((currency) => [
+    const normalized = Object.fromEntries([
+      [
+        'SEK',
+        normalizeInvoicePaymentAccount(accounts.SEK ?? legacySekAccount),
+      ],
+      ...configuredCurrencies.filter((currency) => currency !== 'SEK').map((currency) => [
         currency,
         normalizeInvoicePaymentAccount(accounts[currency] ?? EMPTY_ACCOUNT),
       ]),
-    ) as Partial<Record<Currency, InvoicePaymentAccount>>
-    const sek = normalized.SEK ?? legacySekInvoicePaymentAccount(settings)
+    ]) as Partial<Record<Currency, InvoicePaymentAccount>>
+    const sek = normalized.SEK!
     const updates: Partial<CompanySettings> = {
       invoice_payment_accounts: normalized,
       bank_name: sek.bank_name ?? '',

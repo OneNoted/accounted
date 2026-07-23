@@ -49,6 +49,7 @@ beforeEach(() => {
   reset()
   authed()
   enqueue({ data: { role: 'admin' }, error: null })
+  enqueue({ data: { role: 'admin' }, error: null })
 })
 
 describe('GET /api/reports/full-archive', () => {
@@ -71,6 +72,36 @@ describe('GET /api/reports/full-archive', () => {
 
     expect(status).toBe(403)
     expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockEstimate).not.toHaveBeenCalled()
+    expect(mockGenerate).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the service-role membership verification disagrees', async () => {
+    reset()
+    enqueue({ data: { role: 'admin' }, error: null })
+    enqueue({ data: null, error: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await GET(createMockRequest('/api/reports/full-archive')),
+    )
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockEstimate).not.toHaveBeenCalled()
+    expect(mockGenerate).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 when the service-role membership verification fails', async () => {
+    reset()
+    enqueue({ data: { role: 'admin' }, error: null })
+    enqueue({ data: null, error: new Error('database unavailable') })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await GET(createMockRequest('/api/reports/full-archive')),
+    )
+
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
     expect(mockEstimate).not.toHaveBeenCalled()
     expect(mockGenerate).not.toHaveBeenCalled()
   })
@@ -143,6 +174,7 @@ describe('GET /api/reports/full-archive', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/zip')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockGenerate).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',

@@ -28,7 +28,6 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import {
   hasRequiredInvoicePaymentAccount,
-  InvoicePaymentAccountMissingError,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
@@ -181,12 +180,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         }),
       )
     } catch (err) {
-      if (err instanceof InvoicePaymentAccountMissingError) {
-        return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
-          requestId: ctx.requestId,
-          details: { currency: typed.currency },
-        })
-      }
       ctx.log.error('invoices.pdf: render failed', err as Error, {
         invoiceId,
         companyId: ctx.companyId,

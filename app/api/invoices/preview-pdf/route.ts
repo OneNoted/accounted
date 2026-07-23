@@ -10,7 +10,6 @@ import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentTy
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   hasRequiredInvoicePaymentAccount,
-  InvoicePaymentAccountMissingError,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 
@@ -235,12 +234,6 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       },
     })
   } catch (error) {
-    if (error instanceof InvoicePaymentAccountMissingError) {
-      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
-        requestId,
-        details: { currency: previewInvoice.currency },
-      })
-    }
     console.error('Preview PDF generation error:', error)
     return NextResponse.json(
       { error: 'Kunde inte generera PDF-förhandsgranskning' },

@@ -62,7 +62,11 @@ the message. Other members receive the minimized list through the dedicated
 database function, so direct PostgREST access cannot bypass route minimization.
 The complete statutory archive is an owner/admin-only server operation and may
 include exact company delivery evidence. Deferred booking uses a separate
-function that exposes only the latest archived document ID.
+`SECURITY DEFINER` function that verifies active-company membership and exposes
+only the latest archived document ID. The archive route verifies owner/admin
+twice: first through the authenticated RLS client and then through a stateless
+service-role client with explicit `company_id` and `user_id` predicates. Every
+archive query is scoped by that `company_id` or by parent IDs selected for it.
 
 ### Why this is intentional
 
@@ -126,6 +130,15 @@ recipient are rejected instead of silently changing recipient classification.
 recipient payload in `invoice_deliveries`, including the actor and company.
 Routine delivery-list responses remain minimized and never expose BCC.
 
+**Service write boundary.** Delivery persistence uses a stateless service-role
+client because authenticated PostgREST writes are intentionally revoked. The
+service-only RPCs do not trust that client alone: they verify the supplied actor
+is a writable member of the supplied company and bind every invoice and
+delivery row to that company. Dashboard routes enter through `withRouteContext`,
+v1 and MCP routes enter through `withApiV1` or the approved pending-operation
+path, and recurring sends derive actor, company, invoice, and schedule from the
+same company-scoped job before calling the RPC.
+
 **Cross-references.**
 - OWASP ASVS V2.3: business logic integrity
 - OWASP ASVS V8.2.1: operation-level authorization
@@ -134,10 +147,11 @@ Routine delivery-list responses remain minimized and never expose BCC.
 
 ### Invoice payment instructions: owner or admin only
 
-**Decision.** Changing the currency-keyed invoice payment accounts or their
-legacy SEK mirror fields requires the `owner` or `admin` role. The settings
-route enforces this before persistence, matching the existing
-`company_settings` RLS policy.
+**Decision.** Changing the currency-keyed `invoice_payment_accounts` or any
+legacy SEK mirror field requires the `owner` or `admin` role. The legacy fields
+are `bank_name`, `clearing_number`, `account_number`, `bankgiro`, `plusgiro`,
+`swish`, `iban`, and `bic`. The settings route enforces this before persistence,
+matching the existing `company_settings` RLS policy.
 
 **Why.** Payment instructions determine where a customer sends company funds.
 They need the same administrative boundary as other company financial settings.

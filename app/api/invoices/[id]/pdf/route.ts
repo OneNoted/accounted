@@ -10,7 +10,6 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import {
   hasRequiredInvoicePaymentAccount,
-  InvoicePaymentAccountMissingError,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 
@@ -116,12 +115,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     })
   } catch (error) {
-    if (error instanceof InvoicePaymentAccountMissingError) {
-      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
-        requestId,
-        details: { currency: (invoice as Invoice).currency },
-      })
-    }
     console.error('PDF generation error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? getUserErrorMessage(error) : 'PDF generation failed' },

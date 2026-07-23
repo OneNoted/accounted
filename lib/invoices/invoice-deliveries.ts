@@ -46,6 +46,9 @@ function addresses(value?: string | string[]): string[] {
 /**
  * Persist a reusable delivery attempt before allocating an invoice number.
  * The unique preparing row is also the concurrency lock for one invoice send.
+ * The stateless service-role client is only transport for the service-only RPC:
+ * the RPC re-authorizes userId as a writable member of companyId and scopes the
+ * invoice row to the same company before it can write anything.
  */
 export async function reserveInvoiceDelivery(args: {
   supabase: SupabaseClient
@@ -101,6 +104,9 @@ export async function sendTrackedInvoiceEmail(
     { upload_source: 'system' },
   )
 
+  // These service-only RPCs re-authorize userId against companyId and bind
+  // every transition to the reserved invoice, so no caller-supplied tenant or
+  // actor identifier is trusted merely because this client bypasses RLS.
   const deliveryWriter = createServiceClient()
   const { data: capturedDeliveryId, error: deliveryError } = await deliveryWriter.rpc(
     'capture_invoice_delivery_payload',

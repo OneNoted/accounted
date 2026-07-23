@@ -113,7 +113,7 @@ export default function SendInvoiceDialog({
       try {
         if (!company?.id) throw new Error(t('no_active_company'))
 
-        const [settingsResult, periodResult, originalResult] = await Promise.all([
+        const [settingsResult, periodResult, originalResult, authResult] = await Promise.all([
           supabase
             .from('company_settings')
             .select('accounting_method, entity_type, defer_invoice_booking, email, invoice_email_cc_addresses, invoice_email_bcc_addresses')
@@ -134,11 +134,13 @@ export default function SendInvoiceDialog({
                 .eq('company_id', company.id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
+          supabase.auth.getUser(),
         ])
 
         if (settingsResult.error) throw new Error(t('company_settings_failed'))
         if (periodResult.error) throw new Error(t('fiscal_period_failed'))
         if (originalResult.error) throw new Error(t('original_invoice_failed'))
+        if (authResult.error || !authResult.data.user) throw new Error(t('load_failed_title'))
 
         if (cancelled) return
 
@@ -169,9 +171,10 @@ export default function SendInvoiceDialog({
         setAccounts(fetchedAccounts)
         setCatalog(fetchedCatalog)
         setEntityType((settingsResult.data?.entity_type as EntityType) || 'enskild_firma')
+        const legacyCc = settingsResult.data?.email || authResult.data.user.email
         setFixedCc(
           settingsResult.data?.invoice_email_cc_addresses
-          ?? (settingsResult.data?.email ? [settingsResult.data.email] : []),
+          ?? (legacyCc ? [legacyCc] : []),
         )
         setFixedBcc(
           canCustomizeRecipients
