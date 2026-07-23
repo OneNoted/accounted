@@ -739,7 +739,12 @@ const EQ_LIAB_MAPPINGS = K2_BR_MAPPINGS.slice(
   FIRST_EQ_LIAB_MAPPING_INDEX,
 )
 
-/** Reconcile each BR side to the rounded exact total without changing exact posts. */
+/**
+ * Reconcile each BR side to its own rounded exact total without changing exact
+ * posts. Residuals must not be netted across sides: doing so could make the
+ * balance check pass while leaving one reported side different from its exact
+ * accounting total.
+ */
 function smoothBrResidual(
   br: ConceptAmounts,
   brExact: ConceptAmounts,

@@ -381,6 +381,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       to: customer.email,
       configuredCc: settings.invoice_email_cc_addresses,
       configuredBcc: settings.invoice_email_bcc_addresses,
+      // The company email is fixed routing, not an arbitrary
+      // request-controlled recipient.
       legacyCc: settings.email,
       additionalCc: bodyResult.data.additional_cc,
       additionalBcc: bodyResult.data.additional_bcc,

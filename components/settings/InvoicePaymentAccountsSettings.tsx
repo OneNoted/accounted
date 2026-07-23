@@ -110,13 +110,27 @@ export function InvoicePaymentAccountsSettings({
   const [activeCurrency, setActiveCurrency] = useState<Currency>('SEK')
   const [currencyToAdd, setCurrencyToAdd] = useState<Currency | ''>('')
   const [isSaving, setIsSaving] = useState(false)
-  const previousServerAccounts = useRef(serverAccounts)
+  const [hasExternalUpdate, setHasExternalUpdate] = useState(false)
+  const accountsRef = useRef(accounts)
+  const previousServerAccountsKey = useRef(serverAccountsKey)
+  accountsRef.current = accounts
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
 
   useEffect(() => {
-    const previous = previousServerAccounts.current
-    setAccounts((current) => accountsKey(current) === accountsKey(previous) ? serverAccounts : current)
-    previousServerAccounts.current = serverAccounts
+    const previousKey = previousServerAccountsKey.current
+    if (serverAccountsKey === previousKey) return
+
+    const currentKey = accountsKey(accountsRef.current)
+    if (currentKey === serverAccountsKey) {
+      setHasExternalUpdate(false)
+    } else if (currentKey === previousKey) {
+      accountsRef.current = serverAccounts
+      setAccounts(serverAccounts)
+      setHasExternalUpdate(false)
+    } else {
+      setHasExternalUpdate(true)
+    }
+    previousServerAccountsKey.current = serverAccountsKey
   }, [serverAccounts, serverAccountsKey])
 
   const configuredCurrencies = useMemo(
@@ -160,6 +174,13 @@ export function InvoicePaymentAccountsSettings({
     setActiveCurrency('SEK')
   }
 
+  function reloadServerAccounts() {
+    accountsRef.current = serverAccounts
+    setAccounts(serverAccounts)
+    if (!serverAccounts[activeCurrency]) setActiveCurrency('SEK')
+    setHasExternalUpdate(false)
+  }
+
   function validationError(): string | null {
     // An added foreign-currency tab is a real configuration immediately. It
     // must have an IBAN before save; the Remove action discards placeholders.
@@ -194,6 +215,15 @@ export function InvoicePaymentAccountsSettings({
   }
 
   async function save() {
+    if (hasExternalUpdate) {
+      toast({
+        title: t('conflict_title'),
+        description: t('conflict_description'),
+        variant: 'destructive',
+      })
+      return
+    }
+
     const error = validationError()
     if (error) {
       toast({ title: t('validation_title'), description: error, variant: 'destructive' })
@@ -236,6 +266,7 @@ export function InvoicePaymentAccountsSettings({
         const result = await response.json()
         throw new Error(typeof result.error === 'string' ? result.error : t('save_failed'))
       }
+      accountsRef.current = normalized
       setAccounts(normalized)
       onUpdate(updates)
       toast({ title: t('saved_title'), description: t('saved_description') })
@@ -258,6 +289,21 @@ export function InvoicePaymentAccountsSettings({
         </h2>
         <p className="text-sm text-muted-foreground">{t('description')}</p>
       </div>
+
+      {hasExternalUpdate && (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="space-y-1">
+            <p className="text-sm font-medium">{t('conflict_title')}</p>
+            <p className="text-sm text-muted-foreground">{t('conflict_description')}</p>
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={reloadServerAccounts}>
+            {t('reload_server_values')}
+          </Button>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2" aria-label={t('currency_tabs_label')}>
         {configuredCurrencies.map((currency) => (
@@ -395,7 +441,7 @@ export function InvoicePaymentAccountsSettings({
       </div>
 
       <div className="flex justify-end">
-        <Button type="button" onClick={save} disabled={isSaving}>
+        <Button type="button" onClick={save} disabled={isSaving || hasExternalUpdate}>
           {isSaving ? t('saving') : t('save')}
         </Button>
       </div>

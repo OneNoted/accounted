@@ -118,7 +118,10 @@ number allocation, or email delivery. The database also rejects direct member
 changes to fixed recipient fields. Once an owner or admin approves a fixed
 recipient, it applies to every send by a writable company member without a new
 role check. A fixed recipient that matches the customer address is de-duplicated
-with To precedence because it does not introduce a new external disclosure.
+with To precedence because it does not introduce a new external disclosure. The
+legacy company-email or authenticated sender-email fallback is also fixed
+routing: it cannot be supplied by the request, and the sender already has access
+to the invoice being sent.
 
 **Why.** Both fixed and per-send recipients can disclose customer invoice data
 to a new external address. This is a distinct disclosure decision and needs a
