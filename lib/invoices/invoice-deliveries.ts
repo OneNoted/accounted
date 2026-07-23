@@ -215,6 +215,8 @@ export async function sendTrackedInvoiceEmail(
   // transition is returned as a reconciliation warning; each caller still
   // advances the invoice to sent, and ordinary send routes reject non-drafts,
   // so a pending evidence row never becomes permission to send a duplicate.
+  // Pending rows are outside the preparing-only reservation lock, so retained
+  // evidence also cannot block a later explicitly authorized resend.
   const finalized = !finalizeError && finalizedDeliveryId === deliveryId
   return {
     ...result,

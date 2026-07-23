@@ -604,6 +604,26 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     )
     expect(result.rows[0].status).toBe('pending')
     expect(result.rows[0].retention_expires_at).toBe('2034-01-01')
+
+    const nextReservationId = await withServiceRoleContext(userId, async (client) => {
+      const reservation = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, userId],
+      )
+      const states = await client.query<{ id: string; status: string }>(
+        `SELECT id, status
+           FROM public.invoice_deliveries
+          WHERE company_id = $1 AND invoice_id = $2
+          ORDER BY created_at`,
+        [companyId, invoiceId],
+      )
+      expect(states.rows).toEqual(expect.arrayContaining([
+        { id: deliveryId, status: 'pending' },
+        { id: reservation.rows[0].id, status: 'preparing' },
+      ]))
+      return reservation.rows[0].id
+    })
+    expect(nextReservationId).not.toBe(deliveryId)
   })
 
   it('allows a failed attempt to release and delete its unsent PDF', async () => {

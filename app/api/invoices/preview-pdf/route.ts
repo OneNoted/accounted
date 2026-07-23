@@ -54,6 +54,36 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     )
   }
 
+  const docType: InvoiceDocumentType = document_type || 'invoice'
+  const requestedCurrency = currency || 'SEK'
+
+  // Fetch and validate company payment settings before customer data. The
+  // preview performs no writes, but a request that cannot be rendered should
+  // still stop before processing customer details.
+  const { data: company, error: companyError } = await supabase
+    .from('company_settings')
+    .select('*')
+    .eq('company_id', companyId)
+    .single()
+
+  if (companyError || !company) {
+    return NextResponse.json(
+      { error: 'Företagsinställningar saknas' },
+      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+    )
+  }
+
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, {
+    currency: requestedCurrency,
+    document_type: docType,
+    credited_invoice_id: null,
+  })) {
+    return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+      requestId,
+      details: { currency: requestedCurrency },
+    }))
+  }
+
   // When customer_id is omitted, only allow the synthetic preview if the
   // company has no real customers: this is the settings-preview dead-end
   // case. Derived server-side so a client can't bypass the ownership check
@@ -117,24 +147,9 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     customer = data as Customer
   }
 
-  // Fetch company settings
-  const { data: company, error: companyError } = await supabase
-    .from('company_settings')
-    .select('*')
-    .eq('company_id', companyId)
-    .single()
-
-  if (companyError || !company) {
-    return NextResponse.json(
-      { error: 'Företagsinställningar saknas' },
-      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
-    )
-  }
-
   // VAT rules are customer-type-driven and only know the customer side.
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
 
-  const docType: InvoiceDocumentType = document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
 
   // VAT registration gate: mirror the server-side write gate
@@ -184,7 +199,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     due_date: due_date || new Date().toISOString().split('T')[0],
     delivery_date: delivery_date || null,
     status: 'draft',
-    currency: currency || 'SEK',
+    currency: requestedCurrency,
     exchange_rate: null,
     exchange_rate_date: null,
     subtotal: isDeliveryNote ? 0 : subtotal,
@@ -209,16 +224,6 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   } as Invoice
-
-  // This route performs no writes or number allocation. Validate only after
-  // the complete preview invoice exists so payable-document exemptions and
-  // currency selection use the same object that is rendered.
-  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, previewInvoice)) {
-    return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
-      requestId,
-      details: { currency: previewInvoice.currency },
-    }))
-  }
 
   try {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(

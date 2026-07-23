@@ -65,6 +65,7 @@ import {
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
 import {
+  EMAIL_PATTERN,
   exceedsInvoiceEmailRecipientLimit,
   MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
   findAdditionalInvoiceRecipientCollisions,
@@ -317,7 +318,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 2: customer email.
     const customer = typed.customer
-    if (!customer?.email?.trim()) {
+    if (!customer?.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
         requestId: ctx.requestId,
         details: { customer_id: typed.customer_id },
@@ -795,7 +796,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       companyId: ctx.companyId,
       userId: ctx.userId,
       invoiceNumber: finalInvoiceNumber,
-      sentTo: customer.email,
+      recipientCounts: {
+        to: recipients.to.length,
+        cc: recipients.cc.length,
+      },
       journalEntryId,
       hadWarnings: warnings.length > 0,
     })

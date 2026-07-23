@@ -30,6 +30,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import {
+  EMAIL_PATTERN,
   exceedsInvoiceEmailRecipientLimit,
   findAdditionalInvoiceRecipientCollisions,
   invoiceEmailRecipientCount,
@@ -169,7 +170,7 @@ export const POST = withRouteContext(
     }
 
     const customer = invoice.customer as Customer
-    if (!customer.email?.trim()) {
+    if (!customer.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
         requestId,
         details: { customerId: customer.id },
@@ -675,7 +676,6 @@ export const POST = withRouteContext(
       recipientCounts: {
         to: recipients.to.length,
         cc: recipients.cc.length,
-        bcc: recipients.bcc.length,
       },
     })
 

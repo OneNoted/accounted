@@ -318,6 +318,26 @@ describe('POST /api/invoices/[id]/send', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_NO_CUSTOMER_EMAIL')
   })
 
+  it('returns 400 when the stored customer email is malformed', async () => {
+    enqueue({
+      data: makeInvoice({
+        id: 'inv-1',
+        customer: makeCustomer({ email: 'not-an-email' }),
+        items: [],
+      }),
+      error: null,
+    })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_NO_CUSTOMER_EMAIL')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('returns 404 when company settings not found', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: null, error: { message: 'Not found' } })

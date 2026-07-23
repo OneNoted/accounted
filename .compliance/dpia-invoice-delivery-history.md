@@ -1,5 +1,7 @@
 # DPIA screening: invoice delivery history
 
+Classification: Confidential
+
 Date: 2026-07-22
 Owner: Accounted controller
 Status: Screening completed

@@ -92,6 +92,7 @@ describe('POST /api/invoices/preview-pdf', () => {
   })
 
   it('returns 404 when the customer does not exist', async () => {
+    enqueue({ data: company, error: null })
     enqueue({ data: null, error: { message: 'not found' } })
 
     const response = await POST(
@@ -104,8 +105,8 @@ describe('POST /api/invoices/preview-pdf', () => {
   })
 
   it('returns a descriptive UTF-8 filename for the PDF preview', async () => {
-    enqueue({ data: customer, error: null })
     enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
 
     const response = await POST(
       createMockRequest('/api/invoices/preview-pdf', { method: 'POST', body: validBody }),
@@ -120,7 +121,6 @@ describe('POST /api/invoices/preview-pdf', () => {
   })
 
   it('returns 400 when a foreign payment account is missing', async () => {
-    enqueue({ data: customer, error: null })
     enqueue({ data: company, error: null })
 
     const response = await POST(
@@ -136,11 +136,12 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(renderToBufferMock).not.toHaveBeenCalled()
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('customers')
   })
 
   it('marks preview generation errors as private and non-cacheable', async () => {
-    enqueue({ data: customer, error: null })
     enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
     renderToBufferMock.mockRejectedValueOnce(new Error('render failed'))
 
     const response = await POST(

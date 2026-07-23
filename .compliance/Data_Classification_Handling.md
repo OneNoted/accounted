@@ -1,5 +1,7 @@
 # Data Classification and Handling
 
+Classification: Confidential
+
 ## Restricted data
 
 Swedish personal identity numbers are Restricted personal data. They are not an

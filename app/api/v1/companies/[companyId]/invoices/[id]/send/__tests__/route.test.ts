@@ -281,6 +281,33 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.error.code).toBe('NOT_FOUND')
   })
 
+  it('rejects a malformed stored customer email before allocation', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: {
+            ...DRAFT_INVOICE,
+            customer: { ...DRAFT_INVOICE.customer, email: 'not-an-email' },
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_NO_CUSTOMER_EMAIL')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it.each(['SEK', 'EUR'] as const)(
     'rejects a %s invoice without a payment account before number allocation',
     async (currency) => {

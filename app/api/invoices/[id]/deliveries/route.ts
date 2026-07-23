@@ -18,6 +18,14 @@ interface InvoiceDeliverySummaryRow {
   created_at: string
 }
 
+type MaskedRecipientAddress = string & { readonly __maskedRecipientAddress: true }
+
+interface MaskedInvoiceDeliverySummaryRow
+  extends Omit<InvoiceDeliverySummaryRow, 'to_addresses' | 'cc_addresses'> {
+  to_addresses: MaskedRecipientAddress[]
+  cc_addresses: MaskedRecipientAddress[]
+}
+
 /**
  * GET /api/invoices/[id]/deliveries
  *
@@ -59,7 +67,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       throw error
     }
 
-    const minimized = ((deliveries || []) as unknown as InvoiceDeliverySummaryRow[]).map((delivery) => ({
+    const minimized: MaskedInvoiceDeliverySummaryRow[] = (
+      (deliveries || []) as unknown as InvoiceDeliverySummaryRow[]
+    ).map((delivery) => ({
       id: delivery.id,
       channel: delivery.channel,
       status: delivery.status,
@@ -80,8 +90,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   },
 )
 
-function maskRecipientDomain(address: string): string {
+function maskRecipientDomain(address: string): MaskedRecipientAddress {
   const separator = address.lastIndexOf('@')
-  if (separator <= 0 || separator === address.length - 1) return '***'
-  return `***@${address.slice(separator + 1)}`
+  if (separator <= 0 || separator === address.length - 1) {
+    return '***' as MaskedRecipientAddress
+  }
+  return `***@${address.slice(separator + 1)}` as MaskedRecipientAddress
 }

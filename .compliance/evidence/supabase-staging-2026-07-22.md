@@ -1,5 +1,7 @@
 # Supabase staging migration evidence: 2026-07-22
 
+Classification: Internal Use Only
+
 Environment: `erpbase` Supabase staging branch
 
 The isolated, history-hydrated CLI dry run listed exactly these migrations,
