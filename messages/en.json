@@ -63,7 +63,8 @@
       "sent": "Sent",
       "matched": "Matched",
       "unmatched": "Unmatched"
-    }
+    },
+    "more_options": "More options"
   },
   "nav": {
     "dashboard": "Overview",
@@ -97,11 +98,11 @@
     "time_tracking": "Time tracking",
     "expenses": "Expenses",
     "receipts": "Receipts",
-    "deadlines": "Deadlines",
+    "deadlines": "Important dates",
     "vat_declaration": "VAT",
     "skattekonto": "Tax account",
     "periodiseringar": "Accruals",
-    "year_end": "Year-end",
+    "year_end": "Annual accounts",
     "annual_report": "Annual report",
     "income_declaration": "Income tax return",
     "pending": "Pending",
@@ -129,7 +130,14 @@
     "logout_sandbox": "Exit sandbox",
     "trial_days_left": "Trial: {days, plural, =1 {1 day} other {# days}} left",
     "ext_tic": "Company profile",
-    "ext_invoice_inbox": "Document inbox"
+    "ext_invoice_inbox": "Document inbox",
+    "fold_register": "Registers",
+    "fold_bokslut": "Year-end",
+    "collapse_nav": "Collapse menu",
+    "expand_nav": "Expand menu",
+    "members_roles": "Members and roles",
+    "subscription": "Subscription",
+    "discord_community": "Discord community"
   },
   "agentKnowledge": {
     "load_error_title": "Couldn't load the knowledge profile",
@@ -416,7 +424,7 @@
   "pending": {
     "title": "Review",
     "subtitle": "Operations waiting for approval",
-    "tab_pending": "Pending",
+    "tab_pending": "Waiting",
     "tab_committed": "Approved",
     "tab_rejected": "Rejected",
     "tab_all": "All",
@@ -446,10 +454,10 @@
     "badge_high_risk": "High risk",
     "badge_approved": "Approved",
     "badge_rejected": "Rejected",
-    "empty_pending_title": "No pending operations",
+    "empty_pending_title": "All clear.",
     "empty_committed_title": "No approved operations",
     "empty_rejected_title": "No rejected operations",
-    "empty_pending_description": "When an operation needs approval it will appear here for review.",
+    "empty_pending_description": "Nothing is waiting for your review. Operations that need approval appear here.",
     "empty_finished_description": "Operations you have approved or rejected appear here.",
     "bulk_confirm_intro": "Confirming will perform the following:",
     "bulk_confirm_footer": "Operations run in order. Failed ones are skipped and reported afterwards.",
@@ -516,7 +524,17 @@
     "badge_auto_expired": "Expired automatically",
     "auto_expired_detail": "Expired automatically after 30 days without action. Nothing was booked.",
     "badge_failed_partial": "Partially completed",
-    "failed_partial_detail": "The action was interrupted after an irreversible posting had already been made. What was posted remains and may need manual correction."
+    "failed_partial_detail": "The action was interrupted after an irreversible posting had already been made. What was posted remains and may need manual correction.",
+    "approve_all": "Approve all ({count})",
+    "bulkbar_selected": "selected",
+    "bulk_excluded_note": "{count, plural, one {1 needs individual review} other {# need individual review}}",
+    "badge_medium_risk": "Medium risk",
+    "badge_low_risk": "Low risk",
+    "show_conversation": "Show the conversation",
+    "tab_history": "History",
+    "details_btn": "Show details",
+    "empty_history_title": "No history yet",
+    "history_reason": "reason: \"{reason}\""
   },
   "deadlines": {
     "title": "Deadlines",
@@ -648,7 +666,11 @@
     "approve": "Approve",
     "approve_failed_title": "Approval failed",
     "approved_title": "Approved",
-    "approved_description": "The invoice has been approved"
+    "approved_description": "The invoice has been approved",
+    "status_picker_aria": "Filter by status",
+    "search_placeholder": "Search supplier invoices …",
+    "status_paid_date": "Paid {date}",
+    "help_body": "Approval attests the invoice for payment. Payments are reconciled automatically when they are matched against the bank, so there is no \"mark as paid\" button here."
   },
   "purchase_orders": {
     "title": "Purchase orders",
@@ -704,7 +726,13 @@
     "label_pg": "PG",
     "label_iban": "IBAN",
     "label_bank_account": "Bank account",
-    "no_contact_info": "No contact details"
+    "no_contact_info": "No contact details",
+    "count_summary": "{count, plural, one {1 supplier} other {# suppliers}}",
+    "th_name": "Name",
+    "th_type": "Type",
+    "th_payment": "Payment method",
+    "th_email": "Email",
+    "th_org_number": "Org. no."
   },
   "accruals": {
     "row_toggle": "Defer over period",
@@ -749,7 +777,8 @@
     "category_equipment": "Equipment",
     "category_vehicle": "Vehicle",
     "category_computer": "Computer",
-    "category_other_tangible": "Other tangible"
+    "category_other_tangible": "Other tangible",
+    "count_footer": "{count, plural, one {1 asset} other {# assets}}"
   },
   "employees": {
     "title": "Employees",
@@ -2667,7 +2696,11 @@
     "possible_duplicate": "Possible duplicate",
     "link": "Link",
     "match": "Match",
-    "view_voucher_short": "View voucher"
+    "view_voucher_short": "View voucher",
+    "th_date": "Date",
+    "th_description": "Description",
+    "th_amount": "Amount",
+    "th_status": "Status"
   },
   "tx_categories": {
     "expense_representation": "Representation",
@@ -3827,7 +3860,16 @@
     "bulk_mark_none": "No entries without documents match the filter.",
     "bulk_mark_body": "{count} entries without a supporting document match the current filter. They will be marked \"No supporting document required\". You can undo this per entry afterwards.",
     "bulk_mark_confirm": "Mark {count}",
-    "bulk_cancel": "Cancel"
+    "bulk_cancel": "Cancel",
+    "th_voucher": "Voucher",
+    "th_date": "Date",
+    "th_description": "Description",
+    "th_amount": "Amount",
+    "missing_attachment_chip": "Missing document",
+    "confirm_post_title": "Post voucher",
+    "confirm_post_description": "Will be posted as voucher {voucher}: {description}, {amount}. A posted voucher cannot be edited, only corrected or reversed.",
+    "confirm_post_description_generic": "The voucher \"{description}\" will be posted with the next available voucher number and can then only be corrected or reversed.",
+    "bulkbar_selected": "selected"
   },
   "attachment_preview_sheet": {
     "title": "Attachments",
@@ -4151,7 +4193,9 @@
     "toast_pruned_title": "Chart of accounts cleaned",
     "toast_pruned_description": "{deleted} accounts deleted",
     "toast_pruned_with_skipped": "{deleted} accounts deleted, {skipped} skipped",
-    "toast_prune_failed": "Could not clean up the chart of accounts"
+    "toast_prune_failed": "Could not clean up the chart of accounts",
+    "bas_version_chip": "BAS 2026",
+    "footer_note": "Showing {shown} of {total} accounts, grouped by BAS class. SRU codes carry through to the income tax return."
   },
   "dimensions": {
     "new_value": "New value",
@@ -4469,7 +4513,9 @@
     "default_company_name": "My business",
     "add_company": "Add company",
     "error_no_access": "You don't have access to this company.",
-    "error_switch_failed": "The company switch could not be saved. Please try again."
+    "error_switch_failed": "The company switch could not be saved. Please try again.",
+    "search_placeholder": "Search companies...",
+    "no_results": "No matching companies"
   },
   "transactions": {
     "page_title": "Transactions",
@@ -4479,11 +4525,9 @@
     "action_import": "Import",
     "action_review_all": "Review all",
     "action_review_loading": "Loading...",
-    "action_select_multi_start": "Select several",
-    "action_select_multi_end": "Done",
     "action_new_transaction": "New transaction",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
-    "mode_inbox": "To post",
+    "mode_inbox": "To record",
     "mode_history": "All transactions",
     "source_label": "Source:",
     "source_all": "All ({count})",
@@ -4556,7 +4600,32 @@
     "bank_sync_session_expired": "Bank connection expired",
     "bank_sync_session_expired_desc": "Reconnect to keep syncing transactions.",
     "import_psd2_active_warning_title": "PSD2 is active for {bankName}",
-    "import_psd2_active_warning_body": "Transactions sync automatically each night. File imports are only needed for older history or when PSD2 isn't working; otherwise duplicates may occur."
+    "import_psd2_active_warning_body": "Transactions sync automatically each night. File imports are only needed for older history or when PSD2 isn't working; otherwise duplicates may occur.",
+    "create_import_desc": "CSV or SIE file from your bank",
+    "create_manual_desc": "Cash, personal outlays",
+    "create_synka": "Sync bank now",
+    "create_synka_desc": "Fetches new transactions from your bank",
+    "create_synka_desc_last": "Last synced {age}",
+    "source_all_label": "All sources",
+    "source_bank_label": "Bank",
+    "source_bank_other": "Other bank items",
+    "source_skatteverket_label": "Skattekonto",
+    "source_account_fallback": "Account",
+    "th_date": "Date",
+    "th_description": "Description",
+    "th_amount": "Amount",
+    "th_status": "Status",
+    "bulkbar_selected": "selected",
+    "batch_book": "Book",
+    "batch_bulk_book": "Book as one voucher",
+    "batch_bulk_book_hint": "Select at least two transactions from the same date and the same direction",
+    "batch_ignore": "Ignore",
+    "batch_delete": "Delete",
+    "batch_select_all": "Select all ({count})",
+    "batch_clear": "Clear selection",
+    "batch_progress": "Booking {done} of {total}…",
+    "mode_all": "All",
+    "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}"
   },
   "bookkeeping": {
     "edit_draft_dialog_title": "Edit draft",
@@ -4574,7 +4643,24 @@
     "copy_fetch_failed": "Could not fetch source voucher.",
     "copy_banner_title": "Copy of voucher {label}",
     "copy_banner_unknown_label": "(unknown number)",
-    "copy_banner_body": "A new, standalone voucher will be created with its own voucher series and number. This is NOT a correction or reversal of the original: use \"Skapa ändringsverifikation\" if you want to correct the source voucher."
+    "copy_banner_body": "A new, standalone voucher will be created with its own voucher series and number. This is NOT a correction or reversal of the original: use \"Skapa ändringsverifikation\" if you want to correct the source voucher.",
+    "create_tomt": "Blank voucher",
+    "create_tomt_desc": "Open the editor directly",
+    "create_mall": "Book from template",
+    "create_mall_desc": "Pick a template and amount",
+    "create_assistent_desc": "The suggestion lands in Review",
+    "tpl_dialog_title": "Book from template",
+    "tpl_search_placeholder": "Search templates...",
+    "tpl_empty": "No matching templates",
+    "tpl_back": "Choose another template",
+    "tpl_date_label": "Date",
+    "tpl_amount_label": "Amount (incl. VAT)",
+    "tpl_enter_amount": "Enter an amount to compute the entry",
+    "tpl_balances": "Balances",
+    "tpl_not_balancing": "Does not balance",
+    "tpl_book": "Post",
+    "tpl_cancel": "Cancel",
+    "tpl_no_period": "No fiscal year covers the chosen date"
   },
   "articles": {
     "title": "Articles",
@@ -4605,7 +4691,8 @@
     "col_price": "Price excl. VAT",
     "col_vat": "VAT",
     "col_status": "Status",
-    "activate_and_save": "Activate and save"
+    "activate_and_save": "Activate and save",
+    "count_footer": "{count, plural, one {1 article} other {# articles}}"
   },
   "article_detail": {
     "back": "Back to articles",
@@ -4713,7 +4800,8 @@
     "col_identifier": "Org. no. / Personal no.",
     "col_email": "Email",
     "col_city": "City",
-    "col_created": "Created"
+    "col_created": "Created",
+    "count_summary": "{count, plural, one {1 customer} other {# customers}}"
   },
   "products": {
     "title": "Products",
@@ -4975,7 +5063,22 @@
     "status_credited": "Credited",
     "due_days_overdue": "{days} days overdue",
     "due_today": "Due today",
-    "due_days_left": "{days} days left"
+    "due_days_left": "{days} days left",
+    "tab_overdue": "Overdue",
+    "more_views": "More …",
+    "th_nr": "No.",
+    "th_customer": "Customer",
+    "th_due": "Due",
+    "th_amount": "Amount",
+    "th_status": "Status",
+    "create_invoice_desc": "Regular customer invoice",
+    "create_recurring": "Recurring invoice",
+    "create_recurring_desc": "Created automatically, e.g. every month",
+    "create_self": "Self-billing invoice",
+    "create_self_desc": "Register a self-billing invoice from your customer",
+    "status_overdue_days": "Overdue {days} d",
+    "status_paid_date": "Paid {date}",
+    "status_picker_aria": "Filter by status"
   },
   "dashboard": {
     "skv_promo_title": "Connect Skatteverket",
@@ -5034,7 +5137,23 @@
     "suggested_view": "View transaction",
     "suggested_confirmed_toast": "Match recorded",
     "suggested_failed_toast": "Match failed",
-    "row_deadlines": "VAT and tax deadlines"
+    "row_deadlines": "VAT and tax deadlines",
+    "greeting_morning": "Good morning",
+    "greeting_day": "Good day",
+    "greeting_evening": "Good evening",
+    "resume_title": "Continue",
+    "resume_invoice_draft": "Draft: invoice to {customer}",
+    "resume_invoice_unsent": "Send invoice {number}",
+    "resume_journal_draft": "Finish journal entry draft",
+    "resume_salary_draft": "Calculate payroll run {period}",
+    "resume_salary_review": "Review payroll run {period}",
+    "resume_salary_approved": "Mark payroll run {period} paid",
+    "resume_salary_paid": "Book payroll run {period}",
+    "resume_edited": "edited {when}",
+    "resume_late": "Late",
+    "rel_today": "today",
+    "rel_yesterday": "yesterday",
+    "rel_days": "{count} days ago"
   },
   "reports": {
     "title": "Reports",
@@ -5188,7 +5307,9 @@
     "status_approved": "Approved",
     "status_paid": "Paid",
     "status_booked": "Posted",
-    "status_corrected": "Corrected"
+    "status_corrected": "Corrected",
+    "th_employees": "Employees",
+    "run_payout_note": "payout {date}"
   },
   "salary_run": {
     "title": "Payroll run {period}",

@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -13,21 +12,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { DataList, DataListHeader, DataListEmpty } from '@/components/ui/data-list'
+import { DataList, DataListEmpty } from '@/components/ui/data-list'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from '@/components/ui/dropdown-menu'
-import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'lucide-react'
+import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { Loader2, Search } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
+import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
+import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
-import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
@@ -43,7 +37,6 @@ import type {
   TransactionWithInvoice,
   ViewMode,
   CategorizeHandler,
-  SourceFilter,
 } from '@/components/transactions/transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
@@ -53,8 +46,8 @@ import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate } from '@/lib/utils'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -103,10 +96,24 @@ const TemplatePicker = dynamic(() => import('@/components/transactions/TemplateP
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
 
+// Source filter for the merged inbox (concept scene 10 account chooser):
+// everything, one cash account ('acct:<id>'), bank rows not yet tied to a
+// registered cash account ('bank:other'), all bank rows ('bank': the fallback
+// split when no cash accounts are registered), or the skattekonto side.
+type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${string}`
+
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
 
+// Validates a persisted value. Stale acct:<id> entries (account removed or
+// disabled) are caught later by the sourceItems stale-filter guard.
 function isSourceFilter(value: string | null): value is SourceFilter {
-  return value === 'all' || value === 'bank' || value === 'skatteverket'
+  return (
+    value === 'all' ||
+    value === 'bank' ||
+    value === 'bank:other' ||
+    value === 'skatteverket' ||
+    (value?.startsWith('acct:') ?? false)
+  )
 }
 
 function buildInvoiceMap(rows: InvoiceWithCustomer[] | null): Record<string, InvoiceWithCustomer> {
@@ -188,11 +195,13 @@ export default function TransactionsPage() {
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
-  // Batch mode
-  const [isBatchMode, setIsBatchMode] = useState(false)
+  // Batch selection: hover checkboxes + bulkbar (concept), no mode toggle.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showBatchSelector, setShowBatchSelector] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
+  // Row expansion (concept foldout): one open row at a time, mirroring the
+  // verifikat list.
+  const [expandedTxId, setExpandedTxId] = useState<string | null>(null)
 
   // Invoice match dialog
   const [matchDialogOpen, setMatchDialogOpen] = useState(false)
@@ -315,7 +324,8 @@ export default function TransactionsPage() {
   // ever visit the settings panel where the reconnect prompt lives.
   const [skvNeedsReconnect, setSkvNeedsReconnect] = useState(false)
 
-  // One browser-wide source filter shared by the inbox and history views.
+  // One browser-wide source filter, persisted (#1105) so the choice
+  // survives reloads. Defaults to 'all'.
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   useEffect(() => {
@@ -336,6 +346,9 @@ export default function TransactionsPage() {
       // localStorage may be unavailable. The in-memory filter still works.
     }
   }, [])
+  // Registered cash accounts (cash_accounts): the account chooser's rows,
+  // with PSD2 balances when the bank reports them.
+  const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -394,6 +407,13 @@ export default function TransactionsPage() {
     if (sourceFilter !== 'skatteverket') {
       for (const tx of uncategorizedTransactions) {
         if (
+          sourceFilter.startsWith('acct:') &&
+          tx.cash_account_id !== sourceFilter.slice('acct:'.length)
+        ) {
+          continue
+        }
+        if (sourceFilter === 'bank:other' && tx.cash_account_id != null) continue
+        if (
           query &&
           !tx.description?.toLowerCase().includes(query) &&
           !tx.date.includes(query) &&
@@ -404,7 +424,7 @@ export default function TransactionsPage() {
         items.push({ source: 'bank', date: tx.date, data: tx })
       }
     }
-    if (sourceFilter !== 'bank') {
+    if (sourceFilter === 'all' || sourceFilter === 'skatteverket') {
       // Inbox only shows SKV rows that need action (no verifikat yet).
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
@@ -427,16 +447,86 @@ export default function TransactionsPage() {
       return 0
     })
   }, [exitingIds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
-  const transactionsWithMatches = useMemo(
-    () => transactions.filter(
-      (transaction) =>
-        (transaction.potential_invoice && !transaction.invoice_id) ||
-        (transaction.potential_supplier_invoice && !transaction.supplier_invoice_id),
-    ),
-    [transactions],
+
+  // Account chooser (concept scene 10): the source picker doubles as a
+  // balance readout. The total sums only SEK ledgers (mixing currencies into
+  // one figure would be a lie); null hides the annotation entirely.
+  const totalSourceBalance = useMemo(() => {
+    const sekBalances = cashAccounts.filter((a) => a.currency === 'SEK' && a.balance != null)
+    if (sekBalances.length === 0) return null
+    return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
+  }, [cashAccounts])
+
+  const hasUnassignedBankRows = useMemo(
+    () => uncategorizedTransactions.some((tx) => tx.cash_account_id == null),
+    [uncategorizedTransactions],
   )
 
+  const sourceItems = useMemo<ContextPickerItem[]>(() => {
+    const showSkvSource = skvRows.length > 0
+    const items: ContextPickerItem[] = [
+      {
+        id: 'all',
+        label: t('source_all_label'),
+        annotation: totalSourceBalance != null ? formatCurrency(totalSourceBalance) : undefined,
+      },
+    ]
+    for (const account of cashAccounts) {
+      items.push({
+        id: `acct:${account.id}`,
+        label: `${account.name || t('source_account_fallback')} ${account.ledger_account}`,
+        annotation:
+          account.balance != null ? formatCurrency(account.balance, account.currency) : undefined,
+      })
+    }
+    if (cashAccounts.length === 0 && showSkvSource) {
+      // No registered cash accounts yet: keep the plain bank/skattekonto split.
+      items.push({ id: 'bank', label: t('source_bank_label') })
+    } else if (cashAccounts.length > 0 && hasUnassignedBankRows) {
+      items.push({ id: 'bank:other', label: t('source_bank_other') })
+    }
+    if (showSkvSource) {
+      items.push({ id: 'skatteverket', label: t('source_skatteverket_label') })
+    }
+    return items
+  }, [cashAccounts, hasUnassignedBankRows, skvRows.length, t, totalSourceBalance])
+
+  // A narrowed filter can go stale (account disabled, skv rows drained,
+  // "övriga" bucket emptied): fall back to everything rather than filtering
+  // the inbox down to an invisible source.
+  useEffect(() => {
+    if (sourceFilter === 'all') return
+    if (!sourceItems.some((item) => item.id === sourceFilter)) setSourceFilter('all')
+  }, [sourceFilter, sourceItems])
+
+  // Rows the bulkbar's "Markera alla" can select: the visible bank rows
+  // (skattekonto rows aren't batch-bookable).
+  const selectableInboxIds = useMemo(
+    () => inboxItems.filter((item) => item.source === 'bank').map((item) => item.data.id),
+    [inboxItems],
+  )
+
+
   const PAGE_SIZE = 200
+
+  // Account chooser rows: the registered, enabled cash accounts. One fetch
+  // per company; balances refresh with the page (bank sync triggers a
+  // router.refresh via the sync toast flow).
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    fetch('/api/cash-accounts?enabled_only=true')
+      .then((res) => (res.ok ? res.json() : { data: [] }))
+      .then((json: { data?: CashAccount[] }) => {
+        if (!cancelled) setCashAccounts(json.data ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setCashAccounts([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId])
 
   const loadSkvRows = useCallback(async () => {
     // Connection health, fetched alongside the rows: any failure (extension
@@ -1538,7 +1628,6 @@ export default function TransactionsPage() {
     })
     await refreshTransactions()
     setSelectedIds(new Set())
-    setIsBatchMode(false)
     setTimeout(() => {
       setExitingIds((prev) => {
         const next = new Set(prev)
@@ -1792,7 +1881,6 @@ export default function TransactionsPage() {
   }
 
   function exitBatchMode() {
-    setIsBatchMode(false)
     setSelectedIds(new Set())
   }
 
@@ -2152,44 +2240,53 @@ export default function TransactionsPage() {
 
   return (
     <div className="space-y-8">
-      {/* Status bar */}
-      <TransactionStatusBar
-        uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
-        invoiceMatchCount={transactionsWithMatches.length}
-        mode={mode}
-        onOpenCreateDialog={() => setIsDialogOpen(true)}
-        isBatchMode={isBatchMode}
-        onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
-      />
+      {/* Page header (concept scene 10): title + Importera split button */}
+      <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <BankSyncStatusChip />
-        <BankSyncNowButton />
-        {/* The ignore flows tell users to "återställ under Bankavstämning":
-            this is the path there. Bankavstämning has no nav entry of its own,
-            so without a link here the copy points at an unreachable place. */}
-        <Button asChild variant="ghost" size="sm" className="ml-auto h-9 text-sm text-muted-foreground">
-          <Link href="/reports/bank-reconciliation">Bankavstämning →</Link>
-        </Button>
-      </div>
-      <BankSyncSinceLastVisit />
 
       {skvNeedsReconnect && (
-        <div className="flex flex-wrap items-start gap-3 rounded-lg border border-border bg-secondary/40 p-4 text-sm">
-          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-medium">{t('skv_reconnect_title')}</p>
-            <p className="text-muted-foreground">{t('skv_reconnect_body')}</p>
-          </div>
-          <Button asChild variant="outline" size="sm" className="shrink-0">
-            <Link href="/settings/tax">{t('skv_reconnect_cta')}</Link>
-          </Button>
-        </div>
+        <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
+          {t('skv_reconnect_body')}
+        </AttnLine>
       )}
 
-      {/* Search + view dropdown */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
+      {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
+          ... [source ContextPicker far right] */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'inbox'}
+            onClick={() => setMode('inbox')}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+              mode === 'inbox'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t('mode_inbox')}
+            {(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 && (
+              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                {totalUncategorizedCount ?? uncategorizedTransactions.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'history'}
+            onClick={() => setMode('history')}
+            className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+              mode === 'history'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t('mode_all')}
+          </button>
+        </div>
+        <div className="relative min-w-[220px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Sök transaktioner…"
@@ -2198,29 +2295,28 @@ export default function TransactionsPage() {
             className="h-9 pl-10"
           />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 gap-2 px-3 text-sm">
-              {mode === 'inbox'
-                ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
-                : 'Alla transaktioner'}
-              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[14rem]">
-            <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
-              <DropdownMenuRadioItem value="inbox">
-                {`Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`}
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="history">Alla transaktioner</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Account chooser (convention 8): the one context chip, far right.
+            Per-cash-account rows with balances (concept scene 10); hidden
+            only when there is nothing beyond "Alla källor" to choose. */}
+        {mode === 'inbox' && sourceItems.length > 1 && (
+          <div className="ml-auto">
+            <ContextPicker
+              value={sourceFilter}
+              onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
+              triggerLabel={(() => {
+                const active =
+                  sourceItems.find((item) => item.id === sourceFilter) ?? sourceItems[0]
+                return active.annotation ? `${active.label} · ${active.annotation}` : active.label
+              })()}
+              items={sourceItems}
+            />
+          </div>
+        )}
       </div>
 
       {/* Content based on mode */}
       {isLoading ? (
-        <DataList>
+        <DataList className="stagger-enter">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
               <Skeleton className="h-5 w-5 rounded" />
@@ -2233,98 +2329,139 @@ export default function TransactionsPage() {
           ))}
         </DataList>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 && !searchTerm && sourceFilter === 'all' ? (
-          <InboxZeroState
-            hasTransactions={transactions.length > 0 || skvRows.length > 0}
-            onCreateTransaction={() => setIsDialogOpen(true)}
-          />
+        inboxItems.length === 0 ? (
+          searchTerm || sourceFilter !== 'all' ? (
+            <DataListEmpty
+              title="Inga träffar"
+              description={searchTerm ? t('no_search_results') : t('source_empty')}
+            />
+          ) : (
+            <InboxZeroState
+              hasTransactions={transactions.length > 0 || skvRows.length > 0}
+              onCreateTransaction={() => setIsDialogOpen(true)}
+            />
+          )
         ) : (
-          <DataList>
-            {(sourceFilter !== 'all'
-              || (skvUnmatched.length > 0 && uncategorizedTransactions.length > 0)) && (
-              <DataListHeader>
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                  {t('source_label')}
-                </span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-xs">
-                      {sourceFilter === 'all'
-                        ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
-                        : sourceFilter === 'bank'
-                          ? t('source_bank', { count: uncategorizedTransactions.length })
-                          : t('source_skatteverket', { count: skvUnmatched.length })}
-                      <ChevronDown className="h-3 w-3 opacity-50" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="min-w-[12rem]">
-                    <DropdownMenuRadioGroup
-                      value={sourceFilter}
-                      onValueChange={(v) => handleSourceFilterChange(v as SourceFilter)}
-                    >
-                      <DropdownMenuRadioItem value="all">
-                        {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="bank">
-                        {t('source_bank', { count: uncategorizedTransactions.length })}
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="skatteverket">
-                        {t('source_skatteverket', { count: skvUnmatched.length })}
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </DataListHeader>
-            )}
-            {inboxItems.length === 0 && (searchTerm || sourceFilter !== 'all') ? (
-              <DataListEmpty
-                title="Inga träffar"
-                description={searchTerm ? t('no_search_results') : t('source_empty')}
-              />
-            ) : null}
-            <AnimatePresence mode="popLayout">
-              {inboxItems.map(item =>
-                item.source === 'bank' ? (
-                  <TransactionInboxCard
-                    key={`bank-${item.data.id}`}
-                    transaction={item.data}
-                    skvCounterpartDate={bankToSkvHints.get(item.data.id)}
-                    processingId={processingId}
-                    isBatchMode={isBatchMode}
-                    isSelected={selectedIds.has(item.data.id)}
-                    entityType={entityType}
-                    onCategorize={handleCategorize}
-                    onOpenMatchDialog={openMatchDialog}
-                    onOpenMatchInvoicePicker={openInvoiceMatchPicker}
-                    onOpenSplitMatch={openSplitMatchDialog}
-                    onOpenMatchVoucher={openMatchVoucherDialog}
-                    onOpenAttachDocument={openAttachDocumentDialog}
-                    onOpenCategoryDialog={openCategoryDialog}
-                    onDelete={handleDeleteTransaction}
-                    onIgnore={handleIgnoreTransaction}
-                    onEditTitle={openEditTitleDialog}
-                    onToggleSelect={toggleBatchSelect}
-                  />
+          <div>
+            {/* Bulkbar (concept): hidden until at least one transaction is
+                selected via the hover checkboxes, then it pops in with the
+                count and the batch actions. */}
+            {selectedIds.size > 0 && (
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+                {batchProgress ? (
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {t('batch_progress', { done: batchProgress.done, total: batchProgress.total })}
+                  </span>
                 ) : (
-                  <SkattekontoInboxCard
-                    key={`skv-${item.data.id}`}
-                    row={item.data}
-                    matchSuggestion={item.data.match_suggestion}
-                    processing={skvProcessingId === item.data.id}
-                    onBokfor={handleSkvBokfor}
-                    onMatch={r => setSkvMatchTarget(r)}
-                  />
-                ),
-              )}
-            </AnimatePresence>
-          </DataList>
+                  <>
+                    <span className="whitespace-nowrap">
+                      <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
+                      {t('bulkbar_selected', { count: selectedIds.size })}
+                    </span>
+                    <Button size="sm" onClick={() => setShowBatchSelector(true)}>
+                      {t('batch_book')}
+                    </Button>
+                    {/* Bulk-book (samlingsverifikation): only when ≥2 selected
+                        on the same date + same direction. Disabled state
+                        explains why via title. */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setBulkBookOpen(true)}
+                      disabled={!bulkBookEligible}
+                      title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
+                    >
+                      {t('batch_bulk_book')}
+                    </Button>
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                      {t('batch_ignore')}
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
+                      onClick={handleBatchDelete}
+                    >
+                      {t('batch_delete')}
+                    </button>
+                    {selectedIds.size < selectableInboxIds.length && (
+                      <button
+                        type="button"
+                        className={QUIET_LINK_CLASS}
+                        onClick={() => setSelectedIds(new Set(selectableInboxIds))}
+                      >
+                        {t('batch_select_all', { count: selectableInboxIds.length })}
+                      </button>
+                    )}
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={exitBatchMode}>
+                      {t('batch_clear')}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
+                    <th className={TH_CLASS}>{t('th_date')}</th>
+                    <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_status')}</th>
+                  </tr>
+                </thead>
+                <tbody className="stagger-enter">
+                  {inboxItems.map(item =>
+                    item.source === 'bank' ? (
+                      <TransactionInboxCard
+                        key={`bank-${item.data.id}`}
+                        transaction={item.data}
+                        skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                        processingId={processingId}
+                        isSelected={selectedIds.has(item.data.id)}
+                        isExpanded={expandedTxId === item.data.id}
+                        onToggleExpand={(id) =>
+                          setExpandedTxId((prev) => (prev === id ? null : id))
+                        }
+                        entityType={entityType}
+                        onCategorize={handleCategorize}
+                        onOpenMatchDialog={openMatchDialog}
+                        onOpenMatchInvoicePicker={openInvoiceMatchPicker}
+                        onOpenSplitMatch={openSplitMatchDialog}
+                        onOpenMatchVoucher={openMatchVoucherDialog}
+                        onOpenAttachDocument={openAttachDocumentDialog}
+                        onOpenCategoryDialog={openCategoryDialog}
+                        onDelete={handleDeleteTransaction}
+                        onIgnore={handleIgnoreTransaction}
+                        onEditTitle={openEditTitleDialog}
+                        onToggleSelect={toggleBatchSelect}
+                      />
+                    ) : (
+                      <SkattekontoInboxCard
+                        key={`skv-${item.data.id}`}
+                        row={item.data}
+                        matchSuggestion={item.data.match_suggestion}
+                        processing={skvProcessingId === item.data.id}
+                        onBokfor={handleSkvBokfor}
+                        onMatch={r => setSkvMatchTarget(r)}
+                      />
+                    ),
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )
       ) : (
         <TransactionHistoryList
           transactions={transactions}
           skvRows={skvRows}
           searchTerm={searchTerm}
-          sourceFilter={sourceFilter}
+          sourceFilter={
+            sourceFilter === 'all' || sourceFilter === 'skatteverket' ? sourceFilter : 'bank'
+          }
           onSourceFilterChange={handleSourceFilterChange}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
@@ -2340,66 +2477,22 @@ export default function TransactionsPage() {
         />
       )}
 
-      {/* Batch mode floating action bar */}
-      {isBatchMode && selectedIds.size > 0 && (
-        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-background border rounded-lg shadow-lg px-4 py-3">
-          {batchProgress ? (
-            <>
-              <Badge variant="secondary">
-                {batchProgress.done}/{batchProgress.total}
-              </Badge>
-              <p className="text-sm text-muted-foreground">
-                Bokför {batchProgress.done} av {batchProgress.total}...
-              </p>
-            </>
-          ) : (
-            <>
-              <Badge variant="secondary">{selectedIds.size} valda</Badge>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
-                <X className="mr-1 h-3 w-3" />
-                Avmarkera
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleBatchIgnore}
-              >
-                <EyeOff className="mr-1 h-3 w-3" />
-                Ignorera
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleBatchDelete}
-                className="text-destructive hover:text-destructive"
-              >
-                <Trash2 className="mr-1 h-3 w-3" />
-                Ta bort
-              </Button>
-              {/* Bulk-book (samlingsverifikation): only when ≥2 selected on
-                  the same date + same direction. Disabled state explains why
-                  via title. */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setBulkBookOpen(true)}
-                disabled={!bulkBookEligible}
-                title={
-                  !bulkBookEligible
-                    ? 'Välj minst två transaktioner från samma datum och samma riktning'
-                    : 'Skapa en samlingsverifikation för de valda transaktionerna'
-                }
-              >
-                <Layers className="mr-1 h-3 w-3" />
-                Bokför i klump
-              </Button>
-              <Button size="sm" onClick={() => setShowBatchSelector(true)}>
-                Bokför
-              </Button>
-            </>
-          )}
-        </div>
-      )}
+      {/* Footer status line (concept): honest counter from the visible
+          rows + bank sync status/actions + the Bankavstämning path (the
+          ignore flows point users there). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
+        {mode === 'inbox' && (
+          <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
+        )}
+        <BankSyncStatusChip />
+        <BankSyncNowButton />
+        <Link
+          href="/reports/bank-reconciliation"
+          className="ml-auto transition-colors duration-150 hover:text-foreground"
+        >
+          Bankavstämning →
+        </Link>
+      </div>
 
       {/* Dialogs */}
       {showBatchSelector && (
@@ -2478,32 +2571,28 @@ export default function TransactionsPage() {
       )}
 
       {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
-            <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+            <div className="flex items-center justify-between gap-3 text-sm">
               <span className="truncate text-muted-foreground">{templatePickerTransaction.description}</span>
-              <span className="font-medium tabular-nums flex-shrink-0 ml-3">
+              <span className="font-medium tabular-nums flex-shrink-0">
                 {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
               </span>
             </div>
           )}
-          <div className="space-y-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start"
-              onClick={handleManualBooking}
-            >
-              Bokför manuellt…
-            </Button>
+          {/* Alternate paths as quiet links (concept vact): the templates are
+              the main content, not three stacked buttons. */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
+              Bokför manuellt
+            </button>
             {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full justify-start"
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
                 onClick={() => {
                   const tx = templatePickerTransaction
                   setTemplatePickerOpen(false)
@@ -2511,18 +2600,17 @@ export default function TransactionsPage() {
                   setInvoicePickerOpen(true)
                 }}
               >
-                Matcha med faktura…
-              </Button>
+                Matcha med faktura
+              </button>
             )}
             {templatePickerTransaction && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start text-muted-foreground"
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
                 onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
               >
-                Ignorera transaktionen…
-              </Button>
+                Ignorera transaktionen
+              </button>
             )}
           </div>
           <TemplatePicker

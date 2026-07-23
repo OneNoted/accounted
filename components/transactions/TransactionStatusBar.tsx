@@ -1,82 +1,87 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Button } from '@/components/ui/button'
-import Link from 'next/link'
-import { Upload, Plus, CheckSquare, FileText, Lock } from 'lucide-react'
+import { Upload, Plus, RefreshCw } from 'lucide-react'
+import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { ViewMode } from './transaction-types'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import { resolveInitialMode } from '@/lib/ui-state/client'
+import { useBankSync } from '@/components/transactions/BankSyncNowButton'
+import { useAgeFormatter } from '@/components/transactions/BankSyncStatusChip'
 
 interface TransactionStatusBarProps {
-  uncategorizedCount: number
-  invoiceMatchCount: number
-  mode: ViewMode
   onOpenCreateDialog: () => void
-  isBatchMode: boolean
-  onToggleBatchMode: () => void
 }
 
+/**
+ * Page header (concept scene 10): title + one Importera split button
+ * holding the ways transactions arrive (bank sync, import guide for CSV/SIE,
+ * manual entry for cash/outlays).
+ */
 export default function TransactionStatusBar({
-  uncategorizedCount,
-  invoiceMatchCount,
-  mode,
   onOpenCreateDialog,
-  isBatchMode,
-  onToggleBatchMode,
 }: TransactionStatusBarProps) {
   const { canWrite } = useCanWrite()
   const t = useTranslations('transactions')
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-      <div>
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight">{t('page_title')}</h1>
-        {uncategorizedCount > 0 && mode === 'inbox' && (
-          <p className="text-muted-foreground mt-1">
-            <span className="text-foreground font-semibold">{uncategorizedCount}</span> {t('subtitle_to_post')}
-            {invoiceMatchCount > 0 && (
-              <span className="ml-2">
-                · <FileText className="inline h-3.5 w-3.5 text-primary" />{' '}
-                <span className="text-foreground font-semibold">{t('subtitle_matches', { count: invoiceMatchCount })}</span>
-              </span>
-            )}
-          </p>
-        )}
-        {mode === 'history' && (
-          <p className="text-muted-foreground">{t('history_subtitle')}</p>
-        )}
-      </div>
+  const router = useRouter()
+  const { uiState, loaded } = useUiState()
+  const { connections, hasBankSync, syncAll, lastSyncedAt } = useBankSync()
+  const formatAge = useAgeFormatter()
 
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" asChild>
-          <Link href="/import">
-            <Upload className="mr-2 h-4 w-4" />
-            {t('action_import')}
-          </Link>
-        </Button>
-        {mode === 'inbox' && uncategorizedCount > 0 && (
-          <Button
-            variant={isBatchMode ? 'default' : 'outline'}
-            size="sm"
-            onClick={onToggleBatchMode}
-          >
-            <CheckSquare className="mr-2 h-4 w-4" />
-            {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
-          </Button>
+  // "Synka bank nu" (concept: first menu row) only renders once a bank is
+  // actually connected and the plan includes PSD2 sync; the footer
+  // BankSyncNowButton stays the gated conversion surface for free users.
+  const showSync = hasBankSync && (connections?.length ?? 0) > 0
+
+  const options: SplitButtonOption[] = [
+    ...(showSync
+      ? [
+          {
+            key: 'synka',
+            label: t('create_synka'),
+            icon: RefreshCw,
+            description: lastSyncedAt
+              ? t('create_synka_desc_last', { age: formatAge(lastSyncedAt) })
+              : t('create_synka_desc'),
+            onSelect: () => {
+              void syncAll()
+            },
+          } satisfies SplitButtonOption,
+        ]
+      : []),
+    {
+      key: 'importera',
+      label: t('action_import'),
+      icon: Upload,
+      description: t('create_import_desc'),
+      onSelect: () => router.push('/import'),
+    },
+    {
+      key: 'manuell',
+      label: t('action_new_transaction'),
+      icon: Plus,
+      description: t('create_manual_desc'),
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => onOpenCreateDialog(),
+    },
+  ]
+
+  return (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
+      <SplitButton
+        key={`${loaded ? 'loaded' : 'initial'}-${showSync ? 'sync' : 'nosync'}`}
+        persistKey="transactions"
+        initialModeKey={resolveInitialMode(
+          uiState,
+          'transactions',
+          options.map((o) => o.key),
+          'importera',
         )}
-        <Button
-          size="sm"
-          onClick={onOpenCreateDialog}
-          disabled={!canWrite}
-          title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-        >
-          {canWrite ? (
-            <Plus className="mr-2 h-4 w-4" />
-          ) : (
-            <Lock className="mr-2 h-4 w-4" />
-          )}
-          {t('action_new_transaction')}
-        </Button>
-      </div>
+        options={options}
+      />
     </div>
   )
 }

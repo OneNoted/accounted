@@ -28,6 +28,20 @@ import {
  */
 const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
 
+/**
+ * Frame layout: on desktop the page is a rounded panel floating on the
+ * warm-toned frame (bg-frame on the wrapper div), with its own inner
+ * scroll. 10px margin against the frame; height is the remaining
+ * viewport. The sidebar (fixed, w-64) sits borderless on the frame, so
+ * the panel starts at ml-64. On mobile the panel dissolves: full-width
+ * document flow with the bottom nav, exactly as before.
+ */
+const MAIN_PANEL_CLASS =
+  'safe-area-main-padding md:!pb-0 relative bg-background min-h-screen ' +
+  'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[10px] md:h-[calc(100vh-20px)] ' +
+  'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
+  'md:transition-[margin-left] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]'
+
 export default async function DashboardLayout({
   children,
   settingsModal,
@@ -95,7 +109,7 @@ export default async function DashboardLayout({
       >
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-background">
+          <div className="min-h-screen bg-frame md:flex md:flex-col">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -104,7 +118,7 @@ export default async function DashboardLayout({
             />
             <main
               id="main-content"
-              className="safe-area-main-padding md:!pb-0 md:pl-64"
+              className={MAIN_PANEL_CLASS}
               role="main"
             >
               <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
@@ -156,10 +170,11 @@ export default async function DashboardLayout({
     // select returns exactly the caller's companies, letting non-active rows
     // show company_settings.company_name instead of the frozen companies.name.
     supabase.from('company_settings').select('company_id, company_name'),
-    // User-level UI preference: hide the floating assistant button
-    // (Inställningar → Assistenten). Batched here so it costs no extra
-    // round-trip on the dashboard critical path.
-    supabase.from('user_preferences').select('hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
+    // Per-user UI state (nav collapse/fold state), server-rendered so the
+    // sidebar width is right on first paint, plus the hide-assistant-FAB
+    // preference (Inställningar → Assistenten). Batched here so it costs no
+    // extra round-trip on the dashboard critical path.
+    supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
   ])
 
   // company_id -> current display name for every company the user belongs to.
@@ -191,14 +206,14 @@ export default async function DashboardLayout({
       <CompanyProvider value={companyContextValue}>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-background">
+          <div className="min-h-screen bg-frame md:flex md:flex-col">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
               isSandbox={false}
               extensionNavItems={getExtensionNavItems()}
             />
-            <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
+            <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
               <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
                 {children}
               </div>
@@ -240,6 +255,12 @@ export default async function DashboardLayout({
 
   const isSandbox = settings?.is_sandbox === true
 
+  // Client-driven UI preferences (sidebar collapse + fold state). Read here
+  // so the shell renders at the right width on first paint; the nav toggles
+  // flip the data attribute client-side and persist via /api/user/ui-state.
+  const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
+  const navCollapsed = uiState.nav_collapsed === true
+
   const companyContextValue = {
     company: companyWithName,
     role: memberRow.role as CompanyRole,
@@ -270,7 +291,11 @@ export default async function DashboardLayout({
         }}
       >
         <CompanyTabSync />
-        <div className="min-h-screen bg-background">
+        <div
+          id="dash-shell"
+          className="min-h-screen bg-frame md:flex md:flex-col"
+          style={{ '--nav-w': navCollapsed ? '64px' : '248px' } as React.CSSProperties}
+        >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
             href="#main-content"
@@ -288,8 +313,9 @@ export default async function DashboardLayout({
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
+            initialUiState={uiState}
           />
-          <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
+          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>
           </main>
           <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />

@@ -63,7 +63,8 @@
       "sent": "Skickad",
       "matched": "Matchad",
       "unmatched": "Omatchad"
-    }
+    },
+    "more_options": "Fler alternativ"
   },
   "nav": {
     "dashboard": "Översikt",
@@ -97,11 +98,11 @@
     "time_tracking": "Tidrapportering",
     "expenses": "Utlägg",
     "receipts": "Kvitton",
-    "deadlines": "Deadlines",
+    "deadlines": "Viktiga datum",
     "vat_declaration": "Moms",
     "skattekonto": "Skattekonto",
     "periodiseringar": "Periodiseringar",
-    "year_end": "Bokslut",
+    "year_end": "Årsbokslut",
     "annual_report": "Årsredovisning",
     "income_declaration": "Inkomstdeklaration",
     "pending": "Väntande",
@@ -129,7 +130,14 @@
     "logout_sandbox": "Avsluta sandbox",
     "trial_days_left": "Provperiod: {days, plural, =1 {1 dag} other {# dagar}} kvar",
     "ext_tic": "Företagsprofil",
-    "ext_invoice_inbox": "Dokumentinkorg"
+    "ext_invoice_inbox": "Dokumentinkorg",
+    "fold_register": "Register",
+    "fold_bokslut": "Bokslut",
+    "collapse_nav": "Minimera menyn",
+    "expand_nav": "Expandera menyn",
+    "members_roles": "Medlemmar och roller",
+    "subscription": "Abonnemang",
+    "discord_community": "Discord-community"
   },
   "agentKnowledge": {
     "load_error_title": "Kunde inte läsa in kunskapsprofilen",
@@ -416,7 +424,7 @@
   "pending": {
     "title": "Granskning",
     "subtitle": "Operationer som väntar på godkännande",
-    "tab_pending": "Väntande",
+    "tab_pending": "Väntar",
     "tab_committed": "Godkända",
     "tab_rejected": "Avvisade",
     "tab_all": "Alla",
@@ -446,10 +454,10 @@
     "badge_high_risk": "Hög risk",
     "badge_approved": "Godkänd",
     "badge_rejected": "Avvisad",
-    "empty_pending_title": "Inga väntande operationer",
+    "empty_pending_title": "Allt klart.",
     "empty_committed_title": "Inga godkända operationer",
     "empty_rejected_title": "Inga avvisade operationer",
-    "empty_pending_description": "När en operation kräver godkännande visas den här för granskning.",
+    "empty_pending_description": "Inget väntar på din granskning. När en operation kräver godkännande visas den här.",
     "empty_finished_description": "Operationer du har godkänt eller avvisat visas här.",
     "bulk_confirm_intro": "Genom att bekräfta utförs följande:",
     "bulk_confirm_footer": "Operationerna körs i ordning. Misslyckade hoppas över och rapporteras efteråt.",
@@ -516,7 +524,17 @@
     "badge_auto_expired": "Utgick automatiskt",
     "auto_expired_detail": "Utgick automatiskt efter 30 dagar utan åtgärd. Inget bokfördes.",
     "badge_failed_partial": "Delvis genomförd",
-    "failed_partial_detail": "Åtgärden avbröts efter att en oåterkallelig bokföring redan hade skett. Det som bokfördes står kvar och kan behöva rättas manuellt."
+    "failed_partial_detail": "Åtgärden avbröts efter att en oåterkallelig bokföring redan hade skett. Det som bokfördes står kvar och kan behöva rättas manuellt.",
+    "approve_all": "Godkänn alla ({count})",
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}",
+    "bulk_excluded_note": "{count, plural, one {1 kräver enskild granskning} other {# kräver enskild granskning}}",
+    "badge_medium_risk": "Medel risk",
+    "badge_low_risk": "Låg risk",
+    "show_conversation": "Visa konversationen",
+    "tab_history": "Historik",
+    "details_btn": "Visa detaljer",
+    "empty_history_title": "Ingen historik ännu",
+    "history_reason": "orsak: \"{reason}\""
   },
   "deadlines": {
     "title": "Deadlines",
@@ -648,7 +666,11 @@
     "approve": "Godkänn",
     "approve_failed_title": "Godkännande misslyckades",
     "approved_title": "Godkänd",
-    "approved_description": "Fakturan har godkänts"
+    "approved_description": "Fakturan har godkänts",
+    "status_picker_aria": "Filtrera på status",
+    "search_placeholder": "Sök leverantörsfaktura …",
+    "status_paid_date": "Betald {date}",
+    "help_body": "Godkännandet attesterar fakturan för betalning. Betalningar prickas av automatiskt när de matchas mot banken, så det finns ingen \"markera som betald\"-knapp här."
   },
   "purchase_orders": {
     "title": "Inköpsorder",
@@ -704,7 +726,13 @@
     "label_pg": "PG",
     "label_iban": "IBAN",
     "label_bank_account": "Bankkonto",
-    "no_contact_info": "Inga kontaktuppgifter"
+    "no_contact_info": "Inga kontaktuppgifter",
+    "count_summary": "{count, plural, one {1 leverantör} other {# leverantörer}}",
+    "th_name": "Namn",
+    "th_type": "Typ",
+    "th_payment": "Betalsätt",
+    "th_email": "E-post",
+    "th_org_number": "Org.nr"
   },
   "accruals": {
     "row_toggle": "Periodisera",
@@ -749,7 +777,8 @@
     "category_equipment": "Inventarier",
     "category_vehicle": "Fordon",
     "category_computer": "Dator",
-    "category_other_tangible": "Övriga materiella"
+    "category_other_tangible": "Övriga materiella",
+    "count_footer": "{count, plural, one {1 tillgång} other {# tillgångar}}"
   },
   "employees": {
     "title": "Anställda",
@@ -2667,7 +2696,11 @@
     "possible_duplicate": "Möjlig dublett",
     "link": "Koppla",
     "match": "Matcha",
-    "view_voucher_short": "Visa verifikat"
+    "view_voucher_short": "Visa verifikat",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "th_status": "Status"
   },
   "tx_categories": {
     "expense_representation": "Representation",
@@ -3827,7 +3860,16 @@
     "bulk_mark_none": "Inga verifikat utan underlag matchar filtret.",
     "bulk_mark_body": "{count} verifikat som saknar underlag matchar nuvarande filter. De markeras som \"Inget underlag krävs\". Du kan ångra per verifikat efteråt.",
     "bulk_mark_confirm": "Markera {count}",
-    "bulk_cancel": "Avbryt"
+    "bulk_cancel": "Avbryt",
+    "th_voucher": "Verifikation",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "missing_attachment_chip": "Underlag saknas",
+    "confirm_post_title": "Bokför verifikat",
+    "confirm_post_description": "Bokförs som verifikat {voucher}: {description}, {amount}. Verifikatet kan inte ändras i efterhand, bara rättas eller stornas.",
+    "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas.",
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}"
   },
   "attachment_preview_sheet": {
     "title": "Bilagor",
@@ -4151,7 +4193,9 @@
     "toast_pruned_title": "Kontoplan rensad",
     "toast_pruned_description": "{deleted} konton togs bort",
     "toast_pruned_with_skipped": "{deleted} konton togs bort, {skipped} hoppades över",
-    "toast_prune_failed": "Kunde inte rensa kontoplanen"
+    "toast_prune_failed": "Kunde inte rensa kontoplanen",
+    "bas_version_chip": "BAS 2026",
+    "footer_note": "Visar {shown} av {total} konton, grupperade per BAS-klass. SRU-koderna följer med till inkomstdeklarationen."
   },
   "dimensions": {
     "new_value": "Nytt värde",
@@ -4469,7 +4513,9 @@
     "default_company_name": "Min verksamhet",
     "add_company": "Lägg till företag",
     "error_no_access": "Du har inte tillgång till detta företag.",
-    "error_switch_failed": "Företagsbytet kunde inte sparas. Försök igen."
+    "error_switch_failed": "Företagsbytet kunde inte sparas. Försök igen.",
+    "search_placeholder": "Sök företag...",
+    "no_results": "Inga företag matchar"
   },
   "transactions": {
     "page_title": "Transaktioner",
@@ -4479,8 +4525,6 @@
     "action_import": "Importera",
     "action_review_all": "Gå igenom alla",
     "action_review_loading": "Laddar...",
-    "action_select_multi_start": "Välj flera",
-    "action_select_multi_end": "Avsluta",
     "action_new_transaction": "Ny transaktion",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "mode_inbox": "Att bokföra",
@@ -4556,7 +4600,32 @@
     "bank_sync_session_expired": "Bankanslutningen har löpt ut",
     "bank_sync_session_expired_desc": "Förnya anslutningen för att fortsätta synka transaktioner.",
     "import_psd2_active_warning_title": "PSD2 är aktivt för {bankName}",
-    "import_psd2_active_warning_body": "Transaktioner synkas automatiskt varje natt. Filimport behövs bara för äldre historik eller om PSD2 inte fungerar; annars kan dubbletter uppstå."
+    "import_psd2_active_warning_body": "Transaktioner synkas automatiskt varje natt. Filimport behövs bara för äldre historik eller om PSD2 inte fungerar; annars kan dubbletter uppstå.",
+    "create_import_desc": "CSV- eller SIE-fil från banken",
+    "create_manual_desc": "Kontanter, egna utlägg",
+    "create_synka": "Synka bank nu",
+    "create_synka_desc": "Hämtar nya transaktioner från banken",
+    "create_synka_desc_last": "Senast synkad {age}",
+    "source_all_label": "Alla källor",
+    "source_bank_label": "Bank",
+    "source_bank_other": "Övriga bankhändelser",
+    "source_skatteverket_label": "Skattekonto",
+    "source_account_fallback": "Konto",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "th_status": "Status",
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}",
+    "batch_book": "Bokför",
+    "batch_bulk_book": "Bokför i klump",
+    "batch_bulk_book_hint": "Välj minst två transaktioner från samma datum och samma riktning",
+    "batch_ignore": "Ignorera",
+    "batch_delete": "Ta bort",
+    "batch_select_all": "Markera alla ({count})",
+    "batch_clear": "Avmarkera",
+    "batch_progress": "Bokför {done} av {total}…",
+    "mode_all": "Alla",
+    "footer_to_handle": "{count, plural, =0 {Inget att hantera} =1 {1 att hantera} other {# att hantera}}"
   },
   "bookkeeping": {
     "edit_draft_dialog_title": "Redigera utkast",
@@ -4574,7 +4643,24 @@
     "copy_fetch_failed": "Källverifikatet kunde inte hämtas.",
     "copy_banner_title": "Kopia av verifikat {label}",
     "copy_banner_unknown_label": "(okänt nummer)",
-    "copy_banner_body": "Ett nytt, fristående verifikat skapas med egen verifikationsserie och nummer. Detta är inte en rättelse eller storno av originalet: använd \"Skapa ändringsverifikation\" om du vill korrigera källverifikatet."
+    "copy_banner_body": "Ett nytt, fristående verifikat skapas med egen verifikationsserie och nummer. Detta är inte en rättelse eller storno av originalet: använd \"Skapa ändringsverifikation\" om du vill korrigera källverifikatet.",
+    "create_tomt": "Tomt verifikat",
+    "create_tomt_desc": "Öppna editorn direkt",
+    "create_mall": "Bokför från mall",
+    "create_mall_desc": "Välj mall och belopp",
+    "create_assistent_desc": "Förslaget landar i Granskning",
+    "tpl_dialog_title": "Bokför från mall",
+    "tpl_search_placeholder": "Sök mall...",
+    "tpl_empty": "Inga mallar matchar",
+    "tpl_back": "Välj en annan mall",
+    "tpl_date_label": "Datum",
+    "tpl_amount_label": "Belopp (inkl. moms)",
+    "tpl_enter_amount": "Ange ett belopp så räknas konteringen fram",
+    "tpl_balances": "Balanserar",
+    "tpl_not_balancing": "Balanserar inte",
+    "tpl_book": "Bokför",
+    "tpl_cancel": "Avbryt",
+    "tpl_no_period": "Det finns inget räkenskapsår som täcker det valda datumet"
   },
   "articles": {
     "title": "Artiklar",
@@ -4605,7 +4691,8 @@
     "col_price": "Pris exkl. moms",
     "col_vat": "Moms",
     "col_status": "Status",
-    "activate_and_save": "Aktivera och spara"
+    "activate_and_save": "Aktivera och spara",
+    "count_footer": "{count, plural, one {1 artikel} other {# artiklar}}"
   },
   "article_detail": {
     "back": "Tillbaka till artiklar",
@@ -4713,7 +4800,8 @@
     "col_identifier": "Org.nr / Personnummer",
     "col_email": "E-post",
     "col_city": "Stad",
-    "col_created": "Skapad"
+    "col_created": "Skapad",
+    "count_summary": "{count, plural, one {1 kund} other {# kunder}}"
   },
   "products": {
     "title": "Produkter",
@@ -4975,7 +5063,22 @@
     "status_credited": "Krediterad",
     "due_days_overdue": "{days} dagar försenad",
     "due_today": "Förfaller idag",
-    "due_days_left": "{days} dagar kvar"
+    "due_days_left": "{days} dagar kvar",
+    "tab_overdue": "Förfallna",
+    "more_views": "Fler …",
+    "th_nr": "Nr",
+    "th_customer": "Kund",
+    "th_due": "Förfaller",
+    "th_amount": "Belopp",
+    "th_status": "Status",
+    "create_invoice_desc": "Vanlig kundfaktura",
+    "create_recurring": "Återkommande faktura",
+    "create_recurring_desc": "Skapas automatiskt, till exempel varje månad",
+    "create_self": "Självfaktura",
+    "create_self_desc": "Registrera en självfaktura från din kund",
+    "status_overdue_days": "Förfallen {days} dgr",
+    "status_paid_date": "Betald {date}",
+    "status_picker_aria": "Filtrera på status"
   },
   "dashboard": {
     "skv_promo_title": "Koppla Skatteverket",
@@ -5034,7 +5137,23 @@
     "suggested_view": "Visa transaktionen",
     "suggested_confirmed_toast": "Matchning bokförd",
     "suggested_failed_toast": "Matchningen misslyckades",
-    "row_deadlines": "Moms- och skattedeadlines"
+    "row_deadlines": "Moms- och skattedeadlines",
+    "greeting_morning": "God morgon",
+    "greeting_day": "God dag",
+    "greeting_evening": "God kväll",
+    "resume_title": "Fortsätt",
+    "resume_invoice_draft": "Utkast: faktura till {customer}",
+    "resume_invoice_unsent": "Skicka faktura {number}",
+    "resume_journal_draft": "Slutför verifikatutkast",
+    "resume_salary_draft": "Beräkna lönekörning {period}",
+    "resume_salary_review": "Granska lönekörning {period}",
+    "resume_salary_approved": "Markera lönekörning {period} utbetald",
+    "resume_salary_paid": "Bokför lönekörning {period}",
+    "resume_edited": "ändrad {when}",
+    "resume_late": "Försenad",
+    "rel_today": "i dag",
+    "rel_yesterday": "i går",
+    "rel_days": "för {count} dagar sedan"
   },
   "reports": {
     "title": "Rapporter",
@@ -5188,7 +5307,9 @@
     "status_approved": "Godkänd",
     "status_paid": "Betald",
     "status_booked": "Bokförd",
-    "status_corrected": "Korrigerad"
+    "status_corrected": "Korrigerad",
+    "th_employees": "Anställda",
+    "run_payout_note": "utbetalning {date}"
   },
   "salary_run": {
     "title": "Lönekörning {period}",

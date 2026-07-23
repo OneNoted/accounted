@@ -11,10 +11,21 @@
 
 :root {
   color-scheme: light;
+
+  /* Sidebar column width (frame layout). Default for shells that don't
+     override it; the dashboard shell (#dash-shell) sets it inline from
+     user_preferences.ui_state (248px expanded / 64px collapsed rail) and
+     the nav toggle updates it client-side. aside and <main> both read the
+     variable so they stay in lockstep. */
+  --nav-w: 248px;
+
   /* Grayscale Chrome Palette: paper white + warm beige */
 
   --background: 0 0% 100%;
   --foreground: 0 0% 9%;
+
+  /* Warm-toned frame behind the floating page panel (frame layout) */
+  --frame: 40 18% 96%;
 
   --card: 0 0% 100%;
   --card-foreground: 0 0% 9%;
@@ -52,6 +63,10 @@
   --warning: 38 55% 50%;
   --warning-foreground: 0 0% 9%;
 
+  /* Attn: darker ochre for the one-sentence attention line (.attn / AttnLine),
+     derived from --warning but AA-safe as small text on the page background. */
+  --attn: 38 50% 34%;
+
   --warm-accent: 38 45% 52%;
 
   /* Chart colors */
@@ -82,6 +97,8 @@
 
   --background: 0 0% 7%;
   --foreground: 0 0% 87%;
+
+  --frame: 0 0% 5%;
 
   --card: 0 0% 11%;
   --card-foreground: 0 0% 87%;
@@ -114,6 +131,8 @@
   --warning: 38 50% 55%;
   --warning-foreground: 38 50% 90%;
 
+  --attn: 38 45% 62%;
+
   --warm-accent: 38 42% 58%;
 
   --chart-1: 155 22% 48%;
@@ -129,6 +148,7 @@
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
+  --color-frame: hsl(var(--frame));
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
   --color-popover: hsl(var(--popover));
@@ -150,6 +170,7 @@
   --color-success-foreground: hsl(var(--success-foreground));
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-attn: hsl(var(--attn));
   --color-warm-accent: hsl(var(--warm-accent));
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
@@ -162,6 +183,7 @@
 * {
   border-color: hsl(var(--border));
 }
+
 
 body {
   background-color: hsl(var(--background));
@@ -179,11 +201,15 @@ body {
   font-optical-sizing: auto;
 }
 
-h1, h2, h3 {
-  font-family: var(--font-display);
-  font-weight: 500;
-  letter-spacing: -0.015em;
-  font-optical-sizing: auto;
+/* Layered so utility classes (e.g. font-sans on a pane title) can override:
+   unlayered element rules would beat Tailwind's layered utilities. */
+@layer base {
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    font-optical-sizing: auto;
+  }
 }
 
 /* Number styling - tabular for alignment */
@@ -281,6 +307,66 @@ h1, h2, h3 {
   }
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * Enter/exit animation utilities (animate-in / animate-out vocabulary).
+ * The codebase uses the shadcn/tailwindcss-animate classes but no animate
+ * plugin was ever installed, so Tailwind v4 silently dropped them all:
+ * every popover, dialog and slide-over appeared instantly. These implement
+ * the exact subset in use, plugin-free. The duration and ease utilities
+ * compose via Tailwind v4's --tw-duration and --tw-ease variables; the
+ * global prefers-reduced-motion block collapses them like everything else.
+ * ───────────────────────────────────────────────────────────────────────── */
+@keyframes accEnter {
+  from {
+    opacity: var(--tw-enter-opacity, 1);
+    transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0)
+      scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), 1);
+  }
+}
+@keyframes accExit {
+  to {
+    opacity: var(--tw-exit-opacity, 1);
+    transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0)
+      scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), 1);
+  }
+}
+@utility animate-in {
+  animation-name: accEnter;
+  animation-duration: var(--tw-duration, 150ms);
+  animation-timing-function: var(--tw-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  animation-fill-mode: both;
+}
+@utility animate-out {
+  animation-name: accExit;
+  animation-duration: var(--tw-duration, 150ms);
+  animation-timing-function: var(--tw-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  animation-fill-mode: both;
+}
+@utility fade-in { --tw-enter-opacity: 0; }
+@utility fade-in-0 { --tw-enter-opacity: 0; }
+@utility fade-out { --tw-exit-opacity: 0; }
+@utility fade-out-0 { --tw-exit-opacity: 0; }
+@utility zoom-in-95 { --tw-enter-scale: 0.95; }
+@utility zoom-out-95 { --tw-exit-scale: 0.95; }
+@utility slide-in-from-top { --tw-enter-translate-y: -100%; }
+@utility slide-in-from-top-1 { --tw-enter-translate-y: -0.25rem; }
+@utility slide-in-from-top-2 { --tw-enter-translate-y: -0.5rem; }
+@utility slide-in-from-top-full { --tw-enter-translate-y: -100%; }
+@utility slide-in-from-bottom { --tw-enter-translate-y: 100%; }
+@utility slide-in-from-bottom-1 { --tw-enter-translate-y: 0.25rem; }
+@utility slide-in-from-bottom-2 { --tw-enter-translate-y: 0.5rem; }
+@utility slide-in-from-left { --tw-enter-translate-x: -100%; }
+@utility slide-in-from-left-1 { --tw-enter-translate-x: -0.25rem; }
+@utility slide-in-from-left-2 { --tw-enter-translate-x: -0.5rem; }
+@utility slide-in-from-right { --tw-enter-translate-x: 100%; }
+@utility slide-in-from-right-2 { --tw-enter-translate-x: 0.5rem; }
+@utility slide-in-from-right-full { --tw-enter-translate-x: 100%; }
+@utility slide-out-to-top { --tw-exit-translate-y: -100%; }
+@utility slide-out-to-bottom { --tw-exit-translate-y: 100%; }
+@utility slide-out-to-left { --tw-exit-translate-x: -100%; }
+@utility slide-out-to-right { --tw-exit-translate-x: 100%; }
+@utility slide-out-to-right-full { --tw-exit-translate-x: 100%; }
+
 /* Staggered entrance animation */
 .stagger-enter > * {
   animation: slideUp var(--duration-slow) var(--ease-out) both;
@@ -316,7 +402,11 @@ h1, h2, h3 {
               0 0 0 4px hsl(var(--primary) / 0.35);
 }
 
-/* Custom scrollbar - minimal */
+/* Overlay-style scrollbars: invisible at rest, revealed only while the
+   container is actually scrolling. ScrollbarReveal (mounted in the root
+   layout) toggles .is-scrolling on the scrolled element; the thumb fades
+   back out when scrolling stops. The gutter is reserved either way, so
+   revealing never shifts layout. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -327,12 +417,52 @@ h1, h2, h3 {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
+  background: transparent;
   border-radius: 3px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.3);
+.is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+}
+
+@supports (scrollbar-color: auto) {
+  /* Layered: the universal transition must not beat Tailwind's layered
+     transition-* utilities (unlayered rules win over layers regardless of
+     specificity: this silently killed every width/margin/color transition
+     in the app). scrollbar-color still animates via the base default. */
+  @layer base {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+      transition: scrollbar-color 300ms ease-out;
+    }
+  }
+  .is-scrolling {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+}
+
+/* Hover-reveal fallback for touch: coarse pointers have no hover, so the
+   controls that desktop reveals on hover (row checkboxes, chevrons, quiet
+   row actions) stay visible. Targets exactly the opacity-0 +
+   group-hover:opacity-100 pairing and nothing else. */
+@media (pointer: coarse) {
+  .group .opacity-0.group-hover\:opacity-100 {
+    opacity: 1;
+  }
+}
+
+/* Always-visible thumb for modal scroll containers (DialogContent,
+   SlideOverBody): inside an overlay the scrollbar is the only cue that
+   content continues below the fold, so the at-rest auto-hide would read
+   as "the dialog is cut off". */
+.scrollbar-visible::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+}
+@supports (scrollbar-color: auto) {
+  .scrollbar-visible {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
 }
 
 /* Hide scrollbar utility */
