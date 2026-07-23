@@ -2661,7 +2661,11 @@
     "possible_duplicate": "Möjlig dublett",
     "link": "Koppla",
     "match": "Matcha",
-    "view_voucher_short": "Visa verifikat"
+    "view_voucher_short": "Visa verifikat",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "th_status": "Status"
   },
   "tx_categories": {
     "expense_representation": "Representation",
@@ -3828,7 +3832,7 @@
     "confirm_post_title": "Bokför verifikat",
     "confirm_post_description": "Bokförs som verifikat {voucher}: {description}, {amount}. Verifikatet kan inte ändras i efterhand, bara rättas eller stornas.",
     "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas.",
-    "bulkbar_selected": "markerade"
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}"
   },
   "attachment_preview_sheet": {
     "title": "Bilagor",
@@ -4476,8 +4480,6 @@
     "action_import": "Importera",
     "action_review_all": "Gå igenom alla",
     "action_review_loading": "Laddar...",
-    "action_select_multi_start": "Välj flera",
-    "action_select_multi_end": "Avsluta",
     "action_new_transaction": "Ny transaktion",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "mode_inbox": "Att bokföra",
@@ -4553,7 +4555,32 @@
     "bank_sync_session_expired": "Bankanslutningen har löpt ut",
     "bank_sync_session_expired_desc": "Förnya anslutningen för att fortsätta synka transaktioner.",
     "import_psd2_active_warning_title": "PSD2 är aktivt för {bankName}",
-    "import_psd2_active_warning_body": "Transaktioner synkas automatiskt varje natt. Filimport behövs bara för äldre historik eller om PSD2 inte fungerar; annars kan dubbletter uppstå."
+    "import_psd2_active_warning_body": "Transaktioner synkas automatiskt varje natt. Filimport behövs bara för äldre historik eller om PSD2 inte fungerar; annars kan dubbletter uppstå.",
+    "create_import_desc": "CSV- eller SIE-fil från banken",
+    "create_manual_desc": "Kontanter, egna utlägg",
+    "create_synka": "Synka bank nu",
+    "create_synka_desc": "Hämtar nya transaktioner från banken",
+    "create_synka_desc_last": "Senast synkad {age}",
+    "source_all_label": "Alla källor",
+    "source_bank_label": "Bank",
+    "source_bank_other": "Övriga bankhändelser",
+    "source_skatteverket_label": "Skattekonto",
+    "source_account_fallback": "Konto",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "th_status": "Status",
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}",
+    "batch_book": "Bokför",
+    "batch_bulk_book": "Bokför i klump",
+    "batch_bulk_book_hint": "Välj minst två transaktioner från samma datum och samma riktning",
+    "batch_ignore": "Ignorera",
+    "batch_delete": "Ta bort",
+    "batch_select_all": "Markera alla ({count})",
+    "batch_clear": "Avmarkera",
+    "batch_progress": "Bokför {done} av {total}…",
+    "mode_all": "Alla",
+    "footer_to_handle": "{count, plural, =0 {Inget att hantera} =1 {1 att hantera} other {# att hantera}}"
   },
   "bookkeeping": {
     "edit_draft_dialog_title": "Redigera utkast",
