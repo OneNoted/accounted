@@ -659,13 +659,24 @@ export async function ingestTransactions(
         cashAccountId !== null
       ) {
         try {
-          await supabase
+          const { error: stampError } = await supabase
             .from('transactions')
             .update({ cash_account_id: cashAccountId })
             .eq('id', consumedTwin.id)
             .is('cash_account_id', null)
-        } catch {
-          // Non-critical: see above.
+          if (stampError) {
+            log.warn('hand-mirror adoption stamp failed; row stays unbound', {
+              transactionId: consumedTwin.id,
+              cashAccountId,
+              error: stampError.message,
+            })
+          }
+        } catch (stampError) {
+          log.warn('hand-mirror adoption stamp failed; row stays unbound', {
+            transactionId: consumedTwin.id,
+            cashAccountId,
+            error: stampError instanceof Error ? stampError.message : String(stampError),
+          })
         }
       }
       continue

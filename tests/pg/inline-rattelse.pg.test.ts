@@ -515,6 +515,7 @@ describe('inline rättelse: lines (correct_entry_lines_inline)', () => {
   it('protects the bank side of transaction-linked entries but allows contra-side fixes', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
     await insertChartAccount(companyId, userId, '5420')
+    await insertChartAccount(companyId, userId, '1930')
     const { entryId, debitLineId, creditLineId } = await insertPostedEntry({
       companyId, userId, fiscalPeriodId, sourceType: 'bank_transaction',
     })

@@ -217,6 +217,25 @@ export default function StripeSettingsPanel() {
     }
   }
 
+  // Hosted: Stripe Connect is not launched yet, so the settings surface is
+  // "coming soon" even where the platform credentials are configured (test
+  // mode): users must not be able to connect or toggle transaction sync until
+  // launch. Self-hosted admins run their own keys and keep the full panel.
+  const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+  if (!isSelfHosted) {
+    return (
+      <Card>
+        <CardContent className="p-0">
+          <EmptyState
+            icon={CreditCard}
+            title={t('coming_soon_title')}
+            description={t('coming_soon_description')}
+          />
+        </CardContent>
+      </Card>
+    )
+  }
+
   if (loading) {
     return (
       <Card>
@@ -230,31 +249,15 @@ export default function StripeSettingsPanel() {
   }
 
   if (!configured) {
-    // Hosted: the Connect platform isn't live yet, so the whole integration
-    // presents as "coming soon" (every server path is already a no-op without
-    // STRIPE_CONNECT_CLIENT_ID). Self-hosted admins get the honest
-    // configuration message instead: for them it's a setup task, not a launch.
-    const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
-    if (isSelfHosted) {
-      return (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <p className="text-sm text-muted-foreground">{t('not_configured')}</p>
-          </CardContent>
-        </Card>
-      )
-    }
+    // Self-hosted without STRIPE_CONNECT_CLIENT_ID: honest configuration
+    // message, for these admins it's a setup task, not a launch.
     return (
       <Card>
-        <CardContent className="p-0">
-          <EmptyState
-            icon={CreditCard}
-            title={t('coming_soon_title')}
-            description={t('coming_soon_description')}
-          />
+        <CardHeader>
+          <CardTitle className="text-base">{t('title')}</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p className="text-sm text-muted-foreground">{t('not_configured')}</p>
         </CardContent>
       </Card>
     )

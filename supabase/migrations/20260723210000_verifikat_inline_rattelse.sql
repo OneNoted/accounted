@@ -278,7 +278,7 @@ DECLARE
   v_log_id      uuid;
 BEGIN
   IF v_jwt_role IN ('anon', 'authenticated') THEN
-    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+    IF NOT public.caller_is_company_member(p_company_id) THEN
       RAISE EXCEPTION 'unauthorized: caller is not a member of company %', p_company_id
         USING ERRCODE = '42501';
     END IF;
@@ -451,7 +451,7 @@ DECLARE
   v_delta        numeric;
 BEGIN
   IF v_jwt_role IN ('anon', 'authenticated') THEN
-    IF p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+    IF NOT public.caller_is_company_member(p_company_id) THEN
       RAISE EXCEPTION 'unauthorized: caller is not a member of company %', p_company_id
         USING ERRCODE = '42501';
     END IF;

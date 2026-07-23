@@ -316,7 +316,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // enforces the same rule server-side; this just hides the dead menu item.
   const canInlineRattelse =
     entry.status === 'posted' &&
-    !['storno', 'opening_balance', 'year_end'].includes(entry.source_type)
+    !['storno', 'opening_balance', 'year_end', 'vat_settlement'].includes(entry.source_type)
 
   // Struck lines (from the immutable rättelse log) render inline in the
   // lines table with strikethrough, Fortnox-style: the original stays

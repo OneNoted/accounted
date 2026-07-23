@@ -46,7 +46,18 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
     expect(response.status).toBe(401)
   })
 
+  it('returns 404 when the entry belongs to another company', async () => {
+    enqueue({ data: null, error: null }) // ownership check finds nothing
+
+    const response = await GET(makeGet(), params())
+    const { body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(response.status).toBe(404)
+    expect(body.error).toContain('hittades inte')
+  })
+
   it('returns the rättelse rows newest first', async () => {
+    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
     enqueue({
       data: [
         {
@@ -91,6 +102,7 @@ describe('GET /api/bookkeeping/journal-entries/[id]/rattelse-log', () => {
   })
 
   it('returns 500 with a Swedish message when the query fails', async () => {
+    enqueue({ data: { id: 'entry-1' }, error: null }) // ownership check
     enqueue({ data: null, error: { message: 'boom' } })
 
     const response = await GET(makeGet(), params())
