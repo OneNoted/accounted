@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { roundOre } from '@/lib/money'
 
 export interface MonthlyBreakdownMonth {
   label: string
@@ -16,6 +17,77 @@ const MONTH_LABELS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun',
   'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec',
 ]
+
+/** Pre-summed month bucket for assembleMonthlyBreakdown. */
+export interface MonthlyBucket {
+  year: number
+  /** 0-based month (JS Date convention, indexes MONTH_LABELS). */
+  month0: number
+  income: number
+  expenses: number
+}
+
+/**
+ * Pure assembly of the monthly breakdown from pre-summed buckets: month
+ * range initialization, bucket fill, natural "YYYY-MM" sort, and Swedish
+ * month labels. Extracted from generateMonthlyBreakdown so callers that
+ * already hold per-month sums (e.g. the KPI route's single-round-trip
+ * aggregate path) can reuse the assembly without re-scanning lines.
+ *
+ * Rounding happens once per bucket (income, expenses, then net over the
+ * rounded pair) instead of the old incremental per-line rounding: equal
+ * within float epsilon for real öre-denominated amounts.
+ */
+export function assembleMonthlyBreakdown(
+  periodStart: string,
+  periodEnd: string,
+  buckets: MonthlyBucket[]
+): MonthlyBreakdown {
+  // Build monthly aggregates using year-aware keys ("2024-03", "2024-04",
+  // etc.) to avoid data corruption for non-calendar fiscal years (Apr-Mar).
+  const monthMap = new Map<string, { year: number; month: number; income: number; expenses: number }>()
+
+  // Initialize all months in the period range
+  const startDate = new Date(periodStart)
+  const endDate = new Date(periodEnd)
+
+  for (
+    let y = startDate.getFullYear(), m = startDate.getMonth();
+    y < endDate.getFullYear() || (y === endDate.getFullYear() && m <= endDate.getMonth());
+    m === 11 ? (y++, m = 0) : m++
+  ) {
+    const key = `${y}-${String(m).padStart(2, '0')}`
+    monthMap.set(key, { year: y, month: m, income: 0, expenses: 0 })
+  }
+
+  for (const bucket of buckets) {
+    const key = `${bucket.year}-${String(bucket.month0).padStart(2, '0')}`
+    if (!monthMap.has(key)) {
+      monthMap.set(key, { year: bucket.year, month: bucket.month0, income: 0, expenses: 0 })
+    }
+    const target = monthMap.get(key)!
+    target.income += bucket.income
+    target.expenses += bucket.expenses
+  }
+
+  // Convert to sorted array (keys sort naturally as "YYYY-MM")
+  const months: MonthlyBreakdownMonth[] = []
+  const sortedKeys = Array.from(monthMap.keys()).sort()
+
+  for (const key of sortedKeys) {
+    const data = monthMap.get(key)!
+    const income = roundOre(data.income)
+    const expenses = roundOre(data.expenses)
+    months.push({
+      label: MONTH_LABELS[data.month],
+      income,
+      expenses,
+      net: roundOre(income - expenses),
+    })
+  }
+
+  return { months }
+}
 
 /**
  * Generate monthly income vs expenses breakdown for a fiscal period.
@@ -73,22 +145,9 @@ export async function generateMonthlyBreakdown(
     return { months: [] }
   }
 
-  // Build monthly aggregates using year-aware keys ("2024-03", "2024-04", etc.)
-  // to avoid data corruption for non-calendar fiscal years (e.g., Apr-Mar)
-  const monthMap = new Map<string, { year: number; month: number; income: number; expenses: number }>()
-
-  // Initialize all months in the period range
-  const startDate = new Date(period.period_start)
-  const endDate = new Date(period.period_end)
-
-  for (
-    let y = startDate.getFullYear(), m = startDate.getMonth();
-    y < endDate.getFullYear() || (y === endDate.getFullYear() && m <= endDate.getMonth());
-    m === 11 ? (y++, m = 0) : m++
-  ) {
-    const key = `${y}-${String(m).padStart(2, '0')}`
-    monthMap.set(key, { year: y, month: m, income: 0, expenses: 0 })
-  }
+  // Sum lines into per-month buckets (raw sums; assembleMonthlyBreakdown
+  // rounds once per bucket), keyed year-aware for non-calendar fiscal years.
+  const bucketMap = new Map<string, MonthlyBucket>()
 
   for (const line of lines) {
     const entry = line.journal_entry as {
@@ -101,18 +160,18 @@ export async function generateMonthlyBreakdown(
     const entryDate = new Date(entry.entry_date)
     const key = `${entryDate.getFullYear()}-${String(entryDate.getMonth()).padStart(2, '0')}`
 
-    if (!monthMap.has(key)) {
-      monthMap.set(key, { year: entryDate.getFullYear(), month: entryDate.getMonth(), income: 0, expenses: 0 })
+    let bucket = bucketMap.get(key)
+    if (!bucket) {
+      bucket = { year: entryDate.getFullYear(), month0: entryDate.getMonth(), income: 0, expenses: 0 }
+      bucketMap.set(key, bucket)
     }
-
-    const bucket = monthMap.get(key)!
 
     if (accountClass === 3) {
       // Revenue accounts: credit side represents revenue
-      bucket.income = Math.round((bucket.income + line.credit_amount - line.debit_amount) * 100) / 100
+      bucket.income += line.credit_amount - line.debit_amount
     } else if (accountClass >= 4 && accountClass <= 7) {
       // Expense accounts: debit side represents expenses
-      bucket.expenses = Math.round((bucket.expenses + line.debit_amount - line.credit_amount) * 100) / 100
+      bucket.expenses += line.debit_amount - line.credit_amount
     } else if (accountClass === 8 && line.account_number !== '8999') {
       // Financial items (class 8): interest, exchange gains/losses, etc.
       // 8999 "Årets resultat" is a year-end closing account: its debit/credit
@@ -120,26 +179,16 @@ export async function generateMonthlyBreakdown(
       // period's income-vs-expense signal on the month of closing.
       const amount = line.credit_amount - line.debit_amount
       if (amount >= 0) {
-        bucket.income = Math.round((bucket.income + amount) * 100) / 100
+        bucket.income += amount
       } else {
-        bucket.expenses = Math.round((bucket.expenses + Math.abs(amount)) * 100) / 100
+        bucket.expenses += Math.abs(amount)
       }
     }
   }
 
-  // Convert to sorted array (keys sort naturally as "YYYY-MM")
-  const months: MonthlyBreakdownMonth[] = []
-  const sortedKeys = Array.from(monthMap.keys()).sort()
-
-  for (const key of sortedKeys) {
-    const data = monthMap.get(key)!
-    months.push({
-      label: MONTH_LABELS[data.month],
-      income: data.income,
-      expenses: data.expenses,
-      net: Math.round((data.income - data.expenses) * 100) / 100,
-    })
-  }
-
-  return { months }
+  return assembleMonthlyBreakdown(
+    period.period_start,
+    period.period_end,
+    Array.from(bucketMap.values())
+  )
 }

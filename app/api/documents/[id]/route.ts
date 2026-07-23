@@ -28,10 +28,24 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Create signed download URL (60 minutes)
-    const { data: signedUrl, error: signError } = await supabase.storage
-      .from('documents')
-      .createSignedUrl(doc.storage_path, 3600)
+    // Sign the download URL (60 minutes) and persist the access event in
+    // parallel: both depend only on the row fetch and are independent of
+    // each other. The emit stays awaited (event-log-handler's insert must
+    // not race Vercel function suspension) and never rejects (the bus
+    // settles handlers via Promise.allSettled), so it cannot fail this
+    // Promise.all.
+    const [signResult] = await Promise.all([
+      supabase.storage.from('documents').createSignedUrl(doc.storage_path, 3600),
+      eventBus.emit({
+        type: 'document.accessed',
+        payload: {
+          document: { id: doc.id, file_name: doc.file_name },
+          userId: user.id,
+          companyId,
+        },
+      }),
+    ])
+    const { data: signedUrl, error: signError } = signResult
 
     if (signError) {
       return NextResponse.json(
@@ -39,15 +53,6 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         { status: 500 }
       )
     }
-
-    await eventBus.emit({
-      type: 'document.accessed',
-      payload: {
-        document: { id: doc.id, file_name: doc.file_name },
-        userId: user.id,
-        companyId,
-      },
-    })
 
     return NextResponse.json({
       data: {

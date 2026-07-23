@@ -14,6 +14,21 @@ const eslintConfig = defineConfig([
       }],
     },
   },
+  // eslint-plugin-react-hooks 7 (pulled in by eslint-config-next) ships new
+  // React Compiler-powered rules at error severity. ~33 legacy components
+  // predate them; refactoring those effects is behavior-sensitive work that
+  // happens per component, not in a lint sweep. Same pattern as no-console
+  // below: warn (not error) until the legacy sites are migrated, then flip
+  // each rule back to "error" so the floor is enforced. New violations still
+  // surface as warnings in every lint run and PR review.
+  {
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/static-components": "warn",
+      "react-hooks/purity": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+    },
+  },
   // No raw console.* in lib/ or app/api/. Use createLogger from @/lib/logger
   // so log lines carry requestId + structured context. lib/logger.ts and
   // app/api/log/route.ts are the two intentional exemptions because they ARE

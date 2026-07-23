@@ -608,7 +608,12 @@ describe('generateTrialBalance', () => {
       }),
     ).rejects.toThrow(/missing closing_entry_id/i)
 
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // The guard throws before any journal data is read. The chart of
+    // accounts is part of the first parallel wave (alongside the period
+    // fetch), so it may have been queried; the entry/line tables must not be.
+    const tables = supabase.from.mock.calls.map((c: unknown[]) => c[0])
+    expect(tables).not.toContain('journal_entries')
+    expect(tables).not.toContain('journal_entry_lines')
   })
 
   it('keeps year-end adjustments for an open period without a final closing entry', async () => {

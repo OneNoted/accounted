@@ -32,8 +32,8 @@ async function fetchWithRetry(url: string): Promise<Response> {
   return fetch(url, { headers: RIKSBANKEN_HEADERS, next: { revalidate: 3600 } })
 }
 
-/** Cache reads/writes are best-effort — a cache failure must never block a rate. */
-async function readCachedRate(
+/** Cache reads/writes are best-effort: a cache failure must never block a rate. */
+export async function readCachedRate(
   supabase: SupabaseClient,
   currency: Currency,
   rateDate: string,

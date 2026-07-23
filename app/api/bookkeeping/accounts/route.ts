@@ -26,6 +26,28 @@ export const GET = withRouteContext('bookkeeping.accounts.list', async (request,
   const activeOnly = validated.data.active !== 'false'
 
   try {
+    // Single-round-trip path: the RPC aggregates the whole list into one json
+    // scalar server-side, bypassing PostgREST's 1000-row page cap. Large
+    // charts (95/1250 prod companies exceed 1000 active accounts) previously
+    // paid 2-5 sequential cross-region round trips through fetchAllRows.
+    const rpc = await supabase.rpc('list_company_accounts', {
+      p_company_id: companyId,
+      p_active_only: activeOnly,
+      p_account_class: accountClass ?? null,
+    })
+    if (!rpc.error) return NextResponse.json({ data: rpc.data ?? [] })
+    if (rpc.error.code === 'PGRST202' || rpc.error.code === '42883' || rpc.error.code === '42501') {
+      // Function not deployed yet (self-hosted instance not migrated, or the
+      // deploy-ordering window before the branching merge applies the
+      // migration) or EXECUTE not granted: fall back to the paged fetch.
+      // Mirrors the load-bearing fallback in lib/company/context.ts.
+      log.warn('list_company_accounts RPC unavailable, falling back to paged fetch', {
+        code: rpc.error.code,
+      })
+    } else {
+      throw new Error(rpc.error.message)
+    }
+
     const data = await fetchAllRows(({ from, to }) => {
       let query = supabase
         .from('chart_of_accounts')

@@ -307,9 +307,73 @@ export async function updateSession(request: NextRequest) {
  * we also upsert user_preferences so subsequent RLS lookups agree with
  * us without needing the fallback scan.
  *
+ * RPC-first: `resolve_active_company()` collapses the whole resolution into
+ * one round trip and is semantically identical to both the query path below
+ * and `current_active_company_id()` (what RLS reads). `used_fallback` is
+ * true exactly when the preference was missing, null, or stale, which is
+ * exactly the condition under which the query path writes the resolved
+ * company back to user_preferences: the write-back behavior is preserved.
+ * Falls back to the query path on PGRST202 (self-hosted instance not
+ * migrated yet, or a deploy racing the branch merge).
+ *
  * Cannot use lib/company/context.ts because middleware runs on Edge.
  */
 async function resolveCompanyForMiddleware(
+  supabase: ReturnType<typeof createServerClient>,
+  userId: string,
+  _request: NextRequest
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
+  const { data, error } = await supabase.rpc('resolve_active_company')
+
+  if (error) {
+    if (error.code === 'PGRST202') {
+      // Function not deployed here: use the query path.
+      return resolveCompanyForMiddlewareViaQueries(supabase, userId, _request)
+    }
+    // Issue #1053: a FAILED call degrades (fail open), never reads as "no
+    // companies". locale null is fine because the degraded flag already
+    // suppresses the locale-cookie sync at the call site.
+    console.error('[middleware] resolve_active_company rpc failed', error)
+    return { companyId: null, locale: null, degraded: true }
+  }
+
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row) {
+    // Zero rows = NULL auth.uid(); impossible for the cookie-auth middleware
+    // client, so treat as degraded rather than redirecting to onboarding.
+    console.error('[middleware] resolve_active_company returned no row for authenticated user')
+    return { companyId: null, locale: null, degraded: true }
+  }
+
+  if (row.company_id && row.used_fallback) {
+    // Write the fallback back to user_preferences so future RLS lookups see
+    // the same active company without needing the fallback scan. Non-fatal
+    // on failure: resolution already succeeded, but log it so silent
+    // persistence failures (#701) are observable.
+    const { error: writeBackError } = await supabase
+      .from('user_preferences')
+      .upsert(
+        { user_id: userId, active_company_id: row.company_id },
+        { onConflict: 'user_id' }
+      )
+    if (writeBackError) {
+      console.error('[middleware] active company write-back failed', writeBackError)
+    }
+  }
+
+  return {
+    companyId: row.company_id ?? null,
+    locale: row.locale ?? null,
+    degraded: false,
+  }
+}
+
+/**
+ * Query-path resolution: the pre-RPC implementation, kept verbatim as the
+ * fallback for resolveCompanyForMiddleware (see the fallback conditions
+ * there).
+ */
+async function resolveCompanyForMiddlewareViaQueries(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest

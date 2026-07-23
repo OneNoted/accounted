@@ -70,15 +70,22 @@ export const GET = withRouteContext(
     const { id } = await params
     const { supabase, companyId, log, requestId } = ctx
     try {
-      if (!(await periodExists(supabase, companyId, id))) {
-        return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
-      }
       const model = await buildCanonicalAnnualReport(supabase, companyId, id, {
         stage: 'draft',
         includeIxbrl: false,
       })
       return NextResponse.json({ data: responseData(model) })
     } catch (err) {
+      // No periodExists preflight here: buildArsredovisningData applies the
+      // same company_id filter and throws 'Fiscal period not found' for
+      // missing/foreign periods, so mapping that message (mirroring the data
+      // route) yields the identical 404 envelope without the extra round
+      // trip. PATCH keeps the preflight since it guards the profile upsert
+      // before any write.
+      const message = err instanceof Error ? err.message : ''
+      if (/not found/i.test(message)) {
+        return errorResponseFromCode('PERIOD_NOT_FOUND', log, { requestId })
+      }
       return errorResponse(err, log, { requestId })
     }
   },
