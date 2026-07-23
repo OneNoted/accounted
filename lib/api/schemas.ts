@@ -1600,7 +1600,7 @@ export const UpdateSettingsSchema = z.object({
   fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
   preliminary_tax_monthly: z.number().nullable().optional(),
   // Share capital per Bolagsverket (annual report aktiekapital note).
-  aktiekapital: z.number().positive('Aktiekapital måste vara större än 0').nullable().optional(),
+  aktiekapital: z.number().int('Aktiekapital anges i hela kronor').positive('Aktiekapital måste vara större än 0').nullable().optional(),
   antal_aktier: z.number().int('Antal aktier måste vara ett heltal').positive('Antal aktier måste vara större än 0').nullable().optional(),
   employer_registered: z.boolean().nullable().optional(),
   employer_seasonal: z.boolean().optional(),
