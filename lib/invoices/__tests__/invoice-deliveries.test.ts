@@ -25,6 +25,7 @@ function makeSupabase(options?: {
   reserveError?: { message: string } | null
   snapshotData?: string | null
   snapshotError?: { message: string } | null
+  terminalData?: string | null
   terminalError?: { message: string } | null
   manualData?: Record<string, unknown> | null
   manualError?: { message: string } | null
@@ -43,7 +44,10 @@ function makeSupabase(options?: {
       })
     }
     if (name === 'finalize_invoice_delivery') {
-      return Promise.resolve({ data: 'delivery-1', error: options?.terminalError ?? null })
+      return Promise.resolve({
+        data: options?.terminalData === undefined ? 'delivery-1' : options.terminalData,
+        error: options?.terminalError ?? null,
+      })
     }
     return Promise.resolve({
       data: options?.manualData === undefined
@@ -201,6 +205,32 @@ describe('invoice delivery tracking', () => {
     )
 
     expect(result.trackingWarning).toBe('finalize_failed')
+  })
+
+  it('treats an unexpected terminal delivery id as a finalize failure', async () => {
+    const { supabase } = makeSupabase({ terminalData: 'delivery-other' })
+    const sendEmail = vi.fn().mockResolvedValue({ success: true })
+
+    const result = await sendTrackedInvoiceEmail(
+      makeInput(supabase, makeEmailService(sendEmail)),
+    )
+
+    expect(result.trackingWarning).toBe('finalize_failed')
+  })
+
+  it('does not delete the archived PDF when the failed terminal id is unexpected', async () => {
+    const { supabase } = makeSupabase({ terminalData: 'delivery-other' })
+    const sendEmail = vi.fn().mockResolvedValue({
+      success: false,
+      error: 'provider rejected the request',
+    })
+
+    const result = await sendTrackedInvoiceEmail(
+      makeInput(supabase, makeEmailService(sendEmail)),
+    )
+
+    expect(result.trackingWarning).toBe('failure_record_failed')
+    expect(mockDeleteDocument).not.toHaveBeenCalled()
   })
 
   it('returns the reservation selected by the privileged RPC', async () => {

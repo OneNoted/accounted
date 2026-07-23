@@ -162,7 +162,7 @@ export async function sendTrackedInvoiceEmail(
   const result = await emailService.sendEmail(emailOptions)
 
   if (!result.success) {
-    const { error: failureRecordError } = await deliveryWriter.rpc(
+    const { data: failedDeliveryId, error: failureRecordError } = await deliveryWriter.rpc(
       'finalize_invoice_delivery',
       {
         p_delivery_id: deliveryId,
@@ -175,8 +175,9 @@ export async function sendTrackedInvoiceEmail(
       },
     )
 
+    const failureRecorded = !failureRecordError && failedDeliveryId === deliveryId
     let cleanupFailed = false
-    if (!failureRecordError) {
+    if (failureRecorded) {
       try {
         const cleanup = await deleteDocument(supabase, companyId, document.id)
         cleanupFailed = !cleanup.ok
@@ -189,7 +190,7 @@ export async function sendTrackedInvoiceEmail(
       ...result,
       deliveryId,
       documentId: document.id,
-      ...(failureRecordError
+      ...(!failureRecorded
         ? { trackingWarning: 'failure_record_failed' as const }
         : cleanupFailed
           ? { trackingWarning: 'failure_cleanup_failed' as const }
@@ -197,7 +198,7 @@ export async function sendTrackedInvoiceEmail(
     }
   }
 
-  const { error: finalizeError } = await deliveryWriter.rpc(
+  const { data: finalizedDeliveryId, error: finalizeError } = await deliveryWriter.rpc(
     'finalize_invoice_delivery',
     {
       p_delivery_id: deliveryId,
@@ -210,11 +211,16 @@ export async function sendTrackedInvoiceEmail(
     },
   )
 
+  // Delivery is irreversible once the provider succeeds. A failed terminal
+  // transition is returned as a reconciliation warning; each caller still
+  // advances the invoice to sent, and ordinary send routes reject non-drafts,
+  // so a pending evidence row never becomes permission to send a duplicate.
+  const finalized = !finalizeError && finalizedDeliveryId === deliveryId
   return {
     ...result,
     deliveryId,
     documentId: document.id,
-    ...(finalizeError ? { trackingWarning: 'finalize_failed' as const } : {}),
+    ...(!finalized ? { trackingWarning: 'finalize_failed' as const } : {}),
   }
 }
 

@@ -161,6 +161,8 @@ export function InvoicePaymentAccountsSettings({
   }
 
   function validationError(): string | null {
+    // An added foreign-currency tab is a real configuration immediately. It
+    // must have an IBAN before save; the Remove action discards placeholders.
     for (const currency of configuredCurrencies) {
       const account = normalizeInvoicePaymentAccount(accounts[currency] ?? EMPTY_ACCOUNT)
       if (account.clearing_number && !/^\d{4,5}$/.test(account.clearing_number)) {
