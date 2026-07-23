@@ -262,7 +262,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       },
     })
   } catch (error) {
-    console.error('Preview PDF generation error:', error)
+    log.error('invoice preview PDF generation failed', error, { requestId })
     return NextResponse.json(
       { error: 'Kunde inte generera PDF-förhandsgranskning' },
       { status: 500, headers: PRIVATE_NO_STORE_HEADERS }

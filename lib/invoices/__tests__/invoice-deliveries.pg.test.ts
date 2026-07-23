@@ -603,7 +603,9 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
       [deliveryId],
     )
     expect(result.rows[0].status).toBe('pending')
-    expect(result.rows[0].retention_expires_at).toBe('2034-01-01')
+    expect(new Date(result.rows[0].retention_expires_at).toISOString().slice(0, 10)).toBe(
+      '2034-01-01',
+    )
 
     const nextReservationId = await withServiceRoleContext(userId, async (client) => {
       const reservation = await client.query<{ id: string }>(

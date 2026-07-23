@@ -1,6 +1,6 @@
 # Supabase staging migration evidence: 2026-07-22
 
-Classification: Internal Use Only
+Classification: Confidential
 
 Environment: `erpbase` Supabase staging branch
 

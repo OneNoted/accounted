@@ -133,7 +133,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     })
   } catch (error) {
-    console.error('PDF generation error:', error)
+    log.error('invoice PDF generation failed', error, { requestId, invoiceId: id })
     return NextResponse.json(
       { error: error instanceof Error ? getUserErrorMessage(error) : 'PDF generation failed' },
       { status: 500, headers: PRIVATE_NO_STORE_HEADERS }
