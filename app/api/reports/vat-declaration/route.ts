@@ -78,12 +78,11 @@ export const GET = withRouteContext(
     }
 
     try {
-      // The accounting-method argument is ignored by calculateVatDeclaration
-      // (the method is already baked into journal entry timing), so we pass
-      // the literal default instead of spending a sequential company_settings
-      // round trip on a value that contributes nothing to the figures.
+      // No accounting-method argument: the method is baked into journal entry
+      // timing (see the invariant note on calculateVatDeclaration), so no
+      // company_settings round trip is needed here.
       const declaration = await calculateVatDeclaration(
-        supabase, companyId!, periodType, year, period, 'accrual',
+        supabase, companyId!, periodType, year, period,
         { fiscalPeriodId },
       )
 

@@ -375,7 +375,6 @@ async function generatePeriodReports(
       'yearly',
       startDate.getFullYear(),
       1,
-      'accrual',
       { fiscalPeriodId: period.id }
     )
   } catch {

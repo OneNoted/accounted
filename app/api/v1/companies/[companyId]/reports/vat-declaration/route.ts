@@ -13,7 +13,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { safeGenerate } from '@/lib/api/v1/report-period'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
-import type { AccountingMethod, VatPeriodType } from '@/types'
+import type { VatPeriodType } from '@/types'
 
 const VatPeriodTypeEnum = z.enum(['monthly', 'quarterly', 'yearly'])
 const AccountingMethodEnum = z.enum(['accrual', 'cash'])
@@ -32,7 +32,7 @@ registerEndpoint({
   pitfalls: [
     '`period_type` (monthly|quarterly|yearly), `year`, and `period` are all required.',
     'For monthly: period is 1-12. For quarterly: period is 1-4. For yearly: period is 1.',
-    '`accounting_method` defaults to accrual (faktureringsmetoden); pass cash for kontantmetoden to honor the VAT-on-payment rule per ML 15 kap 8-11 §§ (ML 2023:200, which replaced ML 1994:200 on 1 July 2023: the prior ML 13 kap reference is outdated).',
+    '`accounting_method` is accepted for backward compatibility but has no effect on the figures: the declaration is a pure ledger projection, and the method (faktureringsmetoden vs kontantmetoden per ML 15 kap 8-11 §§, ML 2023:200) is already reflected in when VAT-bearing journal entries are posted.',
     'Output ruta 49 = (10+11+12+30+31+32+60+61+62) − 48. Positive = pay; negative = refund.',
   ],
   example: {
@@ -123,7 +123,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         },
       })
     }
-    const { period_type, year, period, accounting_method } = filters.data
+    // accounting_method is still accepted (public API back-compat) but has no
+    // effect: see the invariant note on calculateVatDeclaration.
+    const { period_type, year, period } = filters.data
 
     const gen = await safeGenerate(
       () =>
@@ -133,7 +135,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           period_type as VatPeriodType,
           year,
           period,
-          accounting_method as AccountingMethod | undefined,
         ),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'vat-declaration' },
     )

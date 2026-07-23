@@ -69,7 +69,7 @@ describe('buildMomsuppgift', () => {
     expect(result.momsuppgift.ingaendeMomsAvdrag).toBe(100)
     expect(result.momsuppgift.summaMoms).toBe(150)
     expect(mockCalculateVatDeclaration).toHaveBeenCalledWith(
-      expect.anything(), 'company-1', 'monthly', 2025, 3, 'accrual', { fiscalPeriodId: undefined },
+      expect.anything(), 'company-1', 'monthly', 2025, 3, { fiscalPeriodId: undefined },
     )
     // Sub-annual periods are calendar periods: no fiscal-period lookup.
     expect(mockResolvePeriodDates).not.toHaveBeenCalled()
@@ -93,7 +93,7 @@ describe('buildMomsuppgift', () => {
     )
     // The figures must describe the same räkenskapsår as the period id.
     expect(mockCalculateVatDeclaration).toHaveBeenCalledWith(
-      expect.anything(), 'company-1', 'yearly', 2026, 1, 'accrual', { fiscalPeriodId: 'fp-1' },
+      expect.anything(), 'company-1', 'yearly', 2026, 1, { fiscalPeriodId: 'fp-1' },
     )
   })
 

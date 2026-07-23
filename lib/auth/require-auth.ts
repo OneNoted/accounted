@@ -15,6 +15,22 @@ type AuthResult =
  * from the token and verified unused by any route (2026-07-23 audit);
  * created_at is set to '' only to satisfy the type.
  */
+/**
+ * Defense-in-depth pinning on top of getClaims' signature/expiry verification:
+ * the token must come from THIS project's auth server (iss) and be an
+ * end-user access token (aud 'authenticated'; anonymous sign-ins share it).
+ * A mismatch is not treated as unauthenticated: we fall back to the
+ * server-side getUser() check, which is authoritative.
+ */
+function claimsPinned(claims: JwtPayload): boolean {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '')
+  // Without a configured URL (unit tests) there is nothing to pin against.
+  const issOk = !supabaseUrl || claims.iss === `${supabaseUrl}/auth/v1`
+  const aud = claims.aud
+  const audOk = Array.isArray(aud) ? aud.includes('authenticated') : aud === 'authenticated'
+  return issOk && audOk
+}
+
 function userFromClaims(claims: JwtPayload): User {
   return {
     id: claims.sub,
@@ -55,10 +71,23 @@ export async function requireAuth(): Promise<AuthResult> {
     // getUser) on the old path.
     if (typeof supabase.auth.getClaims === 'function') {
       const { data } = await supabase.auth.getClaims()
-      if (data?.claims?.sub) user = userFromClaims(data.claims)
+      const claims = data?.claims
+      if (claims?.sub) {
+        if (claimsPinned(claims)) {
+          user = userFromClaims(claims)
+        } else {
+          console.error('requireAuth: getClaims iss/aud pinning failed; falling back to getUser', {
+            iss: claims.iss,
+            aud: claims.aud,
+          })
+        }
+      }
     }
-  } catch {
+  } catch (err) {
     // JWKS outage or malformed token: fall through to the server-side check.
+    // Logged because every hit here degrades the request to the slower
+    // getUser round trip; a spike must be visible in production.
+    console.error('requireAuth: getClaims failed; falling back to getUser', err)
   }
   if (!user) {
     const { data } = await supabase.auth.getUser()

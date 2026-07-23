@@ -14,7 +14,6 @@ import {
   VAT_RUTA_LABELS,
   type VatPeriodType,
   type VatDeclarationRutor,
-  type AccountingMethod,
 } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -48,24 +47,15 @@ export const GET = withRouteContext('report.vat_declaration.xlsx', async (reques
     return NextResponse.json({ error: 'Invalid year or period' }, { status: 400 })
   }
 
-  const [{ data: settings }, { data: companyRow }] = await Promise.all([
-    supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', companyId)
-      .single(),
-    supabase
-      .from('company_settings')
-      .select('company_name')
-      .eq('company_id', companyId)
-      .single(),
-  ])
-
-  const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
+  const { data: companyRow } = await supabase
+    .from('company_settings')
+    .select('company_name')
+    .eq('company_id', companyId)
+    .single()
 
   try {
     const declaration = await calculateVatDeclaration(
-      supabase, companyId, periodType, year, period, accountingMethod,
+      supabase, companyId, periodType, year, period,
       { fiscalPeriodId },
     )
 

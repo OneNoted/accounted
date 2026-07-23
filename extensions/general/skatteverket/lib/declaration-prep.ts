@@ -89,7 +89,6 @@ export async function buildMomsuppgift(
     periodType,
     year,
     period,
-    'accrual',
     { fiscalPeriodId },
   )
 

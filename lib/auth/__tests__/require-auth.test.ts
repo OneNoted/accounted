@@ -44,6 +44,8 @@ describe('requireAuth', () => {
     vi.clearAllMocks()
     // Deterministic baseline: MFA off unless a test stubs it on.
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'false')
+    // Matches CLAIMS.iss so the fast path passes the issuer pinning.
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://test.supabase.co')
   })
 
   afterEach(() => {
@@ -99,6 +101,45 @@ describe('requireAuth', () => {
     expect(result.error).toBeNull()
     expect(result.user?.id).toBe('user-1')
     expect(getUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to getUser when the claims issuer does not match the project URL', async () => {
+    const claims = { ...CLAIMS, iss: 'https://evil.example.com/auth/v1' }
+    const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+    const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
+    useSupabase({ getClaims, getUser })
+
+    const result = await requireAuth()
+
+    expect(result.error).toBeNull()
+    expect(result.user?.id).toBe('user-1')
+    expect(getUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to getUser when the claims audience is not authenticated', async () => {
+    const claims = { ...CLAIMS, aud: 'something-else' }
+    const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+    const getUser = vi.fn().mockResolvedValue({ data: { user: MOCK_USER }, error: null })
+    useSupabase({ getClaims, getUser })
+
+    const result = await requireAuth()
+
+    expect(result.error).toBeNull()
+    expect(result.user?.id).toBe('user-1')
+    expect(getUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts an array audience containing authenticated', async () => {
+    const claims = { ...CLAIMS, aud: ['authenticated', 'other'] }
+    const getClaims = vi.fn().mockResolvedValue({ data: { claims }, error: null })
+    const getUser = vi.fn()
+    useSupabase({ getClaims, getUser })
+
+    const result = await requireAuth()
+
+    expect(result.error).toBeNull()
+    expect(result.user?.id).toBe('user-1')
+    expect(getUser).not.toHaveBeenCalled()
   })
 
   it('returns 403 when MFA is required and AAL2 is not verified', async () => {

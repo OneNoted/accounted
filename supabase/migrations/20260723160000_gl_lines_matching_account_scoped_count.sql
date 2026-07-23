@@ -126,7 +126,9 @@ GRANT EXECUTE ON FUNCTION public.get_account_gl_lines_for_matching(uuid, text, d
 -- pointing at an IB entry and drop the voucher out of the period movement while
 -- its transaction stays in the bank total: a permanent phantom difference.
 -- An entry with a bank-feed counterpart is by definition not an ingående
--- balans, so refuse outright. Body otherwise verbatim from 20260613120000.
+-- balans, so refuse outright. Body otherwise verbatim from 20260619130100
+-- (NOT 20260613120000: the 130100 revision added the claims-based 42501
+-- tenant guard, which must survive this replace).
 -- =============================================================================
 CREATE OR REPLACE FUNCTION public.mark_entry_as_opening_balance(
   p_company_id uuid,
@@ -144,7 +146,16 @@ DECLARE
   v_locked_at       timestamptz;
   v_has_bank_line   boolean;
   v_old_source_type text;
+  v_jwt_role        text := coalesce(nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role', '');
 BEGIN
+  -- Tenant guard: anon/authenticated may only act on their own companies;
+  -- service_role / direct access (no JWT role) bypasses BY DESIGN.
+  IF v_jwt_role IN ('anon', 'authenticated')
+     AND p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+    RAISE EXCEPTION 'unauthorized: caller is not a member of company %', p_company_id
+      USING ERRCODE = '42501';
+  END IF;
+
   -- Owner/admin only (defense in depth alongside RLS; the function is SECURITY
   -- DEFINER so it must enforce tenancy + role itself).
   SELECT cm.role INTO v_caller_role

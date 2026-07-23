@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { buildESkdFile } from '@/lib/reports/vat-eskd-file'
-import type { VatPeriodType, AccountingMethod } from '@/types'
+import type { VatPeriodType } from '@/types'
 
 /**
  * Momsdeklaration eSKDUpload (v6.0) XML file for filing at skatteverket.se via
@@ -64,15 +64,12 @@ export const GET = withRouteContext(
       )
     }
 
-    const accountingMethod = (companyRow.accounting_method as AccountingMethod) || 'accrual'
-
     const declaration = await calculateVatDeclaration(
       supabase,
       companyId,
       periodType,
       year,
       period,
-      accountingMethod,
       { fiscalPeriodId },
     )
 

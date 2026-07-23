@@ -116,6 +116,16 @@ describe('calculateVatLiability', () => {
     expect(calculateVatLiability(rows)).toBe(15000)
   })
 
+  it('includes reduced-rate output VAT (12% and 6%) in the liability', () => {
+    const rows = [
+      makeTrialBalanceRow({ account_number: '2611', closing_credit: 25000 }),
+      makeTrialBalanceRow({ account_number: '2621', closing_credit: 1200 }),
+      makeTrialBalanceRow({ account_number: '2631', closing_credit: 600 }),
+      makeTrialBalanceRow({ account_number: '2641', closing_debit: 10000 }),
+    ]
+    expect(calculateVatLiability(rows)).toBe(16800)
+  })
+
   it('nets EU reverse charge (2614 + 2645) to zero: issue #715', () => {
     const rows = [
       makeTrialBalanceRow({ account_number: '2614', closing_credit: 2500 }),

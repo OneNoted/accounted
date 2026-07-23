@@ -741,6 +741,14 @@ async function buildK2Noter(
  *
  * The aktiekapital note is shared with K2 logic: K3 punkt 18.x also
  * mandates the share-capital disclosure for AB.
+ *
+ * tbFullRows MUST be the FULL current-period trial balance (tbFull.rows:
+ * opening balances included, year-end closing entries NOT excluded). The
+ * uppskjutna-skatter note derives its BFNAR 2012:1 ch.29 opening balance,
+ * movement, and closing balance for 2240/8940 from these rows; passing
+ * tbPreClosing.rows would zero the opening balance and misstate the note.
+ * The K3 multiyear snapshot test pins a non-zero 2240 opening balance to
+ * guard this contract.
  */
 async function buildK3Noter(
   supabase: SupabaseClient,

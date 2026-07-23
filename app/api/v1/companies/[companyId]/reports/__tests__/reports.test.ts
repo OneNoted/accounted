@@ -431,7 +431,6 @@ describe('GET /reports/vat-declaration', () => {
       'monthly',
       2026,
       4,
-      undefined,
     )
   })
 })

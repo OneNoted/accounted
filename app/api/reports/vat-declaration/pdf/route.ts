@@ -7,7 +7,7 @@ import {
 } from '@/lib/reports/vat-declaration'
 import { buildManualFilingRows } from '@/lib/reports/vat-manual-filing'
 import { VatDeclarationPDF } from '@/lib/reports/vat-declaration-pdf-template'
-import type { VatPeriodType, AccountingMethod, CompanySettings } from '@/types'
+import type { VatPeriodType, CompanySettings } from '@/types'
 
 /**
  * Momsdeklaration PDF for manual filing at skatteverket.se. The declaration is
@@ -51,15 +51,12 @@ export const GET = withRouteContext(
       return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 404 })
     }
 
-    const accountingMethod = (companyRow.accounting_method as AccountingMethod) || 'accrual'
-
     const declaration = await calculateVatDeclaration(
       supabase,
       companyId,
       periodType,
       year,
       period,
-      accountingMethod,
       { fiscalPeriodId },
     )
 
