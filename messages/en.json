@@ -1580,6 +1580,10 @@
     "connected_description": "You can now file declarations and fetch the tax account balance.",
     "connect_failed_title": "Connection failed"
   },
+  "settings_assistant": {
+    "fab_title": "Floating assistant button",
+    "fab_description": "Show the assistant button in the bottom-right corner on every page. The assistant is always available in the sidebar."
+  },
   "settings_account_danger": {
     "heading": "Delete account",
     "blockers_title": "Companies you own",
@@ -4019,8 +4023,8 @@
     "col_description": "Description",
     "col_debit": "Debit",
     "col_credit": "Credit",
-    "col_saldo": "Balance (before)",
-    "saldo_label": "Balance (before)",
+    "col_saldo": "Balance",
+    "saldo_label": "Balance",
     "line_description_placeholder": "Line text...",
     "sum": "Total",
     "sum_d": "D: {amount}",

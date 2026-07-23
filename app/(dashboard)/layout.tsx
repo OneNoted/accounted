@@ -133,6 +133,7 @@ export default async function DashboardLayout({
     { data: userProfile },
     entitlements,
     { data: allSettingsNames },
+    { data: userPrefs },
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
     supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
@@ -155,6 +156,10 @@ export default async function DashboardLayout({
     // select returns exactly the caller's companies, letting non-active rows
     // show company_settings.company_name instead of the frozen companies.name.
     supabase.from('company_settings').select('company_id, company_name'),
+    // User-level UI preference: hide the floating assistant button
+    // (Inställningar → Assistenten). Batched here so it costs no extra
+    // round-trip on the dashboard critical path.
+    supabase.from('user_preferences').select('hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
   ])
 
   // company_id -> current display name for every company the user belongs to.
@@ -287,7 +292,7 @@ export default async function DashboardLayout({
           <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>
           </main>
-          <AgentTrigger />
+          <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
           <LazyCommandPalette />
           <SettingsHotkey />
           {settingsModal}

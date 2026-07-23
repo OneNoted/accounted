@@ -1580,6 +1580,10 @@
     "connected_description": "Du kan nu skicka deklarationer och hämta skattekonto-saldot.",
     "connect_failed_title": "Anslutning misslyckades"
   },
+  "settings_assistant": {
+    "fab_title": "Flytande assistentknapp",
+    "fab_description": "Visa assistentknappen nere till höger på alla sidor. Assistenten finns alltid kvar i sidomenyn."
+  },
   "settings_account_danger": {
     "heading": "Radera konto",
     "blockers_title": "Företag du äger",
@@ -4019,8 +4023,8 @@
     "col_description": "Beskrivning",
     "col_debit": "Debet",
     "col_credit": "Kredit",
-    "col_saldo": "Saldo (före)",
-    "saldo_label": "Saldo (före)",
+    "col_saldo": "Saldo",
+    "saldo_label": "Saldo",
     "line_description_placeholder": "Radtext...",
     "sum": "Summa",
     "sum_d": "D: {amount}",
