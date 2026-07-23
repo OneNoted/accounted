@@ -150,8 +150,11 @@ DECLARE
 BEGIN
   -- Tenant guard: anon/authenticated may only act on their own companies;
   -- service_role / direct access (no JWT role) bypasses BY DESIGN.
+  -- NULL-safe membership predicate (20260703180000): the raw
+  -- NOT IN (SELECT user_company_ids()) pattern skips the deny branch on
+  -- UNKNOWN and is ratchet-blocked by null-safe-tenant-guards.pg.test.
   IF v_jwt_role IN ('anon', 'authenticated')
-     AND p_company_id NOT IN (SELECT public.user_company_ids()) THEN
+     AND NOT public.caller_is_company_member(p_company_id) THEN
     RAISE EXCEPTION 'unauthorized: caller is not a member of company %', p_company_id
       USING ERRCODE = '42501';
   END IF;
