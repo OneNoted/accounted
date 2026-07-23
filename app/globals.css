@@ -11,6 +11,14 @@
 
 :root {
   color-scheme: light;
+
+  /* Sidebar column width (frame layout). Default for shells that don't
+     override it; the dashboard shell (#dash-shell) sets it inline from
+     user_preferences.ui_state (248px expanded / 64px collapsed rail) and
+     the nav toggle updates it client-side. aside and <main> both read the
+     variable so they stay in lockstep. */
+  --nav-w: 248px;
+
   /* Grayscale Chrome Palette: paper white + warm beige */
 
   --background: 0 0% 100%;
@@ -169,6 +177,7 @@
   border-color: hsl(var(--border));
 }
 
+
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -322,7 +331,11 @@ h1, h2, h3 {
               0 0 0 4px hsl(var(--primary) / 0.35);
 }
 
-/* Custom scrollbar - minimal */
+/* Overlay-style scrollbars: invisible at rest, revealed only while the
+   container is actually scrolling. ScrollbarReveal (mounted in the root
+   layout) toggles .is-scrolling on the scrolled element; the thumb fades
+   back out when scrolling stops. The gutter is reserved either way, so
+   revealing never shifts layout. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -333,12 +346,23 @@ h1, h2, h3 {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
+  background: transparent;
   border-radius: 3px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.3);
+.is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+}
+
+@supports (scrollbar-color: auto) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 300ms ease-out;
+  }
+  .is-scrolling {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
 }
 
 /* Hide scrollbar utility */
