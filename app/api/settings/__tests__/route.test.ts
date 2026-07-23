@@ -97,6 +97,54 @@ describe('PUT /api/settings', () => {
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
   })
 
+  it('round-trips share capital fields and clears them with null', async () => {
+    const updates = { aktiekapital: 25000, antal_aktier: 500 }
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { id: 's1', ...updates } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: updates,
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: typeof updates }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject(updates)
+
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { id: 's1', aktiekapital: null, antal_aktier: null } },
+      { data: null, count: 5 },
+    ])
+    const clearResponse = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { aktiekapital: null, antal_aktier: null },
+    }), { params: Promise.resolve({}) })
+    const cleared = await parseJsonResponse<{ data: Record<string, unknown> }>(clearResponse)
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.data.aktiekapital).toBeNull()
+    expect(cleared.body.data.antal_aktier).toBeNull()
+  })
+
+  it('rejects non-positive aktiekapital and fractional antal_aktier', async () => {
+    for (const body of [
+      { aktiekapital: 0 },
+      { aktiekapital: -25000 },
+      { aktiekapital: 25000.5 },
+      { antal_aktier: 0 },
+      { antal_aktier: 500.5 },
+    ]) {
+      const response = await PUT(createMockRequest('/api/settings', {
+        method: 'PUT',
+        body,
+      }), { params: Promise.resolve({}) })
+      expect((await parseJsonResponse(response)).status).toBe(400)
+    }
+  })
+
   it('updates invoice email recipients and payment accounts', async () => {
     const updates = {
       invoice_email_cc_addresses: ['info@example.com', 'owner@example.com'],
