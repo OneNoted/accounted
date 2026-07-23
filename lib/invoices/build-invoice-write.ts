@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
@@ -226,16 +227,33 @@ export async function buildInvoiceWriteData(params: {
           },
         }
       }
+      // A class 1-2 (balance-sheet) posting override is only valid on
+      // zero-VAT lines (deposits, advances, outlays). On a VAT-bearing line
+      // it would divert the tax base away from a 3xxx account and understate
+      // ruta 05 of the momsdeklaration (ML 17 kap 24§).
+      if (
+        item.revenue_account &&
+        isBalanceSheetAccount(item.revenue_account) &&
+        itemRate > 0
+      ) {
+        return {
+          ok: false,
+          code: 'INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT',
+          details: { account: item.revenue_account, vatRate: itemRate },
+        }
+      }
       const lineTotal = item.quantity * item.unit_price
       vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
     }
   }
   const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
 
-  // Validate any per-line revenue-account override against the company's chart
-  // of accounts. Zod already constrains the shape to a 3xxx string; here we
-  // confirm each is a real, active class-3 account so a typo or a non-revenue
-  // account can never be booked. Never trust the client.
+  // Validate any per-line posting-account override against the company's chart
+  // of accounts. The legacy field name is revenue_account, but balance-sheet
+  // accounts are valid for deposits, customer advances, and genuine outlays.
+  // Zod already constrains the shape to classes 1-3; here we
+  // confirm each is a real, active account so a typo or unsuitable account
+  // can never be booked. Never trust the client.
   const overrideAccounts = Array.from(
     new Set(
       items
@@ -248,7 +266,8 @@ export async function buildInvoiceWriteData(params: {
       .from('chart_of_accounts')
       .select('account_number')
       .eq('company_id', companyId)
-      .eq('account_class', 3)
+      .gte('account_class', 1)
+      .lte('account_class', 3)
       .eq('is_active', true)
       .in('account_number', overrideAccounts)
 
