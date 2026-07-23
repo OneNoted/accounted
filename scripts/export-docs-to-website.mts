@@ -14,9 +14,9 @@ const errors = await import('@/lib/docs/content/errors')
 const reference = await import('@/lib/docs/content/reference')
 const connectClaude = await import('@/lib/docs/content/connect-claude')
 
-const buildErrorReferenceMd = errors.buildErrorReferenceMd ?? (errors as any).default?.buildErrorReferenceMd
-const buildResourcePages = reference.buildResourcePages ?? (reference as any).default?.buildResourcePages
-const buildReferenceOverviewMd = reference.buildReferenceOverviewMd ?? (reference as any).default?.buildReferenceOverviewMd
+const buildErrorReferenceMd = errors.buildErrorReferenceMd ?? (errors as { default?: typeof errors }).default?.buildErrorReferenceMd
+const buildResourcePages = reference.buildResourcePages ?? (reference as { default?: typeof reference }).default?.buildResourcePages
+const buildReferenceOverviewMd = reference.buildReferenceOverviewMd ?? (reference as { default?: typeof reference }).default?.buildReferenceOverviewMd
 
 if (!buildErrorReferenceMd || !buildResourcePages || !buildReferenceOverviewMd) {
   console.error('Missing builder exports. Inspect:', {

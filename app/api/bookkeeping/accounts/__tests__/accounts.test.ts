@@ -35,7 +35,7 @@ interface CapturedCall {
   args: unknown[]
 }
 
-/** Chainable builder recording calls; resolves queued {data,error,count} per from(). */
+/** Chainable builder recording calls; resolves queued {data,error,count} per from()/rpc(). */
 function createCapturingSupabase(
   results: { data?: unknown; error?: unknown; count?: number | null }[]
 ) {
@@ -59,6 +59,11 @@ function createCapturingSupabase(
     from: (table: string) => {
       calls.push({ method: 'from', args: [table] })
       return makeBuilder()
+    },
+    rpc: (...args: unknown[]) => {
+      calls.push({ method: 'rpc', args })
+      const result = results[idx++] ?? { data: null, error: null, count: null }
+      return Promise.resolve({ data: result.data ?? null, error: result.error ?? null })
     },
   }
   return { supabase, calls }
@@ -95,7 +100,7 @@ describe('GET /api/bookkeeping/accounts', () => {
     expect(status).toBe(400)
   })
 
-  it('lists accounts for the company', async () => {
+  it('lists accounts via the single-round-trip RPC', async () => {
     const { supabase, calls } = createCapturingSupabase([
       { data: [{ account_number: '1930', account_name: 'Företagskonto' }] },
     ])
@@ -105,10 +110,66 @@ describe('GET /api/bookkeeping/accounts', () => {
     )
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
+    const rpcCall = calls.find((c) => c.method === 'rpc')
+    expect(rpcCall?.args).toEqual([
+      'list_company_accounts',
+      { p_company_id: 'company-1', p_active_only: true, p_account_class: null },
+    ])
+    // The RPC path must not also hit the table: exactly one round trip.
+    expect(calls.some((c) => c.method === 'from')).toBe(false)
+  })
+
+  it('maps ?class=3&active=false onto the RPC arguments', async () => {
+    const { supabase, calls } = createCapturingSupabase([{ data: [] }])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      searchParams: { class: '3', active: 'false' },
+    })
+    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(
+      await listGET(req, routeParams)
+    )
+    expect(status).toBe(200)
+    expect(body.data).toEqual([])
+    const rpcCall = calls.find((c) => c.method === 'rpc')
+    expect(rpcCall?.args[1]).toEqual({
+      p_company_id: 'company-1',
+      p_active_only: false,
+      p_account_class: 3,
+    })
+  })
+
+  it('falls back to the paged fetch when the RPC is not deployed (PGRST202)', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { error: { code: 'PGRST202', message: 'function not found in schema cache' } },
+      { data: [{ account_number: '1930', account_name: 'Företagskonto' }] },
+    ])
+    auth(supabase)
+    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(
+      await listGET(createMockRequest('/api/bookkeeping/accounts'), routeParams)
+    )
+    expect(status).toBe(200)
+    expect(body.data).toHaveLength(1)
+    expect(calls.filter((c) => c.method === 'from').map((c) => c.args)).toContainEqual([
+      'chart_of_accounts',
+    ])
     expect(calls.filter((c) => c.method === 'eq').map((c) => c.args)).toContainEqual([
       'company_id',
       'company-1',
     ])
+  })
+
+  it('returns the legacy 500 { error: string } on a non-fallback RPC error', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { error: { code: 'XX000', message: 'boom' } },
+    ])
+    auth(supabase)
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await listGET(createMockRequest('/api/bookkeeping/accounts'), routeParams)
+    )
+    expect(status).toBe(500)
+    expect(typeof body.error).toBe('string')
+    // A non-deploy error must NOT silently fall back to the paged fetch.
+    expect(calls.some((c) => c.method === 'from')).toBe(false)
   })
 })
 

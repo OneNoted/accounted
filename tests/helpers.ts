@@ -79,6 +79,10 @@ export function createMockSupabase() {
         error: null,
       }),
       remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: 'https://example.com/signed' },
+        error: null,
+      }),
       getPublicUrl: vi.fn().mockReturnValue({
         data: { publicUrl: 'https://example.com/file.jpg' },
       }),
@@ -772,6 +776,10 @@ export function createQueuedMockSupabase() {
         error: null,
       }),
       remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: 'https://example.com/signed' },
+        error: null,
+      }),
       getPublicUrl: vi.fn().mockReturnValue({
         data: { publicUrl: 'https://example.com/file.jpg' },
       }),

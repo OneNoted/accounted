@@ -5,6 +5,7 @@ import {
   insertCompany,
   insertCompanyMember,
   insertFiscalPeriod,
+  insertTransaction,
 } from '@/tests/pg/fixtures'
 import { getClient, getPool, withUserContext } from '@/tests/pg/setup'
 
@@ -160,6 +161,34 @@ describe('mark_entry_as_opening_balance RPC', () => {
     })
   })
 
+  it('refuses an entry with a linked bank transaction (20260723160000 guard)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    // A half-settled own-account transfer: since the account-scoped matching
+    // semantics (same migration), this voucher surfaces in the reconciliation
+    // view's unmatched table on the OTHER account, making "Märk som IB"
+    // reachable. Re-tagging it would strand the linked transaction against an
+    // excluded entry, so the RPC must refuse.
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+      lines: [
+        { account: '1930', debit: 2500, credit: 0 },
+        { account: '1940', debit: 0, credit: 2500 },
+      ],
+    })
+    await insertTransaction({
+      companyId, userId, amount: -2500, journalEntryId: entryId,
+    })
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
+      ).rejects.toThrow(/linked bank transactions/i)
+    })
+  })
+
   it('refuses re-tagging in a locked fiscal period', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -252,6 +281,78 @@ describe('enforce_journal_entry_immutability: source_type retag carve-out', () =
     } finally {
       client.release()
     }
+  })
+})
+
+describe('check_transaction_link_not_opening_balance trigger (20260723190000)', () => {
+  it('refuses INSERTing a transaction linked to an opening_balance entry', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedOwner()
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'opening_balance',
+    })
+
+    await expect(
+      insertTransaction({ companyId, userId, amount: -2500, journalEntryId: entryId }),
+    ).rejects.toThrow(/opening balance entry/i)
+  })
+
+  it('refuses UPDATEing journal_entry_id to point at an opening_balance entry', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedOwner()
+    const obEntryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'opening_balance',
+    })
+    const txId = await insertTransaction({ companyId, userId, amount: -2500 })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.transactions SET journal_entry_id = $1 WHERE id = $2`,
+        [obEntryId, txId],
+      ),
+    ).rejects.toThrow(/opening balance entry/i)
+  })
+
+  it('allows linking to an ordinary entry and unlinking back to NULL', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedOwner()
+    const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
+    const txId = await insertTransaction({ companyId, userId, amount: -2500 })
+
+    await getPool().query(
+      `UPDATE public.transactions SET journal_entry_id = $1 WHERE id = $2`,
+      [entryId, txId],
+    )
+    const linked = await getPool().query<{ journal_entry_id: string | null }>(
+      `SELECT journal_entry_id FROM public.transactions WHERE id = $1`,
+      [txId],
+    )
+    expect(linked.rows[0]!.journal_entry_id).toBe(entryId)
+
+    await getPool().query(
+      `UPDATE public.transactions SET journal_entry_id = NULL WHERE id = $1`,
+      [txId],
+    )
+    const unlinked = await getPool().query<{ journal_entry_id: string | null }>(
+      `SELECT journal_entry_id FROM public.transactions WHERE id = $1`,
+      [txId],
+    )
+    expect(unlinked.rows[0]!.journal_entry_id).toBeNull()
+  })
+
+  it('leaves updates that do not change journal_entry_id alone', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedOwner()
+    const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
+    const txId = await insertTransaction({ companyId, userId, amount: -2500, journalEntryId: entryId })
+
+    // Same-value SET (e.g. a generic column-list UPDATE) must not raise even
+    // though the trigger's UPDATE OF column list matches.
+    await getPool().query(
+      `UPDATE public.transactions SET journal_entry_id = journal_entry_id, description = 'touched' WHERE id = $1`,
+      [txId],
+    )
+    const after = await getPool().query<{ description: string }>(
+      `SELECT description FROM public.transactions WHERE id = $1`,
+      [txId],
+    )
+    expect(after.rows[0]!.description).toBe('touched')
   })
 })
 

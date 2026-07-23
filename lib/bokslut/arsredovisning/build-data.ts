@@ -28,7 +28,7 @@ import type {
   NoteEntry,
   KassaflodesAnalysisSummary,
 } from './types'
-import type { AccountingFramework, Asset } from '@/types'
+import type { AccountingFramework, Asset, TrialBalanceRow } from '@/types'
 
 /**
  * Pre-populate the K2 årsredovisning data for a fiscal period. Loads:
@@ -129,24 +129,51 @@ export async function buildArsredovisningData(
   const prevPeriodRow = period.previous_period_id
     ? ((periodList ?? []) as PeriodRow[]).find((p) => p.id === period.previous_period_id) ?? null
     : null
-  let previousTb: TrialBalancePair | null = null
-  if (prevPeriodRow) {
-    try {
-      const [prevFull, prevPreClosing] = await Promise.all([
-        generateTrialBalance(supabase, companyId, prevPeriodRow.id),
-        // Comparative RR figures need the same statutory view as the current
-        // year: keep booked depreciation, appropriations, and tax, excluding
-        // only the linked final result-closing entry.
-        generateTrialBalance(supabase, companyId, prevPeriodRow.id, {
-          excludeFinalClosingEntry: true,
-        }),
-      ])
-      previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
-    } catch {
-      statementWarnings.push(
-        'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår, balans- och resultaträkningen visas utan jämförelseår. Kontrollera det föregående årets bokföring.',
-      )
-    }
+
+  // Flerårsöversikt window: the current period + up to 3 prior (oldest
+  // first). Resolved here so the prior-period trial balances it needs can
+  // share one parallel wave with the comparative-year pair instead of being
+  // fetched sequentially (and, for the previous year, twice).
+  const sortedPeriods = [...((periodList ?? []) as PeriodRow[])].sort((a, b) =>
+    a.period_start.localeCompare(b.period_start),
+  )
+  const currentIdx = sortedPeriods.findIndex((p) => p.id === fiscalPeriodId)
+  const overviewSlice =
+    currentIdx === -1 ? [] : sortedPeriods.slice(Math.max(0, currentIdx - 3), currentIdx + 1)
+
+  // Every prior period needed by the comparatives and/or the flerårsöversikt
+  // gets its TB pair fetched exactly once. Comparative RR figures need the
+  // same statutory view as the current year: keep booked depreciation,
+  // appropriations, and tax, excluding only the linked final result-closing
+  // entry. A failed pair downgrades to null so a broken prior year (e.g. a
+  // partial SIE import without IB continuity) never blocks the document.
+  const tbTargets = new Map<string, PeriodRow>()
+  if (prevPeriodRow) tbTargets.set(prevPeriodRow.id, prevPeriodRow)
+  for (const p of overviewSlice) {
+    if (p.id !== fiscalPeriodId) tbTargets.set(p.id, p)
+  }
+  const tbPairs = new Map<string, TrialBalancePair | null>()
+  await Promise.all(
+    [...tbTargets.values()].map(async (p) => {
+      try {
+        const [full, preClosing] = await Promise.all([
+          generateTrialBalance(supabase, companyId, p.id),
+          generateTrialBalance(supabase, companyId, p.id, { excludeFinalClosingEntry: true }),
+        ])
+        tbPairs.set(p.id, { full: full.rows, preClosing: preClosing.rows })
+      } catch {
+        tbPairs.set(p.id, null)
+      }
+    }),
+  )
+
+  // Previous fiscal year comparison (jämförelsesiffror): a TB failure
+  // downgrades to "no comparison year" with a warning instead of blocking.
+  const previousTb = prevPeriodRow ? tbPairs.get(prevPeriodRow.id) ?? null : null
+  if (prevPeriodRow && !previousTb) {
+    statementWarnings.push(
+      'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår, balans- och resultaträkningen visas utan jämförelseår. Kontrollera det föregående årets bokföring.',
+    )
   }
   const mapping = mapTrialBalancesToK2(
     { full: tbFull.rows, preClosing: tbPreClosing.rows },
@@ -167,13 +194,7 @@ export async function buildArsredovisningData(
   const persistedRd = narrative?.resultatdisposition ?? undefined
   const persistedAgmDate = narrative?.agm_date ?? null
 
-  const flerarsoversikt = await buildFlerarsoversikt(
-    supabase,
-    companyId,
-    fiscalPeriodId,
-    (periodList ?? []) as Array<{ id: string; name: string; period_start: string; period_end: string }>,
-    mapping,
-  )
+  const flerarsoversikt = buildFlerarsoversikt(overviewSlice, fiscalPeriodId, mapping, tbPairs)
 
   const egen_kapital_changes = buildEquityChanges(mapping)
   const proposedDividend = narrative?.proposed_dividend ?? 0
@@ -206,40 +227,39 @@ export async function buildArsredovisningData(
   // K3 vs K2 split: K3 has a richer note set + a kassaflöde + a separate
   // equity-changes statement. The 18a/b warning that flagged "K3 noter not
   // yet emitted" is removed below now that we actually emit them.
-  const { notes: noter, warnings: noterWarnings } =
-    accountingFramework === 'k3'
-      ? await buildK3Noter(
-          supabase,
-          companyId,
-          fiscalPeriodId,
-          entityType,
-          period.period_start,
-          period.period_end,
-          narrative,
-        )
-      : await buildK2Noter(
-          supabase,
-          companyId,
-          entityType,
-          period.period_start,
-          period.period_end,
-          narrative,
-        )
-
+  //
   // Kassaflödesanalys + separate equity-changes statement, K3 only. K2
   // mindre företag is exempt from kassaflödesanalys (BFNAR 2016:10 punkt
-  // 5.2) and keeps equity changes inside förvaltningsberättelsen.
+  // 5.2) and keeps equity changes inside förvaltningsberättelsen. The K3
+  // noter and the kassaflödesanalys are independent reads, so they share
+  // one round trip; the kassaflöde failure warning still lands AFTER the
+  // noter warnings so the warnings array order is unchanged.
+  let noter: NoteEntry[]
+  let noterWarnings: string[]
   let kassaflodesanalys: KassaflodesAnalysisSummary | undefined
   let equity_changes_statement:
     | { rows: EgenKapitalRow[]; closing_total: number }
     | undefined
   if (accountingFramework === 'k3') {
-    try {
-      const cashFlow = await generateKassaflodesanalys(
+    const [noterResult, cashFlowSettled] = await Promise.all([
+      buildK3Noter(
         supabase,
         companyId,
-        fiscalPeriodId,
-      )
+        entityType,
+        period.period_start,
+        period.period_end,
+        narrative,
+        tbFull.rows,
+      ),
+      generateKassaflodesanalys(supabase, companyId, fiscalPeriodId).then(
+        (cashFlow) => ({ ok: true as const, cashFlow }),
+        () => ({ ok: false as const }),
+      ),
+    ])
+    noter = noterResult.notes
+    noterWarnings = noterResult.warnings
+    if (cashFlowSettled.ok) {
+      const { cashFlow } = cashFlowSettled
       // Strip fiscal_period_id from the embedded report: period info is
       // already on ArsredovisningData.fiscal_period; carrying it twice in
       // the payload would be redundant.
@@ -252,7 +272,7 @@ export async function buildArsredovisningData(
         total_cash_flow: cashFlow.total_cash_flow,
         reconciliation: cashFlow.reconciliation,
       }
-    } catch {
+    } else {
       // A partial SIE import can leave 1xxx without an IB row: the report
       // throws. Surface as a warning instead of blocking the whole ÅR.
       noterWarnings.push(
@@ -264,6 +284,17 @@ export async function buildArsredovisningData(
     // reuse buildEquityChangesNote's roll-forward to keep one source of
     // truth for the closing total.
     equity_changes_statement = buildK3EquityChangesStatement(mapping)
+  } else {
+    const k2Noter = await buildK2Noter(
+      supabase,
+      companyId,
+      entityType,
+      period.period_start,
+      period.period_end,
+      narrative,
+    )
+    noter = k2Noter.notes
+    noterWarnings = k2Noter.warnings
   }
 
   const resultatrakning = buildRrRows(mapping)
@@ -414,32 +445,26 @@ export function calculateSoliditet(mapping: K2MappingResult): number | null {
   return Math.round((adjustedEquity / totalAssets) * 1000) / 10
 }
 
-async function buildFlerarsoversikt(
-  supabase: SupabaseClient,
-  companyId: string,
+/**
+ * Flerårsöversikt from pre-fetched trial-balance pairs. `overviewSlice` is
+ * the current period + up to 3 prior, oldest first (resolved by the caller
+ * so the pairs could be fetched in one parallel wave); `tbPairs` holds the
+ * prior-period pairs, with null marking a period whose TB fetch failed.
+ */
+function buildFlerarsoversikt(
+  overviewSlice: PeriodRow[],
   currentPeriodId: string,
-  allPeriods: PeriodRow[],
   currentMapping: K2MappingResult,
-): Promise<FlerarsoversiktRow[]> {
-  // Take the current period + 3 prior (oldest first).
-  const sorted = [...allPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
-  const currentIdx = sorted.findIndex((p) => p.id === currentPeriodId)
-  if (currentIdx === -1) return []
-  const slice = sorted.slice(Math.max(0, currentIdx - 3), currentIdx + 1)
-
+  tbPairs: Map<string, TrialBalancePair | null>,
+): FlerarsoversiktRow[] {
   const rows: FlerarsoversiktRow[] = []
-  for (const p of slice) {
+  for (const p of overviewSlice) {
     try {
       let mapping = currentMapping
       if (p.id !== currentPeriodId) {
-        const [tbFull, tbPreClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, p.id),
-          generateTrialBalance(supabase, companyId, p.id, { excludeFinalClosingEntry: true }),
-        ])
-        mapping = mapTrialBalancesToK2(
-          { full: tbFull.rows, preClosing: tbPreClosing.rows },
-          null,
-        )
+        const pair = tbPairs.get(p.id)
+        if (!pair) throw new Error('trial balance unavailable')
+        mapping = mapTrialBalancesToK2(pair, null)
       }
       const netRevenue = mapping.rr['Nettoomsattning']?.current ?? 0
       const resultAfterFinancial = mapping.totals.resultatEfterFinansiellaPoster.current
@@ -524,14 +549,29 @@ async function buildK2Noter(
   // an AB the user just hasn't configured yet: staying silent would let
   // them download an incomplete K2 ÅR without realising.
   const maybeAb = isAbK2 || entityType === 'unknown'
+
+  // The three reads feeding the notes below (aktiekapital settings, asset
+  // register, employee windows) are independent, so they share one parallel
+  // round trip instead of three sequential ones. Note bodies, push order,
+  // and numbering (notes.length + 1) are unchanged.
+  const [settingsResult, assets, employeesResult] = await Promise.all([
+    maybeAb
+      ? supabase
+          .from('company_settings')
+          .select('aktiekapital, antal_aktier')
+          .eq('company_id', companyId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    listAssets(supabase, companyId),
+    supabase
+      .from('employees')
+      .select('employment_start, employment_end, employment_degree')
+      .eq('company_id', companyId),
+  ])
+
   if (maybeAb) {
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('aktiekapital, antal_aktier')
-      .eq('company_id', companyId)
-      .maybeSingle()
     type AktiekapitalShape = { aktiekapital?: number | null; antal_aktier?: number | null }
-    const ak = settings as AktiekapitalShape | null
+    const ak = (settingsResult.data ?? null) as AktiekapitalShape | null
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
     // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
@@ -563,7 +603,6 @@ async function buildK2Noter(
 
   // Avskrivningstider: derive from asset register (supplementary
   // disclosure; the statutory ÅRL 5:8 § roll-forward follows below).
-  const assets = await listAssets(supabase, companyId)
   if (assets.length > 0) {
     const byCategory = new Map<string, Set<number>>()
     for (const a of assets) {
@@ -622,12 +661,8 @@ async function buildK2Noter(
   // ÅRL 5:20 § requires the note for AB regardless of value: "0" must be
   // disclosed as "Inga anställda". For enskild firma the disclosure is
   // discretionary, so we still skip when medelantal === 0 there.
-  const { data: employeeRows } = await supabase
-    .from('employees')
-    .select('employment_start, employment_end, employment_degree')
-    .eq('company_id', companyId)
   const medelantal = computeMedelantalAnstallda(
-    (employeeRows ?? []) as Array<{
+    (employeesResult.data ?? []) as Array<{
       employment_start: string
       employment_end: string | null
       employment_degree: number
@@ -706,18 +741,48 @@ async function buildK2Noter(
  *
  * The aktiekapital note is shared with K2 logic: K3 punkt 18.x also
  * mandates the share-capital disclosure for AB.
+ *
+ * tbFullRows MUST be the FULL current-period trial balance (tbFull.rows:
+ * opening balances included, year-end closing entries NOT excluded). The
+ * uppskjutna-skatter note derives its BFNAR 2012:1 ch.29 opening balance,
+ * movement, and closing balance for 2240/8940 from these rows; passing
+ * tbPreClosing.rows would zero the opening balance and misstate the note.
+ * The K3 multiyear snapshot test pins a non-zero 2240 opening balance to
+ * guard this contract.
  */
 async function buildK3Noter(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string,
   entityType: string,
   periodStartIso: string,
   periodEndIso: string,
   narrative: NarrativeRow | null,
+  tbFullRows: TrialBalanceRow[],
 ): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
+
+  const isAb = entityType === 'aktiebolag'
+  const maybeAb = isAb || entityType === 'unknown'
+
+  // The three reads feeding the notes below (asset register, aktiekapital
+  // settings, employee windows) are independent, so they share one parallel
+  // round trip instead of three sequential ones. Note bodies, push order,
+  // and numbering (notes.length + 1) are unchanged.
+  const [assetsResult, settingsResult, employeesResult] = await Promise.all([
+    listAssets(supabase, companyId),
+    maybeAb
+      ? supabase
+          .from('company_settings')
+          .select('aktiekapital, antal_aktier')
+          .eq('company_id', companyId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    supabase
+      .from('employees')
+      .select('employment_start, employment_end, employment_degree')
+      .eq('company_id', companyId),
+  ])
 
   // 1. Redovisningsprinciper. We check whether any asset has K3 components
   // configured so the principles paragraph only mentions komponentavskrivning
@@ -732,7 +797,7 @@ async function buildK3Noter(
   // (months elapsed / useful life) which matches what the per-component
   // depreciation engine (computeComponentDepreciation) produces over a year.
   // The fiscal period end is the as-of date for the depreciation snapshot.
-  const assets = (await listAssets(supabase, companyId)) as Asset[]
+  const assets = assetsResult as Asset[]
   const monthsBetween = (fromIso: string, toIso: string): number => {
     const from = new Date(`${fromIso}T00:00:00Z`)
     const to = new Date(`${toIso}T00:00:00Z`)
@@ -778,19 +843,12 @@ async function buildK3Noter(
 
   // 2. Aktiekapital (shared with K2 logic: K3 punkt 18.x mandates the same
   // disclosure for AB).
-  const isAb = entityType === 'aktiebolag'
-  const maybeAb = isAb || entityType === 'unknown'
   if (maybeAb) {
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('aktiekapital, antal_aktier')
-      .eq('company_id', companyId)
-      .maybeSingle()
     type AktiekapitalShape = {
       aktiekapital?: number | null
       antal_aktier?: number | null
     }
-    const ak = settings as AktiekapitalShape | null
+    const ak = (settingsResult.data ?? null) as AktiekapitalShape | null
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
     // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
@@ -846,10 +904,11 @@ async function buildK3Noter(
 
   // 4. Uppskjutna skatter. K3 ch.29 requires disclosure of opening,
   // movement, and closing balance of uppskjuten skatteskuld. We derive
-  // these from the trial balance for 2240 (latent tax liability) and
-  // 8940 (latent tax expense).
+  // these from the current-period full trial balance (passed in by the
+  // caller, which already fetched it for the statements) for 2240 (latent
+  // tax liability) and 8940 (latent tax expense).
   try {
-    const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+    const rows = tbFullRows
     const row2240 = rows.find((r) => r.account_number === '2240')
     const row8940 = rows.find((r) => r.account_number === '8940')
     // 2240 is credit-normal liability: opening = opening_credit - opening_debit
@@ -886,12 +945,8 @@ async function buildK3Noter(
   // 5. Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. The note is
   // statutory for AB regardless of value (disclose "0" explicitly); for non-AB
   // entities we still skip when there are no employees.
-  const { data: employeeRows } = await supabase
-    .from('employees')
-    .select('employment_start, employment_end, employment_degree')
-    .eq('company_id', companyId)
   const medelantal = computeMedelantalAnstallda(
-    (employeeRows ?? []) as Array<{
+    (employeesResult.data ?? []) as Array<{
       employment_start: string
       employment_end: string | null
       employment_degree: number

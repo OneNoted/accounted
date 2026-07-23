@@ -20,8 +20,19 @@ type TerminalResult = { data?: unknown; error?: unknown }
  * A terminal seeded as an ARRAY is consumed in call order, for functions
  * that query the same table twice (getActiveCompanyId's fallback fetch +
  * preference validation both end on company_members.maybeSingle()).
+ *
+ * `rpcResult` seeds supabase.rpc('resolve_active_company'). The default is a
+ * PGRST202 "function not found" error so every pre-RPC test keeps passing
+ * unchanged: they now exercise the query fallback path, which is exactly the
+ * behavior on a not-yet-migrated database.
  */
-function buildSupabase(results: Record<string, Record<string, TerminalResult | TerminalResult[]>>) {
+function buildSupabase(
+  results: Record<string, Record<string, TerminalResult | TerminalResult[]>>,
+  rpcResult: TerminalResult = {
+    data: null,
+    error: { code: 'PGRST202', message: 'Could not find the function' },
+  },
+) {
   const calls: CapturedCall[] = []
 
   function makeChain(table: string) {
@@ -44,6 +55,10 @@ function buildSupabase(results: Record<string, Record<string, TerminalResult | T
 
   const supabase = {
     from: vi.fn().mockImplementation((table: string) => makeChain(table)),
+    rpc: vi.fn(async () => ({
+      data: rpcResult.data ?? null,
+      error: rpcResult.error ?? null,
+    })),
   }
 
   return { supabase, calls }
@@ -228,6 +243,73 @@ describe('getActiveCompanyId', () => {
     // the wrong company's books.
     expect(err).toBeInstanceOf(CompanyContextError)
     expect(err.code).toBe('resolution_failed')
+  })
+})
+
+describe('getActiveCompanyId via resolve_active_company RPC', () => {
+  it('resolves from the RPC in one call without touching any table', async () => {
+    const { supabase } = buildSupabase(
+      {},
+      { data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }] },
+    )
+
+    const id = await getActiveCompanyId(supabase as never, 'user-1')
+
+    expect(id).toBe('company-1')
+    expect(supabase.rpc).toHaveBeenCalledWith('resolve_active_company')
+    // The whole point of the RPC: zero PostgREST table round trips.
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('returns null from an RPC row with a null company_id (no companies) without table queries', async () => {
+    const { supabase } = buildSupabase(
+      {},
+      { data: [{ company_id: null, locale: 'en', used_fallback: true }] },
+    )
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBeNull()
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('throws resolution_failed on a non-fallback RPC error instead of masking it', async () => {
+    const { supabase } = buildSupabase(
+      {},
+      { data: null, error: { code: '57014', message: 'statement timeout' } },
+    )
+
+    const err = await getActiveCompanyId(supabase as never, 'user-1').catch((e) => e)
+
+    expect(err).toBeInstanceOf(CompanyContextError)
+    expect(err.code).toBe('resolution_failed')
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the query path on 42501 (service-role client lacks EXECUTE)', async () => {
+    // The mcp-oauth token route and the events route (API-key branch) call
+    // requireCompanyId with createServiceClientNoCookies(): EXECUTE is
+    // granted to `authenticated` only, so the RPC refuses with 42501 and the
+    // query path (filtered by the explicit userId param) must take over.
+    const { supabase } = buildSupabase(
+      {
+        user_preferences: { maybeSingle: { data: { active_company_id: 'company-1' } } },
+        company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+      },
+      { data: null, error: { code: '42501', message: 'permission denied for function' } },
+    )
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
+  })
+
+  it('falls back to the query path on zero RPC rows (NULL auth.uid(), service client)', async () => {
+    const { supabase } = buildSupabase(
+      {
+        user_preferences: { maybeSingle: { data: null } },
+        company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+      },
+      { data: [] },
+    )
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
   })
 })
 

@@ -3,7 +3,6 @@ import type {
   VatDeclaration,
   VatDeclarationRutor,
   VatPeriodType,
-  AccountingMethod,
 } from '@/types'
 
 /**
@@ -410,8 +409,13 @@ export function rutorFromTotals(
  *
  *   - ruta 49 = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
  *
- * The accounting method parameter is accepted for backward compatibility
- * but not used: the method is already baked into journal entry timing.
+ * INVARIANT: the company's accounting method (faktureringsmetoden vs
+ * kontantmetoden) needs no parameter here and must not become one. The method
+ * is already baked into journal entry TIMING: kontantmetod companies post
+ * VAT-bearing entries at payment date, faktureringsmetod companies at invoice
+ * date, so summing posted lines per period is correct for both. A method
+ * parameter existed until 2026-07-23 and was silently ignored; it was removed
+ * so no future code path can branch on a value that callers hard-code.
  */
 export async function calculateVatDeclaration(
   supabase: SupabaseClient,
@@ -419,7 +423,6 @@ export async function calculateVatDeclaration(
   periodType: VatPeriodType,
   year: number,
   period: number,
-  _accountingMethod: AccountingMethod = 'accrual',
   options: { fiscalPeriodId?: string } = {}
 ): Promise<VatDeclaration> {
   // For yearly VAT this resolves to the räkenskapsår bounds (when a fiscal

@@ -4,6 +4,7 @@ import {
   fetchMultipleRates,
   fetchRateRange,
   fetchLatestRate,
+  readCachedRate,
   convertToSEK,
   formatCurrencyAmount,
 } from '../riksbanken'
@@ -220,6 +221,56 @@ describe('fetchExchangeRate', () => {
 
       expect(result).toBeNull()
     })
+  })
+})
+
+// Exported so the currency.rate route can hit the exchange_rates cache in
+// parallel with its sandbox guard instead of always going through
+// fetchExchangeRate's sequential path.
+describe('readCachedRate', () => {
+  it('maps an exact-date cache row to an ExchangeRate', async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({
+      // rate arrives as a numeric string from PostgREST: must be Number()ed.
+      data: { rate: '11.25', observation_date: '2025-01-14' },
+      error: null,
+    })
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle,
+      })),
+    } as never
+
+    const result = await readCachedRate(supabase, 'EUR', '2025-01-15')
+
+    expect(result).toEqual({ currency: 'EUR', rate: 11.25, date: '2025-01-14' })
+  })
+
+  it('returns null when the cache has no row for the date', async () => {
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      })),
+    } as never
+
+    const result = await readCachedRate(supabase, 'EUR', '2025-01-15')
+
+    expect(result).toBeNull()
+  })
+
+  it('swallows thrown client errors and returns null (best-effort cache)', async () => {
+    const supabase = {
+      from: vi.fn(() => {
+        throw new Error('connection refused')
+      }),
+    } as never
+
+    const result = await readCachedRate(supabase, 'EUR', '2025-01-15')
+
+    expect(result).toBeNull()
   })
 })
 

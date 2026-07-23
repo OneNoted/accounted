@@ -34,12 +34,60 @@ export class CompanyContextError extends Error {
  * Having Next.js and RLS both read from `user_preferences` keeps them
  * perfectly in sync.
  *
+ * RPC-first: tries `resolve_active_company()` (one round trip, semantically
+ * identical to the query path and to `current_active_company_id()`), falling
+ * back to the original query path when the function is not deployed
+ * (PGRST202), the caller lacks EXECUTE (42501: service-role clients), or the
+ * RPC returns zero rows (NULL auth.uid(), also service-role clients).
+ *
  * Returns null only when the user positively has no non-archived companies.
  * Throws CompanyContextError('resolution_failed') when a query fails: a
  * transient failure must never read as "no companies", because callers
  * redirect that state to the onboarding wizard (issue #1053).
  */
 export async function getActiveCompanyId(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<string | null> {
+  const { data, error } = await supabase.rpc('resolve_active_company')
+
+  if (error) {
+    // PGRST202: function not in the schema cache (self-hosted instance not
+    // migrated yet, or a deploy racing the branch merge).
+    // 42501: EXECUTE is granted to `authenticated` only, so a service-role
+    // client is refused. These fallbacks are LOAD-BEARING, not defensive:
+    // app/api/mcp-oauth/token/route.ts and app/api/events/route.ts (API-key
+    // branch) call requireCompanyId with createServiceClientNoCookies(), and
+    // must silently resolve via the query path or the OAuth token flow breaks.
+    if (error.code === 'PGRST202' || error.code === '42501') {
+      return getActiveCompanyIdViaQueries(supabase, userId)
+    }
+    throw new CompanyContextError(
+      `Active company resolution failed: ${error.message}`,
+      'resolution_failed'
+    )
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { company_id: string | null; locale: string | null; used_fallback: boolean }
+    | undefined
+    | null
+
+  if (!row) {
+    // Zero rows = NULL auth.uid() inside the RPC, i.e. a service-role client
+    // (same call sites as the 42501 branch above). The query path filters by
+    // the explicit userId param and still resolves correctly.
+    return getActiveCompanyIdViaQueries(supabase, userId)
+  }
+
+  return row.company_id ?? null
+}
+
+/**
+ * Query-path resolution: the pre-RPC implementation, kept verbatim as the
+ * fallback for getActiveCompanyId (see the fallback conditions there).
+ */
+async function getActiveCompanyIdViaQueries(
   supabase: SupabaseClient,
   userId: string
 ): Promise<string | null> {

@@ -4,6 +4,7 @@ import {
   parseJsonResponse,
   createMockRouteParams,
   createQueuedMockSupabase,
+  makeDocumentAttachment,
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
@@ -26,7 +27,7 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
-import { DELETE } from '../route'
+import { GET, DELETE } from '../route'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { NextResponse } from 'next/server'
 
@@ -41,9 +42,78 @@ beforeEach(() => {
   vi.mocked(requireWritePermission).mockResolvedValue({ ok: true })
 })
 
-function makeReq() {
-  return new Request('http://localhost/api/documents/doc-1', { method: 'DELETE' })
+function makeReq(method: 'GET' | 'DELETE' = 'DELETE') {
+  return new Request('http://localhost/api/documents/doc-1', { method })
 }
+
+describe('GET /api/documents/[id]', () => {
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const res = await GET(makeReq('GET'), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse(res)
+    expect(status).toBe(401)
+    expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 404 when the document is not found in the company', async () => {
+    enqueue({ data: null, error: null }) // doc lookup
+    const res = await GET(makeReq('GET'), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    expect(status).toBe(404)
+    expect(body.error).toBe('Document not found')
+  })
+
+  it('returns 500 when the signed URL cannot be created', async () => {
+    enqueue({ data: makeDocumentAttachment({ id: 'doc-1' }), error: null })
+    mockSupabase.storage.from.mockReturnValueOnce({
+      createSignedUrl: vi.fn().mockResolvedValue({ data: null, error: { message: 'boom' } }),
+    } as never)
+
+    const res = await GET(makeReq('GET'), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+
+    expect(status).toBe(500)
+    expect(body.error).toContain('Failed to create download URL')
+  })
+
+  it('returns the document with a signed download URL and emits document.accessed', async () => {
+    const row = makeDocumentAttachment({
+      id: 'doc-1',
+      file_name: 'kvitto.pdf',
+      storage_path: 'documents/user-1/kvitto.pdf',
+    })
+    enqueue({ data: row, error: null })
+
+    const handler = vi.fn()
+    eventBus.on('document.accessed', handler)
+
+    const res = await GET(makeReq('GET'), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; download_url: string }
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.id).toBe('doc-1')
+    expect(body.data.download_url).toBe('https://example.com/signed')
+
+    expect(mockSupabase.storage.from).toHaveBeenCalledWith('documents')
+    const storageBucket = mockSupabase.storage.from.mock.results[0]?.value
+    expect(storageBucket.createSignedUrl).toHaveBeenCalledWith('documents/user-1/kvitto.pdf', 3600)
+
+    expect(handler).toHaveBeenCalledOnce()
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({ id: 'doc-1', file_name: 'kvitto.pdf' }),
+        userId: 'user-1',
+        companyId: 'company-1',
+      }),
+    )
+  })
+})
 
 describe('DELETE /api/documents/[id]', () => {
   it('returns 401 when not authenticated', async () => {

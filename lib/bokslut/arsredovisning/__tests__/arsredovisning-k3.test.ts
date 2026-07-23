@@ -37,6 +37,9 @@ import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
+// Captured from the sequential (pre-dedupe) implementation: the parallel
+// TB-pair fetch must reproduce it byte for byte.
+import multiYearSnapshot from './arsredovisning-k3-multiyear-snapshot.json'
 
 interface ChainableMock {
   from: ReturnType<typeof vi.fn>
@@ -48,6 +51,7 @@ function makeSupabase(opts: {
   aktiekapital?: number | null
   antalAktier?: number | null
   agmDate?: string | null
+  previousPeriodId?: string | null
 }): ChainableMock {
   const from = vi.fn((table: string) => {
     if (table === 'fiscal_periods') {
@@ -62,7 +66,7 @@ function makeSupabase(opts: {
                     name: '2025',
                     period_start: '2025-01-01',
                     period_end: '2025-12-31',
-                    previous_period_id: null,
+                    previous_period_id: opts.previousPeriodId ?? null,
                     closing_entry_id: null,
                   },
                   error: null,
@@ -484,5 +488,55 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     await buildArsredovisningData(supabase, 'co1', 'fp1')
     expect(mockedKassaflode).not.toHaveBeenCalled()
+  })
+})
+
+describe('buildArsredovisningData: prior-period TB dedupe (multi-year)', () => {
+  // Current period + previous year + 2 older years: exercises both the
+  // comparative pair and the full flerårsöversikt window at once.
+  const FOUR_PERIODS = [
+    { id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+    { id: 'fp0', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+    { id: 'fpA', name: '2023', period_start: '2023-01-01', period_end: '2023-12-31' },
+    { id: 'fpB', name: '2022', period_start: '2022-01-01', period_end: '2022-12-31' },
+  ]
+
+  it('fetches each prior-period TB pair exactly once (previous year is no longer fetched twice)', async () => {
+    mockFetchAllRows.mockResolvedValue(FOUR_PERIODS)
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    const callsFor = (periodId: string) =>
+      mockedTrialBalance.mock.calls.filter((call) => call[2] === periodId)
+    // Current period: full + statutory pre-closing from the statement batch.
+    expect(callsFor('fp1')).toHaveLength(2)
+    // Previous year: ONE pair, shared by the comparatives and the overview
+    // (the sequential version fetched it twice: 4 calls).
+    expect(callsFor('fp0')).toHaveLength(2)
+    // Each older overview year: one pair.
+    expect(callsFor('fpA')).toHaveLength(2)
+    expect(callsFor('fpB')).toHaveLength(2)
+    expect(mockedTrialBalance).toHaveBeenCalledTimes(8)
+  })
+
+  it('K3: drops the duplicate noter TB fetch and keeps output byte-identical', async () => {
+    mockFetchAllRows.mockResolvedValue(FOUR_PERIODS)
+    const supabase = makeSupabase({ accountingFramework: 'k3', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    // buildK3Noter used to fetch the current-period full TB a third time;
+    // it now reuses the statement batch's rows.
+    const currentPeriodCalls = mockedTrialBalance.mock.calls.filter((call) => call[2] === 'fp1')
+    expect(currentPeriodCalls).toHaveLength(2)
+
+    // Deep-equality against the output captured from the sequential
+    // implementation: same rows, same note numbering, same warning order.
+    expect(data.forvaltningsberattelse.flerarsoversikt).toEqual(
+      multiYearSnapshot.flerarsoversikt,
+    )
+    expect(data.noter).toEqual(multiYearSnapshot.noter)
+    expect(data.warnings).toEqual(multiYearSnapshot.warnings)
   })
 })

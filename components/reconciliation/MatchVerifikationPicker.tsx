@@ -45,9 +45,11 @@ export interface UnlinkedGLLine {
   entry_description: string
   source_type: string
   confidence?: number
-  /** How many bank transactions already point at this entry. > 0 means the
-   *  voucher is already matched: surfaced (behind the "visa matchade" opt-in)
-   *  so a second/third transaction can be attached to it (N:1). */
+  /** How many bank transactions already settle this entry on the account being
+   *  matched (links on OTHER cash accounts, e.g. a transfer's outgoing leg,
+   *  don't count). > 0 means the voucher is already matched on this account:
+   *  surfaced (behind the "visa matchade" opt-in) so a second/third
+   *  transaction can be attached to it (N:1). */
   linked_transaction_count?: number
 }
 

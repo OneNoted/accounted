@@ -300,6 +300,7 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
         id: deliveryId,
         to_addresses: ['***@example.com'],
         cc_addresses: ['***@example.com'],
+        attachment_filename: 'invoice.pdf',
       }),
     ])
     expect(summary.rows[0]).not.toHaveProperty('bcc_addresses')

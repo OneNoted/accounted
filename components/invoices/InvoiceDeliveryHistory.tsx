@@ -17,6 +17,7 @@ export type InvoiceDeliveryView = Pick<
   | 'provider'
   | 'error_code'
   | 'document_attachment_id'
+  | 'attachment_filename'
   | 'sent_at'
   | 'failed_at'
   | 'created_at'
@@ -123,7 +124,9 @@ export function InvoiceDeliveryHistory({
                             >
                               <ExternalLink className="mr-2 h-4 w-4" />
                               <span className="truncate">
-                                {t('delivery_open_pdf', { filename: t('delivery_pdf_fallback') })}
+                                {t('delivery_open_pdf', {
+                                  filename: delivery.attachment_filename || t('delivery_pdf_fallback'),
+                                })}
                               </span>
                             </a>
                           </Button>

@@ -371,12 +371,6 @@ describe('calculateVatDeclaration', () => {
     expect(result.rutor.ruta49).toBe(-2500) // 500 - 3000
   })
 
-  it('accepts accountingMethod parameter for backward compatibility', async () => {
-    seedLedger([])
-
-    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1, 'cash')
-    expect(result.rutor.ruta49).toBe(0)
-  })
 
   it('throws a labelled error when the RPC fails', async () => {
     results = [{ data: null, error: { message: 'permission denied' } }]

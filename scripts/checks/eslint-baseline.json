@@ -1,12 +1,4 @@
 {
-  "totalErrors": 53,
-  "perRule": {
-    "@next/next/no-assign-module-variable": 1,
-    "@typescript-eslint/no-explicit-any": 14,
-    "prefer-const": 1,
-    "react-hooks/preserve-manual-memoization": 5,
-    "react-hooks/purity": 1,
-    "react-hooks/set-state-in-effect": 25,
-    "react-hooks/static-components": 6
-  }
+  "totalErrors": 0,
+  "perRule": {}
 }

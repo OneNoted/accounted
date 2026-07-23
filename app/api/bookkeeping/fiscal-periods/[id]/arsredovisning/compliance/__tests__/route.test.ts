@@ -84,19 +84,42 @@ describe('annual report compliance route', () => {
   })
 
   it('returns 404 for another company period', async () => {
-    const { enqueue } = setup()
-    enqueue({ data: null })
+    // GET has no periodExists preflight: the 404 comes from the report
+    // builder throwing 'Fiscal period not found' (same company_id filter).
+    setup()
+    vi.mocked(buildCanonicalAnnualReport).mockRejectedValue(
+      new Error('Fiscal period not found'),
+    )
     expect((await GET(createMockRequest('/x'), params)).status).toBe(404)
   })
 
+  it('maps unexpected builder failures to the generic error envelope', async () => {
+    setup()
+    vi.mocked(buildCanonicalAnnualReport).mockRejectedValue(new Error('boom'))
+    expect((await GET(createMockRequest('/x'), params)).status).toBe(500)
+  })
+
   it('returns the canonical compliance result', async () => {
-    const { enqueue } = setup()
-    enqueue({ data: { id: 'period-1' } })
+    setup()
     const { status, body } = await parseJsonResponse<{ data: typeof model }>(
       await GET(createMockRequest('/x'), params),
     )
     expect(status).toBe(200)
     expect(body.data.validation.ok).toBe(true)
+  })
+
+  it('keeps the periodExists preflight on PATCH (404 before any write)', async () => {
+    const { enqueue } = setup()
+    enqueue({ data: null })
+    const response = await PATCH(
+      createMockRequest('/x', {
+        method: 'PATCH',
+        body: { is_public_limited_company: false },
+      }),
+      params,
+    )
+    expect(response.status).toBe(404)
+    expect(upsertAnnualReportProfile).not.toHaveBeenCalled()
   })
 
   it('persists legal facts and confirmation timestamps', async () => {

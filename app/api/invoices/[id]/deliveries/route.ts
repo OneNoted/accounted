@@ -13,6 +13,7 @@ interface InvoiceDeliverySummaryRow {
   provider: string | null
   error_code: string | null
   document_attachment_id: string | null
+  attachment_filename: string | null
   sent_at: string | null
   failed_at: string | null
   created_at: string
@@ -31,9 +32,11 @@ interface MaskedInvoiceDeliverySummaryRow
  *
  * Returns minimized delivery metadata for an invoice. Exact message content,
  * BCC recipients, provider identifiers, checksums, and full recipient
- * addresses stay server-side. The database allow-list and masking boundary is
- * defined by list_invoice_delivery_summaries in migration 20260723003000; this
- * route masks returned addresses again as defense in depth.
+ * addresses stay server-side. The attachment filename passes through: it is
+ * derived from data the invoice already exposes to every company member. The
+ * database allow-list and masking boundary is defined by
+ * list_invoice_delivery_summaries in migration 20260723150000; this route
+ * masks returned addresses again as defense in depth.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.deliveries.list',
@@ -78,6 +81,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       provider: delivery.provider,
       error_code: delivery.error_code,
       document_attachment_id: delivery.document_attachment_id,
+      attachment_filename: delivery.attachment_filename,
       sent_at: delivery.sent_at,
       failed_at: delivery.failed_at,
       created_at: delivery.created_at,
