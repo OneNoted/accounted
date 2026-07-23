@@ -386,14 +386,13 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
       )),
     ).rejects.toThrow(/row-level security|policy/i)
 
-    await expect(
-      withUserContext(userId, (client) => client.query(
-        `UPDATE public.invoice_deliveries
-            SET status = 'sent', sent_at = now()
-          WHERE id = $1`,
-        [deliveryId],
-      )),
-    ).rejects.toThrow(/row-level security|policy/i)
+    const directUpdate = await withUserContext(userId, (client) => client.query(
+      `UPDATE public.invoice_deliveries
+          SET status = 'sent', sent_at = now()
+        WHERE id = $1`,
+      [deliveryId],
+    ))
+    expect(directUpdate.rowCount).toBe(0)
 
     await expect(
       withUserContext(memberId, (client) => client.query(
@@ -489,23 +488,21 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     const memberId = await insertAuthUser()
     await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
 
-    await expect(
-      withUserContext(memberId, (client) => client.query(
-        `UPDATE public.company_settings
-            SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
-          WHERE company_id = $1`,
-        [companyId],
-      )),
-    ).rejects.toThrow(/owner or admin role required/i)
+    const memberUpdate = await withUserContext(memberId, (client) => client.query(
+      `UPDATE public.company_settings
+          SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
+        WHERE company_id = $1`,
+      [companyId],
+    ))
+    expect(memberUpdate.rowCount).toBe(0)
 
-    await expect(
-      withUserContext(userId, (client) => client.query(
-        `UPDATE public.company_settings
-            SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
-          WHERE company_id = $1`,
-        [companyId],
-      )),
-    ).resolves.toBeDefined()
+    const ownerUpdate = await withUserContext(userId, (client) => client.query(
+      `UPDATE public.company_settings
+          SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
+        WHERE company_id = $1`,
+      [companyId],
+    ))
+    expect(ownerUpdate.rowCount).toBe(1)
   })
 
   it('reserves one preparing attempt and promotes it to the exact pending payload', async () => {
