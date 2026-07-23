@@ -105,6 +105,10 @@ export async function generateTrialBalance(
   const closingEntryId = options?.excludeFinalClosingEntry
     ? period?.closing_entry_id ?? null
     : null
+  // The base query already admits only posted and reversed entries. Exclude a
+  // posted final closing entry, but retain a reversed one together with its
+  // storno so the two continue to net to zero. Draft entries never enter the
+  // base query.
   const excludeClosingEntry = (query: EntryLinesQuery): EntryLinesQuery =>
     closingEntryId
       ? query.or(`id.neq.${closingEntryId},status.neq.posted`)

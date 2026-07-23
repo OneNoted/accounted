@@ -37,7 +37,7 @@ import { GET } from '../route'
 describe('GET /api/invoices/[id]/pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige' })
+  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
   const invoice = makeInvoice({
     id: 'invoice-1',
     invoice_number: '2621',

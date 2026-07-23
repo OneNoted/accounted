@@ -137,7 +137,7 @@ import { POST } from '../route'
 describe('POST /api/invoices/[id]/send', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
   const customer = makeCustomer({ id: 'cust-1', email: 'kund@test.se' })
-  const company = makeCompanySettings({ accounting_method: 'accrual' })
+  const company = makeCompanySettings({ accounting_method: 'accrual', bankgiro: '123-4567' })
   const invoice = makeInvoice({
     id: 'inv-1',
     status: 'draft',
@@ -330,14 +330,28 @@ describe('POST /api/invoices/[id]/send', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_SEND_COMPANY_SETTINGS_MISSING')
   })
 
-  it('does not allocate a number or send a foreign invoice without a matching payment account', async () => {
-    const eurInvoice = makeInvoice({
+  it.each(['SEK', 'EUR'] as const)(
+    'does not allocate a number or send a %s invoice without a matching payment account',
+    async (currency) => {
+    const invoiceWithoutAccount = makeInvoice({
       ...invoice,
       invoice_number: null,
-      currency: 'EUR',
+      currency,
     })
-    enqueue({ data: eurInvoice, error: null })
-    enqueue({ data: company, error: null })
+    enqueue({ data: invoiceWithoutAccount, error: null })
+    enqueue({
+      data: {
+        ...company,
+        invoice_payment_accounts: {},
+        clearing_number: null,
+        account_number: null,
+        bankgiro: null,
+        plusgiro: null,
+        swish: null,
+        iban: null,
+      },
+      error: null,
+    })
 
     const request = createMockRequest('/api/invoices/inv-1/send', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -347,7 +361,8 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
     expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
-  })
+    },
+  )
 
   it('rejects custom recipients from a non-admin company member before allocation', async () => {
     enqueue({ data: invoice, error: null })
@@ -426,11 +441,13 @@ describe('POST /api/invoices/[id]/send', () => {
     const { status, body } = await parseJsonResponse<{
       success: boolean
       messageId: string
+      recipient_counts: { to: number; cc: number; bcc: number }
     }>(response)
 
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.messageId).toBe('msg-1')
+    expect(body.recipient_counts).toEqual({ to: 1, cc: 2, bcc: 2 })
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',
@@ -601,7 +618,7 @@ describe('POST /api/invoices/[id]/send', () => {
   })
 
   it('skips journal entry for cash method', async () => {
-    const cashCompany = makeCompanySettings({ accounting_method: 'cash' })
+    const cashCompany = makeCompanySettings({ accounting_method: 'cash', bankgiro: '123-4567' })
     enqueue({ data: invoice, error: null })
     enqueue({ data: cashCompany, error: null })
 

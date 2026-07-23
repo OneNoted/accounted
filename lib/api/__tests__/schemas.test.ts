@@ -1247,6 +1247,15 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts and normalizes a non-Swedish IBAN in the legacy SEK mirror', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      iban: 'gb29 nwbk 6016 1331 9268 19',
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.iban).toBe('GB29NWBK60161331926819')
+  })
+
   it('accepts a positive next_arrival_number (supplier-invoice start floor)', () => {
     const result = UpdateSettingsSchema.safeParse({ next_arrival_number: 248 })
     expect(result.success).toBe(true)

@@ -110,6 +110,7 @@ const COMPANY_SETTINGS = {
   company_name: 'Test AB',
   entity_type: 'enskild_firma',
   accounting_method: 'accrual',
+  bankgiro: '123-4567',
 }
 
 beforeEach(() => {

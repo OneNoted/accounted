@@ -215,7 +215,10 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
       }),
       error: null,
     })
-    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({
+      data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+      error: null,
+    })
     enqueue({ data: null, error: null }) // status update
     enqueue({ data: null, error: null }) // dispatcher update
 
@@ -240,7 +243,9 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
     })
   })
 
-  it('rejects a foreign invoice without a payment account before number allocation', async () => {
+  it.each(['SEK', 'EUR'] as const)(
+    'rejects a %s invoice without a payment account before number allocation',
+    async (currency) => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
@@ -249,7 +254,7 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
         status: 'draft',
         invoice_number: null,
         credited_invoice_id: null,
-        currency: 'EUR',
+        currency,
       }),
       error: null,
     })
@@ -272,11 +277,14 @@ describe('commitPendingOperation: credit-note issuance guard', () => {
     expect(result.http_status).toBe(400)
     expect(ensureInvoiceNumber).not.toHaveBeenCalled()
     expect(mockRecordManualInvoiceDelivery).not.toHaveBeenCalled()
-  })
+    },
+  )
 })
 
 describe('commitPendingOperation: invoice send payment account guard', () => {
-  it('rejects a foreign invoice before delivery reservation and number allocation', async () => {
+  it.each(['SEK', 'EUR'] as const)(
+    'rejects a %s invoice before delivery reservation and number allocation',
+    async (currency) => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
@@ -284,7 +292,7 @@ describe('commitPendingOperation: invoice send payment account guard', () => {
         id: 'invoice-1',
         status: 'draft',
         invoice_number: null,
-        currency: 'EUR',
+        currency,
         customer: makeCustomer({ id: 'customer-1', email: 'customer@example.test' }),
         items: [],
       }),
@@ -315,7 +323,8 @@ describe('commitPendingOperation: invoice send payment account guard', () => {
     expect(result.http_status).toBe(400)
     expect(ensureInvoiceNumber).not.toHaveBeenCalled()
     expect(supabase.from).not.toHaveBeenCalledWith('invoice_deliveries')
-  })
+    },
+  )
 })
 
 // ─── post_annual_depreciation ───────────────────────────────────────

@@ -74,9 +74,8 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import {
-  hasUsableInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-  resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -1509,16 +1508,8 @@ async function commitSendInvoice(
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
-  const invoiceCurrency = (invoice as Invoice).currency
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-  if (
-    paymentAccountRequired
-    && invoiceCurrency !== 'SEK'
-    && !hasUsableInvoicePaymentAccount(
-      resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
-      invoiceCurrency,
-    )
-  ) {
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
     return {
       error:
         getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
@@ -1752,15 +1743,7 @@ async function commitMarkInvoiceSent(
 
   if (settingsError || !settings) return { error: 'Company settings missing', status: 500 }
 
-  const invoiceCurrency = (invoice as Invoice).currency
-  if (
-    invoiceRequiresPaymentAccount(invoice as Invoice)
-    && invoiceCurrency !== 'SEK'
-    && !hasUsableInvoicePaymentAccount(
-      resolveInvoicePaymentAccount(settings as CompanySettings, invoiceCurrency),
-      invoiceCurrency,
-    )
-  ) {
+  if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
     return {
       error:
         getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv

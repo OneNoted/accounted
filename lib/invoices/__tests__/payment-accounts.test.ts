@@ -3,6 +3,7 @@ import {
   InvoicePaymentAccountMissingError,
   assertInvoicePaymentAccountForRender,
   companyWithInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
   resolveInvoicePaymentAccount,
@@ -80,8 +81,20 @@ describe('invoice payment accounts', () => {
     expect(hasUsableInvoicePaymentAccount(withoutIban, 'EUR')).toBe(false)
   })
 
-  it('blocks foreign-currency rendering when no usable account is configured', () => {
+  it('blocks payable rendering in every currency without a usable account', () => {
+    const emptySettings = company({
+      clearing_number: null,
+      account_number: null,
+      bankgiro: null,
+      plusgiro: null,
+      swish: null,
+      iban: null,
+    })
+
     expect(() => assertInvoicePaymentAccountForRender(company(), 'EUR')).toThrow(
+      InvoicePaymentAccountMissingError,
+    )
+    expect(() => assertInvoicePaymentAccountForRender(emptySettings, 'SEK')).toThrow(
       InvoicePaymentAccountMissingError,
     )
     expect(() => assertInvoicePaymentAccountForRender(company(), 'SEK')).not.toThrow()
@@ -92,5 +105,22 @@ describe('invoice payment accounts', () => {
     expect(invoiceRequiresPaymentAccount(makeInvoice({ credited_invoice_id: 'invoice-original' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'delivery_note' }))).toBe(false)
     expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'proforma' }))).toBe(false)
+  })
+
+  it('accepts non-payable documents without an account', () => {
+    const emptySettings = company({
+      clearing_number: null,
+      account_number: null,
+      bankgiro: null,
+      plusgiro: null,
+      swish: null,
+      iban: null,
+    })
+
+    expect(hasRequiredInvoicePaymentAccount(
+      emptySettings,
+      makeInvoice({ document_type: 'proforma' }),
+    )).toBe(true)
+    expect(hasRequiredInvoicePaymentAccount(emptySettings, makeInvoice())).toBe(false)
   })
 })

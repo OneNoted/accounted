@@ -92,6 +92,17 @@ export function invoiceRequiresPaymentAccount(
     && invoice.document_type !== 'proforma'
 }
 
+export function hasRequiredInvoicePaymentAccount(
+  company: CompanySettings,
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'currency' | 'document_type'>,
+): boolean {
+  return !invoiceRequiresPaymentAccount(invoice)
+    || hasUsableInvoicePaymentAccount(
+      resolveInvoicePaymentAccount(company, invoice.currency),
+      invoice.currency,
+    )
+}
+
 export class InvoicePaymentAccountMissingError extends Error {
   readonly code = 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
   readonly currency: Currency
@@ -108,8 +119,7 @@ export function assertInvoicePaymentAccountForRender(
   currency: Currency,
 ): void {
   if (
-    currency !== 'SEK'
-    && !hasUsableInvoicePaymentAccount(
+    !hasUsableInvoicePaymentAccount(
       resolveInvoicePaymentAccount(company, currency),
       currency,
     )

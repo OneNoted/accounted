@@ -158,6 +158,7 @@ describe('buildRrRows', () => {
     const rr = buildRrRows(mapping)
     const aretsResultat = rr[rr.length - 1]
     expect(aretsResultat.label).toBe('Årets resultat')
+    expect(aretsResultat.semantic_key).toBe('income_statement_result')
     expect(aretsResultat.is_total).toBe(true)
     expect(aretsResultat.current).toBe(mapping.totals.aretsResultat.current)
     expect(aretsResultat.current).toBe(300_000)
@@ -188,6 +189,10 @@ describe('buildBrRows', () => {
   it('renders Kassa och bank as a post and ends both sides on tied totals', () => {
     const mapping = mapTrialBalancesToK2(currentPair(), null)
     const { assets, equityLiabilities } = buildBrRows(mapping)
+
+    expect(
+      equityLiabilities.find((row) => row.semantic_key === 'balance_sheet_current_year_result'),
+    ).toMatchObject({ label: 'Årets resultat', current: 300_000 })
 
     expect(assets.find((r) => r.label === 'Kassa och bank' && !r.is_heading)?.current).toBe(
       600_000,

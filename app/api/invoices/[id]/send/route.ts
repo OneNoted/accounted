@@ -34,9 +34,8 @@ import {
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import {
-  hasUsableInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-  resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -233,14 +232,7 @@ export const POST = withRouteContext(
 
     const invoiceCurrency = (invoice as Invoice).currency
     const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-    if (
-      paymentAccountRequired
-      && invoiceCurrency !== 'SEK'
-      && !hasUsableInvoicePaymentAccount(
-        resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
-        invoiceCurrency,
-      )
-    ) {
+    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
       return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
         requestId,
         details: { currency: invoiceCurrency },
@@ -669,6 +661,11 @@ export const POST = withRouteContext(
       message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
       messageId: result.messageId,
       deliveryId: result.deliveryId,
+      recipient_counts: {
+        to: recipients.to.length,
+        cc: recipients.cc.length,
+        bcc: recipients.bcc.length,
+      },
       ...(partialFailures.length > 0
         ? { partial: true, partial_failures: partialFailures }
         : {}),

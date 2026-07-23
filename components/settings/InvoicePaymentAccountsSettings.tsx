@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
+import { useCompany } from '@/contexts/CompanyContext'
 import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -77,6 +78,7 @@ export function InvoicePaymentAccountsSettings({
 }: InvoicePaymentAccountsSettingsProps) {
   const t = useTranslations('settings_invoice_payment_accounts')
   const { toast } = useToast()
+  const { role } = useCompany()
   const legacySekAccount = useMemo(
     () => legacySekInvoicePaymentAccount({
       bank_name: settings.bank_name,
@@ -125,6 +127,8 @@ export function InvoicePaymentAccountsSettings({
     (currency) => !accounts[currency],
   )
   const activeAccount = accounts[activeCurrency] ?? EMPTY_ACCOUNT
+
+  if (role !== 'owner' && role !== 'admin') return null
 
   function updateField(field: keyof InvoicePaymentAccount, nextValue: string) {
     setAccounts((current) => ({

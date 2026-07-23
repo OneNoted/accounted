@@ -29,6 +29,7 @@ function hasValue(amount: ConceptAmount): boolean {
 
 interface RowOptions {
   indent?: number
+  semantic_key?: StatementRow['semantic_key']
   /** Presentational minus — show cost posts as negative. */
   displayMinus?: boolean
   /** Emit the row even when zero in both years (statutory always-visible posts). */
@@ -65,6 +66,7 @@ class RowBuilder {
       label,
       current: sign * amount.current,
       previous: this.hasPrevious ? sign * (amount.previous ?? 0) : null,
+      ...(opts.semantic_key ? { semantic_key: opts.semantic_key } : {}),
       ...(isTotal ? { is_total: true } : {}),
       ...(opts.indent ? { indent: opts.indent } : {}),
     }
@@ -172,7 +174,9 @@ export function buildRrRows(mapping: StatementMapping): StatementRow[] {
   b.heading('Skatter')
   b.post('Skatt på årets resultat', rr['SkattAretsResultat'], { indent: 1, displayMinus: true })
   b.post('Övriga skatter', rr['OvrigaSkatter'], { indent: 1, displayMinus: true })
-  b.total('Årets resultat', totals.aretsResultat)
+  b.total('Årets resultat', totals.aretsResultat, {
+    semantic_key: 'income_statement_result',
+  })
 
   return b.rows
 }
@@ -357,7 +361,11 @@ export function buildBrRows(mapping: StatementMapping): {
   e.heading('Fritt eget kapital', 1)
   e.post('Överkursfond', br['Overkursfond'], { indent: 2 })
   e.post('Balanserat resultat', br['BalanseratResultat'], { indent: 2, alwaysShow: true })
-  e.post('Årets resultat', br['AretsResultatEgetKapital'], { indent: 2, alwaysShow: true })
+  e.post('Årets resultat', br['AretsResultatEgetKapital'], {
+    indent: 2,
+    alwaysShow: true,
+    semantic_key: 'balance_sheet_current_year_result',
+  })
   e.total('Summa fritt eget kapital', totals.frittEgetKapital, { indent: 1 })
   e.total('Summa eget kapital', totals.egetKapital)
   if (hasValue(totals.obeskattadeReserver)) {

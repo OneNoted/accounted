@@ -49,6 +49,7 @@ function statementRowsEqual(
     const other = right[index]
     return (
       row.label === other.label &&
+      row.semantic_key === other.semantic_key &&
       row.current === other.current &&
       row.previous === other.previous &&
       Boolean(row.is_total) === Boolean(other.is_total) &&
@@ -76,11 +77,21 @@ export function validateStatementIntegrity(
     )
   }
 
-  const incomeStatementResult = report.resultatrakning.find(
-    (row) => row.label === 'Årets resultat' && row.current !== null,
+  const incomeStatementResult = (
+    report.resultatrakning.find(
+      (row) => row.semantic_key === 'income_statement_result' && row.current !== null,
+    )
+    ?? report.resultatrakning.find(
+      (row) => row.label === 'Årets resultat' && row.current !== null,
+    )
   )?.current ?? undefined
-  const visibleBalanceSheetResult = report.balansrakning.equity_liabilities.find(
-    (row) => row.label === 'Årets resultat' && row.current !== null,
+  const visibleBalanceSheetResult = (
+    report.balansrakning.equity_liabilities.find(
+      (row) => row.semantic_key === 'balance_sheet_current_year_result' && row.current !== null,
+    )
+    ?? report.balansrakning.equity_liabilities.find(
+      (row) => row.label === 'Årets resultat' && row.current !== null,
+    )
   )?.current ?? undefined
   const dispositionResult =
     report.forvaltningsberattelse.resultatdisposition_amounts.current_year_result

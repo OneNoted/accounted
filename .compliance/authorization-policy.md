@@ -107,10 +107,14 @@ Although authorization is by `company_id`, the audit trail is by `user_id`:
 
 **Decision.** Changing fixed invoice recipients or adding an arbitrary CC or
 BCC recipient to an individual invoice send requires the actor to have the
-`owner` or `admin` role in `company_members`. The dashboard hides the controls
-for other roles. The settings, dashboard send, and v1 send routes enforce the
-role before persistence, PDF rendering, number allocation, or email delivery.
-The database also rejects direct member changes to the fixed recipient fields.
+`owner` or `admin` role in `company_members`. The dashboard hides those change
+controls for other roles. The settings route protects fixed-recipient changes;
+the dashboard and v1 send routes protect per-send additions before rendering,
+number allocation, or email delivery. The database also rejects direct member
+changes to fixed recipient fields. Once an owner or admin approves a fixed
+recipient, it applies to every send by a writable company member without a new
+role check. A fixed recipient that matches the customer address is de-duplicated
+with To precedence because it does not introduce a new external disclosure.
 
 **Why.** Both fixed and per-send recipients can disclose customer invoice data
 to a new external address. This is a distinct disclosure decision and needs a
@@ -126,6 +130,24 @@ Routine delivery-list responses remain minimized and never expose BCC.
 - OWASP ASVS V2.3: business logic integrity
 - OWASP ASVS V8.2.1: operation-level authorization
 - GDPR Articles 5(1)(c) and 25(2): minimization and privacy by default
+- SOC 2 CC6.1: logical access
+
+### Invoice payment instructions: owner or admin only
+
+**Decision.** Changing the currency-keyed invoice payment accounts or their
+legacy SEK mirror fields requires the `owner` or `admin` role. The settings
+route enforces this before persistence, matching the existing
+`company_settings` RLS policy.
+
+**Why.** Payment instructions determine where a customer sends company funds.
+They need the same administrative boundary as other company financial settings.
+All payable invoices, including SEK invoices, must resolve a usable account
+before PDF rendering or invoice-number allocation. Credit notes, proformas, and
+delivery notes remain exempt because they do not request payment.
+
+**Cross-references.**
+- OWASP ASVS V2.3: business logic integrity
+- OWASP ASVS V8.2.1: operation-level authorization
 - SOC 2 CC6.1: logical access
 
 ### bank_connections: managed at company scope

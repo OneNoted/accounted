@@ -70,9 +70,8 @@ import {
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import {
-  hasUsableInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-  resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
@@ -384,14 +383,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
-    if (
-      paymentAccountRequired
-      && typed.currency !== 'SEK'
-      && !hasUsableInvoicePaymentAccount(
-        resolveInvoicePaymentAccount(settings, typed.currency),
-        typed.currency,
-      )
-    ) {
+    if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
       return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
         requestId: ctx.requestId,
         details: { currency: typed.currency },
@@ -442,6 +434,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           invoice_number: typed.invoice_number ?? '(allocated atomically on commit)',
           would_send_to: customer.email,
           would_cc: recipients.cc[0] ?? null,
+          would_cc_addresses: recipients.cc,
+          would_bcc_addresses: recipients.bcc,
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             (settings.accounting_method ?? 'accrual') === 'accrual',

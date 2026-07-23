@@ -42,8 +42,7 @@ import {
 } from '@/lib/invoices/invoice-deliveries'
 import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
 import {
-  hasUsableInvoicePaymentAccount,
-  resolveInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { createLogger } from '@/lib/logger'
 import type {
@@ -461,13 +460,7 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
-  if (
-    invoice.currency !== 'SEK'
-    && !hasUsableInvoicePaymentAccount(
-      resolveInvoicePaymentAccount(company, invoice.currency),
-      invoice.currency,
-    )
-  ) {
+  if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
     log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
       currency: invoice.currency,

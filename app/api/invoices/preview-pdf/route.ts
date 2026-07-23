@@ -8,7 +8,11 @@ import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
+import {
+  hasRequiredInvoicePaymentAccount,
+  InvoicePaymentAccountMissingError,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 
 /**
  * POST /api/invoices/preview-pdf
@@ -188,6 +192,13 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     updated_at: new Date().toISOString(),
   } as Invoice
 
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, previewInvoice)) {
+    return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+      requestId,
+      details: { currency: previewInvoice.currency },
+    })
+  }
+
   try {
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
@@ -224,11 +235,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       },
     })
   } catch (error) {
-    if (
-      typeof error === 'object'
-      && error !== null
-      && (error as { code?: unknown }).code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
-    ) {
+    if (error instanceof InvoicePaymentAccountMissingError) {
       return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
         requestId,
         details: { currency: previewInvoice.currency },

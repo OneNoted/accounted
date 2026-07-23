@@ -147,7 +147,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: DRAFT_INVOICE, error: null },
           { data: SENT_INVOICE, error: null },
         ],
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          error: null,
+        },
       }),
     )
 
@@ -193,11 +196,39 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.error.details.current_status).toBe('sent')
   })
 
-  it('rejects a foreign invoice without a payment account before number allocation', async () => {
+  it.each([
+    ['missing row', { data: null, error: null }],
+    ['database error', { data: null, error: { message: 'connection reset' } }],
+  ])('fails closed when company settings have a %s', async (_label, settingsResult) => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        invoices: { data: { ...DRAFT_INVOICE, currency: 'EUR' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+        company_settings: settingsResult,
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_COMPANY_SETTINGS_MISSING')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it.each(['SEK', 'EUR'] as const)(
+    'rejects a %s invoice without a payment account before number allocation',
+    async (currency) => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, currency }, error: null },
         company_settings: {
           data: {
             accounting_method: 'accrual',
@@ -221,7 +252,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
     expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
-  })
+    },
+  )
 
   it('rejects delivery notes with VALIDATION_ERROR (regardless of status)', async () => {
     // Critical: the delivery-note guard must run BEFORE the status check
@@ -300,7 +332,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: DRAFT_INVOICE, error: null },
           { data: SENT_INVOICE, error: null },
         ],
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          error: null,
+        },
       }),
     )
     // Force the journal-entry generator to throw.
@@ -368,7 +403,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
-        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          error: null,
+        },
       }),
     )
 
@@ -398,7 +436,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           { data: DRAFT_INVOICE, error: null },
           { data: SENT_INVOICE, error: null },
         ],
-        company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+        company_settings: {
+          data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          error: null,
+        },
       }),
     )
 

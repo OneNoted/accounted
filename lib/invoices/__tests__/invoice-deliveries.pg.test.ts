@@ -487,6 +487,11 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     const { userId, companyId } = await seedCompany()
     const memberId = await insertAuthUser()
     await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id)
+       VALUES ($1, $2)`,
+      [userId, companyId],
+    )
 
     const memberUpdate = await withUserContext(memberId, (client) => client.query(
       `UPDATE public.company_settings

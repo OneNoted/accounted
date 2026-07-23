@@ -129,10 +129,12 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { ensureInvoiceNumber as mockedEnsureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { POST as sendInvoice } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
+const mockEnsureInvoiceNumber = mockedEnsureInvoiceNumber as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
 function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
@@ -227,6 +229,7 @@ const COMPANY_SETTINGS = {
   email: 'support@test-ab.example',
   invoice_email_cc_addresses: ['fixed-copy@test-ab.example'],
   invoice_email_bcc_addresses: ['fixed-archive@test-ab.example'],
+  bankgiro: '123-4567',
   accounting_method: 'accrual',
   entity_type: 'enskild_firma',
 }
@@ -277,6 +280,43 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     const body = await res.json()
     expect(body.error.code).toBe('NOT_FOUND')
   })
+
+  it.each(['SEK', 'EUR'] as const)(
+    'rejects a %s invoice without a payment account before number allocation',
+    async (currency) => {
+      mockServiceClient.mockReturnValue(
+        makeFlexibleSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: { ...DRAFT_INVOICE, currency }, error: null },
+          company_settings: {
+            data: {
+              ...COMPANY_SETTINGS,
+              invoice_payment_accounts: {},
+              clearing_number: null,
+              account_number: null,
+              bankgiro: null,
+              plusgiro: null,
+              swish: null,
+              iban: null,
+            },
+            error: null,
+          },
+        }),
+      )
+
+      const res = await sendInvoice(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+      expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+      expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+      expect(mockSendEmail).not.toHaveBeenCalled()
+    },
+  )
 
   it('returns VALIDATION_ERROR for malformed JSON', async () => {
     mockServiceClient.mockReturnValue(
@@ -558,7 +598,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.preview.status).toBe('sent')
     expect(body.data.preview.would_send_to).toBe('billing@acme.test')
     expect(body.data.preview.would_cc).toBe('fixed-copy@test-ab.example')
-    expect(body.data.preview).not.toHaveProperty('would_bcc')
+    expect(body.data.preview.would_cc_addresses).toEqual(['fixed-copy@test-ab.example'])
+    expect(body.data.preview.would_bcc_addresses).toEqual(['fixed-archive@test-ab.example'])
     expect(body.data.preview.preflight_pdf_render).toBe('ok')
     expect(mockSendEmail).not.toHaveBeenCalled()
   })

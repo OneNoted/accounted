@@ -41,7 +41,7 @@ import { POST } from '../route'
 describe('POST /api/invoices/preview-pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ id: 'customer-1', name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige' })
+  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
   const validBody = {
     customer_id: customer.id,
     invoice_number: '2621',

@@ -149,6 +149,34 @@ describe('PUT /api/settings', () => {
     ])
   })
 
+  it('rejects invoice payment instruction changes from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: {
+        invoice_payment_accounts: {
+          SEK: { bankgiro: '123-4567' },
+        },
+        bankgiro: '123-4567',
+      },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { required_roles?: string[] } }
+    }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details?.required_roles).toEqual(['owner', 'admin'])
+    expect(supabase.from.mock.calls.map(([table]) => table)).toEqual([
+      'company_settings',
+      'company_members',
+    ])
+  })
+
   it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {
     enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
 

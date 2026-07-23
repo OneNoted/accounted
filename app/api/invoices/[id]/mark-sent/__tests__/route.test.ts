@@ -91,6 +91,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
   const company = makeCompanySettings({
     accounting_method: 'accrual',
     entity_type: 'enskild_firma',
+    bankgiro: '123-4567',
   })
   const invoice = makeInvoice({
     id: 'inv-1',
@@ -167,16 +168,30 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(400)
   })
 
-  it('rejects a foreign invoice without a payment account before number allocation', async () => {
+  it.each(['SEK', 'EUR'] as const)(
+    'rejects a %s invoice without a payment account before number allocation',
+    async (currency) => {
     enqueue({
       data: makeInvoice({
         ...invoice,
         invoice_number: null,
-        currency: 'EUR',
+        currency,
       }),
       error: null,
     })
-    enqueue({ data: { ...company, invoice_payment_accounts: {} }, error: null })
+    enqueue({
+      data: {
+        ...company,
+        invoice_payment_accounts: {},
+        clearing_number: null,
+        account_number: null,
+        bankgiro: null,
+        plusgiro: null,
+        swish: null,
+        iban: null,
+      },
+      error: null,
+    })
 
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -187,7 +202,8 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
     expect(mockRenderToBuffer).not.toHaveBeenCalled()
-  })
+    },
+  )
 
   it('archives the rendered PDF as underlag linked to the journal entry', async () => {
     enqueue({ data: invoice, error: null }) // fetch invoice

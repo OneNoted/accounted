@@ -43,9 +43,7 @@ import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import {
-  hasUsableInvoicePaymentAccount,
-  invoiceRequiresPaymentAccount,
-  resolveInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { eventBus } from '@/lib/events'
 import type { CompanySettings, EntityType, Invoice } from '@/types'
@@ -210,32 +208,32 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Fetch company settings before number allocation. Besides the accounting
-    // decision, foreign payable invoices need a currency-matching account.
-    const { data: settings } = await ctx.supabase
+    // decision, payable invoices need a currency-matching account.
+    const { data: settings, error: settingsError } = await ctx.supabase
       .from('company_settings')
       .select('accounting_method, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
-    const companySettings = settings as CompanySettings | null
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
-    if (
-      paymentAccountRequired
-      && typed.currency !== 'SEK'
-      && (
-        !companySettings
-        || !hasUsableInvoicePaymentAccount(
-          resolveInvoicePaymentAccount(companySettings, typed.currency),
-          typed.currency,
-        )
-      )
-    ) {
+    if (settingsError || !settings) {
+      if (settingsError) {
+        ctx.log.error('invoices.mark-sent: company settings fetch failed', settingsError as Error, {
+          invoiceId,
+          companyId: ctx.companyId,
+        })
+      }
+      return v1ErrorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
+    const companySettings = settings as CompanySettings
+    if (!hasRequiredInvoicePaymentAccount(companySettings, typed)) {
       return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
         requestId: ctx.requestId,
         details: { currency: typed.currency },
       })
     }
-    const accountingMethod = companySettings?.accounting_method ?? 'accrual'
-    const entityType = (companySettings?.entity_type ?? 'enskild_firma') as EntityType
+    const accountingMethod = companySettings.accounting_method ?? 'accrual'
+    const entityType = (companySettings.entity_type ?? 'enskild_firma') as EntityType
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
     const wouldCreateJournalEntry = isRealInvoice && accountingMethod === 'accrual'
 

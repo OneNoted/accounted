@@ -18,9 +18,8 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
-  hasUsableInvoicePaymentAccount,
+  hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
-  resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -115,14 +114,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   const invoiceCurrency = (invoice as Invoice).currency
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-  if (
-    paymentAccountRequired
-    && invoiceCurrency !== 'SEK'
-    && !hasUsableInvoicePaymentAccount(
-      resolveInvoicePaymentAccount(settings as CompanySettings, invoiceCurrency),
-      invoiceCurrency,
-    )
-  ) {
+  if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
     return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
       requestId,
       details: { currency: invoiceCurrency },

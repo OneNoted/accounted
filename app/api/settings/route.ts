@@ -59,7 +59,17 @@ export const PUT = withRouteContext(
     const changesInvoiceEmailRecipients =
       body.invoice_email_cc_addresses !== undefined
       || body.invoice_email_bcc_addresses !== undefined
-    if (changesInvoiceEmailRecipients) {
+    const changesInvoicePaymentInstructions =
+      body.invoice_payment_accounts !== undefined
+      || body.bank_name !== undefined
+      || body.clearing_number !== undefined
+      || body.account_number !== undefined
+      || body.bankgiro !== undefined
+      || body.plusgiro !== undefined
+      || body.swish !== undefined
+      || body.iban !== undefined
+      || body.bic !== undefined
+    if (changesInvoiceEmailRecipients || changesInvoicePaymentInstructions) {
       const { data: membership, error: membershipError } = await supabase
         .from('company_members')
         .select('role')
@@ -68,7 +78,7 @@ export const PUT = withRouteContext(
         .maybeSingle()
 
       if (membershipError) {
-        log.error('failed to authorize invoice email recipient settings', membershipError)
+        log.error('failed to authorize restricted invoice settings', membershipError)
         return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
       }
       if (!membership || !['owner', 'admin'].includes(membership.role)) {

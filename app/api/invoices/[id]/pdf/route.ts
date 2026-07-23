@@ -8,7 +8,11 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
+import {
+  hasRequiredInvoicePaymentAccount,
+  InvoicePaymentAccountMissingError,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
@@ -40,6 +44,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   if (companyError || !company) {
     return NextResponse.json({ error: 'Company settings not found' }, { status: 404 })
+  }
+
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
+    return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+      requestId,
+      details: { currency: (invoice as Invoice).currency },
+    })
   }
 
   // Sort items by sort_order
@@ -105,11 +116,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     })
   } catch (error) {
-    if (
-      typeof error === 'object'
-      && error !== null
-      && (error as { code?: unknown }).code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
-    ) {
+    if (error instanceof InvoicePaymentAccountMissingError) {
       return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
         requestId,
         details: { currency: (invoice as Invoice).currency },

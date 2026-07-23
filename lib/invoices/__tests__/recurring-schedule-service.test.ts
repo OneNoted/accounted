@@ -222,6 +222,7 @@ describe('executeRecurringSchedule auto-send', () => {
   const company = makeCompanySettings({
     company_name: 'Oppy Sverige',
     accounting_method: 'accrual',
+    bankgiro: '123-4567',
     invoice_email_cc_addresses: ['fixed-copy@test.se'],
     invoice_email_bcc_addresses: ['fixed-archive@test.se'],
   })

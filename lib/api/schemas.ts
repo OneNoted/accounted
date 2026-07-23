@@ -1518,6 +1518,13 @@ export const InvoiceEmailTextsSchema = z.object({
   en: InvoiceEmailTextsLangSchema.optional(),
 })
 
+const InvoiceIbanSchema = z.string()
+  .transform((value) => value.replace(/\s/g, '').toUpperCase())
+  .pipe(z.string().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, 'Ogiltigt IBAN'))
+  .nullable()
+  .optional()
+  .or(z.literal(''))
+
 const InvoicePaymentAccountSchema = z.object({
   bank_name: z.string().trim().max(100).nullable().optional(),
   clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').nullable().optional().or(z.literal('')),
@@ -1525,12 +1532,7 @@ const InvoicePaymentAccountSchema = z.object({
   bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer').nullable().optional().or(z.literal('')),
   plusgiro: z.string().regex(/^\d{1,7}-\d$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
   swish: z.string().transform(normaliseSwish).pipe(z.string().refine(isValidSwish, 'Ogiltigt Swish-nummer')).nullable().optional(),
-  iban: z.string()
-    .transform((value) => value.replace(/\s/g, '').toUpperCase())
-    .pipe(z.string().regex(/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/, 'Ogiltigt IBAN'))
-    .nullable()
-    .optional()
-    .or(z.literal('')),
+  iban: InvoiceIbanSchema,
   bic: z.string()
     .transform((value) => value.replace(/\s/g, '').toUpperCase())
     .pipe(z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT'))
@@ -1605,7 +1607,9 @@ export const UpdateSettingsSchema = z.object({
     )
     .nullable()
     .optional(),
-  iban: z.string().regex(/^SE\d{22}$/, 'Ogiltigt IBAN (SE följt av 22 siffror)').nullable().optional().or(z.literal('')),
+  // Legacy SEK mirror of invoice_payment_accounts.SEK. Use the same general
+  // IBAN validation because a SEK-denominated account need not be Swedish.
+  iban: InvoiceIbanSchema,
   bic: z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT (8 eller 11 tecken)').nullable().optional().or(z.literal('')),
   invoice_payment_accounts: InvoicePaymentAccountsSchema.optional(),
   accounting_method: AccountingMethodSchema.optional(),

@@ -217,6 +217,29 @@ describe('validateAnnualReportCompleteness', () => {
     )
   })
 
+  it('identifies the statutory result by semantic key instead of its K2 label', () => {
+    const value = report()
+    value.resultatrakning = [{
+      label: 'Årets resultat/förlust',
+      semantic_key: 'income_statement_result',
+      current: 20,
+      previous: null,
+      is_total: true,
+    }]
+    value.balansrakning.equity_liabilities = [{
+      label: 'Periodens resultat',
+      semantic_key: 'balance_sheet_current_year_result',
+      current: 20,
+      previous: null,
+    }]
+
+    expect(validateStatementIntegrity(value)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-RESULT-MISSING' }),
+      ]),
+    )
+  })
+
   it('detects a line reclassification between PDF and iXBRL with unchanged totals', () => {
     const value = input('draft')
     const full = [

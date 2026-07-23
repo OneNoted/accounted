@@ -133,6 +133,9 @@ export async function buildArsredovisningData(
     try {
       const [prevFull, prevPreClosing] = await Promise.all([
         generateTrialBalance(supabase, companyId, prevPeriodRow.id),
+        // Comparative RR figures need the same statutory view as the current
+        // year: keep booked depreciation, appropriations, and tax, excluding
+        // only the linked final result-closing entry.
         generateTrialBalance(supabase, companyId, prevPeriodRow.id, {
           excludeFinalClosingEntry: true,
         }),
