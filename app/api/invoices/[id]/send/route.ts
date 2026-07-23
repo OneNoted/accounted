@@ -30,7 +30,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import {
+  exceedsInvoiceEmailRecipientLimit,
   findAdditionalInvoiceRecipientCollisions,
+  invoiceEmailRecipientCount,
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import {
@@ -227,6 +229,12 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
         requestId,
         details: { customerId: customer.id },
+      })
+    }
+    if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+      return errorResponseFromCode('INVOICE_SEND_TOO_MANY_RECIPIENTS', opLog, {
+        requestId,
+        details: { recipient_count: invoiceEmailRecipientCount(recipients) },
       })
     }
 

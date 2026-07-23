@@ -76,9 +76,10 @@ vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
 }))
 
 const mockRecordManualInvoiceDelivery = vi.fn().mockResolvedValue({ id: 'delivery-1' })
+const mockReserveInvoiceDelivery = vi.fn().mockResolvedValue('delivery-1')
 vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
-  reserveInvoiceDelivery: vi.fn().mockResolvedValue('delivery-1'),
+  reserveInvoiceDelivery: (...args: unknown[]) => mockReserveInvoiceDelivery(...args),
   sendTrackedInvoiceEmail: vi.fn(),
 }))
 
@@ -325,6 +326,51 @@ describe('commitPendingOperation: invoice send payment account guard', () => {
     expect(supabase.from).not.toHaveBeenCalledWith('invoice_deliveries')
     },
   )
+})
+
+describe('commitPendingOperation: invoice send recipient limit', () => {
+  it('rejects an oversized configured recipient set before reservation and allocation', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'invoice-1',
+        status: 'draft',
+        invoice_number: null,
+        customer: makeCustomer({ id: 'customer-1', email: 'customer@example.test' }),
+        items: [],
+      }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        company_name: 'Test AB',
+        bankgiro: '123-4567',
+        invoice_email_cc_addresses: Array.from(
+          { length: 20 },
+          (_, index) => `fixed-${index}@example.test`,
+        ),
+        invoice_email_bcc_addresses: [],
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        operation_type: 'send_invoice',
+        params: { invoice_id: 'invoice-1' },
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(ensureInvoiceNumber).not.toHaveBeenCalled()
+  })
 })
 
 // ─── post_annual_depreciation ───────────────────────────────────────

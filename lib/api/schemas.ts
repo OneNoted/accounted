@@ -5,7 +5,7 @@ import { isSaneDateString } from '@/lib/utils'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { MAX_INVOICE_EMAIL_RECIPIENTS } from '@/lib/invoices/email-recipients'
+import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import type { AuditAction } from '@/types'
 
 // ============================================================
@@ -43,8 +43,8 @@ const invoiceEmailAddress = z
 const invoiceEmailAddressList = z
   .array(invoiceEmailAddress)
   .max(
-    MAX_INVOICE_EMAIL_RECIPIENTS,
-    `Högst ${MAX_INVOICE_EMAIL_RECIPIENTS} mottagare är tillåtna`,
+    MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
+    `Högst ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} kopiemottagare är tillåtna`,
   )
 
 /** BAS class-3 revenue account: exactly 4 digits starting with 3 (försäljning/intäkt). */
@@ -745,7 +745,16 @@ export const MarkInvoiceSentSchema = z.object({
 export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
   additional_cc: invoiceEmailAddressList.optional(),
   additional_bcc: invoiceEmailAddressList.optional(),
-})
+}).refine(
+  (data) => (
+    (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
+    <= MAX_INVOICE_EMAIL_COPY_RECIPIENTS
+  ),
+  {
+    message: `Högst ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} extra kopiemottagare är tillåtna totalt`,
+    path: ['additional_cc'],
+  },
+)
 
 // ============================================================
 // Customer schemas
@@ -1722,6 +1731,16 @@ export const UpdateSettingsSchema = z.object({
   // blocks changing this while open vacation-ledger rows exist.
   salary_vacation_year_basis: z.enum(['calendar', 'statutory_apr_mar']).optional(),
 }).refine(
+  (data) => (
+    (data.invoice_email_cc_addresses?.length ?? 0)
+    + (data.invoice_email_bcc_addresses?.length ?? 0)
+    <= MAX_INVOICE_EMAIL_COPY_RECIPIENTS
+  ),
+  {
+    message: `Högst ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} fasta kopiemottagare är tillåtna totalt`,
+    path: ['invoice_email_cc_addresses'],
+  },
+).refine(
   (data) => {
     // BFL 3 kap.: Enskild firma must have fiscal year starting January
     if (data.entity_type === 'enskild_firma' && data.fiscal_year_start_month !== undefined) {

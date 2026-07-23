@@ -396,6 +396,32 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('does not reserve an auto-send delivery when configured recipients exceed the limit', async () => {
+    enqueue({ data: customer, error: null })
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompleteInvoice(), error: null })
+    enqueue({
+      data: {
+        ...company,
+        invoice_email_cc_addresses: Array.from(
+          { length: 20 },
+          (_, index) => `fixed-${index}@example.test`,
+        ),
+        invoice_email_bcc_addresses: [],
+      },
+      error: null,
+    })
+
+    const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+    expect(result.autoSent).toBe(false)
+    expect(result.warning).not.toBeNull()
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockRenderToBuffer).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('never auto-sends from a sandbox company; invoice stays a numbered draft', async () => {
     mockIsSandbox.mockResolvedValue(true)
     // Sandbox bails before company_settings/payment-link/render/email, so the

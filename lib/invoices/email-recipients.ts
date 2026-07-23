@@ -1,4 +1,5 @@
 export const MAX_INVOICE_EMAIL_RECIPIENTS = 20
+export const MAX_INVOICE_EMAIL_COPY_RECIPIENTS = MAX_INVOICE_EMAIL_RECIPIENTS - 1
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export interface ResolveInvoiceEmailRecipientsInput {
@@ -14,6 +15,18 @@ export interface ResolvedInvoiceEmailRecipients {
   to: string[]
   cc: string[]
   bcc: string[]
+}
+
+export function invoiceEmailRecipientCount(
+  recipients: ResolvedInvoiceEmailRecipients,
+): number {
+  return recipients.to.length + recipients.cc.length + recipients.bcc.length
+}
+
+export function exceedsInvoiceEmailRecipientLimit(
+  recipients: ResolvedInvoiceEmailRecipients,
+): boolean {
+  return invoiceEmailRecipientCount(recipients) > MAX_INVOICE_EMAIL_RECIPIENTS
 }
 
 export interface InvoiceEmailRecipientCollision {

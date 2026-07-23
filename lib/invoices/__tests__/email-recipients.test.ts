@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  exceedsInvoiceEmailRecipientLimit,
   findAdditionalInvoiceRecipientCollisions,
+  invoiceEmailRecipientCount,
   parseInvoiceRecipientText,
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
@@ -32,6 +34,23 @@ describe('resolveInvoiceEmailRecipients', () => {
       cc: ['finance@example.test', 'handler@example.test'],
       bcc: ['archive@example.test', 'director@example.test'],
     })
+  })
+
+  it('counts the final de-duplicated To, CC, and BCC recipients', () => {
+    const atLimit = resolveInvoiceEmailRecipients({
+      to: 'customer@example.test',
+      configuredCc: Array.from({ length: 19 }, (_, index) => `copy-${index}@example.test`),
+    })
+    expect(invoiceEmailRecipientCount(atLimit)).toBe(20)
+    expect(exceedsInvoiceEmailRecipientLimit(atLimit)).toBe(false)
+
+    const overLimit = resolveInvoiceEmailRecipients({
+      to: 'customer@example.test',
+      configuredCc: atLimit.cc,
+      additionalBcc: ['archive@example.test'],
+    })
+    expect(invoiceEmailRecipientCount(overLimit)).toBe(21)
+    expect(exceedsInvoiceEmailRecipientLimit(overLimit)).toBe(true)
   })
 
   it('trims and de-duplicates address text', () => {

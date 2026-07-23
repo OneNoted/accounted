@@ -77,7 +77,11 @@ import {
   hasRequiredInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
-import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
+import {
+  exceedsInvoiceEmailRecipientLimit,
+  invoiceEmailRecipientCount,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -1508,6 +1512,21 @@ async function commitSendInvoice(
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
+  const recipients = resolveInvoiceEmailRecipients({
+    to: customer.email,
+    configuredCc: company.invoice_email_cc_addresses,
+    configuredBcc: company.invoice_email_bcc_addresses,
+    legacyCc: company.email || userEmail,
+  })
+  if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_TOO_MANY_RECIPIENTS')?.message_sv
+        ?? `Ett fakturautskick får inte ha ${invoiceEmailRecipientCount(recipients)} mottagare.`,
+      status: 400,
+    }
+  }
+
   const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
     return {
@@ -1624,12 +1643,6 @@ async function commitSendInvoice(
     isCreditNote,
   })
 
-  const recipients = resolveInvoiceEmailRecipients({
-    to: customer.email,
-    configuredCc: company.invoice_email_cc_addresses,
-    configuredBcc: company.invoice_email_bcc_addresses,
-    legacyCc: company.email || userEmail,
-  })
   const emailData = { invoice: renderableInvoice, customer, company: company as CompanySettings }
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)

@@ -65,8 +65,10 @@ import {
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
 import {
-  MAX_INVOICE_EMAIL_RECIPIENTS,
+  exceedsInvoiceEmailRecipientLimit,
+  MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
   findAdditionalInvoiceRecipientCollisions,
+  invoiceEmailRecipientCount,
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import {
@@ -82,12 +84,18 @@ import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from
 
 const InvoiceSendBody = z.object({
   additional_cc: z.array(z.string().trim().pipe(z.email().max(254)))
-    .max(MAX_INVOICE_EMAIL_RECIPIENTS)
+    .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
     .optional(),
   additional_bcc: z.array(z.string().trim().pipe(z.email().max(254)))
-    .max(MAX_INVOICE_EMAIL_RECIPIENTS)
+    .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
     .optional(),
-})
+}).refine(
+  (data) => (
+    (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
+    <= MAX_INVOICE_EMAIL_COPY_RECIPIENTS
+  ),
+  { path: ['additional_cc'] },
+)
 
 const InvoiceSendResponse = z.object({
   id: z.string().uuid(),
@@ -380,6 +388,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
         requestId: ctx.requestId,
         details: { customer_id: typed.customer_id },
+      })
+    }
+    if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_TOO_MANY_RECIPIENTS', ctx.log, {
+        requestId: ctx.requestId,
+        details: { recipient_count: invoiceEmailRecipientCount(recipients) },
       })
     }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)

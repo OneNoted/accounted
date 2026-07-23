@@ -1230,6 +1230,21 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('rejects more than 19 fixed invoice copy recipients in total', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_email_cc_addresses: Array.from(
+        { length: 10 },
+        (_, index) => `copy-${index}@example.test`,
+      ),
+      invoice_email_bcc_addresses: Array.from(
+        { length: 10 },
+        (_, index) => `archive-${index}@example.test`,
+      ),
+    })
+
+    expect(result.success).toBe(false)
+  })
+
   it('accepts empty strings when clearing nested invoice payment account fields', () => {
     const result = UpdateSettingsSchema.safeParse({
       invoice_payment_accounts: {

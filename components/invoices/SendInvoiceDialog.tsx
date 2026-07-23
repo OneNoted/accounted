@@ -33,8 +33,10 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import {
   EMAIL_PATTERN,
+  exceedsInvoiceEmailRecipientLimit,
   MAX_INVOICE_EMAIL_RECIPIENTS,
   parseInvoiceRecipientText,
+  resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 
 interface InvoiceWithRelations extends Invoice {
@@ -233,10 +235,16 @@ export default function SendInvoiceDialog({
   )
   const invalidAdditionalRecipient = [...additionalCc, ...additionalBcc]
     .find((address) => !EMAIL_PATTERN.test(address))
+  const resolvedRecipients = resolveInvoiceEmailRecipients({
+    to: invoice.customer.email ?? '',
+    configuredCc: fixedCc,
+    configuredBcc: fixedBcc,
+    additionalCc,
+    additionalBcc,
+  })
   const recipientError = invalidAdditionalRecipient
     ? t('recipient_invalid', { address: invalidAdditionalRecipient })
-    : additionalCc.length > MAX_INVOICE_EMAIL_RECIPIENTS
-        || additionalBcc.length > MAX_INVOICE_EMAIL_RECIPIENTS
+    : exceedsInvoiceEmailRecipientLimit(resolvedRecipients)
       ? t('recipient_too_many', { count: MAX_INVOICE_EMAIL_RECIPIENTS })
       : null
 

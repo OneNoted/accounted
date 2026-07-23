@@ -405,6 +405,38 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('rejects a combined recipient set over the limit before allocation', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({
+      data: {
+        ...company,
+        invoice_email_cc_addresses: Array.from(
+          { length: 19 },
+          (_, index) => `fixed-${index}@test.se`,
+        ),
+        invoice_email_bcc_addresses: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { role: 'admin' }, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { additional_bcc: ['archive@test.se'] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { recipient_count: number } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_TOO_MANY_RECIPIENTS')
+    expect(body.error.details.recipient_count).toBe(21)
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSupabase.rpc).not.toHaveBeenCalledWith('generate_invoice_number', expect.anything())
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('sends invoice email, updates status, creates journal entry for accrual', async () => {
     // Fetch invoice
     enqueue({ data: invoice, error: null })

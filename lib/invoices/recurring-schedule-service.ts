@@ -40,7 +40,11 @@ import {
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '@/lib/invoices/invoice-deliveries'
-import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
+import {
+  exceedsInvoiceEmailRecipientLimit,
+  invoiceEmailRecipientCount,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
 import {
   hasRequiredInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
@@ -460,6 +464,19 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
+  const recipients = resolveInvoiceEmailRecipients({
+    to: invoice.customer.email,
+    configuredCc: company.invoice_email_cc_addresses,
+    configuredBcc: company.invoice_email_bcc_addresses,
+    legacyCc: company.email,
+  })
+  if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+    log.warn('invoice has too many email recipients; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      recipientCount: invoiceEmailRecipientCount(recipients),
+    })
+    return false
+  }
   if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
     log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
@@ -536,13 +553,6 @@ async function sendInvoiceFromSchedule(
     invoiceDate: invoice.invoice_date,
     documentType: invoice.document_type,
   })
-  const recipients = resolveInvoiceEmailRecipients({
-    to: invoice.customer.email,
-    configuredCc: company.invoice_email_cc_addresses,
-    configuredBcc: company.invoice_email_bcc_addresses,
-    legacyCc: company.email,
-  })
-
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)
   const text = generateInvoiceEmailText(emailData)

@@ -885,6 +885,12 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Customer has no email address.',
     remediation: { description: 'Add an email address on the customer record before sending.' },
   },
+  INVOICE_SEND_TOO_MANY_RECIPIENTS: {
+    httpStatus: 400,
+    message_sv: 'Ett fakturautskick får ha högst 20 mottagare totalt.',
+    message_en: 'An invoice email may have at most 20 recipients in total.',
+    remediation: { description: 'Remove CC or BCC recipients before sending the invoice.' },
+  },
   INVOICE_SEND_COMPANY_SETTINGS_MISSING: {
     httpStatus: 404,
     message_sv: 'Företagsinställningar saknas.',

@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import {
   EMAIL_PATTERN,
-  MAX_INVOICE_EMAIL_RECIPIENTS,
+  MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
   parseInvoiceRecipientText,
 } from '@/lib/invoices/email-recipients'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -64,10 +64,10 @@ export function InvoiceEmailRecipientsSettings({
       })
       return
     }
-    if (cc.length > MAX_INVOICE_EMAIL_RECIPIENTS || bcc.length > MAX_INVOICE_EMAIL_RECIPIENTS) {
+    if (cc.length + bcc.length > MAX_INVOICE_EMAIL_COPY_RECIPIENTS) {
       toast({
         title: t('too_many_title'),
-        description: t('too_many_description', { count: MAX_INVOICE_EMAIL_RECIPIENTS }),
+        description: t('too_many_description', { count: MAX_INVOICE_EMAIL_COPY_RECIPIENTS }),
         variant: 'destructive',
       })
       return
