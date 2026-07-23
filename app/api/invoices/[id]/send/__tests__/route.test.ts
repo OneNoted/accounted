@@ -349,6 +349,47 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('rejects custom recipients from a non-admin company member before allocation', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: { role: 'member' }, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { additional_cc: ['external@test.se'] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('rejects a custom recipient collision before allocation', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: { role: 'admin' }, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/send', {
+      method: 'POST',
+      body: { additional_cc: ['KUND@test.se'] },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { collisions: Array<{ conflicts_with: string }> } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.collisions).toEqual([
+      expect.objectContaining({ conflicts_with: 'to' }),
+    ])
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('sends invoice email, updates status, creates journal entry for accrual', async () => {
     // Fetch invoice
     enqueue({ data: invoice, error: null })
@@ -361,6 +402,8 @@ describe('POST /api/invoices/[id]/send', () => {
       },
       error: null,
     })
+    // Authorize the per-send CC and BCC additions.
+    enqueue({ data: { role: 'owner' }, error: null })
 
     mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-1' })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })

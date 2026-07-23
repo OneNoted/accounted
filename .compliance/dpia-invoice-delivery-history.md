@@ -19,14 +19,21 @@ the sent accounting document. It is not necessary in the routine browser list.
 The list therefore exposes only status, timestamps, masked recipient domains,
 provider name, error code, and an active-company-scoped link to the archived
 PDF. Subjects, bodies, full addresses, reply-to addresses, provider message IDs,
-and checksums are excluded.
+BCC recipients, filenames, and checksums are excluded.
 
 ## Risks and controls
 
 - Cross-tenant disclosure: route context, explicit `company_id` filters, RLS,
   and active-company document authorization.
 - Excess browser disclosure: allow-listed response fields, domain masking, and
-  `private, no-store` caching.
+  `private, no-store` caching. BCC recipients never leave the server-side
+  delivery evidence through the list endpoint. The exact table payload is
+  sender-only under RLS; other members use a masked summary function. Complete
+  statutory exports are owner/admin-only server operations.
+- Forged delivery evidence: authenticated PostgREST INSERT and UPDATE access is
+  removed. Server-only functions bind reservations and state transitions to a
+  verified writable company member. Payload-free crashed reservations may be
+  reclaimed by another sender only after 15 minutes.
 - Undocumented mutation: immutable status transitions plus a metadata-only
   audit trigger. Audit state excludes recipients and message content.
 - Excess retention: fiscal-period-derived `retention_expires_at` and daily PII

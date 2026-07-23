@@ -29,7 +29,10 @@ import {
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
-import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
+import {
+  findAdditionalInvoiceRecipientCollisions,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
 import {
   hasUsableInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
@@ -165,7 +168,7 @@ export const POST = withRouteContext(
     }
 
     const customer = invoice.customer as Customer
-    if (!customer.email) {
+    if (!customer.email?.trim()) {
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
         requestId,
         details: { customerId: customer.id },
@@ -180,6 +183,52 @@ export const POST = withRouteContext(
 
     if (companyError || !company) {
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
+    }
+
+    const hasAdditionalRecipients =
+      (bodyResult.data.additional_cc?.length ?? 0) > 0
+      || (bodyResult.data.additional_bcc?.length ?? 0) > 0
+    if (hasAdditionalRecipients) {
+      const { data: membership, error: membershipError } = await supabase
+        .from('company_members')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (membershipError) {
+        opLog.error('failed to authorize custom invoice recipients', membershipError)
+        return errorResponseFromCode('INTERNAL_ERROR', opLog, { requestId })
+      }
+      if (!membership || !['owner', 'admin'].includes(membership.role)) {
+        return errorResponseFromCode('FORBIDDEN', opLog, {
+          requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+    }
+
+    const recipientInput = {
+      to: customer.email,
+      configuredCc: company.invoice_email_cc_addresses,
+      configuredBcc: company.invoice_email_bcc_addresses,
+      legacyCc: company.email || user.email,
+      additionalCc: bodyResult.data.additional_cc,
+      additionalBcc: bodyResult.data.additional_bcc,
+    }
+    const recipientCollisions = findAdditionalInvoiceRecipientCollisions(recipientInput)
+    if (recipientCollisions.length > 0) {
+      return errorResponseFromCode('VALIDATION_ERROR', opLog, {
+        requestId,
+        details: { field: 'recipients', collisions: recipientCollisions },
+      })
+    }
+    const recipients = resolveInvoiceEmailRecipients(recipientInput)
+    if (recipients.to.length === 0) {
+      return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
+        requestId,
+        details: { customerId: customer.id },
+      })
     }
 
     const invoiceCurrency = (invoice as Invoice).currency
@@ -227,6 +276,7 @@ export const POST = withRouteContext(
         const preflight = await prepareInvoicePdfRender(
           company as CompanySettings,
           (invoice as Invoice).currency,
+          { paymentAccountRequired },
         )
         await renderToBuffer(
           InvoicePDF({
@@ -291,6 +341,7 @@ export const POST = withRouteContext(
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
       renderableInvoice.currency,
+      { paymentAccountRequired },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
@@ -323,14 +374,6 @@ export const POST = withRouteContext(
       isCreditNote,
     })
 
-    const recipients = resolveInvoiceEmailRecipients({
-      to: customer.email,
-      configuredCc: company.invoice_email_cc_addresses,
-      configuredBcc: company.invoice_email_bcc_addresses,
-      legacyCc: company.email || user.email,
-      additionalCc: bodyResult.data.additional_cc,
-      additionalBcc: bodyResult.data.additional_bcc,
-    })
     const partialFailures: Array<{ step: string; reason: string }> = []
     if (paymentLinkFailure) {
       // The failure string is a raw provider/DB message: log it, but the

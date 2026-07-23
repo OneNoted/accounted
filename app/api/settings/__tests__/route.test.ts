@@ -111,6 +111,7 @@ describe('PUT /api/settings', () => {
     }
     enqueueMany([
       { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
       { data: { id: 's1', ...updates } },
       { data: null, count: 5 },
     ])
@@ -123,6 +124,29 @@ describe('PUT /api/settings', () => {
 
     expect(status).toBe(200)
     expect(body.data).toMatchObject(updates)
+  })
+
+  it('rejects fixed invoice recipient changes from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_email_bcc_addresses: ['archive@example.com'] },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { required_roles?: string[] } }
+    }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details?.required_roles).toEqual(['owner', 'admin'])
+    expect(supabase.from.mock.calls.map(([table]) => table)).toEqual([
+      'company_settings',
+      'company_members',
+    ])
   })
 
   it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {

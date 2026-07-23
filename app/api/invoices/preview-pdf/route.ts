@@ -7,6 +7,8 @@ import { getVatRules } from '@/lib/invoices/vat-rules'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
 
 /**
  * POST /api/invoices/preview-pdf
@@ -14,7 +16,13 @@ import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentTy
  * Generates a preview PDF from form data without creating an invoice.
  * Returns the PDF as an inline blob for display in a new browser tab.
  */
-export const POST = withRouteContext('invoice.preview_pdf', async (request, { supabase, user, companyId }) => {
+export const POST = withRouteContext('invoice.preview_pdf', async (request, {
+  supabase,
+  user,
+  companyId,
+  log,
+  requestId,
+}) => {
   const body = await request.json()
   const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number, payment_link_url } = body
 
@@ -184,6 +192,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, { su
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
       previewInvoice.currency,
+      { paymentAccountRequired: invoiceRequiresPaymentAccount(previewInvoice) },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, previewInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(previewInvoice)
@@ -215,6 +224,16 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, { su
       },
     })
   } catch (error) {
+    if (
+      typeof error === 'object'
+      && error !== null
+      && (error as { code?: unknown }).code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
+    ) {
+      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+        requestId,
+        details: { currency: previewInvoice.currency },
+      })
+    }
     console.error('Preview PDF generation error:', error)
     return NextResponse.json(
       { error: 'Kunde inte generera PDF-förhandsgranskning' },

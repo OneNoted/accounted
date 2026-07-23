@@ -12,6 +12,7 @@ import {
   parseInvoiceRecipientText,
 } from '@/lib/invoices/email-recipients'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useCompany } from '@/contexts/CompanyContext'
 import type { CompanySettings } from '@/types'
 
 interface InvoiceEmailRecipientsSettingsProps {
@@ -29,6 +30,7 @@ export function InvoiceEmailRecipientsSettings({
 }: InvoiceEmailRecipientsSettingsProps) {
   const t = useTranslations('settings_invoice_email_recipients')
   const { toast } = useToast()
+  const { role } = useCompany()
   const effectiveCc = settings.invoice_email_cc_addresses ?? (
     settings.email ? [settings.email] : []
   )
@@ -46,6 +48,8 @@ export function InvoiceEmailRecipientsSettings({
     setBccText((current) => current === previous.bcc ? serverBccText : current)
     previousServerText.current = { cc: serverCcText, bcc: serverBccText }
   }, [serverBccText, serverCcText])
+
+  if (role !== 'owner' && role !== 'admin') return null
 
   async function save() {
     const cc = parseInvoiceRecipientText(ccText)

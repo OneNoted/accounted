@@ -444,7 +444,7 @@ async function sendInvoiceFromSchedule(
     })
     return false
   }
-  if (!invoice.customer.email) {
+  if (!invoice.customer.email?.trim()) {
     log.warn('customer has no email; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
       customerId: invoice.customer.id,

@@ -91,6 +91,33 @@ export function invoiceRequiresPaymentAccount(
     && invoice.document_type !== 'delivery_note'
     && invoice.document_type !== 'proforma'
 }
+
+export class InvoicePaymentAccountMissingError extends Error {
+  readonly code = 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
+  readonly currency: Currency
+
+  constructor(currency: Currency) {
+    super(`Invoice payment account is missing for ${currency}.`)
+    this.name = 'InvoicePaymentAccountMissingError'
+    this.currency = currency
+  }
+}
+
+export function assertInvoicePaymentAccountForRender(
+  company: CompanySettings,
+  currency: Currency,
+): void {
+  if (
+    currency !== 'SEK'
+    && !hasUsableInvoicePaymentAccount(
+      resolveInvoicePaymentAccount(company, currency),
+      currency,
+    )
+  ) {
+    throw new InvoicePaymentAccountMissingError(currency)
+  }
+}
+
 /**
  * Return invoice render settings with only the matching payment account.
  * Foreign invoices never inherit the legacy SEK payment details.

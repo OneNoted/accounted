@@ -27,7 +27,10 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { createLogger } from '@/lib/logger'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 import { prepareInvoiceFont } from '@/lib/invoices/pdf-fonts'
-import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
+import {
+  assertInvoicePaymentAccountForRender,
+  companyWithInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 
 const log = createLogger('invoice.swish-qr')
 const paymentLinkLog = createLogger('invoice.payment-link-qr')
@@ -41,6 +44,10 @@ export interface InvoicePdfRenderExtras {
    * unchanged on any failure, so behaviour is never worse than before.
    */
   company: CompanySettings
+}
+
+export interface InvoicePdfRenderOptions {
+  paymentAccountRequired?: boolean
 }
 
 // A company's logo is reused across every invoice render, and twice per send
@@ -146,7 +153,11 @@ async function encodeLogo(logoUrl: string): Promise<string | null> {
 export async function prepareInvoicePdfRender(
   company: CompanySettings,
   currency?: Currency,
+  options: InvoicePdfRenderOptions = {},
 ): Promise<InvoicePdfRenderExtras> {
+  if (currency && options.paymentAccountRequired !== false) {
+    assertInvoicePaymentAccountForRender(company, currency)
+  }
   const branding = await prepareInvoiceFont(
     company,
     brandingFromCompanySettings(company),

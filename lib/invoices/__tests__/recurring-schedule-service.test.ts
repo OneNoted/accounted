@@ -377,6 +377,24 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
   })
 
+  it('does not reserve a delivery when the customer email is blank', async () => {
+    const customerWithoutEmail = { ...customer, email: '   ' }
+    enqueue({ data: customerWithoutEmail, error: null })
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({
+      data: { ...makeCompleteInvoice(), customer: customerWithoutEmail },
+      error: null,
+    })
+
+    const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+    expect(result.autoSent).toBe(false)
+    expect(result.warning).toContain('Auto-utskick misslyckades')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('never auto-sends from a sandbox company; invoice stays a numbered draft', async () => {
     mockIsSandbox.mockResolvedValue(true)
     // Sandbox bails before company_settings/payment-link/render/email, so the

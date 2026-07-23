@@ -16,6 +16,17 @@ export interface ResolvedInvoiceEmailRecipients {
   bcc: string[]
 }
 
+export interface InvoiceEmailRecipientCollision {
+  address: string
+  field: 'additional_cc' | 'additional_bcc'
+  conflicts_with:
+    | 'to'
+    | 'configured_cc'
+    | 'configured_bcc'
+    | 'additional_cc'
+    | 'additional_bcc'
+}
+
 function normalizedKey(address: string): string {
   return address.trim().toLocaleLowerCase('en-US')
 }
@@ -68,6 +79,61 @@ export function resolveInvoiceEmailRecipients(
   )
 
   return { to, cc, bcc }
+}
+
+/**
+ * Report explicit per-send recipients that would be silently moved or omitted
+ * by deterministic To, CC, BCC precedence. Company-level configuration keeps
+ * its historical de-duplication behavior, while caller-supplied collisions are
+ * rejected before invoice number allocation so the caller can correct them.
+ */
+export function findAdditionalInvoiceRecipientCollisions(
+  input: ResolveInvoiceEmailRecipientsInput,
+): InvoiceEmailRecipientCollision[] {
+  const occupied = new Map<string, InvoiceEmailRecipientCollision['conflicts_with']>()
+  const rawTo = typeof input.to === 'string' ? [input.to] : input.to
+  for (const address of rawTo) {
+    const key = normalizedKey(address)
+    if (key) occupied.set(key, 'to')
+  }
+
+  const fixedCc = input.configuredCc === null || input.configuredCc === undefined
+    ? input.legacyCc
+      ? [input.legacyCc]
+      : []
+    : input.configuredCc
+  for (const address of fixedCc) {
+    const key = normalizedKey(address)
+    if (key && !occupied.has(key)) occupied.set(key, 'configured_cc')
+  }
+  for (const address of input.configuredBcc ?? []) {
+    const key = normalizedKey(address)
+    if (key && !occupied.has(key)) occupied.set(key, 'configured_bcc')
+  }
+
+  const collisions: InvoiceEmailRecipientCollision[] = []
+  for (const address of input.additionalCc ?? []) {
+    const key = normalizedKey(address)
+    if (!key) continue
+    const conflict = occupied.get(key)
+    if (conflict) {
+      collisions.push({ address: address.trim(), field: 'additional_cc', conflicts_with: conflict })
+      continue
+    }
+    occupied.set(key, 'additional_cc')
+  }
+  for (const address of input.additionalBcc ?? []) {
+    const key = normalizedKey(address)
+    if (!key) continue
+    const conflict = occupied.get(key)
+    if (conflict) {
+      collisions.push({ address: address.trim(), field: 'additional_bcc', conflicts_with: conflict })
+      continue
+    }
+    occupied.set(key, 'additional_bcc')
+  }
+
+  return collisions
 }
 
 export function parseInvoiceRecipientText(value: string): string[] {

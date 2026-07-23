@@ -2,7 +2,7 @@
 
 Status: **Approved Documented Security Decision**
 Owner: Emil Mattsson (emil.mattsson@arcim.io)
-Last reviewed: 2026-05-11
+Last reviewed: 2026-07-23
 
 This document records authorization decisions for Accounted that go beyond the
 default "the resource creator is the only person who can act on it" model.
@@ -54,9 +54,15 @@ of who originally drafted it.
 
 Invoice delivery list responses are data-minimized even for authorized
 company members. They expose masked recipient domains and operational status,
-but not message bodies, subjects, reply-to addresses, provider message IDs, or
-attachment checksums. Archived PDFs are served only when their document row
-belongs to the request's active company.
+but not BCC recipients, message bodies, subjects, reply-to addresses, provider
+message IDs, attachment filenames, or attachment checksums. Archived PDFs are
+served only when their document row belongs to the request's active company.
+The underlying exact delivery payload is selectable only by the user who sent
+the message. Other members receive the minimized list through the dedicated
+database function, so direct PostgREST access cannot bypass route minimization.
+The complete statutory archive is an owner/admin-only server operation and may
+include exact company delivery evidence. Deferred booking uses a separate
+function that exposes only the latest archived document ID.
 
 ### Why this is intentional
 
@@ -96,6 +102,31 @@ Although authorization is by `company_id`, the audit trail is by `user_id`:
 ---
 
 ## Specific decisions
+
+### Invoice CC and BCC configuration: owner or admin only
+
+**Decision.** Changing fixed invoice recipients or adding an arbitrary CC or
+BCC recipient to an individual invoice send requires the actor to have the
+`owner` or `admin` role in `company_members`. The dashboard hides the controls
+for other roles. The settings, dashboard send, and v1 send routes enforce the
+role before persistence, PDF rendering, number allocation, or email delivery.
+The database also rejects direct member changes to the fixed recipient fields.
+
+**Why.** Both fixed and per-send recipients can disclose customer invoice data
+to a new external address. This is a distinct disclosure decision and needs a
+narrower authorization boundary than ordinary invoice sending. Explicit
+recipients that collide with To, fixed CC, fixed BCC, or another per-send
+recipient are rejected instead of silently changing recipient classification.
+
+**Compensating audit.** Successful invoice sends retain the exact immutable
+recipient payload in `invoice_deliveries`, including the actor and company.
+Routine delivery-list responses remain minimized and never expose BCC.
+
+**Cross-references.**
+- OWASP ASVS V2.3: business logic integrity
+- OWASP ASVS V8.2.1: operation-level authorization
+- GDPR Articles 5(1)(c) and 25(2): minimization and privacy by default
+- SOC 2 CC6.1: logical access
 
 ### bank_connections: managed at company scope
 

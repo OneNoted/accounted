@@ -26,6 +26,7 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 const INVOICE_PDF_COLUMNS =
@@ -154,6 +155,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         company as CompanySettings,
         typed.currency,
+        { paymentAccountRequired: invoiceRequiresPaymentAccount(typed) },
       )
       const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, typed as Invoice)
       pdfBuffer = await renderToBuffer(
@@ -168,6 +170,16 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         }),
       )
     } catch (err) {
+      if (
+        typeof err === 'object'
+        && err !== null
+        && (err as { code?: unknown }).code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
+      ) {
+        return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+          requestId: ctx.requestId,
+          details: { currency: typed.currency },
+        })
+      }
       ctx.log.error('invoices.pdf: render failed', err as Error, {
         invoiceId,
         companyId: ctx.companyId,

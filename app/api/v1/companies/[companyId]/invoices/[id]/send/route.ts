@@ -66,10 +66,12 @@ import {
 } from '@/lib/invoices/invoice-deliveries'
 import {
   MAX_INVOICE_EMAIL_RECIPIENTS,
+  findAdditionalInvoiceRecipientCollisions,
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
 import {
   hasUsableInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
   resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { eventBus } from '@/lib/events'
@@ -95,7 +97,9 @@ const InvoiceSendResponse = z.object({
   total: z.number(),
   message_id: z.string().nullable(),
   sent_to: z.string(),
-  cc: z.string().nullable(),
+  cc: z.string().nullable().describe(
+    'Deprecated compatibility field containing only the first CC recipient. Use cc_addresses for the complete delivery list.',
+  ),
   cc_addresses: z.array(z.string()),
   bcc_addresses: z.array(z.string()),
   journal_entry_id: z.string().uuid().nullable(),
@@ -122,6 +126,8 @@ registerEndpoint({
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'Email failure before the status flip leaves the F-series number consumed but the invoice in `draft` status. Same orphan window as :mark-sent (architecturally tracked, matches internal route).',
     'After the email succeeds, journal-entry/archive/event failures become warnings on the response; the invoice IS marked sent regardless.',
+    'additional_cc and additional_bcc require the API key user to be an owner or admin of the company.',
+    'The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.',
   ],
   example: {
     request: {
@@ -305,7 +311,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 2: customer email.
     const customer = typed.customer
-    if (!customer?.email) {
+    if (!customer?.email?.trim()) {
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
         requestId: ctx.requestId,
         details: { customer_id: typed.customer_id },
@@ -330,8 +336,57 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    const hasAdditionalRecipients =
+      (bodyResult.data.additional_cc?.length ?? 0) > 0
+      || (bodyResult.data.additional_bcc?.length ?? 0) > 0
+    if (hasAdditionalRecipients) {
+      const { data: membership, error: membershipError } = await ctx.supabase
+        .from('company_members')
+        .select('role')
+        .eq('company_id', ctx.companyId!)
+        .eq('user_id', ctx.userId)
+        .maybeSingle()
+
+      if (membershipError) {
+        ctx.log.error('invoices.send: failed to authorize custom recipients', membershipError)
+        return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
+      if (!membership || !['owner', 'admin'].includes(membership.role)) {
+        return v1ErrorResponseFromCode('FORBIDDEN', ctx.log, {
+          requestId: ctx.requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+    }
+
+    const recipientInput = {
+      to: customer.email,
+      configuredCc: settings.invoice_email_cc_addresses,
+      configuredBcc: settings.invoice_email_bcc_addresses,
+      legacyCc: settings.email,
+      additionalCc: bodyResult.data.additional_cc,
+      additionalBcc: bodyResult.data.additional_bcc,
+    }
+    const recipientCollisions = findAdditionalInvoiceRecipientCollisions(recipientInput)
+    if (recipientCollisions.length > 0) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'recipients', collisions: recipientCollisions },
+      })
+    }
+    const recipients = resolveInvoiceEmailRecipients(recipientInput)
+    if (recipients.to.length === 0) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
+        requestId: ctx.requestId,
+        details: { customer_id: typed.customer_id },
+      })
+    }
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
     if (
-      typed.currency !== 'SEK'
+      paymentAccountRequired
+      && typed.currency !== 'SEK'
       && !hasUsableInvoicePaymentAccount(
         resolveInvoicePaymentAccount(settings, typed.currency),
         typed.currency,
@@ -342,15 +397,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { currency: typed.currency },
       })
     }
-    const recipients = resolveInvoiceEmailRecipients({
-      to: customer.email,
-      configuredCc: settings.invoice_email_cc_addresses,
-      configuredBcc: settings.invoice_email_bcc_addresses,
-      legacyCc: settings.email,
-      additionalCc: bodyResult.data.additional_cc,
-      additionalBcc: bodyResult.data.additional_bcc,
-    })
-
     const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
     // Credit notes are rejected above, so originalInvoiceNumber is never
     // needed on this code path. Kept undefined to satisfy the InvoicePDF
@@ -362,7 +408,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(settings, typed.currency)
+        const preflight = await prepareInvoicePdfRender(settings, typed.currency, {
+          paymentAccountRequired,
+        })
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
@@ -494,6 +542,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         settings,
         renderableInvoice.currency,
+        { paymentAccountRequired },
       )
       const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
       const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)

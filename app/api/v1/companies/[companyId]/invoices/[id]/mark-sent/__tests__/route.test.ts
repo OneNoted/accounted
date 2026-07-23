@@ -50,11 +50,13 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import {
   createInvoiceJournalEntry as mockedCreateEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { ensureInvoiceNumber as mockedEnsureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { POST as markSent } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockCreateJournalEntry = mockedCreateEntry as ReturnType<typeof vi.fn>
+const mockEnsureInvoiceNumber = mockedEnsureInvoiceNumber as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
 function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
@@ -189,6 +191,36 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     const body = await res.json()
     expect(body.error.code).toBe('INVOICE_UPDATE_NOT_DRAFT')
     expect(body.error.details.current_status).toBe('sent')
+  })
+
+  it('rejects a foreign invoice without a payment account before number allocation', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, currency: 'EUR' }, error: null },
+        company_settings: {
+          data: {
+            accounting_method: 'accrual',
+            entity_type: 'enskild_firma',
+            invoice_payment_accounts: {},
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('rejects delivery notes with VALIDATION_ERROR (regardless of status)', async () => {

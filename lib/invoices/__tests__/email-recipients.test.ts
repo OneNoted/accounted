@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  findAdditionalInvoiceRecipientCollisions,
   parseInvoiceRecipientText,
   resolveInvoiceEmailRecipients,
 } from '@/lib/invoices/email-recipients'
@@ -37,5 +38,31 @@ describe('resolveInvoiceEmailRecipients', () => {
     expect(parseInvoiceRecipientText(
       ' finance@example.test,\nDIRECTOR@example.test; finance@example.test ',
     )).toEqual(['finance@example.test', 'DIRECTOR@example.test'])
+  })
+
+  it('reports per-send collisions instead of silently changing recipient precedence', () => {
+    expect(findAdditionalInvoiceRecipientCollisions({
+      to: 'customer@example.test',
+      configuredCc: ['finance@example.test'],
+      configuredBcc: ['archive@example.test'],
+      additionalCc: ['CUSTOMER@example.test', 'case-owner@example.test'],
+      additionalBcc: ['finance@example.test', 'case-owner@example.test'],
+    })).toEqual([
+      {
+        address: 'CUSTOMER@example.test',
+        field: 'additional_cc',
+        conflicts_with: 'to',
+      },
+      {
+        address: 'finance@example.test',
+        field: 'additional_bcc',
+        conflicts_with: 'configured_cc',
+      },
+      {
+        address: 'case-owner@example.test',
+        field: 'additional_bcc',
+        conflicts_with: 'additional_cc',
+      },
+    ])
   })
 })

@@ -52,7 +52,7 @@ export async function generateTrialBalance(
   // Fetch period for opening balance computation
   const { data: period } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end, opening_balance_entry_id, closing_entry_id')
+    .select('period_start, period_end, opening_balance_entry_id, closing_entry_id, is_closed')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
@@ -63,11 +63,22 @@ export async function generateTrialBalance(
       : undefined
 
   // Existing operational reports intentionally exclude every year_end entry.
-  // Keep that behavior separate from statutory annual-report generation,
-  // which excludes only the final result-closing entry while retaining tax
-  // and appropriations.
+  // Statutory annual reports must exclude only the linked final closing entry:
+  // tax, depreciation, and appropriations also use source_type year_end. A
+  // closed period without the link is ambiguous, so fail instead of silently
+  // understating the statutory report.
+  if (
+    options?.excludeFinalClosingEntry
+    && period?.is_closed === true
+    && !period.closing_entry_id
+  ) {
+    throw new Error(
+      'Closed fiscal period is missing closing_entry_id; statutory pre-closing balances cannot be generated safely',
+    )
+  }
+  const excludeAllYearEndEntries = options?.excludeYearEndClosing
   let yearEndEntryIds: string[] = []
-  if (options?.excludeYearEndClosing) {
+  if (excludeAllYearEndEntries) {
     yearEndEntryIds = (
       await fetchAllRows<{ id: string }>(({ from, to }) =>
         supabase
@@ -142,7 +153,7 @@ export async function generateTrialBalance(
           query = query.neq('id', obEntryId)
         }
 
-        if (options?.excludeYearEndClosing) {
+        if (excludeAllYearEndEntries) {
           query = excludeYearEndChain(query)
         }
         if (options?.excludeFinalClosingEntry) {
@@ -203,7 +214,7 @@ export async function generateTrialBalance(
         query = query.neq('id', obEntryId)
       }
 
-      if (options?.excludeYearEndClosing) {
+      if (excludeAllYearEndEntries) {
         query = excludeYearEndChain(query)
       }
       if (options?.excludeFinalClosingEntry) {

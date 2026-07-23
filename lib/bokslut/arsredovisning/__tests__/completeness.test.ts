@@ -185,6 +185,23 @@ describe('validateAnnualReportCompleteness', () => {
     )
   })
 
+  it('compares annual-report results at whole-ore precision', () => {
+    const value = report()
+    value.resultatrakning = [
+      { label: 'Årets resultat', current: 0.1 + 0.2, previous: null, is_total: true },
+    ]
+    value.balansrakning.equity_liabilities = [
+      { label: 'Årets resultat', current: 0.3, previous: null },
+    ]
+    value.forvaltningsberattelse.resultatdisposition_amounts.current_year_result = 0.3
+
+    expect(validateStatementIntegrity(value)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-RESULT-MISMATCH' }),
+      ]),
+    )
+  })
+
   it('blocks a version when the income statement has no final result row', () => {
     const value = input('draft')
     value.report.resultatrakning = [

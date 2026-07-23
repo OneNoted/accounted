@@ -1,7 +1,32 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import type { PoolClient } from 'pg'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from '@/tests/pg/fixtures'
+
+async function withServiceRoleContext<T>(
+  userId: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+      JSON.stringify({ sub: userId, role: 'service_role' }),
+    ])
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+    await client.query(`SELECT set_config('request.jwt.claim.role', 'service_role', true)`)
+    await client.query(`SET LOCAL ROLE service_role`)
+    const result = await fn(client)
+    await client.query('ROLLBACK')
+    return result
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
 
 async function insertInvoice(userId: string, companyId: string): Promise<string> {
   const customerId = randomUUID()
@@ -236,6 +261,91 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     expect(visibleIds).toEqual([deliveryA])
   })
 
+  it('keeps exact payload sender-only and exposes masked summaries to members', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const deliveryId = await insertPendingEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+    await getPool().query(
+      `UPDATE public.invoice_deliveries SET status = 'sent', sent_at = now() WHERE id = $1`,
+      [deliveryId],
+    )
+
+    const directRows = await withUserContext(memberId, async (client) => {
+      return client.query(
+        `SELECT id, bcc_addresses, body_text
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+    })
+    expect(directRows.rowCount).toBe(0)
+
+    const summary = await withUserContext(memberId, async (client) => {
+      return client.query<Record<string, unknown>>(
+        `SELECT *
+           FROM public.list_invoice_delivery_summaries($1, $2)`,
+        [companyId, invoiceId],
+      )
+    })
+    expect(summary.rows).toEqual([
+      expect.objectContaining({
+        id: deliveryId,
+        to_addresses: ['***@example.com'],
+        cc_addresses: ['***@example.com'],
+      }),
+    ])
+    expect(summary.rows[0]).not.toHaveProperty('bcc_addresses')
+    expect(summary.rows[0]).not.toHaveProperty('body_text')
+
+    const documentLookup = await withUserContext(memberId, (client) => client.query<{ id: string }>(
+      `SELECT public.latest_sent_invoice_delivery_document($1, $2)::text AS id`,
+      [companyId, invoiceId],
+    ))
+    expect(documentLookup.rows[0].id).toBe(documentId)
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT id FROM public.export_invoice_delivery_evidence($1)`,
+        [companyId],
+      )),
+    ).rejects.toThrow(/owner or admin role required/i)
+
+    const ownerExport = await withUserContext(userId, (client) => client.query<{
+      id: string
+      bcc_addresses: string[]
+    }>(
+      `SELECT id, bcc_addresses
+         FROM public.export_invoice_delivery_evidence($1)
+        WHERE id = $2`,
+      [companyId, deliveryId],
+    ))
+    expect(ownerExport.rows[0]).toEqual({
+      id: deliveryId,
+      bcc_addresses: ['archive@example.com'],
+    })
+
+    const senderPayload = await withUserContext(userId, async (client) => {
+      return client.query<{ bcc_addresses: string[]; body_text: string }>(
+        `SELECT bcc_addresses, body_text
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+    })
+    expect(senderPayload.rows[0]).toEqual({
+      bcc_addresses: ['archive@example.com'],
+      body_text: 'Exact plain text',
+    })
+  })
+
   it('denies inserts to a viewer', async () => {
     const { userId, companyId } = await seedCompany()
     const viewerId = await insertAuthUser()
@@ -252,6 +362,150 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
         )
       }),
     ).rejects.toThrow(/row-level security|policy/i)
+  })
+
+  it('denies direct delivery writes and RPC execution to authenticated members', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const deliveryId = await insertPendingEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `INSERT INTO public.invoice_deliveries
+           (user_id, company_id, invoice_id, channel, status, sent_at)
+         VALUES ($1, $2, $3, 'manual', 'marked_sent', now())`,
+        [memberId, companyId, invoiceId],
+      )),
+    ).rejects.toThrow(/row-level security|policy/i)
+
+    await expect(
+      withUserContext(userId, (client) => client.query(
+        `UPDATE public.invoice_deliveries
+            SET status = 'sent', sent_at = now()
+          WHERE id = $1`,
+        [deliveryId],
+      )),
+    ).rejects.toThrow(/row-level security|policy/i)
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)`,
+        [companyId, invoiceId, userId],
+      )),
+    ).rejects.toThrow(/permission denied/i)
+  })
+
+  it('uses server-only RPCs for reservation, payload capture, and finalization', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+
+    await withServiceRoleContext(userId, async (client) => {
+      const reserved = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, userId],
+      )
+      const deliveryId = reserved.rows[0].id
+
+      const reused = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, userId],
+      )
+      expect(reused.rows[0].id).toBe(deliveryId)
+
+      const captured = await client.query<{ id: string }>(
+        `SELECT public.capture_invoice_delivery_payload(
+           $1, $2, $3, $4,
+           ARRAY['customer@example.com'], ARRAY['copy@example.com'], ARRAY['archive@example.com'],
+           'sender@example.com', 'Example AB', 'Faktura F-1001',
+           'Exact plain text', '<p>Exact HTML</p>', $5,
+           'invoice.pdf', 'application/pdf', $6
+         )::text AS id`,
+        [deliveryId, companyId, invoiceId, userId, documentId, 'a'.repeat(64)],
+      )
+      expect(captured.rows[0].id).toBe(deliveryId)
+
+      const finalized = await client.query<{ id: string }>(
+        `SELECT public.finalize_invoice_delivery(
+           $1, $2, $3, 'sent', 'resend', 'provider-message-1', NULL
+         )::text AS id`,
+        [deliveryId, companyId, userId],
+      )
+      expect(finalized.rows[0].id).toBe(deliveryId)
+
+      const row = await client.query(
+        `SELECT status, bcc_addresses, body_text
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+      expect(row.rows[0]).toMatchObject({
+        status: 'sent',
+        bcc_addresses: ['archive@example.com'],
+        body_text: 'Exact plain text',
+      })
+    })
+  })
+
+  it('reclaims only stale payload-free reservations for another sender', async () => {
+    const { userId, companyId } = await seedCompany()
+    const otherUserId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: otherUserId, role: 'admin' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const staleId = randomUUID()
+
+    await getPool().query(
+      `INSERT INTO public.invoice_deliveries
+         (id, user_id, company_id, invoice_id, channel, status, created_at)
+       VALUES ($1, $2, $3, $4, 'email', 'preparing', now() - interval '16 minutes')`,
+      [staleId, userId, companyId, invoiceId],
+    )
+
+    await withServiceRoleContext(otherUserId, async (client) => {
+      const result = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, otherUserId],
+      )
+      expect(result.rows[0].id).not.toBe(staleId)
+
+      const stale = await client.query(
+        `SELECT id FROM public.invoice_deliveries WHERE id = $1`,
+        [staleId],
+      )
+      expect(stale.rowCount).toBe(0)
+    })
+  })
+
+  it('restricts fixed invoice email recipient settings to owners and admins', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `UPDATE public.company_settings
+            SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
+          WHERE company_id = $1`,
+        [companyId],
+      )),
+    ).rejects.toThrow(/owner or admin role required/i)
+
+    await expect(
+      withUserContext(userId, (client) => client.query(
+        `UPDATE public.company_settings
+            SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
+          WHERE company_id = $1`,
+        [companyId],
+      )),
+    ).resolves.toBeDefined()
   })
 
   it('reserves one preparing attempt and promotes it to the exact pending payload', async () => {

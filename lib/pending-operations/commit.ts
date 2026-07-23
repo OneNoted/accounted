@@ -1502,7 +1502,7 @@ async function commitSendInvoice(
   }
 
   const customer = invoice.customer as Customer
-  if (!customer.email) return { error: 'Customer has no email address', status: 400 }
+  if (!customer.email?.trim()) return { error: 'Customer has no email address', status: 400 }
 
   const { data: company, error: companyError } = await supabase
     .from('company_settings').select('*').eq('company_id', companyId).single()
@@ -1550,6 +1550,7 @@ async function commitSendInvoice(
       const preflight = await prepareInvoicePdfRender(
         company as CompanySettings,
         (invoice as Invoice).currency,
+        { paymentAccountRequired },
       )
       await renderToBuffer(
         InvoicePDF({
@@ -1606,6 +1607,7 @@ async function commitSendInvoice(
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
     renderableInvoice.currency,
+    { paymentAccountRequired },
   )
   const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
@@ -1742,6 +1744,31 @@ async function commitMarkInvoiceSent(
   }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
 
+  const { data: settings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('accounting_method, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
+    .eq('company_id', companyId)
+    .single()
+
+  if (settingsError || !settings) return { error: 'Company settings missing', status: 500 }
+
+  const invoiceCurrency = (invoice as Invoice).currency
+  if (
+    invoiceRequiresPaymentAccount(invoice as Invoice)
+    && invoiceCurrency !== 'SEK'
+    && !hasUsableInvoicePaymentAccount(
+      resolveInvoicePaymentAccount(settings as CompanySettings, invoiceCurrency),
+      invoiceCurrency,
+    )
+  ) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
+        ?? 'Betalningskonto saknas för fakturans valuta.',
+      status: 400,
+    }
+  }
+
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
@@ -1764,9 +1791,6 @@ async function commitMarkInvoiceSent(
     })
     deliveryHistoryWarning = 'Fakturan markerades som skickad men utskickshistoriken kunde inte sparas.'
   }
-
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
 
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null

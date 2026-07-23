@@ -239,6 +239,26 @@ describe('GET /api/v1/companies/:companyId/invoices/:id/pdf', () => {
     expect(body.error.code).toBe('INVOICE_PDF_RENDER_FAILED')
   })
 
+  it('returns 400 when a foreign payment account is missing', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...SENT_INVOICE, currency: 'EUR' }, error: null },
+        company_settings: { data: { ...COMPANY_SETTINGS, invoice_payment_accounts: {} }, error: null },
+      }),
+    )
+
+    const res = await pdf(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/pdf`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(mockRender).not.toHaveBeenCalled()
+  })
+
   it('returns 400 VALIDATION_ERROR for non-UUID id', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

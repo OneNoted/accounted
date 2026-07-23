@@ -7,10 +7,12 @@ import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { invoiceRequiresPaymentAccount } from '@/lib/invoices/payment-accounts'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
   const { id } = await params
 
   // Fetch invoice with customer and items
@@ -62,6 +64,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
       (invoice as Invoice).currency,
+      { paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice) },
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
@@ -102,6 +105,16 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       },
     })
   } catch (error) {
+    if (
+      typeof error === 'object'
+      && error !== null
+      && (error as { code?: unknown }).code === 'INVOICE_SEND_PAYMENT_ACCOUNT_MISSING'
+    ) {
+      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+        requestId,
+        details: { currency: (invoice as Invoice).currency },
+      })
+    }
     console.error('PDF generation error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? getUserErrorMessage(error) : 'PDF generation failed' },

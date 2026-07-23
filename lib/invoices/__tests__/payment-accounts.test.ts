@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  InvoicePaymentAccountMissingError,
+  assertInvoicePaymentAccountForRender,
   companyWithInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
@@ -76,6 +78,13 @@ describe('invoice payment accounts', () => {
     }), 'EUR')
 
     expect(hasUsableInvoicePaymentAccount(withoutIban, 'EUR')).toBe(false)
+  })
+
+  it('blocks foreign-currency rendering when no usable account is configured', () => {
+    expect(() => assertInvoicePaymentAccountForRender(company(), 'EUR')).toThrow(
+      InvoicePaymentAccountMissingError,
+    )
+    expect(() => assertInvoicePaymentAccountForRender(company(), 'SEK')).not.toThrow()
   })
 
   it('requires payment accounts only for payable invoice documents', () => {

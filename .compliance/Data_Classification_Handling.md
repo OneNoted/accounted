@@ -31,6 +31,10 @@ personal and business data. Exact payloads are retained server-side as delivery
 evidence until `invoice_deliveries.retention_expires_at`. Browser list responses
 contain masked recipient domains and operational metadata only. After the BFL
 retention date, the daily redaction control removes recipients, message content,
-provider message IDs, filenames, and attachment checksums. Selective audit rows
-must contain delivery IDs, tenant IDs, status transitions, actors, timestamps,
-and document linkage only, never email payload content.
+provider message IDs, filenames, and attachment checksums. BCC recipients are
+never returned by the browser delivery-list endpoint, and direct table selection
+of the exact payload is limited to the sending user. Exact company evidence is
+included only in owner/admin server-side statutory archives. Delivery writes use
+service-only functions so browser clients cannot forge or mutate the evidence.
+Selective audit rows must contain delivery IDs, tenant IDs, status transitions,
+actors, timestamps, and document linkage only, never email payload content.

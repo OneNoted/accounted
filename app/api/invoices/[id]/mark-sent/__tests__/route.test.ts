@@ -29,6 +29,11 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+const mockEnsureInvoiceNumber = vi.fn()
+vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
+  ensureInvoiceNumber: (...args: unknown[]) => mockEnsureInvoiceNumber(...args),
+}))
+
 const mockRenderToBuffer = vi.fn()
 vi.mock('@react-pdf/renderer', () => ({
   renderToBuffer: (...args: unknown[]) => mockRenderToBuffer(...args),
@@ -160,6 +165,28 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(400)
+  })
+
+  it('rejects a foreign invoice without a payment account before number allocation', async () => {
+    enqueue({
+      data: makeInvoice({
+        ...invoice,
+        invoice_number: null,
+        currency: 'EUR',
+      }),
+      error: null,
+    })
+    enqueue({ data: { ...company, invoice_payment_accounts: {} }, error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mockRenderToBuffer).not.toHaveBeenCalled()
   })
 
   it('archives the rendered PDF as underlag linked to the journal entry', async () => {

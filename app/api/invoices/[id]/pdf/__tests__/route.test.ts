@@ -92,4 +92,19 @@ describe('GET /api/invoices/[id]/pdf', () => {
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
       .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
   })
+
+  it('returns 400 before rendering when a foreign payment account is missing', async () => {
+    enqueue({ data: { ...invoice, currency: 'EUR' }, error: null })
+    enqueue({ data: { ...company, invoice_payment_accounts: {} }, error: null })
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf'),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(renderToBufferMock).not.toHaveBeenCalled()
+  })
 })

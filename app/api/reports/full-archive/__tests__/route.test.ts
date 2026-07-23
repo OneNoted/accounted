@@ -1,9 +1,8 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase } = createQueuedMockSupabase()
+const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -18,6 +17,10 @@ vi.mock('@/lib/company/context', () => ({
 vi.mock('@/lib/reports/full-archive-export', () => ({
   generateFullArchive: vi.fn(),
   estimateArchiveSize: vi.fn(),
+}))
+
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => supabase,
 }))
 
 import {
@@ -43,7 +46,9 @@ function unauthed() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  reset()
   authed()
+  enqueue({ data: { role: 'admin' }, error: null })
 })
 
 describe('GET /api/reports/full-archive', () => {
@@ -54,6 +59,20 @@ describe('GET /api/reports/full-archive', () => {
     )
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 403 for a member without archive-audit access', async () => {
+    reset()
+    enqueue({ data: { role: 'member' }, error: null })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await GET(createMockRequest('/api/reports/full-archive')),
+    )
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockEstimate).not.toHaveBeenCalled()
+    expect(mockGenerate).not.toHaveBeenCalled()
   })
 
   it('returns estimate-only response when ?estimate=1', async () => {

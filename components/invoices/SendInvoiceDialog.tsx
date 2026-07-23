@@ -60,7 +60,8 @@ export default function SendInvoiceDialog({
 }: SendInvoiceDialogProps) {
   const { toast } = useToast()
   const supabase = createClient()
-  const { company, isSandbox } = useCompany()
+  const { company, role, isSandbox } = useCompany()
+  const canCustomizeRecipients = role === 'owner' || role === 'admin'
   const canEmail = useCapability(CAPABILITY.email_send)
   const t = useTranslations('invoice_send_dialog')
   const locale = useLocale() as 'sv' | 'en'
@@ -172,7 +173,11 @@ export default function SendInvoiceDialog({
           settingsResult.data?.invoice_email_cc_addresses
           ?? (settingsResult.data?.email ? [settingsResult.data.email] : []),
         )
-        setFixedBcc(settingsResult.data?.invoice_email_bcc_addresses ?? [])
+        setFixedBcc(
+          canCustomizeRecipients
+            ? settingsResult.data?.invoice_email_bcc_addresses ?? []
+            : [],
+        )
         setPeriodName(periodResult.data?.name || '')
         setDeferBooking(!!settingsResult.data?.defer_invoice_booking)
         setShouldBookOnIssue(bookOnIssue)
@@ -190,7 +195,7 @@ export default function SendInvoiceDialog({
 
     init()
     return () => { cancelled = true }
-  }, [open, invoice.id, invoice.invoice_date, company?.id])
+  }, [open, invoice.id, invoice.invoice_date, company?.id, canCustomizeRecipients])
 
   const proposedLines = useMemo(() => {
     if (!isInitialized || !shouldBookOnIssue) return []
@@ -330,10 +335,10 @@ export default function SendInvoiceDialog({
 
       const payload = {
         ...(apiLines ? { lines: apiLines } : {}),
-        ...(mode === 'email' && additionalCc.length > 0
+        ...(mode === 'email' && canCustomizeRecipients && additionalCc.length > 0
           ? { additional_cc: additionalCc }
           : {}),
-        ...(mode === 'email' && additionalBcc.length > 0
+        ...(mode === 'email' && canCustomizeRecipients && additionalBcc.length > 0
           ? { additional_bcc: additionalBcc }
           : {}),
       }
@@ -480,36 +485,42 @@ export default function SendInvoiceDialog({
                     <span className="font-medium text-foreground">{t('recipient_fixed_cc_label')}:</span>{' '}
                     {fixedCc.length > 0 ? fixedCc.join(', ') : t('recipient_none')}
                   </p>
-                  <p className="text-muted-foreground">
-                    <span className="font-medium text-foreground">{t('recipient_fixed_bcc_label')}:</span>{' '}
-                    {fixedBcc.length > 0 ? fixedBcc.join(', ') : t('recipient_none')}
-                  </p>
+                  {canCustomizeRecipients && (
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">{t('recipient_fixed_bcc_label')}:</span>{' '}
+                      {fixedBcc.length > 0 ? fixedBcc.join(', ') : t('recipient_none')}
+                    </p>
+                  )}
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="invoice-additional-cc">{t('recipient_additional_cc_label')}</Label>
-                    <Input
-                      id="invoice-additional-cc"
-                      value={additionalCcText}
-                      onChange={(event) => setAdditionalCcText(event.target.value)}
-                      placeholder={t('recipient_additional_placeholder')}
-                      aria-invalid={!!recipientError}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="invoice-additional-bcc">{t('recipient_additional_bcc_label')}</Label>
-                    <Input
-                      id="invoice-additional-bcc"
-                      value={additionalBccText}
-                      onChange={(event) => setAdditionalBccText(event.target.value)}
-                      placeholder={t('recipient_additional_placeholder')}
-                      aria-invalid={!!recipientError}
-                    />
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground">{t('recipient_additional_hint')}</p>
-                {recipientError && (
-                  <p className="text-sm text-destructive" role="alert">{recipientError}</p>
+                {canCustomizeRecipients && (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-additional-cc">{t('recipient_additional_cc_label')}</Label>
+                        <Input
+                          id="invoice-additional-cc"
+                          value={additionalCcText}
+                          onChange={(event) => setAdditionalCcText(event.target.value)}
+                          placeholder={t('recipient_additional_placeholder')}
+                          aria-invalid={!!recipientError}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-additional-bcc">{t('recipient_additional_bcc_label')}</Label>
+                        <Input
+                          id="invoice-additional-bcc"
+                          value={additionalBccText}
+                          onChange={(event) => setAdditionalBccText(event.target.value)}
+                          placeholder={t('recipient_additional_placeholder')}
+                          aria-invalid={!!recipientError}
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{t('recipient_additional_hint')}</p>
+                    {recipientError && (
+                      <p className="text-sm text-destructive" role="alert">{recipientError}</p>
+                    )}
+                  </>
                 )}
               </div>
             )}

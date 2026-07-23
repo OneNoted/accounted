@@ -6,13 +6,16 @@ import {
 } from '@/lib/reports/full-archive-export'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createServiceClient } from '@/lib/supabase/server'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
 
-export const GET = withRouteContext('report.full_archive', async (request, { supabase, companyId }) => {
+export const GET = withRouteContext('report.full_archive', async (request, ctx) => {
+  const { supabase, companyId, user, log, requestId } = ctx
   const { searchParams } = new URL(request.url)
   const scopeParam = searchParams.get('scope')
   const periodId = searchParams.get('period_id')
@@ -30,9 +33,31 @@ export const GET = withRouteContext('report.full_archive', async (request, { sup
     )
   }
 
+  const { data: membership, error: membershipError } = await supabase
+    .from('company_members')
+    .select('role')
+    .eq('company_id', companyId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (membershipError) {
+    log.error('failed to authorize full archive export', membershipError)
+    return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
+  }
+  if (!membership || !['owner', 'admin'].includes(membership.role)) {
+    return errorResponseFromCode('FORBIDDEN', log, {
+      requestId,
+      details: { required_roles: ['owner', 'admin'] },
+    })
+  }
+
+  // The complete statutory archive includes exact delivery evidence from all
+  // company senders. Only this owner/admin server path receives a service-role
+  // client; normal delivery history remains data-minimized by RLS.
+  const archiveClient = createServiceClient()
+
   try {
     const estimate = await estimateArchiveSize(
-      supabase,
+      archiveClient,
       companyId,
       scope,
       scope === 'period' ? periodId! : undefined
@@ -60,7 +85,7 @@ export const GET = withRouteContext('report.full_archive', async (request, { sup
     }
 
     const zipBuffer = await generateFullArchive(
-      supabase,
+      archiveClient,
       companyId,
       scope === 'period'
         ? { scope: 'period', period_id: periodId!, include_documents: includeDocuments }
@@ -71,6 +96,8 @@ export const GET = withRouteContext('report.full_archive', async (request, { sup
       scope === 'period'
         ? `arkiv_${periodId}.zip`
         : `arkiv_full_${companyId}_${formatDateStamp(new Date())}.zip`
+
+    log.info('full archive generated', { scope, includeDocuments })
 
     return new NextResponse(zipBuffer, {
       status: 200,

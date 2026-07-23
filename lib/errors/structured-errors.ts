@@ -892,8 +892,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
-    message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Fakturering innan du skickar.',
-    message_en: 'The invoice has no payment account for its currency. Add the account under Invoicing before sending.',
+    message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Fakturering innan du skapar PDF-filen eller skickar fakturan.',
+    message_en: 'The invoice has no payment account for its currency. Add the account under Invoicing before generating the PDF or sending the invoice.',
     remediation: {
       description: 'Lägg till ett betalningskonto med IBAN för fakturans valuta under Fakturering.',
     },

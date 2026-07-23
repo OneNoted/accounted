@@ -583,7 +583,7 @@ describe('generateTrialBalance', () => {
     expect(orCalls).toContainEqual(['id.neq.closing-1,status.neq.posted'])
   })
 
-  it('keeps all year-end entries when no final closing entry is linked', async () => {
+  it('fails closed when a closed period has no linked final closing entry', async () => {
     mockResults = {
       fiscal_periods: [
         {
@@ -592,11 +592,40 @@ describe('generateTrialBalance', () => {
             period_end: '2025-12-31',
             opening_balance_entry_id: null,
             closing_entry_id: null,
+            is_closed: true,
           },
           error: null,
         },
       ],
       journal_entries: [{ data: [{ id: 'tax-1' }, { id: 'appropriation-1' }], error: null }],
+      journal_entry_lines: [{ data: [], error: null }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await expect(
+      generateTrialBalance(supabase, 'company-1', 'period-1', {
+        excludeFinalClosingEntry: true,
+      }),
+    ).rejects.toThrow(/missing closing_entry_id/i)
+
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps year-end adjustments for an open period without a final closing entry', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: null,
+            is_closed: false,
+          },
+          error: null,
+        },
+      ],
+      journal_entries: [{ data: [{ id: 'tax-1' }], error: null }],
       journal_entry_lines: [{ data: [], error: null }],
       chart_of_accounts: [{ data: [], error: null }],
     }
@@ -610,9 +639,6 @@ describe('generateTrialBalance', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
     expect(neqCalls).not.toContainEqual(['source_type', 'year_end'])
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const orCalls = builders.flatMap((b: any) => (b.or ? b.or.mock.calls : []))
-    expect(orCalls).toHaveLength(0)
   })
 
   it('keeps a linked reversed closing together with its storno', async () => {
