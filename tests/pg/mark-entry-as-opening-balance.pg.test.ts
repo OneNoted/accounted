@@ -5,6 +5,7 @@ import {
   insertCompany,
   insertCompanyMember,
   insertFiscalPeriod,
+  insertTransaction,
 } from '@/tests/pg/fixtures'
 import { getClient, getPool, withUserContext } from '@/tests/pg/setup'
 
@@ -157,6 +158,34 @@ describe('mark_entry_as_opening_balance RPC', () => {
       await expect(
         client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
       ).rejects.toThrow(/manual\/import/i)
+    })
+  })
+
+  it('refuses an entry with a linked bank transaction (20260723160000 guard)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+    // A half-settled own-account transfer: since the account-scoped matching
+    // semantics (same migration), this voucher surfaces in the reconciliation
+    // view's unmatched table on the OTHER account, making "Märk som IB"
+    // reachable. Re-tagging it would strand the linked transaction against an
+    // excluded entry, so the RPC must refuse.
+    const entryId = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 1,
+      lines: [
+        { account: '1930', debit: 2500, credit: 0 },
+        { account: '1940', debit: 0, credit: 2500 },
+      ],
+    })
+    await insertTransaction({
+      companyId, userId, amount: -2500, journalEntryId: entryId,
+    })
+
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(`SELECT mark_entry_as_opening_balance($1, $2)`, [companyId, entryId]),
+      ).rejects.toThrow(/linked bank transactions/i)
     })
   })
 

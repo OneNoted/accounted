@@ -573,9 +573,13 @@ export async function getReconciliationStatus(
     (tx) => tx.journal_entry_id === null && tx.is_ignored !== true
   ).length
 
-  // Unlinked GL lines count (RPC excludes opening_balance, storno and correction
-  // since 20260601120000_unlinked_gl_lines_exclude_storno_correction.sql)
-  const unlinkedLines = await fetchUnlinkedGLLines(supabase, companyId, bankAccount, dateFrom, dateTo)
+  // Unmatched GL lines count (RPC excludes opening_balance, storno and correction
+  // since 20260601120000_unlinked_gl_lines_exclude_storno_correction.sql).
+  // Account-scoped since 20260723160000: a voucher whose links all sit on another
+  // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
+  // number in agreement with the "Omatchade verifikationer" table the
+  // reconciliation view derives from the same RPC.
+  const unlinkedLines = await fetchGLLinesForMatching(supabase, companyId, bankAccount, dateFrom, dateTo)
 
   const difference = Math.round((bankTotal - glPeriodMovement) * 100) / 100
 
@@ -684,9 +688,11 @@ export async function manualLink(
   // links net to zero and any mis-link surfaces as a non-zero difference on the
   // status card: there's no need to forbid a second link here. (A given
   // transaction still can't be double-linked: the tx.journal_entry_id guard
-  // above already blocks that.) The candidate list only surfaces an
-  // already-matched voucher when the user opts in via "Visa även matchade
-  // verifikationer", so this can't happen by accident.
+  // above already blocks that.) The candidate list surfaces a voucher already
+  // settled on THIS account only when the user opts in via "Visa även matchade
+  // verifikationer"; a voucher whose links all sit on another cash account (the
+  // second leg of an own-account transfer, issue #1026) surfaces by default,
+  // which is exactly the N:1-across-accounts case this permits.
 
   // Apply link. The write re-checks the pointer we validated inside the write
   // itself (the read above is advisory): null for a free row, or the exact
@@ -1033,17 +1039,25 @@ export async function fetchUnlinkedGLLines(
 
 /** A match candidate that carries how many transactions already point at it. */
 export interface GLLineForMatching extends UnlinkedGLLine {
+  /** Transactions settling this entry ON THE REQUESTED ACCOUNT (plus legacy
+   *  rows with no cash_account_id, which count everywhere). A transaction on
+   *  another cash account, e.g. the outgoing leg of an own-account transfer,
+   *  does not mark the voucher as matched here (issue #1026). */
   linked_transaction_count: number
 }
 
 /**
  * Fetch GL lines on a settlement account as match candidates. With
- * `includeMatched=false` this is parity with fetchUnlinkedGLLines (unmatched
- * only); with `includeMatched=true` it also returns already-matched vouchers,
- * each carrying `linked_transaction_count`, so a second/third bank transaction
- * can be attached to the same verifikat (N:1, a salary run paid in several
- * transfers, a supplier invoice paid in instalments). Server-only: like the rest
- * of this module it must never reach the client bundle.
+ * `includeMatched=false` this returns vouchers not yet settled on the requested
+ * account: unlike fetchUnlinkedGLLines, a voucher whose only links are
+ * transactions on ANOTHER cash account (the second leg of an own-account
+ * transfer) still surfaces, since from this account's perspective it is
+ * unmatched (issue #1026). With `includeMatched=true` it also returns vouchers
+ * already settled on this account, each carrying `linked_transaction_count`, so
+ * a second/third bank transaction can be attached to the same verifikat (N:1,
+ * a salary run paid in several transfers, a supplier invoice paid in
+ * instalments). Server-only: like the rest of this module it must never reach
+ * the client bundle.
  */
 export async function fetchGLLinesForMatching(
   supabase: SupabaseClient,
