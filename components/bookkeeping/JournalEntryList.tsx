@@ -1,13 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
   DataList,
-  DataListHeader,
-  DataListRow,
   DataListEmpty,
   DataListLoading,
 } from '@/components/ui/data-list'
@@ -17,7 +15,6 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
@@ -28,12 +25,13 @@ import {
   DialogClose,
 } from '@/components/ui/dialog'
 import {
-  FiscalYearSelector,
   STORAGE_KEY_PREFIX as FISCAL_YEAR_STORAGE_KEY_PREFIX,
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
-import { ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal, RotateCcw, Rows3 } from 'lucide-react'
-import { formatDate, formatCurrency } from '@/lib/utils'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { Input } from '@/components/ui/input'
@@ -69,7 +67,6 @@ const SORT_VALUES = new Set<SortBy>(['date_desc', 'date_asc', 'voucher_asc', 'vo
 
 // Compact row density (support feedback: "kompakt visning av verifikat").
 // Persisted per company, mirroring the sort key convention.
-const DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'
 
 // Page-size selector. Persisted per company, mirroring the sort key convention.
 // 'all' fetches everything in the current scope (capped server-side at MAX_LIMIT);
@@ -81,6 +78,35 @@ const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
 
+// Concept table styles (scene 9 "dry-table"): borderless table on the
+// panel, uppercase hairline heads, 13px rows.
+const TH_CLASS =
+  'px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border whitespace-nowrap'
+const TD_CLASS = 'px-4 py-[11px] border-b border-border align-top'
+const VTH_CLASS =
+  'py-2 pr-4 text-left text-[10.5px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border'
+const VTD_CLASS = 'py-[7px] pr-4 border-b border-border/60 align-top'
+const QUIET_LINK_CLASS =
+  'text-[12.5px] text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground'
+
+// Animated row expansion (concept vwrap/vinner): grid-rows 0fr -> 1fr on
+// mount; the global reduced-motion rule collapses the transition.
+function RowFoldout({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setOpen(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <div
+      className="grid transition-[grid-template-rows] duration-300 ease-out"
+      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  )
+}
+
 export default function JournalEntryList() {
   const router = useRouter()
   const { toast } = useToast()
@@ -89,6 +115,10 @@ export default function JournalEntryList() {
   const t = useTranslations('journal_list')
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [committingId, setCommittingId] = useState<string | null>(null)
+  // Confirm-before-posting (convention 10): the draft the user is about to
+  // commit, plus the predicted voucher label ("A-218") for the dialog copy.
+  const [commitTarget, setCommitTarget] = useState<JournalEntry | null>(null)
+  const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
@@ -128,7 +158,6 @@ export default function JournalEntryList() {
   const [draftCount, setDraftCount] = useState(0)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
-  const [compact, setCompact] = useState(false)
   const showingAll = pageSizeChoice === 'all'
   const pageSize = showingAll ? ALL_PAGE_SIZE : Number(pageSizeChoice)
 
@@ -235,25 +264,6 @@ export default function JournalEntryList() {
     setSortHydrated(true)
   }, [company?.id])
 
-  // Restore the persisted row density (per company). Purely visual, so it
-  // doesn't gate the first fetch; the effect-read avoids an SSR mismatch.
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const stored = window.localStorage.getItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'))
-      setCompact(stored === 'compact')
-    }
-  }, [company?.id])
-
-  const toggleDensity = () => {
-    const next = !compact
-    setCompact(next)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(
-        DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'),
-        next ? 'compact' : 'comfortable',
-      )
-    }
-  }
 
   // Restore the persisted page-size choice (per company). Same hydration pattern
   // as the sort order, read in an effect to avoid an SSR mismatch, and gate the
@@ -419,6 +429,21 @@ export default function JournalEntryList() {
     setPage(0)
     setSelectedIds(new Set())
     if (mode === 'drafts') setShowMissingOnly(false)
+  }
+
+  // Open the confirm dialog and fetch the predicted voucher number. The
+  // prediction is indicative (numbers are assigned atomically at commit,
+  // and a draft in another period/series may land elsewhere); the success
+  // toast always shows the real one.
+  const openCommitConfirm = (entry: JournalEntry) => {
+    setCommitTarget(entry)
+    setCommitVoucherPreview(null)
+    fetch('/api/bookkeeping/voucher-sequences/next')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (data?.next != null) setCommitVoucherPreview(`${data.series}${data.next}`)
+      })
+      .catch(() => {})
   }
 
   const handleCommit = async (entryId: string) => {
@@ -901,33 +926,14 @@ export default function JournalEntryList() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        {/* Row density: comfortable vs compact, persisted per company. A toggle
-            (aria-pressed) rather than two modes buried in the filter dialog. */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={toggleDensity}
-          aria-pressed={compact}
-          aria-label={t('density_compact')}
-          title={t('density_compact')}
-          className={`h-8 w-8 shrink-0 p-0 ${compact ? 'bg-secondary text-foreground' : 'text-muted-foreground'}`}
-        >
-          <Rows3 className="h-3.5 w-3.5" />
-        </Button>
-        {/* Active fiscal-year scope as a direct one-click picker, pushed to the
-            right of the control bar, keeps the räkenskapsår visible per BFL and
-            changeable in one click. Distinct from Filtrera (which now holds only
-            sort / series / date / underlag); previously both just opened the same
-            dialog. The selector persists the choice to localStorage; the first-load
-            scope resolution still happens authoritatively in the period effect. */}
+        {/* The page context picker (convention 8): fiscal-year scope as a
+            chip-dropdown far right in the toolbar, one click to change,
+            always visible per BFL. Persists to localStorage (same key as
+            before); first-load scope resolution still happens
+            authoritatively in the period effect. */}
         {periodHydrated && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground sm:ml-auto">
-            <span className="shrink-0">{t('scope_label')}</span>
-            <FiscalYearSelector
-              value={periodId}
-              onChange={handlePeriodChange}
-              label={null}
-            />
+          <div className="sm:ml-auto">
+            <FyPicker value={periodId} onChange={handlePeriodChange} />
           </div>
         )}
       </div>
@@ -967,469 +973,343 @@ export default function JournalEntryList() {
           />
         </DataList>
       ) : (
-      <DataList className="stagger-enter">
-        {/* Batch-mark "Inget underlag krävs": select-all + contextual action bar,
-            rendered as the list header so it reads as part of the ledger rather
-            than a detached box above it. */}
-        {(eligibleEntries.length > 0 || selectedIds.size > 0) && (
-          <DataListHeader className="justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="select-all-missing"
-                checked={allEligibleSelected}
-                onCheckedChange={toggleSelectAll}
-                disabled={eligibleEntries.length === 0}
-              />
-              <Label htmlFor="select-all-missing" className="text-sm cursor-pointer">
-                {selectedIds.size > 0
-                  ? t('batch_selected_count', { count: selectedIds.size })
-                  : t('batch_select_all', { count: eligibleEntries.length })}
-              </Label>
-            </div>
-            {selectedIds.size > 0 ? (
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Input
-                  value={batchReason}
-                  onChange={(e) => setBatchReason(e.target.value)}
-                  placeholder={t('no_doc_required_reason_placeholder')}
-                  list="batch-no-doc-suggestions"
-                  maxLength={200}
-                  className="h-8 text-xs sm:w-56"
-                  disabled={batchSubmitting}
-                />
-                <datalist id="batch-no-doc-suggestions">
-                  <option value={t('no_doc_required_suggestion_bank_fee')} />
-                  <option value={t('no_doc_required_suggestion_interest')} />
-                  <option value={t('no_doc_required_suggestion_internal_transfer')} />
-                  <option value={t('no_doc_required_suggestion_tax_payment')} />
-                  <option value={t('no_doc_required_suggestion_salary')} />
-                </datalist>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
-                    {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {t('batch_mark_no_doc')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setSelectedIds(new Set())}
-                    disabled={batchSubmitting}
-                  >
-                    {t('batch_clear_selection')}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              // Filter-scoped: mark every missing-doc verifikat matching the active
-              // filters across all pages: scales to a post-import flood.
-              <Button size="sm" variant="outline" onClick={openBulk}>
-                <CircleSlash className="mr-2 h-4 w-4" />
-                {t('batch_mark_all_missing')}
-              </Button>
+      <div>
+        {/* Bulkbar (concept): hidden until at least one verifikat is
+            selected via the hover checkboxes, then it pops in with the
+            count and the batch actions. Select-all and the filter-scoped
+            bulk mark live inside it as quiet actions. */}
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+            <span className="whitespace-nowrap">
+              <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
+              {t('bulkbar_selected')}
+            </span>
+            <Input
+              value={batchReason}
+              onChange={(e) => setBatchReason(e.target.value)}
+              placeholder={t('no_doc_required_reason_placeholder')}
+              list="batch-no-doc-suggestions"
+              maxLength={200}
+              className="h-8 w-56 text-xs"
+              disabled={batchSubmitting}
+            />
+            <datalist id="batch-no-doc-suggestions">
+              <option value={t('no_doc_required_suggestion_bank_fee')} />
+              <option value={t('no_doc_required_suggestion_interest')} />
+              <option value={t('no_doc_required_suggestion_internal_transfer')} />
+              <option value={t('no_doc_required_suggestion_tax_payment')} />
+              <option value={t('no_doc_required_suggestion_salary')} />
+            </datalist>
+            <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
+              {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('batch_mark_no_doc')}
+            </Button>
+            {!allEligibleSelected && (
+              <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAll}>
+                {t('batch_select_all', { count: eligibleEntries.length })}
+              </button>
             )}
-          </DataListHeader>
-        )}
-        {filteredEntries.map((entry) => {
-          const isExpanded = expandedId === entry.id
-          const lines = (entry.lines || []) as JournalEntryLine[]
-          // Voucher total = sum of the debit side (= credit side when balanced).
-          const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
-          const selectable = canWrite && isEligibleForExempt(entry)
-
-          return (
-            <DataListRow
-              key={entry.id}
-              selected={selectedIds.has(entry.id)}
-              expanded={isExpanded}
-              rowClassName={compact ? 'py-1' : undefined}
-              onClick={() => toggleExpand(entry.id)}
-              leading={
-                selectable ? (
-                  <div onClick={(e) => e.stopPropagation()}>
-                    <Checkbox
-                      checked={selectedIds.has(entry.id)}
-                      onCheckedChange={() => toggleSelect(entry.id)}
-                      aria-label={t('batch_select_row')}
-                    />
-                  </div>
-                ) : undefined
-              }
-              expandedContent={
-                isExpanded ? (
-                  <>
-                    {lines.length === 0 ? (
-                      <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
-                    ) : (
-                      <div className="rounded-lg border overflow-hidden">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>{t('account_column')}</TableHead>
-                              <TableHead>{t('description_column')}</TableHead>
-                              <TableHead className="text-right">{t('debit')}</TableHead>
-                              <TableHead className="text-right">{t('credit')}</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {lines
-                              .slice()
-                              .sort((a, b) => a.sort_order - b.sort_order)
-                              .map((line) => {
-                                const accountName = getAccountDescription(line.account_number)?.name
-                                const desc = line.line_description
-                                const showDesc = desc
-                                  && desc.toLowerCase() !== accountName?.toLowerCase()
-                                  && desc.toLowerCase() !== entry.description?.toLowerCase()
-                                const debit = Number(line.debit_amount) || 0
-                                const credit = Number(line.credit_amount) || 0
-                                const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-                                  ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
-                                  : null
-                                return (
-                                  <TableRow key={line.id}>
-                                    <TableCell className="align-top whitespace-nowrap">
-                                      <AccountNumber number={line.account_number} showName />
-                                    </TableCell>
-                                    <TableCell className="align-top text-muted-foreground">
-                                      {showDesc ? desc : ''}
-                                    </TableCell>
-                                    <TableCell className="align-top text-right tabular-nums">
-                                      {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                      {debit > 0 && fx && (
-                                        <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                      )}
-                                    </TableCell>
-                                    <TableCell className="align-top text-right tabular-nums">
-                                      {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                      {credit > 0 && fx && (
-                                        <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                      )}
-                                    </TableCell>
-                                  </TableRow>
-                                )
-                              })}
-                          </TableBody>
-                          <TableFooter>
-                            <TableRow>
-                              <TableCell colSpan={2} className="font-medium">{t('sum_label')}</TableCell>
-                              <TableCell className="text-right tabular-nums font-medium">
-                                {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums font-medium">
-                                {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                              </TableCell>
-                            </TableRow>
-                          </TableFooter>
-                        </Table>
-                      </div>
-                    )}
-
-                    {entry.notes && (
-                      <p className="mt-3 text-xs text-muted-foreground italic px-1">
-                        {entry.notes}
-                      </p>
-                    )}
-
-                    <JournalEntryAttachments
-                      journalEntryId={entry.id}
-                      onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
-                    />
-
-                    {entry.status === 'posted' && NEEDS_ATTACHMENT.has(entry.source_type) && (
-                      <NoDocRequiredToggle
-                        entryId={entry.id}
-                        initialExempt={noDocRequired.has(entry.id)}
-                        initialReason={noDocRequired.get(entry.id) ?? null}
-                        canWrite={canWrite}
-                        onChange={(exempted, reason) => {
-                          setNoDocRequired((prev) => {
-                            const next = new Map(prev)
-                            if (exempted) next.set(entry.id, reason ?? null)
-                            else next.delete(entry.id)
-                            return next
-                          })
-                        }}
-                      />
-                    )}
-
-                    <div className="mt-4 pt-3 border-t flex flex-col sm:flex-row gap-2">
-                      {entry.status === 'draft' && (
-                        <Button
-                          size="sm"
-                          className="w-full sm:w-auto"
-                          onClick={() => handleCommit(entry.id)}
-                          disabled={!canWrite || committingId === entry.id}
-                          title={!canWrite ? t('read_only_tooltip') : undefined}
-                        >
-                          {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : committingId === entry.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                          {t('post')}
-                        </Button>
-                      )}
-                      <Button variant="outline" size="sm" className="w-full sm:w-auto" asChild>
-                        <Link href={`/bookkeeping/${entry.id}`}>{t('show_details')}</Link>
-                      </Button>
-                      {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full sm:w-auto"
-                          onClick={() => setCorrectionEntry(entry)}
-                        >
-                          {t('create_correction')}
-                        </Button>
-                      )}
-                      {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full sm:w-auto"
-                          onClick={() => setReverseEntryTarget(entry)}
-                        >
-                          <RotateCcw className="mr-2 h-4 w-4" />
-                          {t('reverse_action')}
-                        </Button>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full sm:w-auto"
-                        onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
-                      >
-                        <Copy className="mr-2 h-4 w-4" />
-                        {t('copy')}
-                      </Button>
-                    </div>
-                  </>
-                ) : undefined
-              }
+            {/* Filter-scoped: mark every missing-doc verifikat matching the
+                active filters across all pages: scales to a post-import flood. */}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={openBulk}>
+              {t('batch_mark_all_missing')}
+            </button>
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => setSelectedIds(new Set())}
+              disabled={batchSubmitting}
             >
-              {/* Desktop: single row */}
-              <div className="hidden sm:flex items-center gap-3">
-                {isExpanded ? (
-                  <ChevronDown className="h-4 w-4 shrink-0" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 shrink-0" />
-                )}
-                <Link
-                  href={`/bookkeeping/${entry.id}`}
-                  className="font-mono text-sm text-primary hover:underline w-16"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {formatVoucher(entry)}
-                </Link>
-                <span className="text-sm text-muted-foreground tabular-nums w-24">
-                  {formatDate(entry.entry_date)}
-                </span>
-                {entry.out_of_period && (
-                  <Badge
-                    variant="outline"
-                    className="text-xs font-normal shrink-0"
-                    title={t('out_of_period_tooltip')}
-                  >
-                    {t('out_of_period_label')}
-                  </Badge>
-                )}
-                {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
-                  <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
-                )}
-                <span className="flex-1 truncate">{entry.description}</span>
-                <span className="shrink-0 w-28 text-right tabular-nums text-sm font-medium rr-mask">
-                  {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
-                </span>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    asChild
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
-                  >
-                    <span
+              {t('batch_clear_selection')}
+            </button>
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
+                <th className={TH_CLASS}>{t('th_voucher')}</th>
+                <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_date')}</th>
+                <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                <th className={TH_CLASS} aria-hidden="true"></th>
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {filteredEntries.map((entry) => {
+                const isExpanded = expandedId === entry.id
+                const lines = (entry.lines || []) as JournalEntryLine[]
+                // Voucher total = sum of the debit side (= credit side when balanced).
+                const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
+                const selectable = canWrite && isEligibleForExempt(entry)
+
+                return (
+                  <Fragment key={entry.id}>
+                    <tr
+                      className={cn(
+                        'group cursor-pointer transition-colors duration-150',
+                        isExpanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
+                        selectedIds.has(entry.id) && 'bg-secondary/40',
+                      )}
                       role="button"
                       tabIndex={0}
-                      aria-label={t('copy_voucher_tooltip')}
-                      title={t('copy_voucher_tooltip')}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        router.push(`/bookkeeping?copy_from=${entry.id}`)
-                      }}
+                      aria-expanded={isExpanded}
+                      onClick={() => toggleExpand(entry.id)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          e.stopPropagation()
-                          router.push(`/bookkeeping?copy_from=${entry.id}`)
+                          toggleExpand(entry.id)
                         }
                       }}
                     >
-                      <Copy className="h-3.5 w-3.5" />
-                    </span>
-                  </Button>
-                  {/* Fixed-width attachment slot keeps the copy icon in a stable
-                      column and the right edge aligned whether a row has a
-                      paperclip, a warning, or nothing. */}
-                  <span className="flex min-w-10 items-center justify-center">
-                    {attachmentCounts[entry.id] ? (
-                      <Button
-                        asChild
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
+                      {/* Hover-revealed selection checkbox (concept .cb) */}
+                      <td
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          aria-label={t('view_attachments')}
-                          title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
-                          onClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            setPreviewEntryId(entry.id)
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              setPreviewEntryId(entry.id)
-                            }
-                          }}
+                        {selectable && (
+                          <Checkbox
+                            checked={selectedIds.has(entry.id)}
+                            onCheckedChange={() => toggleSelect(entry.id)}
+                            aria-label={t('batch_select_row')}
+                            className={cn(
+                              'transition-opacity duration-150',
+                              selectedIds.has(entry.id)
+                                ? 'opacity-100'
+                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                            )}
+                          />
+                        )}
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                        <Link
+                          href={`/bookkeeping/${entry.id}`}
+                          className="font-mono text-[13px] tabular-nums hover:underline"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          <span className="flex items-center gap-0.5">
-                            <Paperclip className="h-3.5 w-3.5" />
-                            <span className="text-xs">{attachmentCounts[entry.id]}</span>
-                          </span>
+                          {formatVoucher(entry)}
+                        </Link>
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground')}>
+                        {formatDate(entry.entry_date)}
+                      </td>
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate">{entry.description}</span>
+                          {entry.out_of_period && (
+                            <Badge
+                              variant="outline"
+                              className="text-xs font-normal shrink-0"
+                              title={t('out_of_period_tooltip')}
+                            >
+                              {t('out_of_period_label')}
+                            </Badge>
+                          )}
+                          {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
+                            <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
+                          )}
                         </span>
-                      </Button>
-                    ) : (
-                      NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                        noDocRequired.has(entry.id) ? (
-                          <span title={t('no_doc_required_indicator_tooltip')}>
-                            <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
-                          </span>
-                        ) : (
-                          <span title={t('missing_attachment_tooltip')}>
-                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                          </span>
-                        )
-                      )
-                    )}
-                  </span>
-                </div>
-              </div>
-              {/* Mobile: two rows */}
-              <div className="sm:hidden">
-                <div className="flex items-center gap-2">
-                  {isExpanded ? (
-                    <ChevronDown className="h-4 w-4 shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 shrink-0" />
-                  )}
-                  <Link
-                    href={`/bookkeeping/${entry.id}`}
-                    className="font-mono text-sm text-primary hover:underline"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {formatVoucher(entry)}
-                  </Link>
-                  <span className="text-sm text-muted-foreground tabular-nums">
-                    {formatDate(entry.entry_date)}
-                  </span>
-                  {entry.out_of_period && (
-                    <Badge
-                      variant="outline"
-                      className="text-xs font-normal shrink-0"
-                      title={t('out_of_period_tooltip_mobile')}
-                    >
-                      {t('out_of_period_label')}
-                    </Badge>
-                  )}
-                  {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
-                    <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
-                  )}
-                  <span className="ml-auto flex items-center gap-1">
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
-                    >
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        aria-label={t('copy_voucher_tooltip')}
-                        title={t('copy_voucher_tooltip')}
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          router.push(`/bookkeeping?copy_from=${entry.id}`)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            router.push(`/bookkeeping?copy_from=${entry.id}`)
-                          }
-                        }}
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                      </span>
-                    </Button>
-                    {attachmentCounts[entry.id] ? (
-                      <Button
-                        asChild
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground transition-colors duration-150 hover:bg-secondary"
-                      >
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          aria-label={t('view_attachments')}
-                          title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
-                          onClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                            setPreviewEntryId(entry.id)
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              setPreviewEntryId(entry.id)
-                            }
-                          }}
-                        >
-                          <span className="flex items-center gap-0.5">
-                            <Paperclip className="h-3.5 w-3.5" />
-                            <span className="text-xs">{attachmentCounts[entry.id]}</span>
-                          </span>
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                        {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+                        <span className="inline-flex items-center justify-end gap-2">
+                          {attachmentCounts[entry.id] ? (
+                            <button
+                              type="button"
+                              aria-label={t('view_attachments')}
+                              title={t('attachment_count_tooltip', { count: attachmentCounts[entry.id] })}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setPreviewEntryId(entry.id)
+                              }}
+                              className="inline-flex items-center gap-0.5 rounded text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                            >
+                              <Paperclip className="h-3.5 w-3.5" />
+                              <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
+                            </button>
+                          ) : (
+                            NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
+                              noDocRequired.has(entry.id) ? (
+                                <span title={t('no_doc_required_indicator_tooltip')}>
+                                  <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                                </span>
+                              ) : (
+                                <Badge variant="warning" title={t('missing_attachment_tooltip')}>
+                                  {t('missing_attachment_chip')}
+                                </Badge>
+                              )
+                            )
+                          )}
+                          {entry.status === 'draft' && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-3.5 text-xs"
+                              disabled={!canWrite || committingId === entry.id}
+                              title={!canWrite ? t('read_only_tooltip') : undefined}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                openCommitConfirm(entry)
+                              }}
+                            >
+                              {committingId === entry.id && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
+                              {t('post')}
+                            </Button>
+                          )}
+                          <ChevronRight
+                            className={cn(
+                              'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
+                              isExpanded
+                                ? 'rotate-90 opacity-100'
+                                : 'opacity-0 group-hover:opacity-100',
+                            )}
+                          />
                         </span>
-                      </Button>
-                    ) : (
-                      NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
-                        noDocRequired.has(entry.id) ? (
-                          <span title={t('no_doc_required_indicator_tooltip')}>
-                            <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
-                          </span>
-                        ) : (
-                          <span title={t('missing_attachment_tooltip')}>
-                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                          </span>
-                        )
-                      )
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={6} className="border-b border-border p-0">
+                          <RowFoldout>
+                            <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
+                              {lines.length === 0 ? (
+                                <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
+                              ) : (
+                                <table className="w-full border-collapse text-[12.5px]" aria-label={formatVoucher(entry)}>
+                                  <thead>
+                                    <tr>
+                                      <th className={cn(VTH_CLASS, 'w-[180px]')}>{t('account_column')}</th>
+                                      <th className={VTH_CLASS}>{t('description_column')}</th>
+                                      <th className={cn(VTH_CLASS, 'text-right')}>{t('debit')}</th>
+                                      <th className={cn(VTH_CLASS, 'text-right')}>{t('credit')}</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {lines
+                                      .slice()
+                                      .sort((a, b) => a.sort_order - b.sort_order)
+                                      .map((line) => {
+                                        const accountName = getAccountDescription(line.account_number)?.name
+                                        const desc = line.line_description
+                                        const showDesc = desc
+                                          && desc.toLowerCase() !== accountName?.toLowerCase()
+                                          && desc.toLowerCase() !== entry.description?.toLowerCase()
+                                        const debit = Number(line.debit_amount) || 0
+                                        const credit = Number(line.credit_amount) || 0
+                                        const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+                                          ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
+                                          : null
+                                        return (
+                                          <tr key={line.id}>
+                                            <td className={cn(VTD_CLASS, 'whitespace-nowrap')}>
+                                              <AccountNumber number={line.account_number} showName />
+                                            </td>
+                                            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
+                                              {showDesc ? desc : ''}
+                                            </td>
+                                            <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
+                                              {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
+                                              {debit > 0 && fx && (
+                                                <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
+                                              )}
+                                            </td>
+                                            <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
+                                              {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
+                                              {credit > 0 && fx && (
+                                                <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        )
+                                      })}
+                                    <tr>
+                                      <td colSpan={2} className="py-[7px] pr-4 font-medium">{t('sum_label')}</td>
+                                      <td className="py-[7px] pr-4 text-right tabular-nums font-medium">
+                                        {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                                      </td>
+                                      <td className="py-[7px] pr-4 text-right tabular-nums font-medium">
+                                        {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                                      </td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              )}
+
+                              {entry.notes && (
+                                <p className="mt-3 text-xs text-muted-foreground italic">
+                                  {entry.notes}
+                                </p>
+                              )}
+
+                              <JournalEntryAttachments
+                                journalEntryId={entry.id}
+                                onCountChange={(c) => handleAttachmentCountChange(entry.id, c)}
+                              />
+
+                              {entry.status === 'posted' && NEEDS_ATTACHMENT.has(entry.source_type) && (
+                                <NoDocRequiredToggle
+                                  entryId={entry.id}
+                                  initialExempt={noDocRequired.has(entry.id)}
+                                  initialReason={noDocRequired.get(entry.id) ?? null}
+                                  canWrite={canWrite}
+                                  onChange={(exempted, reason) => {
+                                    setNoDocRequired((prev) => {
+                                      const next = new Map(prev)
+                                      if (exempted) next.set(entry.id, reason ?? null)
+                                      else next.delete(entry.id)
+                                      return next
+                                    })
+                                  }}
+                                />
+                              )}
+
+                              {/* Quiet link actions (concept vact); posting keeps
+                                  its pill because it changes legal state. */}
+                              <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
+                                {entry.status === 'draft' && (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => openCommitConfirm(entry)}
+                                    disabled={!canWrite || committingId === entry.id}
+                                    title={!canWrite ? t('read_only_tooltip') : undefined}
+                                  >
+                                    {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : committingId === entry.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    {t('post')}
+                                  </Button>
+                                )}
+                                <Link href={`/bookkeeping/${entry.id}`} className={QUIET_LINK_CLASS}>
+                                  {t('show_details')}
+                                </Link>
+                                {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setCorrectionEntry(entry)}>
+                                    {t('create_correction')}
+                                  </button>
+                                )}
+                                {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setReverseEntryTarget(entry)}>
+                                    {t('reverse_action')}
+                                  </button>
+                                )}
+                                <button type="button" className={QUIET_LINK_CLASS} onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}>
+                                  {t('copy')}
+                                </button>
+                              </div>
+                            </div>
+                          </RowFoldout>
+                        </td>
+                      </tr>
                     )}
-                  </span>
-                </div>
-                <div className="mt-1 ml-6 flex items-center justify-between gap-2">
-                  <p className="text-sm truncate">{entry.description}</p>
-                  <span className="shrink-0 tabular-nums text-sm font-medium">
-                    {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              </div>
-            </DataListRow>
-          )
-        })}
-      </DataList>
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
       )}
 
       {/* Filter-scoped bulk "Inget underlag krävs" confirmation */}
@@ -1500,6 +1380,39 @@ export default function JournalEntryList() {
           open={!!correctionEntry}
           onOpenChange={(open) => { if (!open) setCorrectionEntry(null) }}
           onCorrected={() => { setCorrectionEntry(null); fetchEntries() }}
+        />
+      )}
+
+      {/* Confirm-before-posting for drafts (convention 10): describes the
+          outcome ("Bokförs som A-218 ...") before the commit runs. */}
+      {commitTarget && (
+        <ConfirmDialog
+          open={!!commitTarget}
+          onOpenChange={(open) => {
+            if (!open && committingId === null) setCommitTarget(null)
+          }}
+          title={t('confirm_post_title')}
+          description={
+            commitVoucherPreview
+              ? t('confirm_post_description', {
+                  voucher: commitVoucherPreview,
+                  description: commitTarget.description || '',
+                  amount: formatCurrency(
+                    ((commitTarget.lines || []) as JournalEntryLine[]).reduce(
+                      (sum, l) => sum + (Number(l.debit_amount) || 0),
+                      0,
+                    ),
+                  ),
+                })
+              : t('confirm_post_description_generic', {
+                  description: commitTarget.description || '',
+                })
+          }
+          confirmLabel={t('post')}
+          onConfirm={async () => {
+            await handleCommit(commitTarget.id)
+            setCommitTarget(null)
+          }}
         />
       )}
 
