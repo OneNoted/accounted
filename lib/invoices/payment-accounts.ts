@@ -1,6 +1,7 @@
 import type {
   CompanySettings,
   Currency,
+  Invoice,
   InvoicePaymentAccount,
 } from '@/types'
 
@@ -30,7 +31,7 @@ function clean(value: string | null | undefined): string | null {
 }
 
 export function legacySekInvoicePaymentAccount(
-  company: CompanySettings,
+  company: Pick<CompanySettings, keyof InvoicePaymentAccount>,
 ): InvoicePaymentAccount {
   return {
     bank_name: clean(company.bank_name),
@@ -83,6 +84,13 @@ export function hasUsableInvoicePaymentAccount(
   )
 }
 
+export function invoiceRequiresPaymentAccount(
+  invoice: Pick<Invoice, 'credited_invoice_id' | 'document_type'>,
+): boolean {
+  return !invoice.credited_invoice_id
+    && invoice.document_type !== 'delivery_note'
+    && invoice.document_type !== 'proforma'
+}
 /**
  * Return invoice render settings with only the matching payment account.
  * Foreign invoices never inherit the legacy SEK payment details.

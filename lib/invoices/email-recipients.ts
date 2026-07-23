@@ -1,4 +1,5 @@
 export const MAX_INVOICE_EMAIL_RECIPIENTS = 20
+export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export interface ResolveInvoiceEmailRecipientsInput {
   to: string | readonly string[]

@@ -168,6 +168,7 @@ export async function buildArsredovisningData(
     companyId,
     fiscalPeriodId,
     (periodList ?? []) as Array<{ id: string; name: string; period_start: string; period_end: string }>,
+    mapping,
   )
 
   const egen_kapital_changes = buildEquityChanges(mapping)
@@ -414,6 +415,7 @@ async function buildFlerarsoversikt(
   companyId: string,
   currentPeriodId: string,
   allPeriods: PeriodRow[],
+  currentMapping: K2MappingResult,
 ): Promise<FlerarsoversiktRow[]> {
   // Take the current period + 3 prior (oldest first).
   const sorted = [...allPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
@@ -424,14 +426,17 @@ async function buildFlerarsoversikt(
   const rows: FlerarsoversiktRow[] = []
   for (const p of slice) {
     try {
-      const [tbFull, tbPreClosing] = await Promise.all([
-        generateTrialBalance(supabase, companyId, p.id),
-        generateTrialBalance(supabase, companyId, p.id, { excludeFinalClosingEntry: true }),
-      ])
-      const mapping = mapTrialBalancesToK2(
-        { full: tbFull.rows, preClosing: tbPreClosing.rows },
-        null,
-      )
+      let mapping = currentMapping
+      if (p.id !== currentPeriodId) {
+        const [tbFull, tbPreClosing] = await Promise.all([
+          generateTrialBalance(supabase, companyId, p.id),
+          generateTrialBalance(supabase, companyId, p.id, { excludeFinalClosingEntry: true }),
+        ])
+        mapping = mapTrialBalancesToK2(
+          { full: tbFull.rows, preClosing: tbPreClosing.rows },
+          null,
+        )
+      }
       const netRevenue = mapping.rr['Nettoomsattning']?.current ?? 0
       const resultAfterFinancial = mapping.totals.resultatEfterFinansiellaPoster.current
       // K2 flerårsöversikt defines soliditet as adjusted equity divided by

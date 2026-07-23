@@ -32,6 +32,7 @@ import type { Invoice, InvoiceItem, Customer, EntityType, BASAccount } from '@/t
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import {
+  EMAIL_PATTERN,
   MAX_INVOICE_EMAIL_RECIPIENTS,
   parseInvoiceRecipientText,
 } from '@/lib/invoices/email-recipients'
@@ -49,8 +50,6 @@ interface SendInvoiceDialogProps {
   mode: 'email' | 'manual'
   onSuccess: () => void
 }
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export default function SendInvoiceDialog({
   open,

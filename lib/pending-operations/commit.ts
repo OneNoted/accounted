@@ -75,8 +75,10 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import {
   hasUsableInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
   resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -1508,8 +1510,10 @@ async function commitSendInvoice(
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
   const invoiceCurrency = (invoice as Invoice).currency
+  const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
   if (
-    invoiceCurrency !== 'SEK'
+    paymentAccountRequired
+    && invoiceCurrency !== 'SEK'
     && !hasUsableInvoicePaymentAccount(
       resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
       invoiceCurrency,
@@ -1627,7 +1631,12 @@ async function commitSendInvoice(
     isCreditNote,
   })
 
-  const ccAddress = company.email || userEmail
+  const recipients = resolveInvoiceEmailRecipients({
+    to: customer.email,
+    configuredCc: company.invoice_email_cc_addresses,
+    configuredBcc: company.invoice_email_bcc_addresses,
+    legacyCc: company.email || userEmail,
+  })
   const emailData = { invoice: renderableInvoice, customer, company: company as CompanySettings }
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)
@@ -1641,8 +1650,9 @@ async function commitSendInvoice(
       userId,
       invoiceId,
       deliveryId,
-      to: customer.email,
-      cc: ccAddress,
+      to: recipients.to,
+      cc: recipients.cc,
+      bcc: recipients.bcc,
       subject,
       html,
       text,

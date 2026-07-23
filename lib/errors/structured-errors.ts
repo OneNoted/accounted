@@ -895,7 +895,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Fakturering innan du skickar.',
     message_en: 'The invoice has no payment account for its currency. Add the account under Invoicing before sending.',
     remediation: {
-      description: 'Configure an invoice payment account with an IBAN for the invoice currency.',
+      description: 'Lägg till ett betalningskonto med IBAN för fakturans valuta under Fakturering.',
     },
   },
   INVOICE_SEND_NUMBER_ASSIGN_FAILED: {

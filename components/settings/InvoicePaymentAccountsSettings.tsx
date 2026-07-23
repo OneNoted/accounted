@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -46,21 +46,29 @@ const EMPTY_ACCOUNT: InvoicePaymentAccount = {
 }
 
 function initialAccounts(
-  settings: CompanySettings,
+  paymentAccounts: CompanySettings['invoice_payment_accounts'],
+  legacySekAccount: InvoicePaymentAccount,
 ): Partial<Record<Currency, InvoicePaymentAccount>> {
   const configured = Object.fromEntries(
-    Object.entries(settings.invoice_payment_accounts ?? {}).map(([currency, account]) => [
+    Object.entries(paymentAccounts ?? {}).map(([currency, account]) => [
       currency,
       normalizeInvoicePaymentAccount(account),
     ]),
   ) as Partial<Record<Currency, InvoicePaymentAccount>>
 
-  if (!configured.SEK) configured.SEK = legacySekInvoicePaymentAccount(settings)
+  if (!configured.SEK) configured.SEK = legacySekAccount
   return configured
 }
 
 function value(account: InvoicePaymentAccount, field: keyof InvoicePaymentAccount): string {
   return account[field] ?? ''
+}
+
+function accountsKey(accounts: Partial<Record<Currency, InvoicePaymentAccount>>): string {
+  return JSON.stringify(INVOICE_PAYMENT_ACCOUNT_CURRENCIES.map((currency) => [
+    currency,
+    accounts[currency] ? normalizeInvoicePaymentAccount(accounts[currency]) : null,
+  ]))
 }
 
 export function InvoicePaymentAccountsSettings({
@@ -69,15 +77,45 @@ export function InvoicePaymentAccountsSettings({
 }: InvoicePaymentAccountsSettingsProps) {
   const t = useTranslations('settings_invoice_payment_accounts')
   const { toast } = useToast()
-  const [accounts, setAccounts] = useState(() => initialAccounts(settings))
+  const legacySekAccount = useMemo(
+    () => legacySekInvoicePaymentAccount({
+      bank_name: settings.bank_name,
+      clearing_number: settings.clearing_number,
+      account_number: settings.account_number,
+      bankgiro: settings.bankgiro,
+      plusgiro: settings.plusgiro,
+      swish: settings.swish,
+      iban: settings.iban,
+      bic: settings.bic,
+    }),
+    [
+      settings.bank_name,
+      settings.clearing_number,
+      settings.account_number,
+      settings.bankgiro,
+      settings.plusgiro,
+      settings.swish,
+      settings.iban,
+      settings.bic,
+    ],
+  )
+  const serverAccounts = useMemo(
+    () => initialAccounts(settings.invoice_payment_accounts, legacySekAccount),
+    [settings.invoice_payment_accounts, legacySekAccount],
+  )
+  const serverAccountsKey = accountsKey(serverAccounts)
+  const [accounts, setAccounts] = useState(serverAccounts)
   const [activeCurrency, setActiveCurrency] = useState<Currency>('SEK')
   const [currencyToAdd, setCurrencyToAdd] = useState<Currency | ''>('')
   const [isSaving, setIsSaving] = useState(false)
+  const previousServerAccounts = useRef(serverAccounts)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
 
   useEffect(() => {
-    setAccounts(initialAccounts(settings))
-  }, [settings])
+    const previous = previousServerAccounts.current
+    setAccounts((current) => accountsKey(current) === accountsKey(previous) ? serverAccounts : current)
+    previousServerAccounts.current = serverAccounts
+  }, [serverAccounts, serverAccountsKey])
 
   const configuredCurrencies = useMemo(
     () => INVOICE_PAYMENT_ACCOUNT_CURRENCIES.filter((currency) => !!accounts[currency]),
@@ -162,7 +200,7 @@ export function InvoicePaymentAccountsSettings({
         normalizeInvoicePaymentAccount(accounts[currency] ?? EMPTY_ACCOUNT),
       ]),
     ) as Partial<Record<Currency, InvoicePaymentAccount>>
-    const sek = normalized.SEK ?? { ...EMPTY_ACCOUNT }
+    const sek = normalized.SEK ?? legacySekInvoicePaymentAccount(settings)
     const updates: Partial<CompanySettings> = {
       invoice_payment_accounts: normalized,
       bank_name: sek.bank_name ?? '',

@@ -422,6 +422,7 @@ describe('POST /api/invoices/[id]/send', () => {
       invoice_number: 'KR-F-2024001',
       status: 'draft',
       credited_invoice_id: 'inv-1',
+      currency: 'EUR',
       customer,
       items: (invoice.items ?? []).map((item) => ({
         ...item,

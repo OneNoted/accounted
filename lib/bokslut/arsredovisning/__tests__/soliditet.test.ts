@@ -16,6 +16,12 @@ function row(
 }
 
 describe('calculateSoliditet', () => {
+  it('returns null when total assets are non-positive', () => {
+    const mapping = mapTrialBalancesToK2({ full: [], preClosing: [] }, null)
+
+    expect(calculateSoliditet(mapping)).toBeNull()
+  })
+
   it('uses adjusted equity and the sign-reclassified balance-sheet total', () => {
     const full = [
       row('1630', 0, 22_985),

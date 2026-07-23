@@ -1230,6 +1230,23 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts empty strings when clearing nested invoice payment account fields', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        SEK: {
+          clearing_number: '',
+          account_number: '',
+          bankgiro: '',
+          plusgiro: '',
+          iban: '',
+          bic: '',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+  })
+
   it('accepts a positive next_arrival_number (supplier-invoice start floor)', () => {
     const result = UpdateSettingsSchema.safeParse({ next_arrival_number: 248 })
     expect(result.success).toBe(true)

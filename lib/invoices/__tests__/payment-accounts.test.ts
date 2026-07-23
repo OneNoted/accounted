@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   companyWithInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
   resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
+import { makeInvoice } from '@/tests/helpers'
 import type { CompanySettings } from '@/types'
 
 function company(overrides: Partial<CompanySettings> = {}): CompanySettings {
@@ -74,5 +76,12 @@ describe('invoice payment accounts', () => {
     }), 'EUR')
 
     expect(hasUsableInvoicePaymentAccount(withoutIban, 'EUR')).toBe(false)
+  })
+
+  it('requires payment accounts only for payable invoice documents', () => {
+    expect(invoiceRequiresPaymentAccount(makeInvoice())).toBe(true)
+    expect(invoiceRequiresPaymentAccount(makeInvoice({ credited_invoice_id: 'invoice-original' }))).toBe(false)
+    expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'delivery_note' }))).toBe(false)
+    expect(invoiceRequiresPaymentAccount(makeInvoice({ document_type: 'proforma' }))).toBe(false)
   })
 })

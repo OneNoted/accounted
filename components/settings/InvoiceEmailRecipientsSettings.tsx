@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import {
+  EMAIL_PATTERN,
   MAX_INVOICE_EMAIL_RECIPIENTS,
   parseInvoiceRecipientText,
 } from '@/lib/invoices/email-recipients'
@@ -17,8 +18,6 @@ interface InvoiceEmailRecipientsSettingsProps {
   settings: CompanySettings
   onUpdate: (updates: Partial<CompanySettings>) => void
 }
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function listText(addresses: readonly string[]): string {
   return addresses.join('\n')
@@ -34,16 +33,19 @@ export function InvoiceEmailRecipientsSettings({
     settings.email ? [settings.email] : []
   )
   const effectiveBcc = settings.invoice_email_bcc_addresses ?? []
-  const [ccText, setCcText] = useState(() => listText(effectiveCc))
-  const [bccText, setBccText] = useState(() => listText(effectiveBcc))
+  const serverCcText = listText(effectiveCc)
+  const serverBccText = listText(effectiveBcc)
+  const [ccText, setCcText] = useState(serverCcText)
+  const [bccText, setBccText] = useState(serverBccText)
   const [isSaving, setIsSaving] = useState(false)
+  const previousServerText = useRef({ cc: serverCcText, bcc: serverBccText })
 
   useEffect(() => {
-    setCcText(listText(
-      settings.invoice_email_cc_addresses ?? (settings.email ? [settings.email] : []),
-    ))
-    setBccText(listText(settings.invoice_email_bcc_addresses ?? []))
-  }, [settings.invoice_email_cc_addresses, settings.invoice_email_bcc_addresses, settings.email])
+    const previous = previousServerText.current
+    setCcText((current) => current === previous.cc ? serverCcText : current)
+    setBccText((current) => current === previous.bcc ? serverBccText : current)
+    previousServerText.current = { cc: serverCcText, bcc: serverBccText }
+  }, [serverBccText, serverCcText])
 
   async function save() {
     const cc = parseInvoiceRecipientText(ccText)

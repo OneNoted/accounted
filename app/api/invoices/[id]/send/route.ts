@@ -32,6 +32,7 @@ import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { resolveInvoiceEmailRecipients } from '@/lib/invoices/email-recipients'
 import {
   hasUsableInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
   resolveInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -182,8 +183,10 @@ export const POST = withRouteContext(
     }
 
     const invoiceCurrency = (invoice as Invoice).currency
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
     if (
-      invoiceCurrency !== 'SEK'
+      paymentAccountRequired
+      && invoiceCurrency !== 'SEK'
       && !hasUsableInvoicePaymentAccount(
         resolveInvoicePaymentAccount(company as CompanySettings, invoiceCurrency),
         invoiceCurrency,

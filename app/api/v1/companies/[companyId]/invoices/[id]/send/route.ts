@@ -80,10 +80,10 @@ import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/in
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 
 const InvoiceSendBody = z.object({
-  additional_cc: z.array(z.string().trim().email().max(254))
+  additional_cc: z.array(z.string().trim().pipe(z.email().max(254)))
     .max(MAX_INVOICE_EMAIL_RECIPIENTS)
     .optional(),
-  additional_bcc: z.array(z.string().trim().email().max(254))
+  additional_bcc: z.array(z.string().trim().pipe(z.email().max(254)))
     .max(MAX_INVOICE_EMAIL_RECIPIENTS)
     .optional(),
 })
@@ -137,6 +137,8 @@ registerEndpoint({
         message_id: 're_abc123',
         sent_to: 'finance@acme.test',
         cc: 'billing@gnubok-user.test',
+        cc_addresses: ['billing@gnubok-user.test'],
+        bcc_addresses: ['invoice-archive@company.test'],
         journal_entry_id: '7b3a…',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -391,8 +393,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           status: 'sent' as const,
           invoice_number: typed.invoice_number ?? '(allocated atomically on commit)',
           would_send_to: customer.email,
-          would_cc: recipients.cc,
-          would_bcc: recipients.bcc,
+          would_cc: recipients.cc[0] ?? null,
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             (settings.accounting_method ?? 'accrual') === 'accrual',

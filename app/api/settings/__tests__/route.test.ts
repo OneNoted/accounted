@@ -125,13 +125,30 @@ describe('PUT /api/settings', () => {
     expect(body.data).toMatchObject(updates)
   })
 
-  it('rejects invalid invoice recipients and foreign payment accounts without IBAN', async () => {
+  it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {
     enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
 
     const response = await PUT(createMockRequest('/api/settings', {
       method: 'PUT',
       body: {
         invoice_email_cc_addresses: ['not-an-email'],
+        invoice_payment_accounts: {
+          EUR: { bank_name: 'Example Bank', iban: 'SE0022222222222222222222' },
+        },
+      },
+    }), { params: Promise.resolve({}) })
+
+    expect(response.status).toBe(400)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a foreign payment account without IBAN with valid recipients', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: {
+        invoice_email_cc_addresses: ['billing@example.com'],
         invoice_payment_accounts: { EUR: { bank_name: 'Example Bank' } },
       },
     }), { params: Promise.resolve({}) })

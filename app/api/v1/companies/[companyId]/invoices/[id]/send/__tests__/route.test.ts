@@ -181,6 +181,18 @@ function makeRequest(url: string, body?: unknown): Request {
     body: body === undefined ? undefined : JSON.stringify(body),
   })
 }
+
+function makeRawRequest(url: string, body: string): Request {
+  return new Request(url, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer test-fixture-not-a-real-key',
+      'Content-Type': 'application/json',
+      'Idempotency-Key': 'idem1234-3030-4abc-8def-1234567890ab',
+    },
+    body,
+  })
+}
 function detailParams(companyId: string, id: string) {
   return { params: Promise.resolve({ companyId, id }) }
 }
@@ -234,6 +246,90 @@ beforeEach(() => {
 })
 
 describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
+  it('returns 401 without an API key', async () => {
+    const res = await sendInvoice(
+      new Request(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`,
+        { method: 'POST' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body.error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('returns 404 when the invoice does not exist', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: null, error: null },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+  })
+
+  it('returns VALIDATION_ERROR for malformed JSON', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRawRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`,
+        '{"additional_cc":[',
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it.each([
+    ['invalid additional_cc', { additional_cc: ['not-an-email'] }],
+    [
+      'oversized additional_cc',
+      { additional_cc: Array.from({ length: 21 }, (_, index) => `copy-${index}@example.test`) },
+    ],
+    ['invalid additional_bcc', { additional_bcc: ['not-an-email'] }],
+    [
+      'oversized additional_bcc',
+      { additional_bcc: Array.from({ length: 21 }, (_, index) => `archive-${index}@example.test`) },
+    ],
+  ])('returns VALIDATION_ERROR for %s', async (_label, requestBody) => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: DRAFT_INVOICE, error: null },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`,
+        requestBody,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
   it('sends a draft invoice end-to-end and returns 200 with messageId', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -410,8 +506,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview.status).toBe('sent')
     expect(body.data.preview.would_send_to).toBe('billing@acme.test')
-    expect(body.data.preview.would_cc).toEqual(['fixed-copy@test-ab.example'])
-    expect(body.data.preview.would_bcc).toEqual(['fixed-archive@test-ab.example'])
+    expect(body.data.preview.would_cc).toBe('fixed-copy@test-ab.example')
+    expect(body.data.preview).not.toHaveProperty('would_bcc')
     expect(body.data.preview.preflight_pdf_render).toBe('ok')
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
