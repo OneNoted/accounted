@@ -440,14 +440,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  return NextResponse.json({
-    success: true,
-    status: 'sent',
-    journal_entry_id: journalEntryId,
-    ...(partialFailures.length > 0
-      ? { partial: true, partial_failures: partialFailures }
-      : {}),
-  })
+  return NextResponse.json(
+    {
+      success: true,
+      status: 'sent',
+      journal_entry_id: journalEntryId,
+      ...(partialFailures.length > 0
+        ? { partial: true, partial_failures: partialFailures }
+        : {}),
+    },
+    { headers: { 'Cache-Control': 'private, no-store' } },
+  )
   },
   { requireWrite: true },
 )

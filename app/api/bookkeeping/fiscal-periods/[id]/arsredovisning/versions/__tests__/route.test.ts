@@ -137,36 +137,39 @@ describe('annual report versions route', () => {
     )
   })
 
-  it('rejects an inconsistent draft before creating a version', async () => {
-    const { enqueue } = setup()
-    enqueue({ data: { id: 'period-1' } })
-    vi.mocked(hasStatementIntegrityErrors).mockReturnValue(true)
-    vi.mocked(buildCanonicalAnnualReport).mockResolvedValue({
-      validation: {
-        ok: false,
-        issues: [{ code: 'AR-RESULT-MISMATCH', severity: 'error' }],
-      },
-    } as never)
+  it.each(['snapshot', 'finalize'] as const)(
+    'rejects an inconsistent report before creating a %s version',
+    async (action) => {
+      const { enqueue } = setup()
+      enqueue({ data: { id: 'period-1' } })
+      vi.mocked(hasStatementIntegrityErrors).mockReturnValue(true)
+      vi.mocked(buildCanonicalAnnualReport).mockResolvedValue({
+        validation: {
+          ok: false,
+          issues: [{ code: 'AR-RESULT-MISMATCH', severity: 'error' }],
+        },
+      } as never)
 
-    const { status, body } = await parseJsonResponse<{
-      error: { code: string; message: string; message_en: string }
-    }>(
-      await POST(
-        createMockRequest('/x', { method: 'POST', body: { action: 'snapshot' } }),
-        params,
-      ),
-    )
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; message_en: string }
+      }>(
+        await POST(
+          createMockRequest('/x', { method: 'POST', body: { action } }),
+          params,
+        ),
+      )
 
-    expect(status).toBe(409)
-    expect(body.error).toEqual(
-      expect.objectContaining({
-        code: 'ARSREDOVISNING_INCOMPLETE',
-        message: expect.any(String),
-        message_en: expect.any(String),
-      }),
-    )
-    expect(createAnnualReportVersion).not.toHaveBeenCalled()
-  })
+      expect(status).toBe(409)
+      expect(body.error).toEqual(
+        expect.objectContaining({
+          code: 'ARSREDOVISNING_INCOMPLETE',
+          message: expect.any(String),
+          message_en: expect.any(String),
+        }),
+      )
+      expect(createAnnualReportVersion).not.toHaveBeenCalled()
+    },
+  )
 
   it('accepts a VD as the fastställelseintyg signer', async () => {
     const { enqueue } = setup()

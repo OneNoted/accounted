@@ -480,6 +480,7 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(body.success).toBe(true)
     expect(body.messageId).toBe('msg-1')
     expect(body.recipient_counts).toEqual({ to: 1, cc: 2 })
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         companyId: 'company-1',
@@ -560,6 +561,9 @@ describe('POST /api/invoices/[id]/send', () => {
       }),
     )
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(InvoicePDF).toHaveBeenCalledWith(
+      expect.objectContaining({ originalInvoiceNumber: 'F-2024001' }),
+    )
     expect(mockSendEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         attachments: [

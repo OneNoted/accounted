@@ -2,22 +2,21 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { InvoiceDelivery } from '@/types'
+import type { InvoiceDeliveryChannel, InvoiceDeliveryStatus } from '@/types'
 
-type DeliveryListRow = Pick<
-  InvoiceDelivery,
-  | 'id'
-  | 'channel'
-  | 'status'
-  | 'to_addresses'
-  | 'cc_addresses'
-  | 'provider'
-  | 'error_code'
-  | 'document_attachment_id'
-  | 'sent_at'
-  | 'failed_at'
-  | 'created_at'
->
+interface InvoiceDeliverySummaryRow {
+  id: string
+  channel: InvoiceDeliveryChannel
+  status: InvoiceDeliveryStatus
+  to_addresses: string[]
+  cc_addresses: string[]
+  provider: string | null
+  error_code: string | null
+  document_attachment_id: string | null
+  sent_at: string | null
+  failed_at: string | null
+  created_at: string
+}
 
 /**
  * GET /api/invoices/[id]/deliveries
@@ -60,7 +59,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       throw error
     }
 
-    const minimized = ((deliveries || []) as unknown as DeliveryListRow[]).map((delivery) => ({
+    const minimized = ((deliveries || []) as unknown as InvoiceDeliverySummaryRow[]).map((delivery) => ({
       id: delivery.id,
       channel: delivery.channel,
       status: delivery.status,

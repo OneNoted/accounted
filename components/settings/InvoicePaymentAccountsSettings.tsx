@@ -213,9 +213,11 @@ export function InvoicePaymentAccountsSettings({
     const sek = normalized.SEK!
     const updates: Partial<CompanySettings> = {
       invoice_payment_accounts: normalized,
-      bank_name: sek.bank_name ?? '',
-      clearing_number: sek.clearing_number ?? '',
-      account_number: sek.account_number ?? '',
+      // The legacy fields are an exact nullable SEK mirror. Clearing SEK is
+      // intentional and must not leave stale payment instructions behind.
+      bank_name: sek.bank_name,
+      clearing_number: sek.clearing_number,
+      account_number: sek.account_number,
       bankgiro: sek.bankgiro,
       plusgiro: sek.plusgiro,
       swish: sek.swish,

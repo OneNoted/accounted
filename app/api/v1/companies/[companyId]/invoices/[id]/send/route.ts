@@ -108,7 +108,6 @@ const InvoiceSendResponse = z.object({
     'Deprecated compatibility field containing only the first CC recipient. Use cc_addresses for the complete delivery list.',
   ),
   cc_addresses: z.array(z.string()),
-  bcc_addresses: z.array(z.string()),
   journal_entry_id: z.string().uuid().nullable(),
   warnings: z
     .array(z.object({ code: z.string(), message: z.string() }))
@@ -135,6 +134,7 @@ registerEndpoint({
     'After the email succeeds, journal-entry/archive/event failures become warnings on the response; the invoice IS marked sent regardless.',
     'additional_cc and additional_bcc require the API key user to be an owner or admin of the company.',
     'The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.',
+    'BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.',
   ],
   example: {
     request: {
@@ -151,7 +151,6 @@ registerEndpoint({
         sent_to: 'finance@acme.test',
         cc: 'billing@gnubok-user.test',
         cc_addresses: ['billing@gnubok-user.test'],
-        bcc_addresses: ['invoice-archive@company.test'],
         journal_entry_id: '7b3a…',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -343,9 +342,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
+    if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: typed.currency },
+      })
+    }
+
     const hasAdditionalRecipients =
       (bodyResult.data.additional_cc?.length ?? 0) > 0
       || (bodyResult.data.additional_bcc?.length ?? 0) > 0
+    // Fixed recipients are owner/admin-approved company routing. A fresh role
+    // check is required only when this request introduces another recipient.
     if (hasAdditionalRecipients) {
       const { data: membership, error: membershipError } = await ctx.supabase
         .from('company_members')
@@ -396,13 +405,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { recipient_count: invoiceEmailRecipientCount(recipients) },
       })
     }
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
-    if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
-      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
-        requestId: ctx.requestId,
-        details: { currency: typed.currency },
-      })
-    }
     const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
     // Credit notes are rejected above, so originalInvoiceNumber is never
     // needed on this code path. Kept undefined to satisfy the InvoicePDF
@@ -441,7 +443,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (ctx.dryRun) {
       // Dry-run stops here. Validated everything that doesn't have side
       // effects; preview the would-be sent state.
-      return dryRunPreview(
+      const response = dryRunPreview(
         {
           ...typed,
           status: 'sent' as const,
@@ -449,7 +451,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           would_send_to: customer.email,
           would_cc: recipients.cc[0] ?? null,
           would_cc_addresses: recipients.cc,
-          would_bcc_addresses: recipients.bcc,
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             (settings.accounting_method ?? 'accrual') === 'accrual',
@@ -458,6 +459,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
+      response.headers.set('Cache-Control', 'private, no-store')
+      return response
     }
 
     let deliveryId: string
@@ -805,11 +808,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         sent_to: customer.email,
         cc: recipients.cc[0] ?? null,
         cc_addresses: recipients.cc,
-        bcc_addresses: recipients.bcc,
         journal_entry_id: journalEntryId,
         ...(warnings.length > 0 ? { warnings } : {}),
       },
-      { requestId: ctx.requestId },
+      {
+        requestId: ctx.requestId,
+        headers: { 'Cache-Control': 'private, no-store' },
+      },
     )
   },
   { requireIdempotencyKey: true },

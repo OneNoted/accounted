@@ -1601,9 +1601,9 @@ export const UpdateSettingsSchema = z.object({
   preliminary_tax_monthly: z.number().nullable().optional(),
   employer_registered: z.boolean().nullable().optional(),
   employer_seasonal: z.boolean().optional(),
-  bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').optional(),
-  clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').optional().or(z.literal('')),
-  account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),
+  bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').nullable().optional(),
+  clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').nullable().optional().or(z.literal('')),
+  account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').nullable().optional().or(z.literal('')),
   bankgiro: z.string().regex(/^(\d{3,4}-\d{4}|\d{7,8})$/, 'Ogiltigt bankgironummer (7-8 siffror)').nullable().optional().or(z.literal('')),
   plusgiro: z.string().regex(/^\d{1,7}-\d{1}$/, 'Ogiltigt plusgironummer').nullable().optional().or(z.literal('')),
   swish: z.string()

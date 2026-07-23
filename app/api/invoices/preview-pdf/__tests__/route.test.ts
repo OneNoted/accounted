@@ -88,6 +88,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     )
 
     expect(response.status).toBe(400)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns 404 when the customer does not exist', async () => {
@@ -99,6 +100,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     )
 
     expect(response.status).toBe(404)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns a descriptive UTF-8 filename for the PDF preview', async () => {
@@ -132,6 +134,21 @@ describe('POST /api/invoices/preview-pdf', () => {
 
     expect(response.status).toBe(400)
     expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(renderToBufferMock).not.toHaveBeenCalled()
+  })
+
+  it('marks preview generation errors as private and non-cacheable', async () => {
+    enqueue({ data: customer, error: null })
+    enqueue({ data: company, error: null })
+    renderToBufferMock.mockRejectedValueOnce(new Error('render failed'))
+
+    const response = await POST(
+      createMockRequest('/api/invoices/preview-pdf', { method: 'POST', body: validBody }),
+      createMockRouteParams({}),
+    )
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

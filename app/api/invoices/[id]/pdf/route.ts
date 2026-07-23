@@ -13,10 +13,20 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 
+const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
+
+function privateNoStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
+
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
   async (request, { supabase, companyId, log, requestId }, { params }) => {
   const { id } = await params
+
+  // withRouteContext resolves companyId from the authenticated user's active
+  // membership. Explicit company filters remain mandatory defense in depth.
 
   // Fetch invoice with customer and items
   const { data: invoice, error: invoiceError } = await supabase
@@ -31,7 +41,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (invoiceError || !invoice) {
-    return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'Invoice not found' },
+      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 
   // Fetch company settings
@@ -42,14 +55,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (companyError || !company) {
-    return NextResponse.json({ error: 'Company settings not found' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'Company settings not found' },
+      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
-    return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+    return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
       requestId,
       details: { currency: (invoice as Invoice).currency },
-    })
+    }))
   }
 
   // Sort items by sort_order
@@ -62,6 +78,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .from('invoices')
       .select('invoice_number')
       .eq('id', invoice.credited_invoice_id)
+      .eq('company_id', companyId)
       .single()
 
     if (originalInvoice) {
@@ -119,7 +136,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     console.error('PDF generation error:', error)
     return NextResponse.json(
       { error: error instanceof Error ? getUserErrorMessage(error) : 'PDF generation failed' },
-      { status: 500 }
+      { status: 500, headers: PRIVATE_NO_STORE_HEADERS }
     )
   }
   },

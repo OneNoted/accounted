@@ -211,6 +211,7 @@ describe('mapTrialBalancesToK2', () => {
 
     expect(res.br['OvrigaFordringarKortfristiga']).toEqual({ current: 0, previous: 0 })
     expect(res.br['Skatteskulder']).toEqual({ current: 0, previous: 20 })
+    expect(res.warnings).toContainEqual(expect.stringContaining('1630-1659'))
   })
 
   it('does not offset a tax-account liability against a separate tax receivable', () => {

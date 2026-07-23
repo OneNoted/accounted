@@ -13,6 +13,13 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 
+const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
+
+function privateNoStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
+
 /**
  * POST /api/invoices/preview-pdf
  *
@@ -41,7 +48,10 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   })()
 
   if (!items || items.length === 0) {
-    return NextResponse.json({ error: 'Rader krävs' }, { status: 400 })
+    return NextResponse.json(
+      { error: 'Rader krävs' },
+      { status: 400, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 
   // When customer_id is omitted, only allow the synthetic preview if the
@@ -58,7 +68,10 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       .eq('company_id', companyId)
 
     if (countError || (count ?? 0) > 0) {
-      return NextResponse.json({ error: 'Kunduppgifter krävs' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'Kunduppgifter krävs' },
+        { status: 400, headers: PRIVATE_NO_STORE_HEADERS },
+      )
     }
 
     const nowIso = new Date().toISOString()
@@ -96,7 +109,10 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
       .single()
 
     if (customerError || !data) {
-      return NextResponse.json({ error: 'Kunden hittades inte' }, { status: 404 })
+      return NextResponse.json(
+        { error: 'Kunden hittades inte' },
+        { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+      )
     }
     customer = data as Customer
   }
@@ -109,7 +125,10 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     .single()
 
   if (companyError || !company) {
-    return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'Företagsinställningar saknas' },
+      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 
   // VAT rules are customer-type-driven and only know the customer side.
@@ -192,10 +211,10 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
   } as Invoice
 
   if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, previewInvoice)) {
-    return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+    return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
       requestId,
       details: { currency: previewInvoice.currency },
-    })
+    }))
   }
 
   try {
@@ -238,7 +257,7 @@ export const POST = withRouteContext('invoice.preview_pdf', async (request, {
     console.error('Preview PDF generation error:', error)
     return NextResponse.json(
       { error: 'Kunde inte generera PDF-förhandsgranskning' },
-      { status: 500 }
+      { status: 500, headers: PRIVATE_NO_STORE_HEADERS }
     )
   }
 })

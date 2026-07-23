@@ -224,6 +224,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBe('je-7')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledWith({
       supabase: mockSupabase,
       companyId: 'company-1',

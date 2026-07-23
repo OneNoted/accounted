@@ -186,9 +186,21 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
     }
 
+    const invoiceCurrency = (invoice as Invoice).currency
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
+      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
+        requestId,
+        details: { currency: invoiceCurrency },
+      })
+    }
+
     const hasAdditionalRecipients =
       (bodyResult.data.additional_cc?.length ?? 0) > 0
       || (bodyResult.data.additional_bcc?.length ?? 0) > 0
+    // Fixed recipients are owner/admin-approved company routing and apply to
+    // every writable sender. Only a new per-send disclosure needs this fresh
+    // role check. See .compliance/authorization-policy.md.
     if (hasAdditionalRecipients) {
       const { data: membership, error: membershipError } = await supabase
         .from('company_members')
@@ -235,15 +247,6 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_SEND_TOO_MANY_RECIPIENTS', opLog, {
         requestId,
         details: { recipient_count: invoiceEmailRecipientCount(recipients) },
-      })
-    }
-
-    const invoiceCurrency = (invoice as Invoice).currency
-    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
-      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
-        requestId,
-        details: { currency: invoiceCurrency },
       })
     }
 
@@ -664,19 +667,22 @@ export const POST = withRouteContext(
       })
     }
 
-    return NextResponse.json({
-      success: true,
-      message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
-      messageId: result.messageId,
-      deliveryId: result.deliveryId,
-      recipient_counts: {
-        to: recipients.to.length,
-        cc: recipients.cc.length,
+    return NextResponse.json(
+      {
+        success: true,
+        message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
+        messageId: result.messageId,
+        deliveryId: result.deliveryId,
+        recipient_counts: {
+          to: recipients.to.length,
+          cc: recipients.cc.length,
+        },
+        ...(partialFailures.length > 0
+          ? { partial: true, partial_failures: partialFailures }
+          : {}),
       },
-      ...(partialFailures.length > 0
-        ? { partial: true, partial_failures: partialFailures }
-        : {}),
-    })
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    )
   },
   { requireWrite: true },
 )

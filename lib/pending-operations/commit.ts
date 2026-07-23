@@ -1512,6 +1512,16 @@ async function commitSendInvoice(
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
 
+  const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
+        ?? 'Betalningskonto saknas för fakturans valuta.',
+      status: 400,
+    }
+  }
+
   const recipients = resolveInvoiceEmailRecipients({
     to: customer.email,
     configuredCc: company.invoice_email_cc_addresses,
@@ -1523,16 +1533,6 @@ async function commitSendInvoice(
       error:
         getErrorEntry('INVOICE_SEND_TOO_MANY_RECIPIENTS')?.message_sv
         ?? `Ett fakturautskick får inte ha ${invoiceEmailRecipientCount(recipients)} mottagare.`,
-      status: 400,
-    }
-  }
-
-  const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
-  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
-    return {
-      error:
-        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
-        ?? 'Betalningskonto saknas för fakturans valuta.',
       status: 400,
     }
   }

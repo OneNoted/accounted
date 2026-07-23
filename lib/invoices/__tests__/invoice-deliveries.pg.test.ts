@@ -575,7 +575,7 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
       [deliveryId],
     )
     expect(result.rows[0].status).toBe('pending')
-    expect(result.rows[0].retention_expires_at).toBeTruthy()
+    expect(result.rows[0].retention_expires_at).toBe('2034-01-01')
   })
 
   it('allows a failed attempt to release and delete its unsent PDF', async () => {

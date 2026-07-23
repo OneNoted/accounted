@@ -403,11 +403,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       'fixed-copy@test-ab.example',
       'case-owner@test-ab.example',
     ])
-    expect(body.data.bcc_addresses).toEqual([
-      'fixed-archive@test-ab.example',
-      'extra-archive@test-ab.example',
-    ])
+    expect(body.data).not.toHaveProperty('bcc_addresses')
     expect(body.data.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: COMPANY_ID, invoiceId: INVOICE_ID }),
@@ -637,7 +635,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.data.preview.would_send_to).toBe('billing@acme.test')
     expect(body.data.preview.would_cc).toBe('fixed-copy@test-ab.example')
     expect(body.data.preview.would_cc_addresses).toEqual(['fixed-copy@test-ab.example'])
-    expect(body.data.preview.would_bcc_addresses).toEqual(['fixed-archive@test-ab.example'])
+    expect(body.data.preview).not.toHaveProperty('would_bcc_addresses')
+    expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(body.data.preview.preflight_pdf_render).toBe('ok')
     expect(mockSendEmail).not.toHaveBeenCalled()
   })

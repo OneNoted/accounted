@@ -1262,6 +1262,21 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts null when clearing the legacy SEK bank account mirror', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      bank_name: null,
+      clearing_number: null,
+      account_number: null,
+      bankgiro: null,
+      plusgiro: null,
+      swish: null,
+      iban: null,
+      bic: null,
+    })
+
+    expect(result.success).toBe(true)
+  })
+
   it('accepts and normalizes a non-Swedish IBAN in the legacy SEK mirror', () => {
     const result = UpdateSettingsSchema.safeParse({
       iban: 'gb29 nwbk 6016 1331 9268 19',

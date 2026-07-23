@@ -519,7 +519,7 @@ function applySignReclassifications(
   warnings: string[],
 ): void {
   for (const rule of SIGN_RECLASSIFICATIONS) {
-    let reclassifiedCurrent = false
+    let reclassified = false
     for (const field of ['current', 'previous'] as const) {
       const rows = field === 'current' ? current : previous
       if (!rows) continue
@@ -536,9 +536,9 @@ function applySignReclassifications(
       const amountToMove = -deviatingBalance
       adjustConcept(br, rule.sourceConcept, field, amountToMove)
       adjustConcept(br, rule.targetConcept, field, amountToMove)
-      reclassifiedCurrent = reclassifiedCurrent || field === 'current'
+      reclassified = true
     }
-    if (reclassifiedCurrent) warnings.push(rule.warning)
+    if (reclassified) warnings.push(rule.warning)
   }
 }
 

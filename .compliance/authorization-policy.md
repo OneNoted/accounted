@@ -128,7 +128,7 @@ recipient are rejected instead of silently changing recipient classification.
 
 **Compensating audit.** Successful invoice sends retain the exact immutable
 recipient payload in `invoice_deliveries`, including the actor and company.
-Routine delivery-list responses remain minimized and never expose BCC.
+Routine delivery-list and send responses remain minimized and never expose BCC.
 
 **Service write boundary.** Delivery persistence uses a stateless service-role
 client because authenticated PostgREST writes are intentionally revoked. The

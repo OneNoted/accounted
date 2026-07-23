@@ -13,6 +13,12 @@ export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
+const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
+
+function privateNoStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
 
 export const GET = withRouteContext('report.full_archive', async (request, ctx) => {
   const { supabase, companyId, user, log, requestId } = ctx
@@ -29,7 +35,7 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
   if (scope === 'period' && !periodId) {
     return NextResponse.json(
       { error: 'period_id is required when scope=period' },
-      { status: 400 }
+      { status: 400, headers: PRIVATE_NO_STORE_HEADERS }
     )
   }
 
@@ -40,19 +46,29 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     .eq('user_id', user.id)
     .maybeSingle()
   if (membershipError) {
-    log.error('failed to authorize full archive export', membershipError)
-    return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
+    log.error('failed to authorize full archive export', membershipError, {
+      userId: user.id,
+      companyId,
+    })
+    return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
   }
   if (!membership || !['owner', 'admin'].includes(membership.role)) {
-    return errorResponseFromCode('FORBIDDEN', log, {
+    log.warn('full archive access denied', {
+      userId: user.id,
+      companyId,
+      role: membership?.role ?? null,
+    })
+    return privateNoStore(errorResponseFromCode('FORBIDDEN', log, {
       requestId,
       details: { required_roles: ['owner', 'admin'] },
-    })
+    }))
   }
 
   // The complete statutory archive includes exact delivery evidence from all
   // company senders. Only this owner/admin server path receives a service-role
-  // client; normal delivery history remains data-minimized by RLS.
+  // client; normal delivery history remains data-minimized by RLS. companyId
+  // comes from withRouteContext's authenticated active-company resolution,
+  // never from a request parameter, and is verified again below.
   const archiveClient = createServiceClient()
   const { data: verifiedMembership, error: verificationError } = await archiveClient
     .from('company_members')
@@ -61,14 +77,22 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     .eq('user_id', user.id)
     .maybeSingle()
   if (verificationError) {
-    log.error('failed to verify full archive export with service role', verificationError)
-    return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
+    log.error('failed to verify full archive export with service role', verificationError, {
+      userId: user.id,
+      companyId,
+    })
+    return privateNoStore(errorResponseFromCode('INTERNAL_ERROR', log, { requestId }))
   }
   if (!verifiedMembership || !['owner', 'admin'].includes(verifiedMembership.role)) {
-    return errorResponseFromCode('FORBIDDEN', log, {
+    log.warn('full archive service-role verification denied', {
+      userId: user.id,
+      companyId,
+      role: verifiedMembership?.role ?? null,
+    })
+    return privateNoStore(errorResponseFromCode('FORBIDDEN', log, {
       requestId,
       details: { required_roles: ['owner', 'admin'] },
-    })
+    }))
   }
 
   try {
@@ -80,13 +104,16 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     )
 
     if (estimateOnly) {
-      return NextResponse.json({
-        data: {
-          ...estimate,
-          size_limit_bytes: SIZE_LIMIT_BYTES,
-          within_limit: estimate.total_bytes <= SIZE_LIMIT_BYTES,
+      return NextResponse.json(
+        {
+          data: {
+            ...estimate,
+            size_limit_bytes: SIZE_LIMIT_BYTES,
+            within_limit: estimate.total_bytes <= SIZE_LIMIT_BYTES,
+          },
         },
-      })
+        { headers: PRIVATE_NO_STORE_HEADERS },
+      )
     }
 
     if (includeDocuments && estimate.total_bytes > SIZE_LIMIT_BYTES) {
@@ -96,7 +123,7 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
           size_bytes: estimate.total_bytes,
           size_limit_bytes: SIZE_LIMIT_BYTES,
         },
-        { status: 413 }
+        { status: 413, headers: PRIVATE_NO_STORE_HEADERS }
       )
     }
 
@@ -118,6 +145,8 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
       companyId,
       scope,
       includeDocuments,
+      filename,
+      sizeBytes: zipBuffer.byteLength,
     })
 
     return new NextResponse(zipBuffer, {
@@ -137,7 +166,10 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
     })
     const message = err instanceof Error ? err.message : 'Failed to generate archive'
     const status = message.includes('not found') ? 404 : 500
-    return NextResponse.json({ error: getErrorMessage(err) }, { status })
+    return NextResponse.json(
+      { error: getErrorMessage(err) },
+      { status, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 })
 

@@ -77,6 +77,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
     )
 
     expect(response.status).toBe(404)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns a descriptive UTF-8 filename for the PDF download', async () => {
@@ -106,6 +107,21 @@ describe('GET /api/invoices/[id]/pdf', () => {
 
     expect(response.status).toBe(400)
     expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(renderToBufferMock).not.toHaveBeenCalled()
+  })
+
+  it('marks PDF generation errors as private and non-cacheable', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    renderToBufferMock.mockRejectedValueOnce(new Error('render failed'))
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf'),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

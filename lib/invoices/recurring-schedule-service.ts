@@ -464,6 +464,13 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
+  if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
+    log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      currency: invoice.currency,
+    })
+    return false
+  }
   const recipients = resolveInvoiceEmailRecipients({
     to: invoice.customer.email,
     configuredCc: company.invoice_email_cc_addresses,
@@ -477,14 +484,6 @@ async function sendInvoiceFromSchedule(
     })
     return false
   }
-  if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
-    log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
-      invoiceId: invoice.id,
-      currency: invoice.currency,
-    })
-    return false
-  }
-
   let deliveryId: string
   try {
     deliveryId = await reserveInvoiceDelivery({
