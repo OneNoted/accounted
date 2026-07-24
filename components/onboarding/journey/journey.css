@@ -14,6 +14,14 @@
   flex-direction: column;
   text-align: center;
 }
+/* The real flow escapes the onboarding layout's max-w-lg wrapper and sits
+   over the shared OnboardingBackdrop (which stays untouched, per plan). */
+.jny.jny-fixed {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  min-height: 0;
+}
 .jny-center {
   flex: 1;
   min-height: 0;
