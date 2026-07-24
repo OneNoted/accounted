@@ -255,6 +255,46 @@ export async function sendMissingUnderlagNotifications(
     (attachments || []).map((a) => a.journal_entry_id)
   )
 
+  // BFL 5 kap 7 § hänvisning: entries referenced by a supplier invoice whose
+  // document is retained and anchored to a journal entry count as covered
+  // (mirrors the verifikat_without_documents RPC): typically the payment
+  // verifikat, whose invoice document hangs on the registration verifikat.
+  const { data: siRefs } = await supabase
+    .from('supplier_invoices')
+    .select(
+      'registration_journal_entry_id, payment_journal_entry_id, document:document_attachments(journal_entry_id)'
+    )
+    .not('document_id', 'is', null)
+
+  for (const si of (siRefs || []) as unknown as {
+    registration_journal_entry_id: string | null
+    payment_journal_entry_id: string | null
+    document: { journal_entry_id: string | null } | null
+  }[]) {
+    if (!si.document?.journal_entry_id) continue // unanchored: not underlag
+    if (si.registration_journal_entry_id) entriesWithDocs.add(si.registration_journal_entry_id)
+    if (si.payment_journal_entry_id) entriesWithDocs.add(si.payment_journal_entry_id)
+  }
+
+  const { data: sipRefs } = await supabase
+    .from('supplier_invoice_payments')
+    .select(
+      'journal_entry_id, supplier_invoice:supplier_invoices(document_id, document:document_attachments(journal_entry_id))'
+    )
+    .not('journal_entry_id', 'is', null)
+
+  for (const sip of (sipRefs || []) as unknown as {
+    journal_entry_id: string | null
+    supplier_invoice: {
+      document_id: string | null
+      document: { journal_entry_id: string | null } | null
+    } | null
+  }[]) {
+    if (sip.journal_entry_id && sip.supplier_invoice?.document?.journal_entry_id) {
+      entriesWithDocs.add(sip.journal_entry_id)
+    }
+  }
+
   // Entries the user has explicitly flagged as "no underlag required" (bank
   // fees, interest, internal transfers, salary, tax payments). Treated as
   // satisfied so we don't nag the user about them.

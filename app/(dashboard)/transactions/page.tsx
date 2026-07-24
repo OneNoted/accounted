@@ -671,12 +671,15 @@ export default function TransactionsPage() {
     setIsLoadingMore(false)
   }
 
-  // Underlag-status enrichment for booked rows. Three RLS-scoped reads per
+  // Underlag-status enrichment for booked rows. Five RLS-scoped reads per
   // 150-id chunk (PostgREST .in() URL-length convention, see
   // lib/worklist/categories.ts): the JEs' source types, which JEs have a
-  // current-version document, and which are exempted via
-  // journal_entry_no_doc_required. Incremental: only fetches JE ids not yet
-  // requested, so loadMoreTransactions pages are covered without refetching.
+  // current-version document, which are covered by a supplier invoice's
+  // retained document (BFL 5 kap 7 § hänvisning: registration/payment FK or a
+  // supplier_invoice_payments row: mirrors the verifikat_without_documents
+  // RPC), and which are exempted via journal_entry_no_doc_required.
+  // Incremental: only fetches JE ids not yet requested, so
+  // loadMoreTransactions pages are covered without refetching.
   // Soft-fails to "no badges" on error.
   useEffect(() => {
     if (!companyId) return
@@ -700,7 +703,8 @@ export default function TransactionsPage() {
       const merged: Record<string, JeUnderlagStatus> = {}
       for (let i = 0; i < newIds.length; i += IN_CLAUSE_CHUNK) {
         const chunk = newIds.slice(i, i + IN_CLAUSE_CHUNK)
-        const [entriesRes, docsRes, exemptRes] = await Promise.all([
+        const chunkInList = `(${chunk.join(',')})`
+        const [entriesRes, docsRes, siRefRes, sipRefRes, exemptRes] = await Promise.all([
           supabase
             .from('journal_entries')
             .select('id, source_type')
@@ -718,16 +722,53 @@ export default function TransactionsPage() {
             .eq('company_id', companyId)
             .eq('is_current_version', true),
           supabase
+            .from('supplier_invoices')
+            .select(
+              'registration_journal_entry_id, payment_journal_entry_id, document:document_attachments(journal_entry_id)',
+            )
+            .eq('company_id', companyId)
+            .not('document_id', 'is', null)
+            .or(
+              `registration_journal_entry_id.in.${chunkInList},payment_journal_entry_id.in.${chunkInList}`,
+            ),
+          supabase
+            .from('supplier_invoice_payments')
+            .select(
+              'journal_entry_id, supplier_invoice:supplier_invoices(document_id, document:document_attachments(journal_entry_id))',
+            )
+            .eq('company_id', companyId)
+            .in('journal_entry_id', chunk),
+          supabase
             .from('journal_entry_no_doc_required')
             .select('journal_entry_id')
             .in('journal_entry_id', chunk)
             .eq('company_id', companyId),
         ])
         // Soft-fail: keep the chunks that already succeeded.
-        if (entriesRes.error || docsRes.error || exemptRes.error) break
+        if (entriesRes.error || docsRes.error || siRefRes.error || sipRefRes.error || exemptRes.error) break
         const jeIdsWithDocs = new Set(
           (docsRes.data ?? []).map((d) => d.journal_entry_id as string),
         )
+        for (const si of (siRefRes.data ?? []) as unknown as {
+          registration_journal_entry_id: string | null
+          payment_journal_entry_id: string | null
+          document: { journal_entry_id: string | null } | null
+        }[]) {
+          if (!si.document?.journal_entry_id) continue // unanchored: not underlag
+          if (si.registration_journal_entry_id) jeIdsWithDocs.add(si.registration_journal_entry_id)
+          if (si.payment_journal_entry_id) jeIdsWithDocs.add(si.payment_journal_entry_id)
+        }
+        for (const sip of (sipRefRes.data ?? []) as unknown as {
+          journal_entry_id: string | null
+          supplier_invoice: {
+            document_id: string | null
+            document: { journal_entry_id: string | null } | null
+          } | null
+        }[]) {
+          if (sip.journal_entry_id && sip.supplier_invoice?.document?.journal_entry_id) {
+            jeIdsWithDocs.add(sip.journal_entry_id)
+          }
+        }
         const exemptIds = new Set(
           (exemptRes.data ?? []).map((e) => e.journal_entry_id as string),
         )
