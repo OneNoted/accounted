@@ -7,7 +7,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
-import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
@@ -215,25 +214,6 @@ export default function StripeSettingsPanel() {
     } finally {
       setDisconnecting(false)
     }
-  }
-
-  // Hosted: Stripe Connect is not launched yet, so the settings surface is
-  // "coming soon" even where the platform credentials are configured (test
-  // mode): users must not be able to connect or toggle transaction sync until
-  // launch. Self-hosted admins run their own keys and keep the full panel.
-  const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
-  if (!isSelfHosted) {
-    return (
-      <Card>
-        <CardContent className="p-0">
-          <EmptyState
-            icon={CreditCard}
-            title={t('coming_soon_title')}
-            description={t('coming_soon_description')}
-          />
-        </CardContent>
-      </Card>
-    )
   }
 
   if (loading) {

@@ -2039,10 +2039,8 @@ export default function ImportPage() {
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasStripeExtension = ENABLED_EXTENSION_IDS.has('stripe')
-  // Hosted: Stripe Connect has not launched, so the card is "coming soon".
-  // The panel carries the same gate internally for ?mode=stripe deep links.
-  const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
-  const stripeDisabled = isSandbox || !isSelfHosted
+  // Stripe is enabled everywhere (hosted + self-hosted); only the sandbox blocks it.
+  const stripeDisabled = isSandbox
 
   return (
     <div className="space-y-8">
@@ -2109,13 +2107,7 @@ export default function ImportPage() {
                   <ImportRow
                     title={t('stripe_title')}
                     sub={t('stripe_description')}
-                    chip={
-                      !isSelfHosted ? (
-                        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
-                          {t('stripe_coming_soon')}
-                        </span>
-                      ) : undefined
-                    }
+                    chips={<LogoChip src="/logos/stripe.svg" name="Stripe" />}
                     disabled={stripeDisabled}
                     onClick={() => setMode('stripe')}
                   />
