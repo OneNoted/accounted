@@ -12,9 +12,13 @@ import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
  */
 export async function GET(request: Request) {
   const appUrl = resolveDiscoveryBaseUrl(request)
+  const resource = new URL('/api/extensions/ext/mcp-server/mcp', appUrl)
+  if (new URL(request.url).searchParams.get('tool_namespace') === 'accounted') {
+    resource.searchParams.set('tool_namespace', 'accounted')
+  }
 
   return NextResponse.json({
-    resource: `${appUrl}/api/extensions/ext/mcp-server/mcp`,
+    resource: resource.toString(),
     authorization_servers: [appUrl],
     scopes_supported: ['mcp'],
   })
