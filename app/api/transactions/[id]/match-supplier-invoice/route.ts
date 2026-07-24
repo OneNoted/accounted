@@ -414,7 +414,14 @@ export const POST = withRouteContext(
         .is('journal_entry_id', null)
         .eq('is_current_version', true)
       if (docLinkError) {
-        txLog.warn('failed to link transaction document to payment JE (non-critical)', docLinkError)
+        // Structured fields so the half-linked state (doc retained but not
+        // anchored to the payment JE) can be reconstructed without an audit
+        // trail dig.
+        txLog.warn('failed to link transaction document to payment JE (non-critical)', {
+          error: docLinkError,
+          documentId: transaction.document_id,
+          journalEntryId,
+        })
       }
     }
 

@@ -104,6 +104,12 @@ type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${str
 
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
 
+// Journal-entry ids get interpolated into the supplier-invoice .or() filter
+// string in the underlag-badge effect below. They come from journal_entries.id
+// (DB-sourced), but this guard keeps the interpolated list UUID-only, matching
+// /api/documents/counts.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 // Validates a persisted value. Stale acct:<id> entries (account removed or
 // disabled) are caught later by the sourceItems stale-filter guard.
 function isSourceFilter(value: string | null): value is SourceFilter {
@@ -703,7 +709,9 @@ export default function TransactionsPage() {
       const merged: Record<string, JeUnderlagStatus> = {}
       for (let i = 0; i < newIds.length; i += IN_CLAUSE_CHUNK) {
         const chunk = newIds.slice(i, i + IN_CLAUSE_CHUNK)
-        const chunkInList = `(${chunk.join(',')})`
+        // Only UUIDs reach the interpolated .or() string (the .in() array
+        // filters are already injection-safe).
+        const chunkInList = `(${chunk.filter((id) => UUID_RE.test(id)).join(',')})`
         const [entriesRes, docsRes, siRefRes, sipRefRes, exemptRes] = await Promise.all([
           supabase
             .from('journal_entries')

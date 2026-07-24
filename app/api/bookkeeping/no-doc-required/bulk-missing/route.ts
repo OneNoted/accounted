@@ -25,6 +25,12 @@ const isoDate = z.string().refine(
   { message: 'Ogiltigt datum (förväntat YYYY-MM-DD)' },
 )
 
+// Journal-entry ids are interpolated into the supplier-invoice .or() filter
+// string below, so they must be UUIDs. They originate from journal_entries.id
+// (DB-sourced, never request input), but this guard keeps the injection-safety
+// contract identical to /api/documents/counts.
+const uuidSchema = z.string().uuid()
+
 const BulkMissingSchema = z.object({
   period_id: z.string().uuid().nullable().optional(),
   // Single uppercase verifikationsserie (A-Z); the list sends null for "all".
@@ -90,10 +96,15 @@ export const POST = withRouteContext(
     const candidateIds = candidates.map((e) => e.id)
     const withDoc = new Set<string>()
     const exempt = new Set<string>()
-    const LOOKUP_CHUNK = 300
+    // 150 keeps the embedded id lists well under PostgREST's URL-length limit:
+    // the supplier-invoice .or() below repeats the chunk twice (registration +
+    // payment FK), so a larger chunk would risk truncating the GET filter.
+    const LOOKUP_CHUNK = 150
     for (let i = 0; i < candidateIds.length; i += LOOKUP_CHUNK) {
       const chunk = candidateIds.slice(i, i + LOOKUP_CHUNK)
-      const chunkInList = `(${chunk.join(',')})`
+      // Only UUIDs reach the interpolated .or() string (the .in() array filters
+      // are already injection-safe); mirrors the guard in documents/counts.
+      const chunkInList = `(${chunk.filter((id) => uuidSchema.safeParse(id).success).join(',')})`
       const [docRes, siRefRes, sipRefRes, exemptRes] = await Promise.all([
         supabase
           .from('document_attachments')
