@@ -2442,15 +2442,19 @@ export default function TransactionsPage() {
               </div>
             )}
 
-            <div className="overflow-x-auto">
+            {/* Negative margin + matching padding: lets the hover-revealed
+                checkbox/chevron hang into the page margins without being
+                clipped by the overflow container, while the columns stay
+                flush with the page edges. */}
+            <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                    <th className={TH_CLASS}>{t('th_date')}</th>
+                    <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
+                    <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
                     <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
                     <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
-                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_status')}</th>
+                    <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
                   </tr>
                 </thead>
                 <tbody className="stagger-enter">
