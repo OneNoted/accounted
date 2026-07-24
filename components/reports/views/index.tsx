@@ -11,8 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
+import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import {
@@ -23,7 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -1085,12 +1084,15 @@ const SKATTEVERKET_MOMS_URL =
  */
 function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Lämna in själv (utan anslutning)</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
+    <section>
+      <div className="mb-3 flex items-center gap-3 px-1">
+        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Lämna in själv, med fil
+        </h3>
+        <div className="h-px flex-1 bg-border/60" />
+      </div>
+      <div className="space-y-4">
+        <p className="text-[13px] leading-6 text-muted-foreground">
           Du behöver inte vara ansluten till Skatteverket för att lämna in.
         </p>
         <ol className="list-decimal pl-6 space-y-1 text-sm text-muted-foreground">
@@ -1123,8 +1125,8 @@ function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: s
             </a>
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }
 
@@ -1144,6 +1146,7 @@ function VatBookingCard({
   period,
   fiscalPeriodId,
   checksBlocked,
+  onStatus,
 }: {
   periodType: VatPeriodType
   year: number
@@ -1155,6 +1158,8 @@ function VatBookingCard({
    * accounts the settlement clears), but the user should know before filing.
    */
   checksBlocked?: boolean
+  /** Lets the surrounding stepper mirror the booking state on its dot. */
+  onStatus?: (status: 'booked' | 'draft' | 'none') => void
 }) {
   const { canWrite } = useCanWrite()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -1199,6 +1204,12 @@ function VatBookingCard({
   const booked = proposal?.existing_entries.find((e) => e.status === 'posted')
   const draft = booked ? undefined : proposal?.existing_entries.find((e) => e.status === 'draft')
 
+  const bookingStatus = booked ? 'booked' : draft ? 'draft' : 'none'
+  useEffect(() => {
+    if (upToDate && proposal) onStatus?.(bookingStatus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upToDate, bookingStatus])
+
   // FormLine amounts are input strings; the proposal's numbers are already
   // öre-rounded server-side, so this is display formatting, not money math.
   const initialLines: FormLine[] = (proposal?.lines ?? []).map((l) => ({
@@ -1209,20 +1220,16 @@ function VatBookingCard({
   }))
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Bokför momsrapporten</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
+    <div className="space-y-4">
+        <p className="text-[13px] leading-6 text-muted-foreground">
           Skapa ett verifikat som nollställer periodens momskonton och bokför
           momsen att betala eller få tillbaka på redovisningskontot. Du granskar
           förslaget och kan ändra raderna innan verifikatet bokförs.
         </p>
 
         {booked && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
+            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               Momsen för perioden är redan bokförd:{' '}
               <Link
@@ -1236,8 +1243,8 @@ function VatBookingCard({
           </div>
         )}
         {draft && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
+            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               Det finns redan ett{' '}
               <Link
@@ -1252,13 +1259,10 @@ function VatBookingCard({
         )}
 
         {checksBlocked && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <AlertCircle className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
-            <p>
-              Det finns fel under 1 · Kontrollera underlaget. Du kan bokföra momsen ändå,
-              men åtgärda felen innan du lämnar in.
-            </p>
-          </div>
+          <p className="text-[12.5px] leading-5 text-attn">
+            Det finns fel under steg 1, Kontrollera. Du kan bokföra momsen ändå, men
+            åtgärda felen innan du lämnar in.
+          </p>
         )}
 
         {failed ? (
@@ -1291,7 +1295,6 @@ function VatBookingCard({
             )}
           </div>
         )}
-      </CardContent>
 
       {proposal && (
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -1327,7 +1330,123 @@ function VatBookingCard({
           </DialogContent>
         </Dialog>
       )}
-    </Card>
+    </div>
+  )
+}
+
+
+/** The Stegen header (concept Moms C): the filing pipeline as a clickable
+ *  horizontal stepper with honest per-step status subs. Statutory surface,
+ *  Swedish in both locales like the rest of the declaration. */
+function VatStepper({
+  active,
+  onSelect,
+  errorCount,
+  warningCount,
+  ruta49,
+  bookingStatus,
+}: {
+  active: number
+  onSelect: (step: number) => void
+  errorCount: number
+  warningCount: number
+  ruta49: number
+  bookingStatus: 'booked' | 'draft' | 'none' | null
+}) {
+  const steps = [
+    {
+      n: 1,
+      label: 'Kontrollera',
+      sub:
+        errorCount > 0
+          ? `${errorCount} fel`
+          : warningCount > 0
+            ? `${warningCount} ${warningCount === 1 ? 'varning' : 'varningar'}`
+            : 'klart',
+      done: errorCount === 0,
+      warn: errorCount > 0,
+    },
+    {
+      n: 2,
+      label: 'Granska',
+      sub:
+        ruta49 > 0
+          ? `${formatAmount(ruta49)} kr att betala`
+          : ruta49 < 0
+            ? `${formatAmount(Math.abs(ruta49))} kr att återfå`
+            : 'ingen moms',
+      done: false,
+      warn: false,
+    },
+    {
+      n: 3,
+      label: 'Bokför',
+      sub:
+        bookingStatus === 'booked'
+          ? 'bokförd'
+          : bookingStatus === 'draft'
+            ? 'utkast finns'
+            : 'mot 2650',
+      done: bookingStatus === 'booked',
+      warn: false,
+    },
+    { n: 4, label: 'Lämna in', sub: 'till Skatteverket', done: false, warn: false },
+  ]
+
+  return (
+    <div
+      className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      role="tablist"
+      aria-label="Momsdeklarationens steg"
+    >
+      {steps.map((step, i) => (
+        <React.Fragment key={step.n}>
+          {i > 0 && <span className="h-px min-w-4 flex-1 bg-border" aria-hidden="true" />}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={active === step.n}
+            onClick={() => onSelect(step.n)}
+            className="group flex shrink-0 items-center gap-2 text-left"
+          >
+            <span
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums transition-colors duration-150',
+                step.done
+                  ? 'border-success/40 text-success'
+                  : active === step.n
+                    ? 'border-foreground bg-foreground text-background'
+                    : 'border-border text-muted-foreground group-hover:border-foreground/30',
+              )}
+            >
+              {step.done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : step.n}
+            </span>
+            <span className="leading-tight">
+              <span
+                className={cn(
+                  'block text-[12.5px] transition-colors duration-150',
+                  active === step.n
+                    ? 'font-medium'
+                    : 'text-muted-foreground group-hover:text-foreground',
+                )}
+              >
+                {step.label}
+              </span>
+              {step.sub && (
+                <span
+                  className={cn(
+                    'block text-[11px] tabular-nums',
+                    step.warn ? 'text-attn' : 'text-muted-foreground',
+                  )}
+                >
+                  {step.sub}
+                </span>
+              )}
+            </span>
+          </button>
+        </React.Fragment>
+      ))}
+    </div>
   )
 }
 
@@ -1358,6 +1477,11 @@ export function VatDeclarationView() {
     error?: string
   } | null>(null)
   const [retryKey, setRetryKey] = useState(0)
+  // Stegen: which of the four pipeline steps is open. null = automatic
+  // (errors land on Kontrollera, otherwise Granska). A period switch resets
+  // to automatic so stale step choices never survive a context change.
+  const [chosenStep, setChosenStep] = useState<number | null>(null)
+  const [bookingStatus, setBookingStatus] = useState<'booked' | 'draft' | 'none' | null>(null)
 
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
@@ -1453,6 +1577,11 @@ export function VatDeclarationView() {
       : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
 
   useEffect(() => {
+    setChosenStep(null)
+    setBookingStatus(null)
+  }, [periodType, year, period, fiscalPeriodId])
+
+  useEffect(() => {
     if (!fetchKey || periodType === null) return
     const params = new URLSearchParams({
       periodType,
@@ -1495,6 +1624,9 @@ export function VatDeclarationView() {
   // but concern manual filers just as much.
   const checks = data ? runVatDeclarationChecks(data.rutor) : []
   const checksBlocked = checks.some((c) => c.status === 'ERROR')
+  const errorCount = checks.filter((c) => c.status === 'ERROR').length
+  const warningCount = checks.filter((c) => c.status === 'WARNING').length
+  const activeStep = chosenStep ?? (checksBlocked ? 1 : 2)
 
   // Settings not settled yet — the picker defaults and the gate both depend
   // on them, so hold the whole view in a skeleton.
@@ -1542,28 +1674,20 @@ export function VatDeclarationView() {
       {/* XML and PDF live in "Lämna in" below: they are filing artifacts, not
           report exports, and one home avoids two competing download surfaces. */}
       <ReportExportMenu
+        variant="default"
         items={[
           { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
         ]}
-      >
-        <AgentSparkleButton
-          intentId="vat.review"
-          intentArgs={{ period_type: periodType, year, period }}
-          contextRef={`vat:${year}-${periodType}-${period}`}
-        />
-      </ReportExportMenu>
+      />
 
-      {/* Period selection — the declaration below follows it automatically */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <Label>Periodicitet</Label>
+      {/* Period selection — the declaration below follows it automatically.
+          Flat toolbar row (concept language), far right like a context picker. */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
               <Select
                 value={periodType}
                 onValueChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
               >
-                <SelectTrigger className="mt-1 w-40">
+                <SelectTrigger aria-label="Periodicitet" className="h-9 w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1572,7 +1696,6 @@ export function VatDeclarationView() {
                   <SelectItem value="yearly">Årsvis</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
             {isYearly ? (
               // Annual VAT covers a räkenskapsår: picked here, not a
               // calendar year.
@@ -1587,10 +1710,8 @@ export function VatDeclarationView() {
               />
             ) : (
               <>
-                <div>
-                  <Label>År</Label>
                   <Select value={String(year)} onValueChange={(value) => setYear(parseInt(value))}>
-                    <SelectTrigger className="mt-1 w-28 tabular-nums">
+                    <SelectTrigger aria-label="År" className="h-9 w-24 tabular-nums">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1601,14 +1722,11 @@ export function VatDeclarationView() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                <div>
-                  <Label>Period</Label>
                   <Select
                     value={String(period)}
                     onValueChange={(value) => setPeriod(parseInt(value))}
                   >
-                    <SelectTrigger className="mt-1 w-44">
+                    <SelectTrigger aria-label="Period" className="h-9 w-44">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1619,12 +1737,9 @@ export function VatDeclarationView() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
               </>
             )}
-          </div>
-        </CardContent>
-      </Card>
+      </div>
 
       {error && (
         <Card>
@@ -1651,14 +1766,21 @@ export function VatDeclarationView() {
         <div
           className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
         >
-          {/* The page follows the filing pipeline: kontrollera, granska,
-              bokför, lämna in. The checks come first because their errors
-              invalidate everything below them. */}
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              1 · Kontrollera underlaget
-            </h2>
-            <VatChecksCard
+          {/* Stegen (concept): the filing pipeline as a horizontal stepper —
+              kontrollera, granska, bokför, lämna in — showing one step's
+              content at a time. Errors land on step 1, otherwise Granska. */}
+          <VatStepper
+            active={activeStep}
+            onSelect={setChosenStep}
+            errorCount={errorCount}
+            warningCount={warningCount}
+            ruta49={data.rutor.ruta49}
+            bookingStatus={bookingStatus}
+          />
+
+          {activeStep === 1 && (
+            <section className="mx-auto max-w-3xl space-y-3">
+              <VatChecksCard
               checks={checks}
               periodType={periodType}
               year={year}
@@ -1666,49 +1788,30 @@ export function VatDeclarationView() {
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
               onCorrected={() => setRetryKey((k) => k + 1)}
             />
-          </section>
-
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              2 · Granska deklarationen
-            </h2>
-          <Card>
-            <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <CardTitle>Momsdeklaration - {data.period.start} till {data.period.end}</CardTitle>
-                <div className="flex items-center gap-3">
-                  <Badge
-                    variant={
-                      data.rutor.ruta49 > 0
-                        ? 'warning'
-                        : data.rutor.ruta49 < 0
-                        ? 'success'
-                        : 'secondary'
-                    }
-                  >
-                    {data.rutor.ruta49 > 0
-                      ? 'Att betala'
-                      : data.rutor.ruta49 < 0
-                      ? 'Att återfå'
-                      : 'Ingen moms'}
-                  </Badge>
-                  {data.rutor.ruta49 !== 0 && (
-                    <span className="font-display text-xl tabular-nums">
-                      {formatAmount(Math.abs(data.rutor.ruta49))} kr
-                    </span>
-                  )}
-                </div>
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(2)}>
+                  Nästa: Granska deklarationen →
+                </Button>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-sm text-muted-foreground mb-4">
-                Baserat på {data.invoiceCount} fakturor och {data.transactionCount} transaktioner
-              </div>
+            </section>
+          )}
 
-              <div className="grid md:grid-cols-2 gap-6">
+          {activeStep === 2 && (
+            <section className="space-y-3">
+              <div className="mx-auto max-w-2xl">
+            <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
+              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Momsdeklaration · {data.period.start} till {data.period.end}
+              </h3>
+              <span className="text-[11.5px] tabular-nums text-muted-foreground">
+                {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
+              </span>
+            </div>
+            <div className="mt-4 space-y-8">
+              <div>
                 {/* Utgående moms */}
                 <div>
-                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Utgående moms (försäljning)
                   </h3>
                   <Table>
@@ -1790,7 +1893,7 @@ export function VatDeclarationView() {
                   {(data.rutor.ruta20 > 0 || data.rutor.ruta21 > 0 || data.rutor.ruta22 > 0 || data.rutor.ruta23 > 0 || data.rutor.ruta24 > 0 ||
                     data.rutor.ruta30 > 0 || data.rutor.ruta31 > 0 || data.rutor.ruta32 > 0) && (
                     <>
-                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3 mt-6">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Omvänd skattskyldighet (inköp)
                       </h3>
                       <Table>
@@ -1811,7 +1914,7 @@ export function VatDeclarationView() {
                   {/* Moms vid import */}
                   {(data.rutor.ruta50 > 0 || data.rutor.ruta60 > 0 || data.rutor.ruta61 > 0 || data.rutor.ruta62 > 0) && (
                     <>
-                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3 mt-6">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Moms vid import
                       </h3>
                       <Table>
@@ -1825,10 +1928,11 @@ export function VatDeclarationView() {
                     </>
                   )}
                 </div>
-
+              </div>
+              <div>
                 {/* Ingående moms */}
                 <div>
-                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Ingående moms (avdragsgill)
                   </h3>
                   <Table>
@@ -1868,63 +1972,77 @@ export function VatDeclarationView() {
                   </Table>
                 </div>
               </div>
+            </div>
 
-              {/* Net result: the tables' sum row. The headline amount lives in
-                  the card header next to the status badge. */}
-              <div className="mt-6 pt-4 border-t">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <span className="font-mono text-xs bg-muted px-1 rounded mr-2">49</span>
-                    <span className="text-sm font-medium">
-                      {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
-                    </span>
-                  </div>
-                  <span
-                    className={`font-semibold tabular-nums ${
-                      data.rutor.ruta49 > 0
-                        ? 'text-warning'
-                        : data.rutor.ruta49 < 0
-                        ? 'text-success'
-                        : ''
-                    }`}
-                  >
-                    {formatAmount(Math.abs(data.rutor.ruta49))} kr
-                  </span>
-                </div>
+            {/* Ruta 49 as the emphasized document foot (concept skv-foot). */}
+            <div className="mt-8 flex items-baseline gap-3 border-t-2 border-foreground/80 pt-3">
+              <span className="font-mono text-xs text-muted-foreground">49</span>
+              <span className="flex-1 text-sm font-medium">
+                {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                {formatAmount(Math.abs(data.rutor.ruta49))} kr
+              </span>
+            </div>
+          </div>
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(3)}>
+                  Nästa: Bokför momsen →
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-          </section>
+            </section>
+          )}
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              3 · Bokför momsen
-            </h2>
-            <VatBookingCard
+          {activeStep === 3 && (
+            <section className="mx-auto max-w-3xl space-y-3">
+              <VatBookingCard
               periodType={periodType}
               year={year}
               period={period}
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
               checksBlocked={checksBlocked}
+              onStatus={setBookingStatus}
             />
-          </section>
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(4)}>
+                  Nästa: Lämna in →
+                </Button>
+              </div>
+            </section>
+          )}
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              4 · Lämna in
-            </h2>
-            <VatManualFilingCard
+          {activeStep === 4 && (
+            <section className="mx-auto max-w-3xl space-y-8">
+              <SkatteverketPanel
+                periodType={periodType}
+                year={year}
+                period={period}
+                fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+                fiscalYearEnd={
+                  isYearly && fiscalPeriodEnd
+                    ? {
+                        year: Number(fiscalPeriodEnd.slice(0, 4)),
+                        month: Number(fiscalPeriodEnd.slice(5, 7)),
+                      }
+                    : undefined
+                }
+                hasData={data !== null}
+                localBlocked={checksBlocked}
+              />
+              <VatManualFilingCard
               xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
               pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
             />
-          </section>
+            </section>
+          )}
         </div>
       )}
 
-      {/* Skatteverket integration panel — hidden while the räkenskapsår for
-          helårsmoms is unresolved, so its actions can never target an
-          unconfirmed period. */}
-      {!awaitingFiscalPeriod && (
+      {/* Skatteverket integration panel for the no-data states (fetch error,
+          empty period): with data it lives inside steg 4. Hidden while the
+          räkenskapsår for helårsmoms is unresolved, so its actions can never
+          target an unconfirmed period. */}
+      {!awaitingFiscalPeriod && !data && (
         <SkatteverketPanel
           periodType={periodType}
           year={year}
