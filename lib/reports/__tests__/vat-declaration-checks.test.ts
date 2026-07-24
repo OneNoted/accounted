@@ -53,6 +53,61 @@ describe('runVatDeclarationChecks', () => {
     expect(fk004?.message).toMatch(/ruta 20-24/)
   })
 
+  // Regression (2026-07-24): the check compared presence, not proportion, so
+  // correcting ONE voucher out of ~39 cleared the error while ~51 tkr of
+  // basis was still missing and the declaration claimed to be ready.
+  it('flags ERROR when RC basis is only partially reported', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta21: 2109.16,   // one corrected voucher
+      ruta30: 13446.18,  // fiktiv moms for ~39 vouchers → expects ~53 785 kr basis
+      ruta48: 13446.18,
+      ruta49: 0,
+    }
+    const finding = runVatDeclarationChecks(rutor).find((f) => f.code === 'RC_BASIS_MISSING')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toMatch(/saknas/)
+  })
+
+  it('does not flag RC basis inside the per-voucher rounding tolerance', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta21: 9990, // expected 10000, tolerance max(1, 0.5%) = 50
+      ruta30: 2500,
+      ruta48: 2500,
+      ruta49: 0,
+    }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.find((f) => f.code === 'RC_BASIS_MISSING')).toBeUndefined()
+    expect(findings.find((f) => f.code === 'RC_OUTPUT_MISSING')).toBeUndefined()
+  })
+
+  it('flags ERROR when a whole voucher of basis is missing beyond the tolerance', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta21: 9000, // expected 10000: one ~1000 kr voucher missing
+      ruta30: 2500,
+      ruta48: 2500,
+      ruta49: 0,
+    }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'RC_BASIS_MISSING')?.status,
+    ).toBe('ERROR')
+  })
+
+  it('flags ERROR when basis exceeds what the output VAT accounts for', () => {
+    const rutor: VatDeclarationRutor = {
+      ...emptyRutor,
+      ruta21: 60000, // expected only 10000 from ruta30: fiktiv moms missing
+      ruta30: 2500,
+      ruta48: 2500,
+      ruta49: 0,
+    }
+    expect(
+      runVatDeclarationChecks(rutor).find((f) => f.code === 'RC_OUTPUT_MISSING')?.status,
+    ).toBe('ERROR')
+  })
+
   it('flags ERROR when basis is present but no output RC VAT', () => {
     const rutor: VatDeclarationRutor = {
       ...emptyRutor,

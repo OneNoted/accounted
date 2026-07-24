@@ -107,10 +107,9 @@ export function VatChecksCard({
   // Gap fetch tagged with the key it was requested under: loading is derived
   // by comparing tags, so the effect never sets state synchronously. Fixed
   // rows are removed via removedIds (the fetch itself is not re-run after a
-  // korrigering: the period key is unchanged). The key is period-only, NOT
-  // gated on RC_BASIS_MISSING: the aggregate check clears as soon as ONE
-  // voucher is corrected, and the remaining unfixed rows must survive the
-  // declaration refetch that follows each korrigering.
+  // korrigering: the period key is unchanged). The key is period-only so the
+  // list survives the declaration refetch that follows each korrigering, and
+  // survives a remount even when the aggregate check no longer fires.
   const gapsKey = `${periodType}:${year}:${period}:${fiscalPeriodId ?? ''}`
   const [gapsResult, setGapsResult] = useState<{
     key: string
@@ -145,25 +144,26 @@ export function VatChecksCard({
   const gapsFetched = gapsResult !== null && gapsResult.key === gapsKey
 
   useEffect(() => {
-    // Fetch once per period, and only while the aggregate check flags a gap:
-    // the fetched list then outlives the check, which clears after the first
-    // correction even though other vouchers may remain broken.
-    if (!hasRcBasisGaps || gapsFetched) return
+    // Fetch once per period, NOT gated on the aggregate check: the check
+    // compares period totals and can clear (or never fire) while individual
+    // vouchers still miss their basis pair. Gating the fetch on it meant a
+    // remount after the first korrigering showed "inga fel" with the
+    // remaining broken vouchers silently hidden.
+    if (gapsFetched) return
     let cancelled = false
     const params = new URLSearchParams({
       periodType,
       year: String(year),
       period: String(period),
     })
-    // Forward-compatible: the route reads calendar params today, but yearly
-    // (helårsmoms) declarations resolve against the räkenskapsår.
+    // Yearly (helårsmoms) resolves against the räkenskapsår server-side.
     if (fiscalPeriodId) params.set('fiscal_period_id', fiscalPeriodId)
     fetch(`/api/reports/vat-declaration/rc-basis-gaps?${params.toString()}`)
       .then(async (r) => {
         const j = await r.json().catch(() => null)
         if (cancelled) return
-        // A failed fetch must not masquerade as "no gaps found": the check
-        // above says there ARE gaps, so an empty list here would mislead.
+        // A failed fetch must not masquerade as "no gaps found": an empty
+        // list would mislead whenever gaps actually exist.
         if (!r.ok || j?.error) setGapsResult({ key: gapsKey, gaps: [], failed: true })
         else setGapsResult({ key: gapsKey, gaps: j?.data?.gaps || [] })
       })
@@ -173,7 +173,7 @@ export function VatChecksCard({
     return () => {
       cancelled = true
     }
-  }, [hasRcBasisGaps, gapsFetched, gapsKey, periodType, year, period, fiscalPeriodId])
+  }, [gapsFetched, gapsKey, periodType, year, period, fiscalPeriodId])
 
   const gaps = gapsFetched
     ? gapsResult.gaps.filter((g) => !removedIds.has(g.entryId))

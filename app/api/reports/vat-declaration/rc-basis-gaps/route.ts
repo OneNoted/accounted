@@ -14,6 +14,9 @@ export const GET = withRouteContext(
     const periodType = searchParams.get('periodType') as VatPeriodType | null
     const yearStr = searchParams.get('year')
     const periodStr = searchParams.get('period')
+    // Yearly (helårsmoms) resolves against the räkenskapsår, mirroring the
+    // declaration route; monthly/quarterly ignore it.
+    const fiscalPeriodId = searchParams.get('fiscal_period_id') ?? undefined
 
     if (!periodType || !yearStr || !periodStr) {
       return errorResponseFromCode('VAT_REPORT_MISSING_PARAMS', log, { requestId })
@@ -35,7 +38,9 @@ export const GET = withRouteContext(
     }
 
     try {
-      const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period)
+      const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period, {
+        fiscalPeriodId,
+      })
       return NextResponse.json({ data: { gaps } })
     } catch (err) {
       log.error('rc-basis-gaps detection failed', err as Error, { periodType, year, period })
