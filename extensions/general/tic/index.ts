@@ -961,30 +961,11 @@ export const ticExtension: Extension = {
             )
           }
 
-          // If the email is already registered, refuse signup. Linking BankID to an
-          // existing account must go through the authenticated /bankid/link route so
-          // email ownership is proven by password login first. (CWE-287)
-          const { data: existingByEmail } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('email', trimmedEmail!)
-            .single()
-
-          if (existingByEmail) {
-            log.warn('bankid signup rejected: email already registered', {
-              sessionId,
-              pnrHashPrefix: pnrHash.slice(0, 8),
-            })
-            return NextResponse.json(
-              {
-                error: 'account_exists',
-                message: 'An account with this email already exists. Log in and link BankID from settings.',
-              },
-              { status: 409 }
-            )
-          }
-
-          // Create new Supabase user
+          // Create new Supabase user. Email uniqueness is checked by createUser
+          // itself against auth.users: do NOT pre-check profiles.email instead.
+          // The profile mirror can lack the address while the auth row still
+          // holds it (anonymize_user_account scrubs profiles.email but keeps the
+          // auth tombstone), which used to fall through to a dead-end 500 here.
           const randomPassword = crypto.randomBytes(32).toString('base64url')
           const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
             email: trimmedEmail!,
@@ -994,6 +975,24 @@ export const ticExtension: Extension = {
           })
 
           if (createError || !newUser?.user) {
+            // Email already registered (including deleted-account tombstones,
+            // which keep their email on purpose): refuse signup. Linking BankID
+            // to an existing account must go through the authenticated
+            // /bankid/link route so email ownership is proven by password login
+            // first. (CWE-287)
+            if (createError?.code === 'email_exists') {
+              log.warn('bankid signup rejected: email already registered', {
+                sessionId,
+                pnrHashPrefix: pnrHash.slice(0, 8),
+              })
+              return NextResponse.json(
+                {
+                  error: 'account_exists',
+                  message: 'Det finns redan ett konto med den här e-postadressen. Logga in och koppla BankID under Inställningar.',
+                },
+                { status: 409 }
+              )
+            }
             log.error('createUser failed', { email: trimmedEmail, status: createError?.status, code: createError?.code, message: createError?.message })
             return NextResponse.json(
               { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
