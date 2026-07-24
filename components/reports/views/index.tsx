@@ -21,7 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -1671,35 +1672,29 @@ export function VatDeclarationView() {
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-8">
-      {/* XML and PDF live in "Lämna in" below: they are filing artifacts, not
-          report exports, and one home avoids two competing download surfaces. */}
-      <ReportExportMenu
-        variant="default"
-        items={[
-          { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
-        ]}
-      />
-
-      {/* Period selection — the declaration below follows it automatically.
-          Flat toolbar row (concept language), far right like a context picker. */}
+      {/* One flat toolbar row (concept language): period pickers + Exportera
+          far right. XML and PDF live in "Lämna in" below: they are filing
+          artifacts, not report exports, and one home avoids two competing
+          download surfaces. */}
       <div className="flex flex-wrap items-center justify-end gap-2">
-              <Select
+              {/* Cadence lives behind a settings-style "Period" chip: the
+                  concrete period chip next to it already shows the cadence
+                  ("Kvartal 2" implies quarterly, "Räkenskapsår ..." yearly). */}
+              <ContextPicker
+                items={[
+                  { id: 'monthly', label: 'Månadsvis' },
+                  { id: 'quarterly', label: 'Kvartalsvis' },
+                  { id: 'yearly', label: 'Årsvis' },
+                ]}
                 value={periodType}
-                onValueChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
-              >
-                <SelectTrigger aria-label="Periodicitet" className="h-9 w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="monthly">Månadsvis</SelectItem>
-                  <SelectItem value="quarterly">Kvartalsvis</SelectItem>
-                  <SelectItem value="yearly">Årsvis</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
+                triggerLabel="Period"
+                ariaLabel="Periodicitet"
+              />
             {isYearly ? (
               // Annual VAT covers a räkenskapsår: picked here, not a
               // calendar year.
-              <FiscalYearSelector
+              <FyPicker
                 value={fiscalPeriodId || null}
                 onChange={(id, fp) => {
                   setFiscalPeriodId(id || '')
@@ -1710,35 +1705,35 @@ export function VatDeclarationView() {
               />
             ) : (
               <>
-                  <Select value={String(year)} onValueChange={(value) => setYear(parseInt(value))}>
-                    <SelectTrigger aria-label="År" className="h-9 w-24 tabular-nums">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {yearOptions.map((y) => (
-                        <SelectItem key={y} value={String(y)} className="tabular-nums">
-                          {y}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
+                  <ContextPicker
+                    items={yearOptions.map((y) => ({ id: String(y), label: String(y) }))}
+                    value={String(year)}
+                    onChange={(value) => setYear(parseInt(value))}
+                    triggerLabel={String(year)}
+                    ariaLabel="År"
+                    className="tabular-nums"
+                  />
+                  <ContextPicker
+                    items={getPeriodOptions().map((opt) => ({
+                      id: String(opt.value),
+                      label: opt.label,
+                    }))}
                     value={String(period)}
-                    onValueChange={(value) => setPeriod(parseInt(value))}
-                  >
-                    <SelectTrigger aria-label="Period" className="h-9 w-44">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {getPeriodOptions().map((opt) => (
-                        <SelectItem key={opt.value} value={String(opt.value)}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={(value) => setPeriod(parseInt(value))}
+                    triggerLabel={
+                      getPeriodOptions().find((opt) => opt.value === period)?.label ??
+                      String(period)
+                    }
+                    ariaLabel="Redovisningsperiod"
+                  />
               </>
             )}
+            <ReportExportMenu
+              variant="default"
+              items={[
+                { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+              ]}
+            />
       </div>
 
       {error && (

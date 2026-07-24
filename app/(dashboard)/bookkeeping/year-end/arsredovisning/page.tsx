@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,12 +11,19 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
 import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2, Trash2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FyPicker } from '@/components/common/FyPicker'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
 import { AnnualReportStudio } from '@/components/bokslut/AnnualReportStudio'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
@@ -452,10 +458,9 @@ export default function ArsredovisningPage() {
           title="Årsredovisning"
           description="Förhandsgranska och ladda ner årsredovisningen för valt räkenskapsår."
         />
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Välj räkenskapsår</CardTitle>
-            <p className="text-sm text-muted-foreground">
+        <div className="max-w-xl px-1">
+            <h3 className="font-sans text-sm font-medium">Välj räkenskapsår</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
               Välj det räkenskapsår du vill se årsredovisningen för. Du kan
               förhandsgranska och ladda ner PDF-utkastet utan att stänga året: det
               fullständiga bokslutet görs sedan via{' '}
@@ -464,19 +469,17 @@ export default function ArsredovisningPage() {
               </Link>
               .
             </p>
-          </CardHeader>
-          <CardContent>
-            <FiscalYearSelector
+          <div className="mt-4">
+            <FyPicker
               value={null}
               onChange={(id) => {
                 if (id) router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
               }}
               includeAllOption={false}
               hideFuturePeriods
-              label={null}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     )
   }
@@ -485,12 +488,10 @@ export default function ArsredovisningPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-32 w-full" />
-          </CardContent>
-        </Card>
+        <div className="space-y-3">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-32 w-full" />
+        </div>
       </div>
     )
   }
@@ -499,11 +500,7 @@ export default function ArsredovisningPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
-        <Card>
-          <CardContent className="p-6 text-destructive">
-            {error ?? 'Kunde inte hämta data'}
-          </CardContent>
-        </Card>
+        <p className="py-4 text-sm text-destructive">{error ?? 'Kunde inte hämta data'}</p>
       </div>
     )
   }
@@ -531,16 +528,14 @@ export default function ArsredovisningPage() {
       />
 
       {data.accounting_framework === 'k3' && (
-        <Card>
-          <CardContent className="p-4 text-sm">
-            <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
-            <p className="text-muted-foreground mt-1">
-              Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
-              utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-              anläggningstillgångar): krav som följer K3 men inte K2.
-            </p>
-          </CardContent>
-        </Card>
+        <div className="px-1 text-sm">
+          <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
+            utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
+            anläggningstillgångar): krav som följer K3 men inte K2.
+          </p>
+        </div>
       )}
 
       <AnnualReportStudio
@@ -553,15 +548,16 @@ export default function ArsredovisningPage() {
         onVersionsChanged={handleVersionsChanged}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Förvaltningsberättelse: narrativ</CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Förvaltningsberättelse: narrativ</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+          <p className="px-1 text-xs leading-5 text-muted-foreground">
             Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
             för att behålla ändringarna mellan sessioner.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <div className="space-y-4 px-1 pt-4">
           <div className="space-y-2">
             <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
             <Textarea
@@ -597,7 +593,7 @@ export default function ArsredovisningPage() {
               value={proposedDividend}
               onChange={(event) => setProposedDividend(event.target.value)}
               placeholder="0"
-              className="min-h-11 max-w-[220px] tabular-nums"
+              className="max-w-[220px] tabular-nums"
             />
             <p className="text-xs text-muted-foreground">
               Beloppet används i resultatdispositionen i samma version av PDF och iXBRL.
@@ -619,23 +615,22 @@ export default function ArsredovisningPage() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="ar-agm-outcome">Årsstämmans beslut om resultatdisposition</Label>
-            <select
-              id="ar-agm-outcome"
-              className="min-h-11 w-full max-w-xl rounded-md border border-border bg-background px-3 text-sm"
+            <Select
               value={agmDispositionOutcome}
-              onChange={(event) =>
+              onValueChange={(next) =>
                 setAgmDispositionOutcome(
-                  event.target.value as
-                    | ''
-                    | 'proposal_approved'
-                    | 'alternative_decision',
+                  next as 'proposal_approved' | 'alternative_decision',
                 )
               }
             >
-              <option value="">Välj efter genomförd årsstämma</option>
-              <option value="proposal_approved">Styrelsens förslag godkändes</option>
-              <option value="alternative_decision">Årsstämman fattade ett annat beslut</option>
-            </select>
+              <SelectTrigger id="ar-agm-outcome" className="max-w-xl">
+                <SelectValue placeholder="Välj efter genomförd årsstämma" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="proposal_approved">Styrelsens förslag godkändes</SelectItem>
+                <SelectItem value="alternative_decision">Årsstämman fattade ett annat beslut</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {agmDispositionOutcome === 'alternative_decision' && (
             <div className="space-y-2">
@@ -651,7 +646,7 @@ export default function ArsredovisningPage() {
 
           <div className="pt-4 border-t border-border space-y-4">
             <div>
-              <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Lagstadgade upplysningar
               </h3>
               <p className="text-xs text-muted-foreground mt-1">
@@ -675,7 +670,7 @@ export default function ArsredovisningPage() {
               <p className="text-xs text-muted-foreground">
                 ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
               </p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox
                   id="ar-ltd-confirmed"
                   checked={longTermDebtConfirmed}
@@ -694,7 +689,7 @@ export default function ArsredovisningPage() {
                 placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox
                   id="ar-securities-confirmed"
                   checked={securitiesPledgedConfirmed}
@@ -713,7 +708,7 @@ export default function ArsredovisningPage() {
                 placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox
                   id="ar-contingent-confirmed"
                   checked={contingentLiabilitiesConfirmed}
@@ -757,7 +752,7 @@ export default function ArsredovisningPage() {
                 />
               </div>
             </div>
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+            <label className="flex cursor-pointer items-center gap-3 text-sm">
               <Checkbox
                 id="ar-parent-confirmed"
                 checked={parentCompanyConfirmed}
@@ -794,14 +789,15 @@ export default function ArsredovisningPage() {
               )}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Flerårsöversikt</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Flerårsöversikt</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -830,64 +826,67 @@ export default function ArsredovisningPage() {
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Underskrifter</CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Underskrifter</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+          <p className="px-1 text-xs leading-5 text-muted-foreground">
             Lägg till varje styrelseledamot och eventuell VD. Lås först en version i
             arbetsflödet ovan. När originalet eller en extern e-signatur är klar registrerar
             du datum och bevisreferens mot exakt den version som skrevs under.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-4 md:grid-cols-2">
+        <div className="space-y-4 px-1 pt-4">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="signature-version">Låst version</Label>
-              <select
-                id="signature-version"
-                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+              <Select
                 value={selectedSignatureVersionId}
-                onChange={(event) => setSelectedSignatureVersionId(event.target.value)}
+                onValueChange={setSelectedSignatureVersionId}
               >
-                <option value="">Välj version</option>
-                {versions
-                  .filter((version) => version.status === 'ready_for_signature')
-                  .map((version) => (
-                    <option key={version.id} value={version.id}>
-                      Version {version.version_number}: {version.content_hash.slice(0, 12)}
-                    </option>
-                  ))}
-              </select>
+                <SelectTrigger id="signature-version">
+                  <SelectValue placeholder="Välj version" />
+                </SelectTrigger>
+                <SelectContent>
+                  {versions
+                    .filter((version) => version.status === 'ready_for_signature')
+                    .map((version) => (
+                      <SelectItem key={version.id} value={version.id}>
+                        Version {version.version_number}: {version.content_hash.slice(0, 12)}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="signature-method">Underskriftsmetod</Label>
-              <select
-                id="signature-method"
-                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+              <Select
                 value={signingMethod}
-                onChange={(event) =>
+                onValueChange={(next) =>
                   setSigningMethod(
-                    event.target.value as
-                      | 'paper_original'
-                      | 'advanced_e_signature'
-                      | 'bankid',
+                    next as 'paper_original' | 'advanced_e_signature' | 'bankid',
                   )
                 }
               >
-                <option value="paper_original">Undertecknat original på papper</option>
-                <option value="advanced_e_signature">Avancerad e-signatur</option>
-                <option value="bankid">BankID via extern signeringstjänst</option>
-              </select>
+                <SelectTrigger id="signature-method">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paper_original">Undertecknat original på papper</SelectItem>
+                  <SelectItem value="advanced_e_signature">Avancerad e-signatur</SelectItem>
+                  <SelectItem value="bankid">BankID via extern signeringstjänst</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="signature-date">Underskriftsdatum</Label>
               <Input
                 id="signature-date"
                 type="date"
-                className="min-h-11"
+               
                 value={signatureDate}
                 onChange={(event) => setSignatureDate(event.target.value)}
               />
@@ -896,7 +895,7 @@ export default function ArsredovisningPage() {
               <Label htmlFor="signature-evidence">Bevisreferens</Label>
               <Input
                 id="signature-evidence"
-                className="min-h-11"
+               
                 value={signatureEvidence}
                 onChange={(event) => setSignatureEvidence(event.target.value)}
                 placeholder="archive:AR-2026-001"
@@ -935,7 +934,7 @@ export default function ArsredovisningPage() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        className="min-h-11 min-w-11"
+                        className="min-w-11"
                         aria-label={tStudio('remove_signer')}
                         onClick={() => void handleRemoveSigner(sig.id)}
                       >
@@ -945,7 +944,7 @@ export default function ArsredovisningPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="min-h-11"
+                     
                       onClick={() => void handleMarkSigned(sig.id)}
                       disabled={
                         !selectedSignatureVersionId ||
@@ -965,17 +964,17 @@ export default function ArsredovisningPage() {
               <Label htmlFor="signer-role" className="text-xs">
                 Roll
               </Label>
-              <select
-                id="signer-role"
-                className="min-h-11 rounded-md border border-border bg-background px-3 text-sm"
-                value={signerRole}
-                onChange={(e) => setSignerRole(e.target.value)}
-              >
-                <option>Styrelseledamot</option>
-                <option>Styrelseordförande</option>
-                <option>VD</option>
-                <option>Verkställande direktör</option>
-              </select>
+              <Select value={signerRole} onValueChange={setSignerRole}>
+                <SelectTrigger id="signer-role" className="sm:w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
+                  <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
+                  <SelectItem value="VD">VD</SelectItem>
+                  <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1 flex-1 min-w-[200px]">
               <Label htmlFor="signer-name" className="text-xs">
@@ -986,21 +985,22 @@ export default function ArsredovisningPage() {
                 value={signerName}
                 onChange={(e) => setSignerName(e.target.value)}
                 placeholder="t.ex. Anna Andersson"
-                className="min-h-11"
+               
               />
             </div>
-            <Button className="min-h-11 w-full sm:w-auto" onClick={handleAddSigner} disabled={!signerName.trim()}>
+            <Button className="w-full sm:w-auto" onClick={handleAddSigner} disabled={!signerName.trim()}>
               <Plus className="mr-1 h-4 w-4" /> Lägg till
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">PDF för pappersinlämning</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">PDF för pappersinlämning</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="space-y-4 px-1 pt-2 text-sm">
           <p className="text-muted-foreground">
             Ladda ner PDF-utkastet och granska det. För pappersinlämning ska
             årsredovisningens original skrivas under av samtliga styrelseledamöter och
@@ -1008,7 +1008,7 @@ export default function ArsredovisningPage() {
             till Bolagsverket. PDF-filen kan inte laddas upp som digital årsredovisning.
           </p>
           <div className="flex flex-wrap gap-3">
-            <Button className="min-h-11" asChild>
+            <Button asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
@@ -1024,7 +1024,7 @@ export default function ArsredovisningPage() {
                   : undefined
               }
             >
-              <Button className="min-h-11" variant="outline" asChild>
+              <Button variant="outline" asChild>
                 <Link
                   href="https://bolagsverket.se/foretag/aktiebolag/arsredovisningforaktiebolag.759.html"
                   target="_blank"
@@ -1045,24 +1045,24 @@ export default function ArsredovisningPage() {
             }
           >
           {data.warnings.length > 0 && (
-            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-1">
+            <div className="space-y-1 border-t border-border/60 pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
-              <ul className="list-disc pl-5 space-y-1">
+              <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
                 {data.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
             </div>
           )}
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
-            <strong>Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
+          <p className="text-xs text-muted-foreground">
+            <strong className="text-foreground">Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
             ansluten programvara. Accounteds direktinlämning förblir stängd tills avtal,
             certifikat och Bolagsverkets acceptanstest är klara. PDF-flödet ovan är den
             separata vägen för pappersinlämning.
+          </p>
           </div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {data.accounting_framework === 'k2' && periodId && (
         <DigitalInlamning periodId={periodId} />
