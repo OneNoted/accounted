@@ -90,8 +90,8 @@ export async function POST(request: Request) {
     )
   }
 
-  // Wipe PII in auth.users metadata and ban the tombstone row ~100 years.
-  // DB functions can't reach supabase.auth.admin, so we do it here.
+  // Ban the tombstone row ~100 years so login is impossible. The DB function
+  // can't set the ban (GoTrue-managed), so we do it here.
   //
   // Note: auth.users.email is intentionally NOT scrubbed. The original
   // address is retained as a legitimate-interest tombstone so that:
@@ -105,18 +105,18 @@ export async function POST(request: Request) {
   // after this point: login is impossible (row is banned) and the
   // profile is anonymized, so no UI ever surfaces it.
   //
-  // user_metadata / app_metadata ARE wiped: they may contain display
-  // name, avatar, or provider info that isn't needed for recovery.
-  // The admin API replaces (not merges) these, so passing {} clears them.
+  // user_metadata / app_metadata PII is scrubbed by the RPC itself, NOT
+  // here: GoTrue's admin update MERGES metadata maps, so the previous
+  // updateUserById(..., { user_metadata: {}, app_metadata: {} }) call was
+  // a silent no-op that left the full name on the tombstone (found on
+  // prod 2026-07-24, repaired by migration 20260724150000).
   const service = createServiceClient()
   try {
     await service.auth.admin.updateUserById(user.id, {
-      user_metadata: {},
-      app_metadata: {},
       ban_duration: '876000h',
     })
   } catch (err) {
-    log.error('Failed to wipe metadata and ban anonymized user', { userId: user.id, err })
+    log.error('Failed to ban anonymized user', { userId: user.id, err })
   }
 
   try {
