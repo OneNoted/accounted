@@ -324,7 +324,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
 
     case 'ENTITY_PICKED': {
       const prev = state.settings.entity_type
-      let settings = { ...state.settings, entity_type: action.entityType }
+      let settings: Partial<CompanySettings> = { ...state.settings, entity_type: action.entityType }
       let next = state
       if (prev && prev !== action.entityType) {
         // Same guard as the wizard's step-1 wipe, but broader per the plan:
