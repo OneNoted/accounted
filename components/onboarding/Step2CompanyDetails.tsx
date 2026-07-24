@@ -13,6 +13,7 @@ import { Loader2, ArrowRight, ArrowLeft, CheckCircle2, AlertTriangle } from 'luc
 import type { EntityType } from '@/types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { fetchCompanyLookup } from '@/lib/company-lookup/fetch-company-lookup'
 
 const schema = z.object({
   company_name: z.string().min(1, 'Företagsnamn krävs'),
@@ -152,32 +153,27 @@ export default function Step2CompanyDetails({
 
       setIsLooking(true)
 
-      fetch(`/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`, {
-        signal: controller.signal,
-      })
-        .then(async (res) => {
-          if (controller.signal.aborted) return
+      fetchCompanyLookup(orgNumber, { ticEnabled: true, signal: controller.signal })
+        .then((outcome) => {
+          if (controller.signal.aborted || outcome.status === 'aborted') return
 
-          if (res.status === 403) {
-            // Extension disabled: silently ignore
+          if (outcome.status === 'disabled') {
+            // Lookup surface unavailable (extension off / dispatcher miss):
+            // degrade silently to manual entry, the input is not at fault.
             return
           }
-          if (res.status === 404) {
+          if (outcome.status === 'not_found') {
             setLookupError(t('step2_lookup_not_found'))
             onTicLookup?.(null)
             return
           }
-          if (!res.ok) {
+          if (outcome.status === 'error') {
             setLookupError(t('step2_lookup_failed'))
             onTicLookup?.(null)
             return
           }
 
-          const { data } = (await res.json()) as { data: CompanyLookupResult }
-
-          // Guard: only apply if org_number still matches (user may have changed it)
-          if (controller.signal.aborted) return
-
+          const data = outcome.result
           setLookupDone(data)
           onTicLookup?.(data)
 
@@ -186,11 +182,6 @@ export default function Step2CompanyDetails({
           if (data.address?.street) setValue('address_line1', data.address.street)
           if (data.address?.postalCode) setValue('postal_code', data.address.postalCode)
           if (data.address?.city) setValue('city', data.address.city)
-        })
-        .catch((err) => {
-          if ((err as Error).name === 'AbortError') return
-          setLookupError(t('step2_lookup_failed'))
-          onTicLookup?.(null)
         })
         .finally(() => {
           if (!controller.signal.aborted) setIsLooking(false)
