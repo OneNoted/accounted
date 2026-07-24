@@ -1626,6 +1626,16 @@ export function VatDeclarationView() {
   const checksBlocked = checks.some((c) => c.status === 'ERROR')
   const errorCount = checks.filter((c) => c.status === 'ERROR').length
   const warningCount = checks.filter((c) => c.status === 'WARNING').length
+  // Latch the automatic landing step once per period, as a render-phase
+  // adjustment when the period's declaration first settles. Deriving it live
+  // from checksBlocked navigated the user away mid-work: the refetch after a
+  // korrigering can clear the aggregate error while the Kontrollera worklist
+  // still holds broken vouchers, and the view would jump to Granska under
+  // their feet. The period-change effect below resets chosenStep to null,
+  // which re-arms this latch for the next period.
+  if (chosenStep === null && upToDate && data && !error) {
+    setChosenStep(checksBlocked ? 1 : 2)
+  }
   const activeStep = chosenStep ?? (checksBlocked ? 1 : 2)
 
   // Settings not settled yet — the picker defaults and the gate both depend

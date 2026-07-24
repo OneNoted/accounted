@@ -4,7 +4,7 @@ import {
   fetchLinesByEntryIds,
   type EntryLinesQuery,
 } from '@/lib/bookkeeping/entry-lines'
-import { calculatePeriodDates } from './vat-declaration'
+import { resolvePeriodDates } from './vat-declaration'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -107,8 +107,15 @@ export async function findRcBasisGaps(
   periodType: VatPeriodType,
   year: number,
   period: number,
+  options: { fiscalPeriodId?: string } = {},
 ): Promise<RcBasisGap[]> {
-  const { start, end } = calculatePeriodDates(periodType, year, period)
+  // Same period resolution as the declaration itself: helårsmoms covers the
+  // räkenskapsår, not the calendar year, so a calendar span would hide gap
+  // vouchers from the tail of an extended/broken fiscal year while the
+  // declaration totals (and the aggregate check) still include them.
+  const { start, end } = await resolvePeriodDates(
+    supabase, companyId, periodType, year, period, options.fiscalPeriodId
+  )
 
   // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   const rcLines = (await fetchEntryLines<unknown>({

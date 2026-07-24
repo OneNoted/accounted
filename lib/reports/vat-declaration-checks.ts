@@ -72,32 +72,50 @@ export function runVatDeclarationChecks(rutor: VatDeclarationRutor): VatDeclarat
   // and we don't want a 0.01 rounding scrap to trip a sanity check.
   const eps = 0.5
 
-  // FK004 mirror: output RC VAT exists, basis missing.
-  if (rcOutput > eps && rcBasis <= eps) {
+  // The basis the per-rate output boxes imply (basbelopp = fiktiv moms / sats).
+  // The RC checks compare reported basis against this instead of testing mere
+  // presence: a binary present/absent test clears as soon as ONE voucher in
+  // the period carries a basis pair, silently passing a declaration where the
+  // remaining vouchers still under-report rutor 20-24 (FK004).
+  const expectedRcBasis =
+    rutor.ruta30 / 0.25 + rutor.ruta31 / 0.12 + rutor.ruta32 / 0.06
+  // Per-voucher öre rounding (basis derived as moms/sats vs the invoiced
+  // amount) accumulates with voucher count; 0.5% with a 1 kr floor absorbs
+  // that without hiding a genuinely missing voucher.
+  const rcTolerance = Math.max(1, expectedRcBasis * 0.005)
+
+  // FK004 mirror: output RC VAT exists, basis missing or too low.
+  if (rcOutput > eps && rcBasis + rcTolerance < expectedRcBasis) {
+    const shortfall = Math.round(expectedRcBasis - rcBasis)
     findings.push({
       code: 'RC_BASIS_MISSING',
       status: 'ERROR',
       message:
-        'Du har redovisat utgående moms på inköp (ruta 30-32) men inget ' +
-        'basbelopp för omvänd skattskyldighet (ruta 20-24). Skatteverket ' +
-        'kräver att båda sidor finns med (ML 13 kap; SKV felkod FK004). ' +
-        'Kontrollera att leverantörsfakturor med omvänd skattskyldighet ' +
-        'är bokförda med basbelopp på 44xx/45xx-konton.',
+        'Den utgående momsen på inköp (ruta 30-32) motsvarar ett basbelopp ' +
+        `på cirka ${Math.round(expectedRcBasis).toLocaleString('sv-SE')} kr, ` +
+        'men ruta 20-24 innehåller bara ' +
+        `${Math.round(rcBasis).toLocaleString('sv-SE')} kr: cirka ` +
+        `${shortfall.toLocaleString('sv-SE')} kr saknas. Skatteverket kräver ` +
+        'att båda sidor finns med (ML 13 kap; SKV felkod FK004). Kontrollera ' +
+        'att leverantörsfakturor med omvänd skattskyldighet är bokförda med ' +
+        'basbelopp på 44xx/45xx-konton.',
       rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
     })
   }
 
-  // Mirror: basis present but no output VAT, equally broken, often a
-  // half-finished manual posting.
-  if (rcBasis > eps && rcOutput <= eps) {
+  // Mirror: more basis than the output VAT accounts for, fiktiv moms missing
+  // for some vouchers. Covers both the all-output-missing case and a partial
+  // one; often a half-finished manual posting.
+  if (rcBasis > eps && rcBasis > expectedRcBasis + rcTolerance) {
     findings.push({
       code: 'RC_OUTPUT_MISSING',
       status: 'ERROR',
       message:
-        'Du har redovisat basbelopp för omvänd skattskyldighet (ruta 20-24) ' +
-        'men ingen utgående moms (ruta 30-32). Vid omvänd skattskyldighet ' +
-        'måste köparen redovisa både underlag och fiktiv moms (ML 13 kap). ' +
-        'Kontrollera att fiktiv moms är bokförd på 2614/2624/2634.',
+        'Basbeloppet för omvänd skattskyldighet (ruta 20-24) är större än ' +
+        'vad den utgående momsen (ruta 30-32) motsvarar. Vid omvänd ' +
+        'skattskyldighet måste köparen redovisa både underlag och fiktiv ' +
+        'moms (ML 13 kap). Kontrollera att fiktiv moms är bokförd på ' +
+        '2614/2624/2634 för varje inköp.',
       rutor: ['ruta20', 'ruta21', 'ruta22', 'ruta23', 'ruta24', 'ruta30', 'ruta31', 'ruta32'],
     })
   }
