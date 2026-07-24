@@ -71,7 +71,7 @@ BEGIN
   -- app/api/account/delete/route.ts).
   UPDATE auth.users
      SET raw_user_meta_data = '{}'::jsonb,
-         raw_app_meta_data  = raw_app_meta_data - 'bankid_linked' - 'has_password'
+         raw_app_meta_data  = coalesce(raw_app_meta_data, '{}'::jsonb) - 'bankid_linked' - 'has_password'
    WHERE id = target_user_id;
 END;
 $function$;
@@ -85,7 +85,7 @@ GRANT EXECUTE ON FUNCTION public.anonymize_user_account(uuid) TO authenticated;
 -- UPDATE is atomic: it either scrubs all matching rows or none.
 UPDATE auth.users u
    SET raw_user_meta_data = '{}'::jsonb,
-       raw_app_meta_data  = u.raw_app_meta_data - 'bankid_linked' - 'has_password'
+       raw_app_meta_data  = coalesce(u.raw_app_meta_data, '{}'::jsonb) - 'bankid_linked' - 'has_password'
   FROM public.profiles p
  WHERE p.id = u.id
    AND p.anonymized_at IS NOT NULL
