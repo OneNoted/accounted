@@ -2,32 +2,21 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from "@/components/ui/skeleton"
+import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
-import dynamic from 'next/dynamic'
-import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
-
-// Recharts is ~180KB: defer the chart components so the KPI page shell and
-// hero cards render without waiting for the charting bundle.
-const chartFallback = () => <Skeleton className="h-[300px] w-full" />
-const KPITrendChart = dynamic(
-  () => import('@/components/kpi/KPITrendChart').then((m) => m.KPITrendChart),
-  { ssr: false, loading: chartFallback },
-)
-const KPIExpenseMixChart = dynamic(
-  () => import('@/components/kpi/KPIExpenseMixChart').then((m) => m.KPIExpenseMixChart),
-  { ssr: false, loading: chartFallback },
-)
-const KPITopSuppliersChart = dynamic(
-  () => import('@/components/kpi/KPITopSuppliersChart').then((m) => m.KPITopSuppliersChart),
-  { ssr: false, loading: chartFallback },
-)
+import { HelpPopover } from '@/components/ui/help-popover'
+import { FyPicker } from '@/components/common/FyPicker'
+import { KPIPanes, KPIBreakdown } from '@/components/kpi/KPIStory'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
 
+/**
+ * Nyckeltal in the founder-picked "Instrumentbrädan" layout: a grid of
+ * bordered instrument panes (monthly result bars + the preference-driven
+ * KPIs) with the cost story as quiet rows below. Plain SVG bars: no
+ * charting bundle on this page anymore.
+ */
 export default function KpiPage() {
   const t = useTranslations('kpi')
   const [selectedPeriod, setSelectedPeriod] = useState<string>('')
@@ -98,41 +87,39 @@ export default function KpiPage() {
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
+        help={
+          <HelpPopover>
+            <p>{t('help_text')}</p>
+          </HelpPopover>
+        }
         action={
-          <KPISettingsDialog
-            preferences={preferences}
-            onSave={handleSavePreferences}
-            saving={isSavingPrefs}
-          />
+          <div className="flex items-center gap-2">
+            <KPISettingsDialog
+              preferences={preferences}
+              onSave={handleSavePreferences}
+              saving={isSavingPrefs}
+            />
+            <FyPicker
+              value={selectedPeriod || null}
+              onChange={(id) => setSelectedPeriod(id || '')}
+              includeAllOption={false}
+              hideFuturePeriods
+            />
+          </div>
         }
       />
 
-      <FiscalYearSelector
-        value={selectedPeriod || null}
-        onChange={(id) => setSelectedPeriod(id || '')}
-        includeAllOption={false}
-        hideFuturePeriods
-      />
-
       {error && (
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            <p>{error}</p>
-          </CardContent>
-        </Card>
+        <p className="py-8 text-center text-sm text-muted-foreground">{error}</p>
       )}
 
       {isLoadingReport && <LoadingSkeleton />}
 
       {!isLoadingReport && !error && report && (
-        <>
-          <KPIHeroCards report={report} preferences={preferences} />
-          {report.months.length > 0 && <KPITrendChart months={report.months} />}
-          <div className="grid gap-4 md:grid-cols-2">
-            <KPIExpenseMixChart composition={report.expenseComposition} />
-            <KPITopSuppliersChart suppliers={report.topSuppliers} />
-          </div>
-        </>
+        <div className="stagger-enter space-y-10">
+          <KPIPanes report={report} preferences={preferences} />
+          <KPIBreakdown report={report} />
+        </div>
       )}
     </div>
   )
@@ -140,34 +127,10 @@ export default function KpiPage() {
 
 function LoadingSkeleton() {
   return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[1, 2, 3, 4].map((i) => (
-          <Card key={i}>
-            <CardContent className="p-4 space-y-2">
-              <Skeleton className="h-3 w-20" />
-              <Skeleton className="h-7 w-28" />
-              <Skeleton className="h-3 w-16" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-56" />
-        </CardContent>
-      </Card>
-      <div className="grid gap-4 md:grid-cols-2">
-        {[1, 2].map((i) => (
-          <Card key={i}>
-            <CardContent className="p-6 space-y-3">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-40" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+    <div className="grid gap-4 sm:grid-cols-2">
+      {[1, 2, 3, 4].map((i) => (
+        <Skeleton key={i} className="h-40 w-full rounded-lg" />
+      ))}
     </div>
   )
 }
