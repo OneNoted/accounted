@@ -28,6 +28,7 @@ import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-typ
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -1127,13 +1128,24 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/link',
-      // skipAuth: false, requires existing Supabase session
-      handler: async (request: Request, ctx?) => {
+      // Requires a Supabase session but NOT a company: a user who just
+      // signed up (or hasn't finished onboarding) must be able to manage
+      // their BankID connection from /settings/account. Without this flag
+      // the dispatcher's requireCompanyId() throws 'No company context'
+      // for zero-company users. skipCompanyContext dispatches without ctx,
+      // so the handler resolves the caller itself via requireAuth() (same
+      // MFA/AAL2 enforcement the dispatcher applies).
+      skipCompanyContext: true,
+      handler: async (request: Request) => {
         try {
+          const auth = await requireAuth()
+          if (auth.error) return auth.error
+          const userId = auth.user.id
+
           const body = await request.json()
           const { sessionId } = body
 
-          if (!sessionId || !ctx?.userId) {
+          if (!sessionId) {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
 
@@ -1157,14 +1169,14 @@ export const ticExtension: Extension = {
             .eq('personal_number_hash', pnrHash)
             .single()
 
-          if (existing && existing.user_id !== ctx.userId) {
+          if (existing && existing.user_id !== userId) {
             return NextResponse.json(
               { error: 'already_linked', message: 'This BankID is already linked to another account' },
               { status: 409 }
             )
           }
 
-          if (existing && existing.user_id === ctx.userId) {
+          if (existing && existing.user_id === userId) {
             return NextResponse.json({ data: { linked: true, alreadyLinked: true } })
           }
 
@@ -1172,7 +1184,7 @@ export const ticExtension: Extension = {
           const { error: insertError } = await supabase
             .from('bankid_identities')
             .insert({
-              user_id: ctx.userId,
+              user_id: userId,
               personal_number_hash: pnrHash,
               personal_number_enc: encryptPersonalNumber(personalNumber),
               given_name: givenName,
@@ -1192,9 +1204,9 @@ export const ticExtension: Extension = {
           // { bankid_linked: true } would wipe has_password for users who
           // already set one, they'd then be incorrectly shown the
           // set-password banner on their next session.
-          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
-          await supabase.auth.admin.updateUserById(ctx.userId, {
+          await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { ...priorMeta, bankid_linked: true },
           })
 
@@ -1219,12 +1231,15 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/unlink',
-      // skipAuth: false, requires existing Supabase session
-      handler: async (_request: Request, ctx?) => {
+      // Requires a Supabase session but NOT a company: see /bankid/link.
+      // A brand-new BankID signup (zero companies) must be able to undo
+      // the connection from /settings/account.
+      skipCompanyContext: true,
+      handler: async (_request: Request) => {
         try {
-          if (!ctx?.userId) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-          }
+          const auth = await requireAuth()
+          if (auth.error) return auth.error
+          const userId = auth.user.id
 
           const supabase = createServiceClient()
 
@@ -1232,7 +1247,7 @@ export const ticExtension: Extension = {
           const { error: deleteError } = await supabase
             .from('bankid_identities')
             .delete()
-            .eq('user_id', ctx.userId)
+            .eq('user_id', userId)
 
           if (deleteError) {
             log.error('unlink delete failed', { message: deleteError.message, code: deleteError.code })
@@ -1246,9 +1261,9 @@ export const ticExtension: Extension = {
           // user (has_password: false) would then be inferred as HAVING a
           // password (lib/auth/has-password.ts) and could strand themselves
           // with no working login method.
-          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
-          await supabase.auth.admin.updateUserById(ctx.userId, {
+          await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { ...priorMeta, bankid_linked: false },
           })
 
