@@ -76,7 +76,11 @@ export function claimConnectionsLoad(companyId: string): boolean {
 }
 
 export function publishConnections(companyId: string, connections: BankConn[]): void {
-  if (loadingCompanyId === companyId) loadingCompanyId = null
+  // Only the fetch that still owns the load claim may publish. A resolve
+  // arriving after the active company switched (and re-claimed the slot)
+  // would otherwise clobber the newer company's list with stale data.
+  if (loadingCompanyId !== companyId) return
+  loadingCompanyId = null
   emit({ ...state, companyId, connections })
 }
 

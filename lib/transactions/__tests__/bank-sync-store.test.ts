@@ -53,6 +53,22 @@ describe('bank-sync-store', () => {
       expect(getBankSyncSnapshot().companyId).toBe('co-2')
       expect(getBankSyncSnapshot().connections).toEqual([conn('c2')])
     })
+
+    it('discards a stale resolve after the company switched mid-flight', () => {
+      expect(claimConnectionsLoad('co-1')).toBe(true) // fetch for co-1 in flight
+      expect(claimConnectionsLoad('co-2')).toBe(true) // switch re-claims the slot
+      publishConnections('co-2', [conn('c2')])
+      // co-1's fetch resolves late: it no longer owns the claim and must not
+      // clobber co-2's published list.
+      publishConnections('co-1', [conn('c1')])
+      expect(getBankSyncSnapshot().companyId).toBe('co-2')
+      expect(getBankSyncSnapshot().connections).toEqual([conn('c2')])
+    })
+
+    it('ignores a publish that never claimed the load', () => {
+      publishConnections('co-1', [conn('c1')])
+      expect(getBankSyncSnapshot().connections).toBeNull()
+    })
   })
 
   describe('busy state', () => {
@@ -94,6 +110,7 @@ describe('bank-sync-store', () => {
 
   describe('markConnectionStatus', () => {
     it('updates one connection immutably', () => {
+      claimConnectionsLoad('co-1')
       publishConnections('co-1', [conn('c1'), conn('c2')])
       const before = getBankSyncSnapshot().connections
       markConnectionStatus('c1', 'expired')
