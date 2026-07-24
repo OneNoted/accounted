@@ -28,6 +28,15 @@ BEGIN
     RAISE EXCEPTION 'Can only delete your own account';
   END IF;
 
+  -- Reject repeat invocations against an already-anonymized tombstone: the
+  -- account is gone, re-running would only churn the scrubbed row.
+  IF EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = target_user_id AND anonymized_at IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'Account is already deleted' USING ERRCODE = 'P0002';
+  END IF;
+
   SELECT count(*) INTO blocker_count
   FROM public.company_members cm
   JOIN public.companies c ON c.id = cm.company_id
@@ -72,6 +81,8 @@ GRANT EXECUTE ON FUNCTION public.anonymize_user_account(uuid) TO authenticated;
 
 -- Repair existing tombstones: every already-anonymized profile whose auth row
 -- still carries metadata. Guarded by anonymized_at so live users are untouched.
+-- The migration runner applies this whole file in a single transaction, so the
+-- UPDATE is atomic: it either scrubs all matching rows or none.
 UPDATE auth.users u
    SET raw_user_meta_data = '{}'::jsonb,
        raw_app_meta_data  = u.raw_app_meta_data - 'bankid_linked' - 'has_password'

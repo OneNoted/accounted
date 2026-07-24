@@ -144,6 +144,10 @@ describe('account deletion RPCs (pg)', () => {
 
     await withUserContext(userId, async (client) => {
       await client.query('SELECT public.anonymize_user_account($1)', [userId])
+      // The authenticated role has no SELECT on auth.users; drop back to the
+      // superuser session user to verify. Still inside the same transaction,
+      // so the rolled-back writes remain visible.
+      await client.query('RESET ROLE')
       const { rows } = await client.query<{
         email: string | null
         user_meta: Record<string, unknown>
@@ -157,6 +161,23 @@ describe('account deletion RPCs (pg)', () => {
       expect(rows[0]!.email).toBe(`pg-real-${userId}@test.invalid`)
       expect(rows[0]!.user_meta).toEqual({})
       expect(rows[0]!.app_meta).toEqual({ provider: 'email', providers: ['email'] })
+    })
+  })
+
+  it('rejects a repeat invocation against an already-anonymized tombstone', async () => {
+    const userId = await insertAuthUser()
+    await getPool().query(
+      `INSERT INTO public.profiles (id, email, full_name)
+       VALUES ($1, $2, 'PG Real')
+       ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, full_name = EXCLUDED.full_name`,
+      [userId, `pg-real-${userId}@test.invalid`],
+    )
+
+    await withUserContext(userId, async (client) => {
+      await client.query('SELECT public.anonymize_user_account($1)', [userId])
+      await expect(
+        client.query('SELECT public.anonymize_user_account($1)', [userId]),
+      ).rejects.toThrow(/already deleted/i)
     })
   })
 })

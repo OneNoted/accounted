@@ -993,7 +993,12 @@ export const ticExtension: Extension = {
                 { status: 409 }
               )
             }
-            log.error('createUser failed', { email: trimmedEmail, status: createError?.status, code: createError?.code, message: createError?.message })
+            log.error('createUser failed', {
+              emailHashPrefix: crypto.createHash('sha256').update(trimmedEmail!).digest('hex').slice(0, 8),
+              status: createError?.status,
+              code: createError?.code,
+              message: createError?.message,
+            })
             return NextResponse.json(
               { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
