@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import WelcomeOnboarding from '@/components/dashboard/WelcomeOnboarding'
+import OnboardingJourney from '@/components/onboarding/journey/OnboardingJourney'
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { mapEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
@@ -104,6 +105,24 @@ export default async function OnboardingPage({
       initialLegalName = match.legalName
       preverifiedOrgNumber = initialOrgNumber
     }
+  }
+
+  // Journey rollout flag (onboarding migration PR C): preview first,
+  // founder click-through, then production. The journey deliberately
+  // ignores preverifiedOrgNumber: the deep-linked orgnr runs the same
+  // single Lens lookup as manual entry (plan addendum 2026-07-24), and
+  // lookup failure degrades to asking the questions instead.
+  if (process.env.NEXT_PUBLIC_ONBOARDING_JOURNEY === 'true') {
+    return (
+      <OnboardingJourney
+        teamId={teamId}
+        hasExistingCompanies={hasCompanies}
+        mode="first"
+        initialOrgNumber={initialOrgNumber}
+        initialEntityType={initialEntityType}
+        initialLegalName={initialLegalName}
+      />
+    )
   }
 
   return (

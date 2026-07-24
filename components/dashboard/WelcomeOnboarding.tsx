@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
+import { deriveFirstYearDefaults, parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import { useToast } from '@/components/ui/use-toast'
 import { Building2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -64,42 +65,6 @@ function logError(message: string, extra?: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: `welcome-onboarding: ${message}`, extra }),
   }).catch(() => {})
-}
-
-// Parse TIC v2's `startMonthDay` ("MM-DD": e.g. "07-01") into a month
-// number 1-12. Returns null on missing / malformed input so the caller
-// can fall through to the manual picker default.
-function parseStartMonthDay(value: string | null | undefined): number | null {
-  if (!value) return null
-  const match = /^(\d{1,2})-\d{1,2}$/.exec(value)
-  if (!match) return null
-  const month = Number(match[1])
-  if (!Number.isInteger(month) || month < 1 || month > 12) return null
-  return month
-}
-
-// Derive the Step-3 first-year defaults from TIC's `registrationDate`.
-// A company is treated as "first year" when registered less than 12 months
-// ago: fits BFL's 6-18 month opening-period window comfortably. Returns
-// both the toggle state and a seeded `first_year_start` (always the 1st of
-// the registration month, the format Step 3's date inputs expect).
-function deriveFirstYearDefaults(registrationDate: number | null | undefined): {
-  isFirstFiscalYear: boolean
-  firstYearStart: string | undefined
-} {
-  if (!registrationDate || !Number.isFinite(registrationDate)) {
-    return { isFirstFiscalYear: false, firstYearStart: undefined }
-  }
-  const regDate = new Date(registrationDate)
-  if (Number.isNaN(regDate.getTime())) {
-    return { isFirstFiscalYear: false, firstYearStart: undefined }
-  }
-  const monthsAgo =
-    (Date.now() - regDate.getTime()) / (1000 * 60 * 60 * 24 * 30.44)
-  if (monthsAgo >= 12) return { isFirstFiscalYear: false, firstYearStart: undefined }
-  const year = regDate.getUTCFullYear()
-  const month = String(regDate.getUTCMonth() + 1).padStart(2, '0')
-  return { isFirstFiscalYear: true, firstYearStart: `${year}-${month}-01` }
 }
 
 interface WelcomeOnboardingProps {
