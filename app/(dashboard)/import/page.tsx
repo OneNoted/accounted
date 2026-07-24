@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
+import { ArrowLeftRight, ArrowRightLeft, CreditCard, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -1934,11 +1934,16 @@ function CSVDataImportWizard() {
 // reconnect entry point), which the old inline wizard here did not.
 const BankingPanel = getSettingsPanel('enable-banking')
 
+// Same registry mechanism for the Stripe connect/sync surface: the feed of
+// payments, fees and payouts is an import source in the same category as the
+// PSD2 bank connection above.
+const StripePanel = getSettingsPanel('stripe')
+
 // ============================================================
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'bank' | 'sie' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'bank' | 'sie' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { company } = useCompany()
@@ -1979,7 +1984,7 @@ export default function ImportPage() {
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
       ? ['bank', 'sie', 'csv_data']
-      : ['psd2', 'bank', 'sie', 'csv_data', 'migration']
+      : ['psd2', 'stripe', 'bank', 'sie', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2018,6 +2023,11 @@ export default function ImportPage() {
   // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
+  const hasStripeExtension = ENABLED_EXTENSION_IDS.has('stripe')
+  // Hosted: Stripe Connect has not launched, so the card is "coming soon".
+  // The panel carries the same gate internally for ?mode=stripe deep links.
+  const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+  const stripeDisabled = isSandbox || !isSelfHosted
 
   return (
     <div className="space-y-8">
@@ -2082,7 +2092,44 @@ export default function ImportPage() {
               </div>
             )}
 
-            {/* 2. Hämta från annat system */}
+            {/* 2. Stripe: continuous feed of payments, fees and payouts, the
+                same category as the bank connection above. Hosted stays
+                "kommer snart" until live Connect launches. */}
+            {hasStripeExtension && (
+              <div
+                role="button"
+                tabIndex={stripeDisabled ? -1 : 0}
+                aria-disabled={stripeDisabled}
+                className={cn(
+                  'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
+                  stripeDisabled
+                    ? 'opacity-50 cursor-not-allowed'
+                    : 'cursor-pointer hover:border-foreground/15'
+                )}
+                onClick={() => { if (!stripeDisabled) setMode('stripe') }}
+                onKeyDown={(e) => { if (!stripeDisabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('stripe') } }}
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
+                  <CreditCard className="h-[18px] w-[18px] text-foreground/60" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-[15px] font-semibold leading-tight">{t('stripe_title')}</h3>
+                    {!isSelfHosted && (
+                      <span className="text-[11px] font-medium text-muted-foreground bg-secondary px-2 py-0.5 rounded-full leading-none">
+                        {t('stripe_coming_soon')}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
+                    {t('stripe_description')}
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              </div>
+            )}
+
+            {/* 3. Hämta från annat system */}
             {hasMigrationExtension === true && (
               <div
                 role="button"
@@ -2126,7 +2173,7 @@ export default function ImportPage() {
               </div>
             )}
 
-            {/* 3. Banktransaktioner: manual file imports (bank file, CSV/Excel,
+            {/* 4. Banktransaktioner: manual file imports (bank file, CSV/Excel,
                 SIE) run entirely on uploaded data with no external service, so
                 they stay available in the sandbox, unlike the API-backed options
                 above (bank connection, provider migration) which need live
@@ -2160,7 +2207,7 @@ export default function ImportPage() {
               <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
 
-            {/* 4. CSV/Excel-data (ingående balanser, kunder, leverantörer) */}
+            {/* 5. CSV/Excel-data (ingående balanser, kunder, leverantörer) */}
             <div
               role="button"
               tabIndex={0}
@@ -2197,7 +2244,7 @@ export default function ImportPage() {
               <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
 
-            {/* 5. Bokföringsdata (SIE) */}
+            {/* 6. Bokföringsdata (SIE) */}
             <div
               role="button"
               tabIndex={0}
@@ -2317,6 +2364,21 @@ export default function ImportPage() {
               <Button variant="outline" onClick={() => setMode('bank')}>
                 Importera bankfil istället
               </Button>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {mode === 'stripe' && (
+        hasStripeExtension && StripePanel ? (
+          <StripePanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <CreditCard className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">{t('stripe_not_enabled_title')}</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {t('stripe_not_enabled_description')}
+              </p>
             </CardContent>
           </Card>
         )
