@@ -137,16 +137,17 @@ describe('POST /api/account/delete', () => {
     })
     expect(updateUserById).toHaveBeenCalledWith(
       'user-1',
-      expect.objectContaining({
-        user_metadata: {},
-        app_metadata: {},
-        ban_duration: expect.any(String),
-      })
+      expect.objectContaining({ ban_duration: expect.any(String) })
     )
+    const updatePayload = updateUserById.mock.calls[0][1]
     // Email must NOT be scrubbed: retaining it is what blocks re-signup
     // with the same address. Recovery goes through support instead.
-    const updatePayload = updateUserById.mock.calls[0][1]
     expect(updatePayload).not.toHaveProperty('email')
+    // Metadata is NOT wiped here: GoTrue merges metadata maps, so passing {}
+    // was a no-op. The anonymize_user_account RPC scrubs auth.users directly
+    // (migration 20260724150000).
+    expect(updatePayload).not.toHaveProperty('user_metadata')
+    expect(updatePayload).not.toHaveProperty('app_metadata')
     expect(adminSignOut).toHaveBeenCalledWith('user-1', 'global')
     expect(emitted).toHaveLength(1)
     expect(emitted[0]).toMatchObject({ userId: 'user-1' })

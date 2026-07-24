@@ -28,6 +28,7 @@ import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-typ
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
 import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -960,30 +961,11 @@ export const ticExtension: Extension = {
             )
           }
 
-          // If the email is already registered, refuse signup. Linking BankID to an
-          // existing account must go through the authenticated /bankid/link route so
-          // email ownership is proven by password login first. (CWE-287)
-          const { data: existingByEmail } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('email', trimmedEmail!)
-            .single()
-
-          if (existingByEmail) {
-            log.warn('bankid signup rejected: email already registered', {
-              sessionId,
-              pnrHashPrefix: pnrHash.slice(0, 8),
-            })
-            return NextResponse.json(
-              {
-                error: 'account_exists',
-                message: 'An account with this email already exists. Log in and link BankID from settings.',
-              },
-              { status: 409 }
-            )
-          }
-
-          // Create new Supabase user
+          // Create new Supabase user. Email uniqueness is checked by createUser
+          // itself against auth.users: do NOT pre-check profiles.email instead.
+          // The profile mirror can lack the address while the auth row still
+          // holds it (anonymize_user_account scrubs profiles.email but keeps the
+          // auth tombstone), which used to fall through to a dead-end 500 here.
           const randomPassword = crypto.randomBytes(32).toString('base64url')
           const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
             email: trimmedEmail!,
@@ -993,7 +975,30 @@ export const ticExtension: Extension = {
           })
 
           if (createError || !newUser?.user) {
-            log.error('createUser failed', { email: trimmedEmail, status: createError?.status, code: createError?.code, message: createError?.message })
+            // Email already registered (including deleted-account tombstones,
+            // which keep their email on purpose): refuse signup. Linking BankID
+            // to an existing account must go through the authenticated
+            // /bankid/link route so email ownership is proven by password login
+            // first. (CWE-287)
+            if (createError?.code === 'email_exists') {
+              log.warn('bankid signup rejected: email already registered', {
+                sessionId,
+                pnrHashPrefix: pnrHash.slice(0, 8),
+              })
+              return NextResponse.json(
+                {
+                  error: 'account_exists',
+                  message: 'Det finns redan ett konto med den här e-postadressen. Logga in och koppla BankID under Inställningar.',
+                },
+                { status: 409 }
+              )
+            }
+            log.error('createUser failed', {
+              emailHashPrefix: crypto.createHash('sha256').update(trimmedEmail!).digest('hex').slice(0, 8),
+              status: createError?.status,
+              code: createError?.code,
+              message: createError?.message,
+            })
             return NextResponse.json(
               { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
@@ -1127,13 +1132,24 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/link',
-      // skipAuth: false, requires existing Supabase session
-      handler: async (request: Request, ctx?) => {
+      // Requires a Supabase session but NOT a company: a user who just
+      // signed up (or hasn't finished onboarding) must be able to manage
+      // their BankID connection from /settings/account. Without this flag
+      // the dispatcher's requireCompanyId() throws 'No company context'
+      // for zero-company users. skipCompanyContext dispatches without ctx,
+      // so the handler resolves the caller itself via requireAuth() (same
+      // MFA/AAL2 enforcement the dispatcher applies).
+      skipCompanyContext: true,
+      handler: async (request: Request) => {
         try {
+          const auth = await requireAuth()
+          if (auth.error) return auth.error
+          const userId = auth.user.id
+
           const body = await request.json()
           const { sessionId } = body
 
-          if (!sessionId || !ctx?.userId) {
+          if (!sessionId) {
             return NextResponse.json({ error: 'sessionId is required' }, { status: 400 })
           }
 
@@ -1157,14 +1173,14 @@ export const ticExtension: Extension = {
             .eq('personal_number_hash', pnrHash)
             .single()
 
-          if (existing && existing.user_id !== ctx.userId) {
+          if (existing && existing.user_id !== userId) {
             return NextResponse.json(
               { error: 'already_linked', message: 'This BankID is already linked to another account' },
               { status: 409 }
             )
           }
 
-          if (existing && existing.user_id === ctx.userId) {
+          if (existing && existing.user_id === userId) {
             return NextResponse.json({ data: { linked: true, alreadyLinked: true } })
           }
 
@@ -1172,7 +1188,7 @@ export const ticExtension: Extension = {
           const { error: insertError } = await supabase
             .from('bankid_identities')
             .insert({
-              user_id: ctx.userId,
+              user_id: userId,
               personal_number_hash: pnrHash,
               personal_number_enc: encryptPersonalNumber(personalNumber),
               given_name: givenName,
@@ -1192,9 +1208,9 @@ export const ticExtension: Extension = {
           // { bankid_linked: true } would wipe has_password for users who
           // already set one, they'd then be incorrectly shown the
           // set-password banner on their next session.
-          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
-          await supabase.auth.admin.updateUserById(ctx.userId, {
+          await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { ...priorMeta, bankid_linked: true },
           })
 
@@ -1219,12 +1235,15 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/unlink',
-      // skipAuth: false, requires existing Supabase session
-      handler: async (_request: Request, ctx?) => {
+      // Requires a Supabase session but NOT a company: see /bankid/link.
+      // A brand-new BankID signup (zero companies) must be able to undo
+      // the connection from /settings/account.
+      skipCompanyContext: true,
+      handler: async (_request: Request) => {
         try {
-          if (!ctx?.userId) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-          }
+          const auth = await requireAuth()
+          if (auth.error) return auth.error
+          const userId = auth.user.id
 
           const supabase = createServiceClient()
 
@@ -1232,7 +1251,7 @@ export const ticExtension: Extension = {
           const { error: deleteError } = await supabase
             .from('bankid_identities')
             .delete()
-            .eq('user_id', ctx.userId)
+            .eq('user_id', userId)
 
           if (deleteError) {
             log.error('unlink delete failed', { message: deleteError.message, code: deleteError.code })
@@ -1246,9 +1265,9 @@ export const ticExtension: Extension = {
           // user (has_password: false) would then be inferred as HAVING a
           // password (lib/auth/has-password.ts) and could strand themselves
           // with no working login method.
-          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const { data: priorUser } = await supabase.auth.admin.getUserById(userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
-          await supabase.auth.admin.updateUserById(ctx.userId, {
+          await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { ...priorMeta, bankid_linked: false },
           })
 

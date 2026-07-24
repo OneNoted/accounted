@@ -127,4 +127,57 @@ describe('account deletion RPCs (pg)', () => {
     })
     // withUserContext rolls back, so the seeded rows do not leak.
   })
+
+  it('scrubs auth.users metadata: user_metadata wiped, app keys dropped, provider kept', async () => {
+    // Migration 20260724150000: the route-level updateUserById "wipe" was a
+    // silent no-op (GoTrue merges metadata maps), so the tombstone kept the
+    // user's full name. The RPC now scrubs auth.users directly. Email must
+    // survive: it is the documented legitimate-interest tombstone.
+    const userId = await insertAuthUser()
+    await getPool().query(
+      `UPDATE auth.users
+       SET raw_user_meta_data = '{"full_name": "PG Real Person", "email_verified": true}'::jsonb,
+           raw_app_meta_data  = '{"provider": "email", "providers": ["email"], "bankid_linked": true, "has_password": false}'::jsonb
+       WHERE id = $1`,
+      [userId],
+    )
+
+    await withUserContext(userId, async (client) => {
+      await client.query('SELECT public.anonymize_user_account($1)', [userId])
+      // The authenticated role has no SELECT on auth.users; drop back to the
+      // superuser session user to verify. Still inside the same transaction,
+      // so the rolled-back writes remain visible.
+      await client.query('RESET ROLE')
+      const { rows } = await client.query<{
+        email: string | null
+        user_meta: Record<string, unknown>
+        app_meta: Record<string, unknown>
+      }>(
+        `SELECT email, raw_user_meta_data AS user_meta, raw_app_meta_data AS app_meta
+         FROM auth.users WHERE id = $1`,
+        [userId],
+      )
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.email).toBe(`pg-real-${userId}@test.invalid`)
+      expect(rows[0]!.user_meta).toEqual({})
+      expect(rows[0]!.app_meta).toEqual({ provider: 'email', providers: ['email'] })
+    })
+  })
+
+  it('rejects a repeat invocation against an already-anonymized tombstone', async () => {
+    const userId = await insertAuthUser()
+    await getPool().query(
+      `INSERT INTO public.profiles (id, email, full_name)
+       VALUES ($1, $2, 'PG Real')
+       ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, full_name = EXCLUDED.full_name`,
+      [userId, `pg-real-${userId}@test.invalid`],
+    )
+
+    await withUserContext(userId, async (client) => {
+      await client.query('SELECT public.anonymize_user_account($1)', [userId])
+      await expect(
+        client.query('SELECT public.anonymize_user_account($1)', [userId]),
+      ).rejects.toThrow(/already deleted/i)
+    })
+  })
 })
