@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Loader2, RefreshCw } from 'lucide-react'
@@ -15,17 +15,23 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
+import {
+  claimConnectionsLoad,
+  clearBusyConnection,
+  getBankSyncSnapshot,
+  markConnectionStatus,
+  publishConnections,
+  releaseConnectionsLoad,
+  setBusyConnection,
+  setSyncingAll,
+  subscribeBankSync,
+  type BankConn,
+} from '@/lib/transactions/bank-sync-store'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-export interface BankConn {
-  id: string
-  bank_name: string
-  status: string
-  provider: string
-  last_synced_at: string | null
-}
+export type { BankConn }
 
 /**
  * Shared on-demand bank sync state + actions. Powers the footer "Synka nu"
@@ -44,15 +50,20 @@ export function useBankSync() {
   const router = useRouter()
   const { company } = useCompany()
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
-  const [connections, setConnections] = useState<BankConn[] | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
-  // Holds isBusy true across the whole syncAll loop so the spinner doesn't
-  // flicker off between per-connection syncs.
-  const [syncingAll, setSyncingAll] = useState(false)
+  // Busy state and the connection list live in a module-level store so every
+  // useBankSync() instance (header split button, footer button) sees the same
+  // sync in flight and cannot start a concurrent one (#1162).
+  const store = useSyncExternalStore(subscribeBankSync, getBankSyncSnapshot, getBankSyncSnapshot)
+  // Never present another company's cached list while a switch is loading.
+  const connections = store.companyId === company?.id ? store.connections : null
 
   useEffect(() => {
     if (!company?.id) return
-    let cancelled = false
+    // First instance to mount claims the fetch; the rest read the store. The
+    // store outlives components, so the result publishes even if this
+    // instance unmounts mid-flight.
+    if (!claimConnectionsLoad(company.id)) return
+    const companyId = company.id
     const supabase = createClient()
     supabase
       .from('bank_connections')
@@ -60,19 +71,20 @@ export function useBankSync() {
       // Include expired/error so the reconnect entry point survives a reload:
       // not just active connections that can sync.
       .in('status', ['active', 'expired', 'error'])
-      .eq('company_id', company.id)
-      .then(({ data }) => {
-        if (!cancelled) setConnections((data as BankConn[]) ?? [])
+      .eq('company_id', companyId)
+      .then(({ data, error }) => {
+        if (error) {
+          releaseConnectionsLoad(companyId)
+          return
+        }
+        publishConnections(companyId, (data as BankConn[]) ?? [])
       })
-    return () => {
-      cancelled = true
-    }
   }, [company?.id])
 
   // Re-authorize an existing connection in place: posts the connection_id so
   // the server reuses the same row, then hands off to the bank's consent screen.
   async function reconnect(conn: BankConn) {
-    setBusyId(conn.id)
+    setBusyConnection(conn.id)
     try {
       const country = conn.provider?.split('-').pop()?.toUpperCase() || 'SE'
       const res = await fetch('/api/extensions/ext/enable-banking/connect', {
@@ -93,12 +105,12 @@ export function useBankSync() {
         description: error instanceof Error ? getUserErrorMessage(error) : 'Reconnect failed',
         variant: 'destructive',
       })
-      setBusyId(null)
+      setBusyConnection(null)
     }
   }
 
   async function syncConnection(conn: BankConn) {
-    setBusyId(conn.id)
+    setBusyConnection(conn.id)
     try {
       const res = await fetch('/api/extensions/ext/enable-banking/sync', {
         method: 'POST',
@@ -120,10 +132,9 @@ export function useBankSync() {
               </ToastAction>
             ),
           })
-          // Reflect the now-expired status so the button flips to reconnect.
-          setConnections((prev) =>
-            (prev ?? []).map((c) => (c.id === conn.id ? { ...c, status: 'expired' } : c))
-          )
+          // Reflect the now-expired status so the button flips to reconnect
+          // on every surface at once.
+          markConnectionStatus(conn.id, 'expired')
           return
         }
         throw new Error(data.error || 'Sync failed')
@@ -145,12 +156,16 @@ export function useBankSync() {
         variant: 'destructive',
       })
     } finally {
-      setBusyId((prev) => (prev === conn.id ? null : prev))
+      clearBusyConnection(conn.id)
     }
   }
 
-  // Active connections sync; expired/error connections reconnect.
+  // Active connections sync; expired/error connections reconnect. Reads the
+  // live snapshot, not the render closure, so a click racing a sync started
+  // from the other surface is a no-op instead of a concurrent PSD2 call.
   function runFor(conn: BankConn) {
+    const { busyId, syncingAll } = getBankSyncSnapshot()
+    if (busyId !== null || syncingAll) return
     if (conn.status === 'active') return syncConnection(conn)
     return reconnect(conn)
   }
@@ -159,6 +174,8 @@ export function useBankSync() {
   // active connection in turn; with only dead connections it jumps straight
   // to re-authorizing the first one (a retry can't revive a closed session).
   async function syncAll() {
+    const { busyId, syncingAll } = getBankSyncSnapshot()
+    if (busyId !== null || syncingAll) return
     setSyncingAll(true)
     try {
       const conns = connections ?? []
@@ -184,8 +201,8 @@ export function useBankSync() {
 
   return {
     connections,
-    busyId,
-    isBusy: busyId !== null || syncingAll,
+    busyId: store.busyId,
+    isBusy: store.busyId !== null || store.syncingAll,
     hasBankSync,
     reconnect,
     syncConnection,
