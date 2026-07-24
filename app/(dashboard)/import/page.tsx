@@ -1955,13 +1955,12 @@ const StripePanel = getSettingsPanel('stripe')
 type ImportMode = null | 'psd2' | 'stripe' | 'bank' | 'sie' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
-  const { company } = useCompany()
+  const { isSandbox } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
   const [userId, setUserId] = useState('')
-  const [isSandbox, setIsSandbox] = useState(false)
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
   const t = useTranslations('import')
@@ -1969,21 +1968,11 @@ export default function ImportPage() {
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
-  // Fetch authenticated user ID and sandbox status
+  // Fetch authenticated user ID (used by the migration wizard)
   useEffect(() => {
     const supabase = createClient()
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      setUserId(user.id)
-      if (!company) return
-      supabase
-        .from('company_settings')
-        .select('is_sandbox')
-        .eq('company_id', company.id)
-        .single()
-        .then(({ data }) => {
-          if (data?.is_sandbox) setIsSandbox(true)
-        })
+      if (user) setUserId(user.id)
     })
   }, [])
 
