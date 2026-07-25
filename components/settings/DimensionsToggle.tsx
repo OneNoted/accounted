@@ -5,10 +5,14 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ExternalLink } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
-import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+} from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
@@ -88,29 +92,33 @@ export function DimensionsToggle() {
     }
   }
 
+  const locked = isSaving || !canWrite
+
   return (
-    <div>
-      <SettingsFieldRow
-        label={t('settings_toggle_label')}
+    <SettingsRow label={t('settings_heading')} help={t('settings_toggle_help')}>
+      <Switch
+        id="dimensions-enabled"
+        checked={enabled}
+        onCheckedChange={(next) => void handleChange(next)}
+        disabled={locked}
+      />
+      <label
         htmlFor="dimensions-enabled"
-        help={t('settings_toggle_help')}
+        className={cn('text-sm', locked ? 'text-muted-foreground' : 'cursor-pointer')}
       >
-        <Switch
-          id="dimensions-enabled"
-          checked={enabled}
-          onCheckedChange={(next) => void handleChange(next)}
-          disabled={isSaving || !canWrite}
-        />
-      </SettingsFieldRow>
+        {t('settings_toggle_label')}
+      </label>
       {enabled && (
-        <Link
-          href="/dimensions"
-          className="mt-2 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          {t('settings_open_register')}
-        </Link>
+        <SettingsRowEnd>
+          <Link
+            href="/dimensions"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t('settings_open_register')}
+          </Link>
+        </SettingsRowEnd>
       )}
-    </div>
+    </SettingsRow>
   )
 }

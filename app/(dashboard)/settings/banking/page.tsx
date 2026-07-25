@@ -1,6 +1,13 @@
-// Rendered by the settings layout: known sections are drawn by the shared
-// master-detail surface (SettingsMasterDetail in settings/layout.tsx); this
-// page only makes the route resolvable for deep links and the settings sheet.
+import { Suspense } from 'react'
+import { BankingSettingsContent } from '@/components/settings/sections/BankingSettingsContent'
+
+// BankingSettingsContent (and the extension panel it hosts) reads
+// useSearchParams for the OAuth-callback ?select_accounts param; without a
+// Suspense boundary that de-opts the whole route to client rendering.
 export default function BankingSettingsPage() {
-  return null
+  return (
+    <Suspense>
+      <BankingSettingsContent />
+    </Suspense>
+  )
 }

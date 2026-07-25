@@ -4,7 +4,10 @@ import { useCallback, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { ExternalLink } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
-import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+} from '@/components/settings/SettingsRows'
 
 /**
  * Per-user toggle for the periodisering wizard's auto-detection step.
@@ -76,25 +79,27 @@ export function PeriodiseringAutoDetectToggle() {
   }, [])
 
   return (
-    <div>
-      <SettingsFieldRow
-        label="Aktivera automatisk periodiseringsdetektering"
-        htmlFor="periodisering-autodetect"
-        description="Skannar fakturor i bokslutet efter datumintervall som sträcker sig in i nästa räkenskapsår och föreslår periodiseringar i bokslut-wizarden."
-      >
-        <Switch
-          id="periodisering-autodetect"
-          checked={enabled}
-          onCheckedChange={handleChange}
-        />
-      </SettingsFieldRow>
-      <Link
-        href="/bookkeeping/year-end/periodisering"
-        className="mt-2 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ExternalLink className="h-3.5 w-3.5" />
-        Öppna periodiserings-wizarden
-      </Link>
-    </div>
+    <SettingsRow
+      label="Periodisering"
+      help="Skannar fakturor i bokslutet efter datumintervall som sträcker sig in i nästa räkenskapsår och föreslår periodiseringar i bokslut-wizarden."
+    >
+      <Switch
+        id="periodisering-autodetect"
+        checked={enabled}
+        onCheckedChange={handleChange}
+      />
+      <label htmlFor="periodisering-autodetect" className="cursor-pointer text-sm">
+        Aktivera automatisk periodiseringsdetektering
+      </label>
+      <SettingsRowEnd>
+        <Link
+          href="/bookkeeping/year-end/periodisering"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          Öppna periodiserings-wizarden
+        </Link>
+      </SettingsRowEnd>
+    </SettingsRow>
   )
 }

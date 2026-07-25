@@ -1,12 +1,11 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Input } from '@/components/ui/input'
 import {
-  SettingsFieldRow,
-  settingsInputClassName,
-} from '@/components/settings/sheet/SettingsFieldRow'
-import { cn } from '@/lib/utils'
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+} from '@/components/settings/SettingsRows'
 import type { CompanySettings } from '@/types'
 
 interface CompanyInfoFormProps {
@@ -15,91 +14,76 @@ interface CompanyInfoFormProps {
 
 export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
   const t = useTranslations('settings_company')
+  const orgLocked = settings.onboarding_complete === true
   return (
-    <div className="divide-y divide-border">
-      <SettingsFieldRow
+    <SettingsGroup label={t('company_info_heading')}>
+      <SettingsRow
         label={t('company_name_label')}
         htmlFor="company_name"
         help={t('company_name_help')}
+        align="baseline"
       >
-        <Input
+        <SettingsInput
           id="company_name"
           name="company_name"
           defaultValue={settings.company_name || ''}
-          className={cn(settingsInputClassName, 'w-64')}
         />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow
+      </SettingsRow>
+      <SettingsRow
         label={t('org_number_label')}
         htmlFor="org_number"
-        description={settings.onboarding_complete ? t('org_number_locked') : undefined}
+        help={orgLocked ? t('org_number_locked') : undefined}
+        align="baseline"
       >
-        <Input
+        <SettingsInput
           id="org_number"
           name="org_number"
           defaultValue={settings.org_number || ''}
-          disabled={settings.onboarding_complete === true}
-          className={cn(settingsInputClassName, 'w-48 tabular-nums')}
+          disabled={orgLocked}
         />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow label={t('address_label')} htmlFor="address_line1">
-        <Input
+      </SettingsRow>
+      <SettingsRow label={t('address_label')} htmlFor="address_line1" align="baseline">
+        <SettingsInput
           id="address_line1"
           name="address_line1"
           defaultValue={settings.address_line1 || ''}
-          className={cn(settingsInputClassName, 'w-64')}
         />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow label={t('postal_code_label')} htmlFor="postal_code">
-        <Input
+      </SettingsRow>
+      <SettingsRow label={t('postal_code_label')} htmlFor="postal_code" align="baseline">
+        <SettingsInput
           id="postal_code"
           name="postal_code"
           defaultValue={settings.postal_code || ''}
-          className={cn(settingsInputClassName, 'w-24 tabular-nums')}
+          className="max-w-24 flex-none"
         />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow label={t('city_label')} htmlFor="city">
-        <Input
-          id="city"
-          name="city"
-          defaultValue={settings.city || ''}
-          className={cn(settingsInputClassName, 'w-48')}
-        />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow label={t('phone_label')} htmlFor="phone">
-        <Input
+      </SettingsRow>
+      <SettingsRow label={t('city_label')} htmlFor="city" align="baseline">
+        <SettingsInput id="city" name="city" defaultValue={settings.city || ''} />
+      </SettingsRow>
+      <SettingsRow label={t('phone_label')} htmlFor="phone" align="baseline">
+        <SettingsInput
           id="phone"
           name="phone"
           type="tel"
           defaultValue={settings.phone || ''}
-          className={cn(settingsInputClassName, 'w-48')}
         />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow label={t('email_label')} htmlFor="email">
-        <Input
+      </SettingsRow>
+      <SettingsRow label={t('email_label')} htmlFor="email" align="baseline">
+        <SettingsInput
           id="email"
           name="email"
           type="email"
           defaultValue={settings.email || ''}
-          className={cn(settingsInputClassName, 'w-64')}
         />
-      </SettingsFieldRow>
-
-      <SettingsFieldRow label={t('website_label')} htmlFor="website">
-        <Input
+      </SettingsRow>
+      <SettingsRow label={t('website_label')} htmlFor="website" align="baseline">
+        <SettingsInput
           id="website"
           name="website"
           defaultValue={settings.website || ''}
           placeholder="https://"
-          className={cn(settingsInputClassName, 'w-64')}
         />
-      </SettingsFieldRow>
-    </div>
+      </SettingsRow>
+    </SettingsGroup>
   )
 }

@@ -1,17 +1,17 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
+import { ChevronDown, Loader2 } from 'lucide-react'
+import {
+  SettingsGroup,
+  SettingsReveal,
+  SettingsRow,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
+import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { CompanySettings, JournalEntrySourceType } from '@/types'
 
@@ -39,6 +39,10 @@ const VISIBLE_SOURCE_TYPES: Array<{ key: JournalEntrySourceType; labelKey: strin
   { key: 'year_end', labelKey: 'year_end' },
 ]
 
+// The everyday types stay visible; the long tail folds behind "Visa alla".
+// Keeps the map's iteration order intact: we only split it, never reorder.
+const ALWAYS_VISIBLE_COUNT = 3
+
 // Swedish labels. Kept inline so this component is self-contained: these
 // labels are bookkeeping-domain terms that intentionally stay Swedish across
 // locales (see CLAUDE.md i18n table).
@@ -65,12 +69,16 @@ interface Props {
 }
 
 export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: Props) {
+  // Generic fold labels ("Visa alla (n)" / "Visa färre") shared with the
+  // dashboard widgets; the domain labels themselves stay hardcoded Swedish.
+  const tCommon = useTranslations('dashboard')
   const { toast } = useToast()
   const initialMap = settings.default_voucher_series_per_source_type || {}
   const [draft, setDraft] = useState<Partial<Record<JournalEntrySourceType, string>>>(
     initialMap as Partial<Record<JournalEntrySourceType, string>>,
   )
   const [isSaving, setIsSaving] = useState(false)
+  const [showAll, setShowAll] = useState(false)
 
   const handleChange = (sourceType: JournalEntrySourceType, value: string) => {
     setDraft((prev) => ({ ...prev, [sourceType]: value }))
@@ -116,45 +124,66 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
     }
   }
 
-  return (
-    <div>
-      {/* The intro lives on the accordion header's "?" (settings_sheet
-          .sub_bookkeeping_series_map_help): 14 rows of selects should start at
-          the top of the panel, not below a paragraph. */}
-      <div className="divide-y divide-border">
-        {VISIBLE_SOURCE_TYPES.map(({ key, labelKey }) => (
-          <SettingsFieldRow
-            key={key}
-            label={SV_LABELS[labelKey] ?? key}
-            htmlFor={`series-${key}`}
-          >
-            <Select
-              value={(draft[key] as string | undefined) || 'A'}
-              onValueChange={(v) => handleChange(key, v)}
-            >
-              <SelectTrigger
-                id={`series-${key}`}
-                className="h-9 w-16 rounded-lg font-mono"
-                aria-label={SV_LABELS[labelKey] ?? key}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SERIES_OPTIONS.map((letter) => (
-                  <SelectItem key={letter} value={letter} className="font-mono">
-                    {letter}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingsFieldRow>
+  const renderRow = (
+    { key, labelKey }: (typeof VISIBLE_SOURCE_TYPES)[number],
+    borderless = false,
+  ) => (
+    <SettingsRow
+      key={key}
+      label={SV_LABELS[labelKey] ?? key}
+      htmlFor={`series-${key}`}
+      borderless={borderless}
+    >
+      <SettingsSelect
+        id={`series-${key}`}
+        value={(draft[key] as string | undefined) || 'A'}
+        onChange={(e) => handleChange(key, e.target.value)}
+        className="font-mono"
+      >
+        {SERIES_OPTIONS.map((letter) => (
+          <option key={letter} value={letter}>
+            {letter}
+          </option>
         ))}
-      </div>
+      </SettingsSelect>
+    </SettingsRow>
+  )
 
-      {/* Radslutet: the save row closes the panel under a hairline. */}
-      <div className="mt-8 flex justify-end border-t border-border pt-4">
+  const alwaysVisible = VISIBLE_SOURCE_TYPES.slice(0, ALWAYS_VISIBLE_COUNT)
+  const folded = VISIBLE_SOURCE_TYPES.slice(ALWAYS_VISIBLE_COUNT)
+
+  return (
+    <SettingsGroup
+      label="Verifikationsserier per typ"
+      help="Tilldela en standardserie per typ av verifikat. Vanlig svensk praxis: leverantörsfakturor på serie B, löner på serie C, övrigt på serie A. Kan alltid ändras per verifikat när du bokför."
+    >
+      {alwaysVisible.map((entry, i) =>
+        // The last always-visible row sits right above the fold toggle:
+        // drop its hairline so the fold reads as part of the same list.
+        renderRow(entry, i === alwaysVisible.length - 1),
+      )}
+
+      <button
+        type="button"
+        onClick={() => setShowAll((v) => !v)}
+        aria-expanded={showAll}
+        className="flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+      >
+        <ChevronDown
+          aria-hidden="true"
+          className={cn('h-3.5 w-3.5 transition-transform duration-150', showAll && 'rotate-180')}
+        />
+        {showAll ? tCommon('show_less') : tCommon('show_all', { count: folded.length })}
+      </button>
+
+      <SettingsReveal open={showAll} indent={false}>
+        {folded.map((entry, i) => renderRow(entry, i === folded.length - 1))}
+      </SettingsReveal>
+
+      <div className="flex justify-end px-1 pt-4">
         <Button
           type="button"
+          size="sm"
           onClick={handleSave}
           disabled={!hasChanges || isSaving}
         >
@@ -162,6 +191,6 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
           Spara serier
         </Button>
       </div>
-    </div>
+    </SettingsGroup>
   )
 }

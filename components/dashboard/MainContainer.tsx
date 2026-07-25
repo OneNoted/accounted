@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname } from 'next/navigation'
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 
 /**
@@ -28,18 +28,7 @@ export function MainContainer({
   // built-in scroll-to-top on navigation (which targets the window) never
   // fires for it. Reset the panel scroll on every route change; hash-anchor
   // scrolling still works because pages call scrollIntoView themselves.
-  //
-  // Exception: /settings/* is an overlay, not a page swap. The intercepting
-  // route renders the settings sheet on top while this slot keeps showing the
-  // page the user came from, so resetting here would scroll that page to the
-  // top behind the sheet and land the user there when it closes. Skipping both
-  // ends of the transition keeps their place. Cost: after a hard load of the
-  // full-page settings route, navigating away keeps its scroll offset.
-  const prevPath = useRef(pathname)
   useEffect(() => {
-    const from = prevPath.current
-    prevPath.current = pathname
-    if (pathname.startsWith('/settings') || from.startsWith('/settings')) return
     document.getElementById('main-content')?.scrollTo(0, 0)
   }, [pathname])
 

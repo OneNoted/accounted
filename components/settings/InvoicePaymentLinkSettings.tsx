@@ -4,7 +4,11 @@ import { useTranslations } from 'next-intl'
 import { useCallback, useState } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowEnd,
+} from '@/components/settings/SettingsRows'
 import type { CompanySettings } from '@/types'
 
 interface InvoicePaymentLinkSettingsProps {
@@ -40,15 +44,17 @@ export function InvoicePaymentLinkSettings({ settings, onUpdate }: InvoicePaymen
   }, [onUpdate, toast, t])
 
   return (
-    <div className="divide-y divide-border">
-      <SettingsFieldRow label={t('enable_label')} help={t('enable_help')}>
-        <Switch
-          checked={settings.invoice_payment_links_enabled ?? false}
-          onCheckedChange={saveToggle}
-          disabled={isSaving}
-          aria-label={t('enable_label')}
-        />
-      </SettingsFieldRow>
-    </div>
+    <SettingsGroup label={t('heading')}>
+      <SettingsRow label={t('enable_label')} help={t('enable_help')}>
+        <SettingsRowEnd>
+          <Switch
+            checked={settings.invoice_payment_links_enabled ?? false}
+            onCheckedChange={saveToggle}
+            disabled={isSaving}
+            aria-label={t('enable_label')}
+          />
+        </SettingsRowEnd>
+      </SettingsRow>
+    </SettingsGroup>
   )
 }

@@ -3,9 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
-import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsTextarea,
+} from '@/components/settings/SettingsRows'
 import {
   EMAIL_PATTERN,
   MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
@@ -107,46 +110,41 @@ export function InvoiceEmailRecipientsSettings({
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">{t('description')}</p>
+    <SettingsGroup label={t('heading')} help={t('description')}>
+      <SettingsRow
+        label={t('cc_label')}
+        htmlFor="invoice-email-cc"
+        help={t('cc_hint')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice-email-cc"
+          value={ccText}
+          onChange={(event) => setCcText(event.target.value)}
+          placeholder={t('cc_placeholder')}
+          rows={3}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('bcc_label')}
+        htmlFor="invoice-email-bcc"
+        help={t('bcc_hint')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice-email-bcc"
+          value={bccText}
+          onChange={(event) => setBccText(event.target.value)}
+          placeholder={t('bcc_placeholder')}
+          rows={3}
+        />
+      </SettingsRow>
 
-      <div className="divide-y divide-border">
-        <SettingsFieldRow
-          stacked
-          label={t('cc_label')}
-          htmlFor="invoice-email-cc"
-          description={t('cc_hint')}
-        >
-          <Textarea
-            id="invoice-email-cc"
-            value={ccText}
-            onChange={(event) => setCcText(event.target.value)}
-            placeholder={t('cc_placeholder')}
-            rows={3}
-          />
-        </SettingsFieldRow>
-
-        <SettingsFieldRow
-          stacked
-          label={t('bcc_label')}
-          htmlFor="invoice-email-bcc"
-          description={t('bcc_hint')}
-        >
-          <Textarea
-            id="invoice-email-bcc"
-            value={bccText}
-            onChange={(event) => setBccText(event.target.value)}
-            placeholder={t('bcc_placeholder')}
-            rows={3}
-          />
-        </SettingsFieldRow>
-      </div>
-
-      <div className="flex justify-end">
-        <Button type="button" onClick={save} disabled={isSaving}>
+      <div className="flex justify-end px-1 pt-4">
+        <Button type="button" size="sm" onClick={save} disabled={isSaving}>
           {isSaving ? t('saving') : t('save')}
         </Button>
       </div>
-    </div>
+    </SettingsGroup>
   )
 }

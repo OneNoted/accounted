@@ -4,9 +4,8 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Skeleton } from "@/components/ui/skeleton"
-import { Badge } from '@/components/ui/badge'
-import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
+import { Skeleton } from '@/components/ui/skeleton'
+import { SettingsGroup, SettingsRowNote } from '@/components/settings/SettingsRows'
 
 interface VoucherSeries {
   voucher_series: string
@@ -18,6 +17,7 @@ interface VoucherSeriesManagerProps {
   defaultSeries?: string
 }
 
+/** Read-only list of the series that have actually been used. */
 export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProps) {
   const t = useTranslations('settings_voucher_series')
   const { company } = useCompany()
@@ -48,41 +48,32 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
   const seriesEntries = Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
 
   return (
-    <div>
+    <SettingsGroup label={t('heading')} help={t('footnote')}>
       {isLoading ? (
-        <div className="space-y-2">
+        <div className="space-y-2 px-1 py-3">
           <Skeleton className="h-4 w-32" />
           <Skeleton className="h-4 w-24" />
         </div>
       ) : seriesEntries.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="px-1 py-3 text-sm text-muted-foreground">
           {t('empty_state', { series: defaultSeries || 'A' })}
         </p>
       ) : (
-        <div className="divide-y divide-border">
-          {seriesEntries.map(([letter, lastNum]) => (
-            <SettingsFieldRow
-              key={letter}
-              label={
-                <span className="flex items-center gap-2">
-                  <span className="tabular-nums">{t('series_prefix')} {letter}</span>
-                  {letter === (defaultSeries || 'A') && (
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">{t('default_badge')}</Badge>
-                  )}
-                </span>
-              }
-            >
-              <span className="text-sm tabular-nums text-muted-foreground">
-                {t('latest_number')}: {lastNum}
-              </span>
-            </SettingsFieldRow>
-          ))}
-        </div>
+        seriesEntries.map(([letter, lastNum]) => (
+          <div key={letter} className="flex items-center gap-3 border-b border-border px-1 py-3">
+            <span className="text-sm font-medium tabular-nums">
+              {t('series_prefix')} {letter}
+            </span>
+            {/* The default marker is a normal state: muted text, not a chip. */}
+            {letter === (defaultSeries || 'A') && (
+              <SettingsRowNote>{t('default_badge')}</SettingsRowNote>
+            )}
+            <span className="ml-auto shrink-0 text-sm text-muted-foreground tabular-nums">
+              {t('latest_number')}: {lastNum}
+            </span>
+          </div>
+        ))
       )}
-
-      <p className="mt-4 text-xs text-muted-foreground">
-        {t('footnote')}
-      </p>
-    </div>
+    </SettingsGroup>
   )
 }

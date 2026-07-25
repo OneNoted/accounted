@@ -1,6 +1,5 @@
-// Rendered by the settings layout: known sections are drawn by the shared
-// master-detail surface (SettingsMasterDetail in settings/layout.tsx); this
-// page only makes the route resolvable for deep links and the settings sheet.
+import { InvoicingSettingsContent } from '@/components/settings/sections/InvoicingSettingsContent'
+
 export default function InvoicingSettingsPage() {
-  return null
+  return <InvoicingSettingsContent />
 }

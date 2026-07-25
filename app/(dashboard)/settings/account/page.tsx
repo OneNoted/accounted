@@ -1,6 +1,5 @@
-// Rendered by the settings layout: known sections are drawn by the shared
-// master-detail surface (SettingsMasterDetail in settings/layout.tsx); this
-// page only makes the route resolvable for deep links and the settings sheet.
+import { AccountSettingsContent } from '@/components/settings/sections/AccountSettingsContent'
+
 export default function AccountSettingsPage() {
-  return null
+  return <AccountSettingsContent />
 }

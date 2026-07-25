@@ -1,6 +1,5 @@
-// Rendered by the settings layout: known sections are drawn by the shared
-// master-detail surface (SettingsMasterDetail in settings/layout.tsx); this
-// page only makes the route resolvable for deep links and the settings sheet.
+import { TaxSettingsContent } from '@/components/settings/sections/TaxSettingsContent'
+
 export default function TaxSettingsPage() {
-  return null
+  return <TaxSettingsContent />
 }

@@ -1,53 +1,88 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
+import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
 import { CompanyProfileSection } from '@/components/settings/CompanyProfileSection'
 import { FiscalPeriodEditor } from '@/components/settings/FiscalPeriodEditor'
+import { LogoUpload } from '@/components/settings/LogoUpload'
+import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
+import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { ShareCapitalForm } from '@/components/settings/ShareCapitalForm'
 import { useSettings } from '@/components/settings/useSettings'
-import { CompanyInfoSettings, CompanyLogoSettings } from './CompanySubsections'
+import type { CompanySettings } from '@/types'
 
-/**
- * Legacy stacked layout for the Företag section. The settings sheet renders
- * the same subsections as accordion panels via the sheet registry
- * (components/settings/sheet/subsections.tsx); this component only stacks them
- * with hairline separators for surfaces that still show the whole section.
- *
- * The top-level loading/error gate stays here so the whole section keeps
- * showing a single skeleton until settings resolve (the subsections carry
- * their own guards for standalone accordion use, but they settle instantly
- * against the already-loaded shared settings state).
- */
 export function CompanySettingsContent() {
-  const { settings, isLoading, refetch } = useSettings()
+  const router = useRouter()
+  const tNav = useTranslations('settings_nav')
+  const tIntro = useTranslations('settings_intro')
+  const { settings, isLoading, updateSettings, refetch } = useSettings()
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
 
+  function handleSave(formData: FormData) {
+    // Empty string clears the value (schema accepts null, not '').
+    const numberOrNull = (name: string) => {
+      const raw = String(formData.get(name) ?? '').trim()
+      if (raw === '') return null
+      const parsed = Number(raw)
+      // NaN would serialize to null in JSON and silently clear the value.
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    const updates: Record<string, unknown> = {
+      ...(formData.has('company_name') && { company_name: formData.get('company_name') as string }),
+      ...(formData.has('org_number') && { org_number: formData.get('org_number') as string }),
+      address_line1: formData.get('address_line1') as string,
+      postal_code: formData.get('postal_code') as string,
+      city: formData.get('city') as string,
+      phone: (formData.get('phone') as string) || '',
+      email: (formData.get('email') as string) || '',
+      website: (formData.get('website') as string) || '',
+      ...(formData.has('aktiekapital') && { aktiekapital: numberOrNull('aktiekapital') }),
+      ...(formData.has('antal_aktier') && { antal_aktier: numberOrNull('antal_aktier') }),
+    }
+    return {
+      updates,
+      onSuccess: (data: Record<string, unknown>) => {
+        updateSettings(data as Partial<CompanySettings>)
+        // Refresh server components so the company switcher and DashboardNav
+        // pick up the new company_name (rendered from server in the dashboard layout).
+        if ('company_name' in updates) {
+          router.refresh()
+        }
+      },
+    }
+  }
+
   return (
-    <div className="space-y-8">
-      {/* Company info + share capital (one form, one save) */}
-      <CompanyInfoSettings />
+    <div>
+      <SettingsSectionHeader title={tNav('company')} intro={tIntro('company')} />
 
-      {/* Logo */}
-      <div className="border-t border-border pt-8">
-        <CompanyLogoSettings />
-      </div>
+      <SettingsFormWrapper onSave={handleSave}>
+        <CompanyInfoForm settings={settings} />
+        {settings.entity_type === 'aktiebolag' && (
+          <ShareCapitalForm
+            settings={{ aktiekapital: settings.aktiekapital, antal_aktier: settings.antal_aktier }}
+          />
+        )}
+      </SettingsFormWrapper>
 
-      {/* Members */}
-      <div className="border-t border-border pt-8">
-        <CompanyMembersSection />
-      </div>
+      <LogoUpload
+        logoUrl={settings.logo_url}
+        onUpdate={(url) => updateSettings({ logo_url: url })}
+      />
 
-      {/* First fiscal period: renders its own separator, owner/admin only */}
+      <CompanyMembersSection />
+
       <FiscalPeriodEditor />
 
-      {/* Företagsprofil (Bolagsverket snapshot) */}
       <CompanyProfileSection />
 
-      {/* Danger zone: renders its own separator, owner only */}
       <CompanyDangerZone />
     </div>
   )

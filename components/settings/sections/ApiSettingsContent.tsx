@@ -1,18 +1,19 @@
 'use client'
 
-import { ApiKeysSettings, ApiOAuthClientsSettings } from './ApiSubsections'
+import { useTranslations } from 'next-intl'
+import { ApiKeysPanel } from '@/components/settings/ApiKeysPanel'
+import { OAuthClientsPanel } from '@/components/settings/OAuthClientsPanel'
+import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 
-/**
- * Legacy stacked layout for the API section. The settings sheet renders the
- * same subsections as accordion panels via the sheet registry
- * (components/settings/sheet/subsections.tsx); this component only stacks
- * them for surfaces that still show the whole section.
- */
 export function ApiSettingsContent() {
+  const tNav = useTranslations('settings_nav')
+  const tIntro = useTranslations('settings_intro')
+
   return (
-    <div className="space-y-8">
-      <ApiKeysSettings />
-      <ApiOAuthClientsSettings />
+    <div>
+      <SettingsSectionHeader title={tNav('api')} intro={tIntro('api')} />
+      <ApiKeysPanel />
+      <OAuthClientsPanel />
     </div>
   )
 }
