@@ -3733,7 +3733,7 @@
     "col_amount": "Belopp",
     "col_remaining": "Kvar",
     "col_status": "Status",
-    "remaining_inline": "Kvar: {amount} kr",
+    "remaining_inline": "Kvar: {amount}",
     "status_registered": "Registrerad",
     "status_approved": "Godkänd",
     "status_paid": "Betald",

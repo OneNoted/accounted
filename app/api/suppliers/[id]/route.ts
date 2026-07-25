@@ -25,24 +25,35 @@ export const GET = withRouteContext(
 
     const { data: invoices } = await supabase
       .from('supplier_invoices')
-      .select('status, total, remaining_amount, paid_amount')
+      .select('status, total, remaining_amount, paid_amount, currency')
       .eq('supplier_id', id)
       .eq('company_id', companyId)
 
-    const stats = {
-      total_outstanding: 0,
-      total_paid: 0,
-      invoice_count: 0,
+    // Amounts are in each invoice's own currency, so a single sum across a
+    // mixed-currency supplier would be meaningless: group per currency instead
+    // (nearly every supplier has exactly one).
+    const perCurrency = new Map<string, { total_outstanding: number; total_paid: number }>()
+    if (invoices) {
+      for (const inv of invoices) {
+        const currency = inv.currency || 'SEK'
+        const row = perCurrency.get(currency) ?? { total_outstanding: 0, total_paid: 0 }
+        if (inv.status !== 'paid' && inv.status !== 'credited') {
+          row.total_outstanding += inv.remaining_amount || 0
+        }
+        row.total_paid += inv.paid_amount || 0
+        perCurrency.set(currency, row)
+      }
     }
 
-    if (invoices) {
-      stats.invoice_count = invoices.length
-      for (const inv of invoices) {
-        if (inv.status !== 'paid' && inv.status !== 'credited') {
-          stats.total_outstanding += inv.remaining_amount || 0
-        }
-        stats.total_paid += inv.paid_amount || 0
-      }
+    const stats = {
+      invoice_count: invoices?.length ?? 0,
+      by_currency: [...perCurrency.entries()]
+        .map(([currency, row]) => ({
+          currency,
+          total_outstanding: Math.round(row.total_outstanding * 100) / 100,
+          total_paid: Math.round(row.total_paid * 100) / 100,
+        }))
+        .sort((a, b) => a.currency.localeCompare(b.currency)),
     }
 
     return NextResponse.json({ data: { ...supplier, stats } })

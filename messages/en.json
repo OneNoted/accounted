@@ -3733,7 +3733,7 @@
     "col_amount": "Amount",
     "col_remaining": "Remaining",
     "col_status": "Status",
-    "remaining_inline": "Remaining: {amount} kr",
+    "remaining_inline": "Remaining: {amount}",
     "status_registered": "Registered",
     "status_approved": "Approved",
     "status_paid": "Paid",
