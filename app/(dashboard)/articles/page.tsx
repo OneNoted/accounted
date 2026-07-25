@@ -364,7 +364,7 @@ function ArticlesPageInner() {
                       {article.unit}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-                      {formatCurrency(article.price_excl_vat)}
+                      {formatCurrency(article.price_excl_vat, article.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                       {article.vat_rate} %
