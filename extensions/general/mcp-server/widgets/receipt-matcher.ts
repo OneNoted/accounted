@@ -199,7 +199,9 @@ export const RECEIPT_MATCHER_HTML = `<!DOCTYPE html>
       const cls = isBooked ? 'booked' : (hasError ? 'error-row' : '');
       const amt = Number(tx.amount);
       const amtClass = amt < 0 ? 'negative' : 'positive';
-      const formatted = amt.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
+      // The tool handler passes each transaction's own currency through.
+      const suffix = !tx.currency || tx.currency === 'SEK' ? 'kr' : tx.currency;
+      const formatted = amt.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ' + esc(suffix);
 
       html += '<tr class="' + cls + '" data-idx="' + i + '">';
       html += '<td>' + esc(tx.date || '') + '</td>';
