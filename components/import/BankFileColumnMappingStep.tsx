@@ -408,6 +408,9 @@ export default function BankFileColumnMappingStep({
                             !isNaN(amount) && amount >= 0 ? 'text-success' : 'text-destructive'
                           }`}
                         >
+                          {/* SEK is safe here ONLY because generic-csv hardcodes
+                              currency: 'SEK' (formats/generic-csv.ts). If the
+                              mapper ever gains a currency column, pass it. */}
                           {!isNaN(amount) ? formatCurrency(amount) : amountStr}
                         </TableCell>
                       </TableRow>

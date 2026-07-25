@@ -30,7 +30,7 @@ export default function DeadlinesPage() {
   const { canWrite } = useCanWrite()
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
-  const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number }>({ count: 0, total: 0 })
+  const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number; unconverted: number }>({ count: 0, total: 0, unconverted: 0 })
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -68,10 +68,10 @@ export default function DeadlinesPage() {
             .order('id', { ascending: true })
             .range(from, to),
         ),
-        fetchAllRows<{ total_sek: number | null; total: number | null }>(({ from, to }) =>
+        fetchAllRows<{ total_sek: number | null; total: number | null; currency: string | null }>(({ from, to }) =>
           supabase
             .from('invoices')
-            .select('total_sek, total')
+            .select('total_sek, total, currency')
             .eq('company_id', companyId)
             .in('status', ['sent', 'unpaid'])
             .lt('due_date', today)
@@ -80,14 +80,20 @@ export default function DeadlinesPage() {
         ),
       ])
 
-      const overdueTotal = overdueRows.reduce(
-        (sum, inv) => sum + (inv.total_sek || inv.total || 0),
-        0
-      )
+      // Non-SEK invoices without a stored SEK conversion (rate fetch failed at
+      // creation) are excluded from the SEK sum rather than mixed in raw, and
+      // surfaced as a count in the attn line instead.
+      let overdueTotal = 0
+      let unconvertedCount = 0
+      for (const inv of overdueRows) {
+        if (inv.total_sek != null) overdueTotal += inv.total_sek
+        else if (!inv.currency || inv.currency === 'SEK') overdueTotal += inv.total || 0
+        else unconvertedCount++
+      }
 
       setDeadlines(deadlineRows)
       setCustomers(customerRows)
-      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal })
+      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal, unconverted: unconvertedCount })
     } catch {
       toast({
         title: t('load_failed_title'),
@@ -364,7 +370,10 @@ export default function DeadlinesPage() {
           action={{ label: t('overdue_invoices_action'), href: '/invoices?status=unpaid' }}
         >
           {t('overdue_invoices', { count: overdueInvoices.count })} ·{' '}
-          {formatCurrency(overdueInvoices.total)}.
+          {formatCurrency(overdueInvoices.total)}
+          {overdueInvoices.unconverted > 0
+            ? ` ${t('overdue_invoices_fx', { count: overdueInvoices.unconverted })}`
+            : ''}.
         </AttnLine>
       ) : null}
 
