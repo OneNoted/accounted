@@ -22,6 +22,17 @@ interface CalendarDayViewProps {
   onAddDeadline: (date: Date) => void
 }
 
+// Per-invoice amount label. Shows the SEK conversion when one exists;
+// otherwise the invoice's own amount in its own currency: total_sek is NULL
+// for non-SEK invoices whose rate fetch failed, and labelling the raw foreign
+// amount "kr" would misstate it.
+function invoiceAmountLabel(invoice: Invoice): string {
+  if (invoice.total_sek != null || !invoice.currency || invoice.currency === 'SEK') {
+    return `${(invoice.total_sek ?? invoice.total).toLocaleString('sv-SE')} kr`
+  }
+  return `${invoice.total.toLocaleString('sv-SE')} ${invoice.currency}`
+}
+
 export function CalendarDayView({
   date,
   invoices,
@@ -105,7 +116,7 @@ export function CalendarDayView({
                         )}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {invoice.customer?.name} • {(invoice.total_sek || invoice.total).toLocaleString('sv-SE')} kr
+                        {invoice.customer?.name} • {invoiceAmountLabel(invoice)}
                       </div>
                     </div>
                   </div>
@@ -132,7 +143,7 @@ export function CalendarDayView({
                         </span>
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        {invoice.customer?.name} • {(invoice.total_sek || invoice.total).toLocaleString('sv-SE')} kr
+                        {invoice.customer?.name} • {invoiceAmountLabel(invoice)}
                       </div>
                     </div>
                   </div>

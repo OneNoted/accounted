@@ -2999,7 +2999,7 @@ function ARCustomerInvoiceRows({
               {inv.days_overdue > 0 ? `${inv.days_overdue} dagar förfallen` : 'Ej förfallen'}
             </td>
             <td className="py-1 text-right text-xs text-muted-foreground">
-              {inv.paid_amount > 0 ? `Betalt: ${formatAmount(inv.paid_amount)}` : ''}
+              {inv.paid_amount > 0 ? `Betalt: ${formatAmount(inv.paid_amount)} ${inv.currency}` : ''}
             </td>
             <td></td>
             <td className="py-1 text-right text-xs font-medium tabular-nums">

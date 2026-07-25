@@ -340,7 +340,11 @@ export default function SupplierInvoiceDetailPage() {
     } else {
       toast({
         title: result.status === 'paid' ? t('paid_title') : t('partial_payment_title'),
-        description: t('amount_registered_description', { amount: formatAmount(parseFloat(payAmount)) }),
+        // The paid amount is in the invoice's currency (the dialog's helper
+        // text says so): the toast must not relabel it as kr.
+        description: t('amount_registered_description', {
+          amount: formatCurrency(parseFloat(payAmount), invoice?.currency || 'SEK'),
+        }),
       })
       setIsPayDialogOpen(false)
       setDuplicateCandidates(null)

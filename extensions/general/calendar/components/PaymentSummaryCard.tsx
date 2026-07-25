@@ -92,6 +92,16 @@ export function PaymentSummaryCard({ invoices, year, month }: PaymentSummaryCard
             </p>
           </div>
         )}
+
+        {/* Foreign-currency invoices without a stored SEK conversion are
+            excluded from the sums above rather than silently mixed in. */}
+        {summary.unconvertedCount > 0 && (
+          <p className="text-xs text-warning">
+            {summary.unconvertedCount === 1
+              ? '1 faktura i utländsk valuta utan växelkurs ingår inte i beloppen.'
+              : `${summary.unconvertedCount} fakturor i utländsk valuta utan växelkurs ingår inte i beloppen.`}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
