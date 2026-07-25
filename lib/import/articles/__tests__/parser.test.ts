@@ -192,3 +192,50 @@ describe('parseArticlesFile', () => {
     expect(result.rows[1].name).toBe('Kärra')
   })
 })
+
+describe('parseArticlesFile currency (Valuta) column', () => {
+  it('parses and normalizes a Valuta column', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Försäljningspris', 'Valuta'],
+      ['EU-konsulting', '950', 'eur'],
+      ['Svensk tjänst', '500', 'SEK'],
+      ['Utan valuta', '100', ''],
+    ])
+
+    const result = parseArticlesFile(buffer, 'valuta.xlsx')
+
+    expect(result.detected_columns.currency_col).toBe(2)
+    expect(result.rows[0].currency).toBe('EUR')
+    expect(result.rows[1].currency).toBe('SEK')
+    // Blank cell = not specified: the execute route imports it as SEK.
+    expect(result.rows[2].currency).toBeNull()
+    expect(result.warnings).toEqual([])
+  })
+
+  it('drops malformed currency codes with a warning', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Pris', 'Valuta'],
+      ['A', '100', 'EURO'],
+      ['B', '200', 'EUR'],
+    ])
+
+    const result = parseArticlesFile(buffer, 'valuta.xlsx')
+
+    expect(result.rows[0].currency).toBeNull()
+    expect(result.rows[1].currency).toBe('EUR')
+    expect(result.warnings.some((w) => w.includes('valutakod'))).toBe(true)
+  })
+
+  it('does not let Valuta steal the price or VAT columns', () => {
+    const buffer = buildXlsx([
+      ['Benämning', 'Valuta', 'Försäljningspris', 'Moms %'],
+      ['A', 'EUR', '100', '25'],
+    ])
+
+    const result = parseArticlesFile(buffer, 'valuta.xlsx')
+
+    expect(result.detected_columns.currency_col).toBe(1)
+    expect(result.rows[0].price_excl_vat).toBe(100)
+    expect(result.rows[0].vat_rate).toBe(25)
+  })
+})

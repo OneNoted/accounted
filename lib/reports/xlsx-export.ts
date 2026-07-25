@@ -23,7 +23,7 @@ import * as XLSX from 'xlsx'
  */
 
 export type CellValue = string | number | Date | null | undefined
-export type ColumnFormat = 'text' | 'currency' | 'date' | 'integer' | 'percent'
+export type ColumnFormat = 'text' | 'currency' | 'decimal' | 'date' | 'integer' | 'percent'
 
 export interface ColumnSpec {
   /** Human-readable header label rendered in row 1. */
@@ -47,6 +47,9 @@ export interface SheetSpec<TRow> {
 }
 
 const CURRENCY_FORMAT = '#,##0.00 " kr"'
+// Money amount WITHOUT the " kr" suffix: for columns whose currency varies per
+// row (e.g. article prices with a separate Valuta column).
+const DECIMAL_FORMAT = '#,##0.00'
 const DATE_FORMAT = 'yyyy-mm-dd'
 const INTEGER_FORMAT = '#,##0'
 const PERCENT_FORMAT = '0.00%'
@@ -55,6 +58,8 @@ function formatToZ(format: ColumnFormat): string | undefined {
   switch (format) {
     case 'currency':
       return CURRENCY_FORMAT
+    case 'decimal':
+      return DECIMAL_FORMAT
     case 'date':
       return DATE_FORMAT
     case 'integer':
@@ -83,6 +88,12 @@ function displayLength(value: CellValue, format: ColumnFormat): number {
           .toFixed(2)
           .replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
         return formatted.length + 3 + (value < 0 ? 1 : 0) // +3 for " kr"
+      }
+      case 'decimal': {
+        const formatted = Math.abs(value)
+          .toFixed(2)
+          .replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+        return formatted.length + (value < 0 ? 1 : 0)
       }
       case 'integer': {
         const formatted = Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
@@ -197,6 +208,11 @@ export function textColumn(header: string): ColumnSpec {
 
 export function currencyColumn(header: string): ColumnSpec {
   return { header, format: 'currency' }
+}
+
+/** Two-decimal amount without the " kr" suffix: pair with a per-row currency column. */
+export function decimalColumn(header: string): ColumnSpec {
+  return { header, format: 'decimal' }
 }
 
 export function dateColumn(header: string): ColumnSpec {

@@ -8,7 +8,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DeadlineList } from '@/components/deadlines/DeadlineList'
-import { DeadlineForm } from '@/components/deadlines/DeadlineForm'
+import { DeadlineForm, type DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -30,7 +30,7 @@ export default function DeadlinesPage() {
   const { canWrite } = useCanWrite()
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
-  const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number }>({ count: 0, total: 0 })
+  const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number; unconverted: number }>({ count: 0, total: 0, unconverted: 0 })
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -68,10 +68,10 @@ export default function DeadlinesPage() {
             .order('id', { ascending: true })
             .range(from, to),
         ),
-        fetchAllRows<{ total_sek: number | null; total: number | null }>(({ from, to }) =>
+        fetchAllRows<{ total_sek: number | null; total: number | null; currency: string | null }>(({ from, to }) =>
           supabase
             .from('invoices')
-            .select('total_sek, total')
+            .select('total_sek, total, currency')
             .eq('company_id', companyId)
             .in('status', ['sent', 'unpaid'])
             .lt('due_date', today)
@@ -80,14 +80,20 @@ export default function DeadlinesPage() {
         ),
       ])
 
-      const overdueTotal = overdueRows.reduce(
-        (sum, inv) => sum + (inv.total_sek || inv.total || 0),
-        0
-      )
+      // Non-SEK invoices without a stored SEK conversion (rate fetch failed at
+      // creation) are excluded from the SEK sum rather than mixed in raw, and
+      // surfaced as a count in the attn line instead.
+      let overdueTotal = 0
+      let unconvertedCount = 0
+      for (const inv of overdueRows) {
+        if (inv.total_sek != null) overdueTotal += inv.total_sek
+        else if (!inv.currency || inv.currency === 'SEK') overdueTotal += inv.total || 0
+        else unconvertedCount++
+      }
 
       setDeadlines(deadlineRows)
       setCustomers(customerRows)
-      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal })
+      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal, unconverted: unconvertedCount })
     } catch {
       toast({
         title: t('load_failed_title'),
@@ -139,9 +145,7 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleDeadlineCreate = async (
-    data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>
-  ) => {
+  const handleDeadlineCreate = async (data: DeadlineFormValues) => {
     try {
       const response = await fetch('/api/deadlines', {
         method: 'POST',
@@ -222,12 +226,15 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleDeadlineEdit = async (deadline: Deadline) => {
+  // Sends ONLY the form-managed fields: the PUT route whitelists to the same
+  // set, and posting a whole Deadline row from here would fabricate system
+  // fields (source, status, reminder_offsets) that only the whitelist drops.
+  const handleDeadlineEdit = async (id: string, data: DeadlineFormValues) => {
     try {
-      const response = await fetch(`/api/deadlines/${deadline.id}`, {
+      const response = await fetch(`/api/deadlines/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(deadline),
+        body: JSON.stringify(data),
       })
 
       if (!response.ok) {
@@ -275,11 +282,9 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleFormSubmit = async (
-    data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>,
-  ) => {
+  const handleFormSubmit = async (data: DeadlineFormValues) => {
     if (editingDeadline) {
-      await handleDeadlineEdit({ ...editingDeadline, ...data })
+      await handleDeadlineEdit(editingDeadline.id, data)
     } else {
       await handleDeadlineCreate(data)
     }
@@ -364,7 +369,10 @@ export default function DeadlinesPage() {
           action={{ label: t('overdue_invoices_action'), href: '/invoices?status=unpaid' }}
         >
           {t('overdue_invoices', { count: overdueInvoices.count })} ·{' '}
-          {formatCurrency(overdueInvoices.total)}.
+          {formatCurrency(overdueInvoices.total)}
+          {overdueInvoices.unconverted > 0
+            ? ` ${t('overdue_invoices_fx', { count: overdueInvoices.unconverted })}`
+            : ''}.
         </AttnLine>
       ) : null}
 

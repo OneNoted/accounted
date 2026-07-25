@@ -75,6 +75,29 @@ export const POST = withRouteContext(
       const accountStatusCache = new Map<string, RevenueAccountStatus>()
       const droppedAccounts = new Set<string>()
       const warnings: string[] = []
+
+      // Currency codes are validated against the currencies reference table
+      // (the same set the articles.currency FK enforces): unknown codes are
+      // dropped with a warning instead of failing the row on a FK violation.
+      // Loaded lazily: most files carry no Valuta column at all. If the
+      // reference read fails, codes pass through and the FK stays the backstop.
+      let validCurrencies: Set<string> | null | undefined
+      const droppedCurrencies = new Set<string>()
+      const resolveCurrency = async (code: string | null | undefined): Promise<string | null> => {
+        if (!code) return null
+        if (validCurrencies === undefined) {
+          const { data: currencyRows } = await supabase.from('currencies').select('code')
+          validCurrencies = currencyRows
+            ? new Set((currencyRows as { code: string }[]).map((c) => c.code))
+            : null
+        }
+        if (!validCurrencies || validCurrencies.has(code)) return code
+        if (!droppedCurrencies.has(code)) {
+          droppedCurrencies.add(code)
+          warnings.push(`Valutan ${code} stöds inte, ignorerades: priset importerades som SEK.`)
+        }
+        return null
+      }
       const resolveRevenueAccount = async (acc: string | null): Promise<string | null> => {
         if (!acc) return null
         let status = accountStatusCache.get(acc)
@@ -107,6 +130,7 @@ export const POST = withRouteContext(
           null
 
         const revenueAccount = await resolveRevenueAccount(row.revenue_account)
+        const currency = await resolveCurrency(row.currency)
 
         if (match) {
           if (!update_duplicates) {
@@ -126,6 +150,9 @@ export const POST = withRouteContext(
           if (row.housework_type) merged.housework_type = row.housework_type
           if (row.notes) merged.notes = row.notes
           if (revenueAccount) merged.revenue_account = revenueAccount
+          // Only when the file explicitly carries a valid currency: absence
+          // must never reset an existing non-SEK article to SEK.
+          if (currency) merged.currency = currency
 
           if (Object.keys(merged).length === 0) {
             skipped++
@@ -159,6 +186,7 @@ export const POST = withRouteContext(
             type: row.type,
             unit: row.unit || 'st',
             price_excl_vat: row.price_excl_vat,
+            currency: currency ?? 'SEK',
             vat_rate: row.vat_rate,
             revenue_account: revenueAccount,
             cost_price: row.cost_price,

@@ -21,11 +21,20 @@ const trimmedName = z.preprocess(
   z.string().min(1, 'Article name is required').max(200),
 )
 
+// ISO 4217 shape, normalized to upper case; the currencies-table FK on
+// articles.currency is the authoritative allow-list (unknown codes fail at
+// commit with a clear message). Empty string / null → undefined.
+const currencyCode = z.preprocess(
+  (v) => (v == null || v === '' ? undefined : typeof v === 'string' ? v.trim().toUpperCase() : v),
+  z.string().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter ISO 4217 code (e.g. EUR)').optional(),
+)
+
 export const CreateArticleParamsSchema = z.object({
   name: trimmedName,
   type: z.enum(['vara', 'tjanst']).default('tjanst'),
   unit: optString(32),
   price_excl_vat: z.number().nonnegative(),
+  currency: currencyCode,
   vat_rate: vatRatePercent.default(25),
   revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
@@ -42,6 +51,7 @@ export const UpdateArticleParamsSchema = z.object({
   type: z.enum(['vara', 'tjanst']).optional(),
   unit: optString(32),
   price_excl_vat: z.number().nonnegative().optional(),
+  currency: currencyCode,
   vat_rate: vatRatePercent.optional(),
   revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),

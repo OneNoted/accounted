@@ -89,14 +89,19 @@ describe('computeFiscalPeriod', () => {
     expect(result.periodName).toBe('')
   })
 
-  it('rejects a first year shorter than 6 months', () => {
+  // BFL 3 kap 3 § allows a first räkenskapsår of any length up to 18 months:
+  // an autumn-registered AB may end its first year at Dec 31 (Bolagsverket
+  // offers this explicitly on the registration certificate).
+  it('accepts a first year shorter than 6 months', () => {
     const result = computeFiscalPeriod({
       entity_type: 'aktiebolag',
       is_first_fiscal_year: true,
       first_year_start: '2026-10-01',
       first_year_end: '2026-12-31',
     })
-    expect(result.error).toContain('at least 6 months')
+    expect(result.error).toBeNull()
+    expect(result.startStr).toBe('2026-10-01')
+    expect(result.endStr).toBe('2026-12-31')
   })
 
   it('rejects an end date that is not the last day of a month', () => {

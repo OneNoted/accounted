@@ -187,12 +187,18 @@ export default function ArticlesEditStep({
                     </Select>
                   </td>
                   <td className="px-3 py-1.5">
-                    <Input
-                      value={String(row.price_excl_vat)}
-                      inputMode="decimal"
-                      onChange={(e) => handlePriceChange(row.id, e.target.value)}
-                      className="h-8 text-right tabular-nums"
-                    />
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        value={String(row.price_excl_vat)}
+                        inputMode="decimal"
+                        onChange={(e) => handlePriceChange(row.id, e.target.value)}
+                        className="h-8 text-right tabular-nums"
+                      />
+                      {/* Exception chip: only non-SEK rows carry a marker. */}
+                      {row.currency && row.currency !== 'SEK' && (
+                        <span className="shrink-0 text-xs text-muted-foreground">{row.currency}</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-1.5">
                     <div className="flex items-center gap-1.5">

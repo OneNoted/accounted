@@ -158,8 +158,15 @@ export async function buildInvoiceWriteData(params: {
   customer: Customer
   documentType: InvoiceDocumentType
   input: InvoiceWriteInput
+  /**
+   * Update path only: the stored encrypted personnummer of the draft being
+   * edited. The plaintext is never rehydratable client-side (only _last4 is),
+   * so an edit that leaves the field empty keeps these stored values instead
+   * of failing ROT/RUT validation or wiping the ciphertext.
+   */
+  existingPersonnummer?: { encrypted: string; last4: string | null } | null
 }): Promise<BuildInvoiceWriteResult> {
-  const { supabase, companyId, customer, documentType, input } = params
+  const { supabase, companyId, customer, documentType, input, existingPersonnummer } = params
   const items = input.items
 
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
@@ -308,7 +315,6 @@ export async function buildInvoiceWriteData(params: {
     }
     const housingProvided = fastighetProvided || (apartmentProvided && brfProvided)
     const personnummerRaw = input.deduction_personnummer?.trim() || ''
-    const personnummerProvided = personnummerRaw.length > 0
 
     const validateInput = items.map((item) => ({
       unit_price: item.unit_price,
@@ -317,6 +323,14 @@ export async function buildInvoiceWriteData(params: {
       labor_hours: item.labor_hours ?? null,
       housing_designation: item.housing_designation ?? null,
     }))
+
+    // Editing a draft: the stored personnummer only exists as ciphertext, so
+    // the client cannot resend it. An empty field on an invoice that still has
+    // deduction lines means "keep the stored one", not "remove it".
+    const hasDeductionItems = validateInput.some((item) => item.deduction_type != null)
+    const keepStoredPersonnummer =
+      personnummerRaw.length === 0 && hasDeductionItems && !!existingPersonnummer
+    const personnummerProvided = personnummerRaw.length > 0 || keepStoredPersonnummer
     const validation = validateRotRut(validateInput, personnummerProvided, housingProvided)
     if (validation.errors.length > 0) {
       return {
@@ -330,7 +344,10 @@ export async function buildInvoiceWriteData(params: {
     // never touches the DB: only the AES-256-GCM ciphertext + the last four
     // digits go into invoices columns.
     deductionTotal = computeInvoiceDeductionTotal(validateInput)
-    if (personnummerProvided) {
+    if (keepStoredPersonnummer && existingPersonnummer) {
+      deductionPersonnummerEncrypted = existingPersonnummer.encrypted
+      deductionPersonnummerLast4 = existingPersonnummer.last4
+    } else if (personnummerProvided) {
       const pnValid = validatePersonnummer(personnummerRaw)
       if (!pnValid.valid) {
         return { ok: false, code: 'INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID', details: { error: pnValid.error } }

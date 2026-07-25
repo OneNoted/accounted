@@ -4,6 +4,7 @@ import {
   reportToWorkbook,
   textColumn,
   currencyColumn,
+  decimalColumn,
   dateColumn,
   integerColumn,
   percentColumn,
@@ -68,6 +69,24 @@ describe('reportToWorkbook', () => {
     // The text column does not get our custom format applied. xlsx may add
     // a default 'General' format on read, so we only assert it isn't ours.
     expect(sheet['A2'].z).not.toBe('#,##0.00 " kr"')
+  })
+
+  it('applies the suffix-free decimal format to decimal columns', () => {
+    type Row = { name: string; price: number }
+    const buffer = reportToWorkbook<Row>([
+      {
+        name: 'Decimal',
+        columns: [textColumn('Name'), decimalColumn('Pris')],
+        rows: [{ name: 'Foo', price: 1234.56 }],
+        mapRow: (r) => [r.name, r.price],
+      },
+    ])
+
+    const wb = parseBuffer(buffer)
+    const sheet = wb.Sheets['Decimal']
+    // No " kr" suffix: decimal columns pair with a per-row currency column.
+    expect(sheet['B2'].z).toBe('#,##0.00')
+    expect(sheet['B2'].v).toBe(1234.56)
   })
 
   it('applies date format to date columns', () => {

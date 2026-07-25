@@ -163,16 +163,22 @@ export function createTaxDeadlinePayload(
   }
 }
 
+// Invoices carry their own currency; "kr" is only correct for SEK.
+function formatInvoiceAmount(amount: number, currency: string): string {
+  return `${amount.toLocaleString('sv-SE')} ${!currency || currency === 'SEK' ? 'kr' : currency}`
+}
+
 export function createInvoiceOverduePayload(
   invoiceNumber: string,
   customerName: string,
   amount: number,
+  currency: string,
   dueDate: string,
   invoiceId: string
 ): NotificationPayload {
   return {
     title: `Obetald faktura #${invoiceNumber}`,
-    body: `${customerName} - ${amount.toLocaleString('sv-SE')} kr (förföll ${formatDate(dueDate)})`,
+    body: `${customerName} - ${formatInvoiceAmount(amount, currency)} (förföll ${formatDate(dueDate)})`,
     icon: '/icons/icon-192.png',
     badge: '/icons/badge-72.png',
     tag: `invoice-${invoiceId}`,
@@ -189,12 +195,13 @@ export function createInvoiceDuePayload(
   invoiceNumber: string,
   customerName: string,
   amount: number,
+  currency: string,
   dueDate: string,
   invoiceId: string
 ): NotificationPayload {
   return {
     title: `Faktura #${invoiceNumber} förfaller`,
-    body: `${customerName} - ${amount.toLocaleString('sv-SE')} kr (${formatDate(dueDate)})`,
+    body: `${customerName} - ${formatInvoiceAmount(amount, currency)} (${formatDate(dueDate)})`,
     icon: '/icons/icon-192.png',
     badge: '/icons/badge-72.png',
     tag: `invoice-${invoiceId}`,

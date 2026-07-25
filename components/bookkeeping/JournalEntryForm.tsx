@@ -59,6 +59,9 @@ export interface FormLine {
   currency?: string
   amount_in_currency?: number
   exchange_rate?: number
+  /** Pass-through only (set via API/MCP, never edited in this form): edit
+   *  mode replaces all lines, so dropping it would strip the stored code. */
+  tax_code?: string | null
   /** SIE dimension map {sie_dim_no: object_code}, e.g. {"1":"KS01","6":"P001"}. */
   dimensions?: Record<string, string>
 }
@@ -81,6 +84,11 @@ interface Props {
   /** Edit an existing DRAFT in place: the form PATCHes this entry instead of
    *  creating a new one. Only the draft's header + lines are updated. */
   editEntryId?: string
+  /** Edit mode: hydrate the currency picker + FX fields from the stored draft
+   *  so a foreign-currency draft is not displayed (and resaved) as SEK. */
+  initialCurrency?: Currency
+  initialExchangeRate?: number
+  initialForeignAmount?: number
   /** Fired after a successful draft edit (editEntryId path). */
   onUpdated?: () => void
   /** The bank transaction being booked (set by TransactionBookingDialog).
@@ -108,6 +116,9 @@ export default function JournalEntryForm({
   embedded,
   bare,
   editEntryId,
+  initialCurrency,
+  initialExchangeRate,
+  initialForeignAmount,
   onUpdated,
   duplicateMatchTransaction,
   onDuplicateMatched,
@@ -181,10 +192,10 @@ export default function JournalEntryForm({
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing rail.
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
-  const [entryCurrency, setEntryCurrency] = useState<Currency>('SEK')
-  const [exchangeRate, setExchangeRate] = useState('')
+  const [entryCurrency, setEntryCurrency] = useState<Currency>(initialCurrency ?? 'SEK')
+  const [exchangeRate, setExchangeRate] = useState(initialExchangeRate != null ? String(initialExchangeRate) : '')
   const [isFetchingRate, setIsFetchingRate] = useState(false)
-  const [foreignAmount, setForeignAmount] = useState('')
+  const [foreignAmount, setForeignAmount] = useState(initialForeignAmount != null ? String(initialForeignAmount) : '')
   const [periodMismatch, setPeriodMismatch] = useState<'no_period' | 'wrong_period' | null>(null)
   const [showCreatePeriod, setShowCreatePeriod] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
@@ -339,8 +350,16 @@ export default function JournalEntryForm({
     }
   }, [entryDate])
 
+  // Edit mode hydrates the draft's STORED rate: the mount-time fetch must not
+  // replace it with today's rate, or a text-only edit would silently save a
+  // different FX rate. Fetch only after the user changes currency (or date).
+  const skipInitialRateFetch = useRef(initialExchangeRate != null)
   useEffect(() => {
     if (entryCurrency !== 'SEK') {
+      if (skipInitialRateFetch.current) {
+        skipInitialRateFetch.current = false
+        return
+      }
       fetchRate(entryCurrency)
     }
   }, [entryCurrency, fetchRate])
@@ -861,10 +880,15 @@ export default function JournalEntryForm({
           if (Object.keys(dims).length > 0) base.dimensions = dims
         }
 
+        if (l.tax_code) base.tax_code = l.tax_code
+
         if (l.currency) {
           base.currency = l.currency
           if (l.amount_in_currency != null) base.amount_in_currency = l.amount_in_currency
           if (l.exchange_rate != null) base.exchange_rate = l.exchange_rate
+          // A line already carrying FX metadata (hydrated edit) IS the FX
+          // line: don't also stamp the fallback meta onto another 19xx line.
+          if (l.currency !== 'SEK') currencyMetaApplied = true
         } else if (isForeign && rate > 0 && l.account_number.startsWith('19') && !currencyMetaApplied) {
           base.currency = entryCurrency
           base.amount_in_currency = computedForeignAmount

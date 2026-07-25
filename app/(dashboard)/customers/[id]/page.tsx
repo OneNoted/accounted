@@ -419,6 +419,9 @@ export default function CustomerDetailPage({
               org_number: customer.org_number || undefined,
               vat_number: customer.vat_number || undefined,
               personal_number: customer.personal_number || undefined,
+              // Must round-trip: the form defaults omitted values ('sv') and
+              // submits every field, so leaving language out resets it on save.
+              language: customer.language,
               default_payment_terms: customer.default_payment_terms || undefined,
               notes: customer.notes || undefined,
             }}

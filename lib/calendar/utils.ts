@@ -131,13 +131,24 @@ export function groupDeadlinesByDate(deadlines: Deadline[]): Map<string, Deadlin
   return grouped
 }
 
+/**
+ * SEK value of an invoice for aggregation, or null when it cannot be known:
+ * total_sek stays NULL when the Riksbanken rate fetch failed at creation, and
+ * falling back to the raw foreign total would add EUR into SEK sums. Callers
+ * skip null and surface the count instead of silently mixing currencies.
+ */
+export function invoiceSekAmount(invoice: Invoice): number | null {
+  if (invoice.total_sek != null) return invoice.total_sek
+  return !invoice.currency || invoice.currency === 'SEK' ? invoice.total : null
+}
+
 // Create PaymentCalendarDay from invoices for a specific date
 export function createPaymentCalendarDay(date: string, invoices: Invoice[]): PaymentCalendarDay {
   const dayInvoices = invoices.filter(inv => inv.due_date === date)
   const overdueCount = dayInvoices.filter(isInvoiceOverdue).length
   const totalExpected = dayInvoices
     .filter(inv => inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'credited')
-    .reduce((sum, inv) => sum + (inv.total_sek || inv.total), 0)
+    .reduce((sum, inv) => sum + (invoiceSekAmount(inv) ?? 0), 0)
 
   return {
     date,
@@ -171,6 +182,8 @@ export interface PeriodSummary {
   overdueCount: number
   pendingCount: number
   paidCount: number
+  /** Non-SEK invoices without a stored SEK conversion, excluded from the totals. */
+  unconvertedCount: number
 }
 
 export function calculatePeriodSummary(invoices: Invoice[]): PeriodSummary {
@@ -180,19 +193,21 @@ export function calculatePeriodSummary(invoices: Invoice[]): PeriodSummary {
   let overdueCount = 0
   let pendingCount = 0
   let paidCount = 0
+  let unconvertedCount = 0
 
   for (const invoice of invoices) {
-    const amount = invoice.total_sek || invoice.total
+    const amount = invoiceSekAmount(invoice)
+    if (amount == null) unconvertedCount++
 
     if (invoice.status === 'paid') {
-      totalPaid += amount
+      totalPaid += amount ?? 0
       paidCount++
     } else if (invoice.status !== 'cancelled' && invoice.status !== 'credited') {
-      totalExpected += amount
+      totalExpected += amount ?? 0
       pendingCount++
 
       if (isInvoiceOverdue(invoice)) {
-        totalOverdue += amount
+        totalOverdue += amount ?? 0
         overdueCount++
       }
     }
@@ -204,7 +219,8 @@ export function calculatePeriodSummary(invoices: Invoice[]): PeriodSummary {
     totalPaid,
     overdueCount,
     pendingCount,
-    paidCount
+    paidCount,
+    unconvertedCount
   }
 }
 

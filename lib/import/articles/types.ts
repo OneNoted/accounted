@@ -8,6 +8,7 @@ export interface DetectedArticleColumns {
   type_col: number | null
   unit_col: number | null
   price_col: number | null
+  currency_col: number | null
   vat_rate_col: number | null
   revenue_account_col: number | null
   cost_price_col: number | null
@@ -28,6 +29,9 @@ export interface ParsedArticleRow {
   unit: string
   /** Always stored EXCLUDING VAT. */
   price_excl_vat: number
+  /** ISO 4217 price currency from the file's Valuta column; null = not in the
+   *  file (imports as SEK). Validated against the currencies table at execute. */
+  currency: string | null
   /** Integer percent, snapped to one of 0 | 6 | 12 | 25. */
   vat_rate: number
   /**

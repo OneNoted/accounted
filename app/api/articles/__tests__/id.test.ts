@@ -186,3 +186,20 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     })
   })
 })
+
+describe('DELETE usage-check query shape', () => {
+  it('must not filter invoice_items by company_id (column does not exist)', async () => {
+    // Regression pin for the odinaero support case: invoice_items has no
+    // company_id column, so filtering on it made PostgREST answer 42703 and
+    // the route mapped that to ARTICLE_DELETE_FAILED for EVERY delete. The
+    // queued supabase mock swallows chained filters, so no behavioral mock
+    // test can catch a phantom column: pin the source instead. Tenancy is
+    // enforced by the preceding articles lookup.
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const src = fs.readFileSync(path.resolve(__dirname, '../[id]/route.ts'), 'utf8')
+    const usageBlock = src.slice(src.indexOf("from('invoice_items')"))
+    const firstQuery = usageBlock.slice(0, usageBlock.indexOf('usageError'))
+    expect(firstQuery).not.toContain("eq('company_id'")
+  })
+})

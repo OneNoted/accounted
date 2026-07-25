@@ -18,6 +18,8 @@ import {
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   Package,
   Wrench,
@@ -59,6 +61,7 @@ export default function ArticleDetailPage({
   const [isUpdating, setIsUpdating] = useState(false)
   const [isTogglingActive, setIsTogglingActive] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isTogglingActive, setIsTogglingActive] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   useEffect(() => {
@@ -314,7 +317,7 @@ export default function ArticleDetailPage({
           <CardContent className="space-y-3">
             <div className="text-sm flex items-center justify-between">
               <span className="text-muted-foreground">{t('label_price')}</span>
-              <span className="tabular-nums">{formatCurrency(article.price_excl_vat)}</span>
+              <span className="tabular-nums">{formatCurrency(article.price_excl_vat, article.currency)}</span>
             </div>
             <div className="text-sm flex items-center justify-between">
               <span className="text-muted-foreground">{t('label_vat')}</span>
@@ -327,7 +330,7 @@ export default function ArticleDetailPage({
             {article.cost_price != null && (
               <div className="text-sm flex items-center justify-between">
                 <span className="text-muted-foreground">{t('label_cost_price')}</span>
-                <span className="tabular-nums">{formatCurrency(article.cost_price)}</span>
+                <span className="tabular-nums">{formatCurrency(article.cost_price, article.currency)}</span>
               </div>
             )}
           </CardContent>
@@ -418,6 +421,7 @@ export default function ArticleDetailPage({
               unit: article.unit,
               price_excl_vat: article.price_excl_vat,
               vat_rate: article.vat_rate,
+              currency: article.currency,
               revenue_account: article.revenue_account || undefined,
               cost_price: article.cost_price ?? undefined,
               ean: article.ean || undefined,

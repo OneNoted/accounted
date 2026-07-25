@@ -135,7 +135,7 @@ export async function sendInvoiceNotifications(
 
   const { data: invoices } = await supabase
     .from('invoices')
-    .select('id, user_id, invoice_number, total, due_date, customer:customers(name)')
+    .select('id, user_id, invoice_number, total, currency, due_date, customer:customers(name)')
     .in('status', ['sent', 'overdue'])
     .in('due_date', [in3DaysStr, todayStr, daysAgo3Str, daysAgo7Str])
 
@@ -180,6 +180,7 @@ export async function sendInvoiceNotifications(
             invoice.invoice_number,
             customerName,
             invoice.total,
+            invoice.currency,
             invoice.due_date,
             invoice.id
           )
@@ -187,6 +188,7 @@ export async function sendInvoiceNotifications(
             invoice.invoice_number,
             customerName,
             invoice.total,
+            invoice.currency,
             invoice.due_date,
             invoice.id
           )

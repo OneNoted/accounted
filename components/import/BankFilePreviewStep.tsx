@@ -20,6 +20,7 @@ import {
   FileText,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
+import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import type { BankFileParseResult } from '@/lib/import/bank-file/types'
 
 interface BankFilePreviewStepProps {
@@ -36,6 +37,9 @@ export default function BankFilePreviewStep({
   const { transactions, stats, issues, date_from, date_to } = parseResult
   const hasIssues = issues.filter((i) => i.severity === 'error').length > 0
   const warnings = issues.filter((i) => i.severity === 'warning')
+  // Wise/camt.053 files can mix currencies per row: the parser-level totals
+  // sum across currencies, so income/expenses are grouped per currency here.
+  const currencyTotals = summarizeByCurrency(transactions)
 
   return (
     <div className="space-y-6">
@@ -74,9 +78,11 @@ export default function BankFilePreviewStep({
               <TrendingUp className="h-4 w-4" />
               <span className="text-sm">Inkomster</span>
             </div>
-            <p className="text-lg font-display tabular-nums">
-              {formatCurrency(stats.total_income)}
-            </p>
+            {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
+              <p key={row.currency} className="text-lg font-display tabular-nums">
+                {formatCurrency(row.total_income, row.currency)}
+              </p>
+            ))}
           </CardContent>
         </Card>
 
@@ -86,9 +92,11 @@ export default function BankFilePreviewStep({
               <TrendingDown className="h-4 w-4" />
               <span className="text-sm">Utgifter</span>
             </div>
-            <p className="text-lg font-display tabular-nums">
-              {formatCurrency(stats.total_expenses)}
-            </p>
+            {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
+              <p key={row.currency} className="text-lg font-display tabular-nums">
+                {formatCurrency(row.total_expenses, row.currency)}
+              </p>
+            ))}
           </CardContent>
         </Card>
       </div>
@@ -151,11 +159,11 @@ export default function BankFilePreviewStep({
                     <TableCell
                       className="text-right font-mono text-sm"
                     >
-                      {formatCurrency(tx.amount)}
+                      {formatCurrency(tx.amount, tx.currency || 'SEK')}
                     </TableCell>
                     {transactions.some((t) => t.balance != null) && (
                       <TableCell className="text-right font-mono text-sm text-muted-foreground">
-                        {tx.balance != null ? formatCurrency(tx.balance) : '-'}
+                        {tx.balance != null ? formatCurrency(tx.balance, tx.currency || 'SEK') : '-'}
                       </TableCell>
                     )}
                     {transactions.some((t) => t.reference) && (

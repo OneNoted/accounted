@@ -5,6 +5,7 @@ import {
   reportToWorkbook,
   textColumn,
   currencyColumn,
+  decimalColumn,
   dateColumn,
   integerColumn,
   xlsxFilename,
@@ -111,9 +112,12 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
           textColumn('Fakturanr'),
           dateColumn('Fakturadatum'),
           dateColumn('Förfallodatum'),
-          currencyColumn('Totalt'),
-          currencyColumn('Betalt'),
-          currencyColumn('Utestående'),
+          // Totalt/Betalt/Utestående are invoice-original currency (see the
+          // Valuta column): the kr-suffixed format is only correct for the
+          // SEK-converted column.
+          decimalColumn('Totalt'),
+          decimalColumn('Betalt'),
+          decimalColumn('Utestående'),
           currencyColumn('Utestående (SEK)'),
           integerColumn('Dagar förfallet'),
           textColumn('Valuta'),

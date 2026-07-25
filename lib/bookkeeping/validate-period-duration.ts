@@ -1,7 +1,10 @@
 /**
  * Validates fiscal period duration per BFL 3 kap.
  * Maximum 18 months for any fiscal period (first year may be extended).
- * Normal ongoing periods are 12 months.
+ * Normal ongoing periods are 12 months. There is NO minimum length: BFL
+ * 3 kap 3 § expressly allows a räkenskapsår shorter than 12 months when
+ * bokföringsskyldigheten begins or the year is re-laid, with no floor
+ * (Bolagsverket: the first year may be "hur kort som helst").
  */
 
 /**
@@ -56,15 +59,12 @@ export function validatePeriodDuration(start: string, end: string, options?: Val
     return 'Period end must be the last day of a month'
   }
 
-  // Max 18 months per BFL 3 kap.
+  // Max 18 months per BFL 3 kap. No minimum: a first (or re-laid) year may
+  // be arbitrarily short, e.g. an autumn-registered AB shortening its first
+  // year to end at Dec 31 for an early årsredovisning.
   const months = monthsBetween(start, end)
   if (months > 18) {
     return `Period duration ${months} months exceeds maximum 18 months (BFL 3 kap.)`
-  }
-
-  // First fiscal period must be at least 6 months per BFL 3 kap.
-  if (options?.isFirstPeriod && months < 6) {
-    return `First fiscal period must be at least 6 months (BFL 3 kap.)`
   }
 
   return null

@@ -84,16 +84,16 @@ describe('validatePeriodDuration', () => {
     expect(result).toContain('18 months')
   })
 
-  it('enforces 6-month minimum for first period (2 months)', () => {
-    expect(validatePeriodDuration('2026-03-25', '2026-05-31', { isFirstPeriod: true })).toBe(
-      'First fiscal period must be at least 6 months (BFL 3 kap.)'
-    )
+  // BFL 3 kap 3 § sets NO minimum for a first räkenskapsår: it may be
+  // "hur kort som helst" (Bolagsverket). A 6-month floor here blocked an
+  // autumn-registered AB from shortening its first year to Dec 31 for an
+  // early årsredovisning (real customer case 2026-07-25).
+  it('allows a short first period (3 months, autumn registration to Dec 31)', () => {
+    expect(validatePeriodDuration('2025-10-01', '2025-12-31', { isFirstPeriod: true })).toBeNull()
   })
 
-  it('enforces 6-month minimum for first period (5 months)', () => {
-    expect(validatePeriodDuration('2026-08-01', '2026-12-31', { isFirstPeriod: true })).toBe(
-      'First fiscal period must be at least 6 months (BFL 3 kap.)'
-    )
+  it('allows a very short first period (2 months, mid-month start)', () => {
+    expect(validatePeriodDuration('2026-03-25', '2026-05-31', { isFirstPeriod: true })).toBeNull()
   })
 
   it('allows exactly 6 months for first period', () => {
