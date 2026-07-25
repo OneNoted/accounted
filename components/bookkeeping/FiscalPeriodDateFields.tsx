@@ -34,7 +34,6 @@ function toSwedishError(msg: string): string {
   if (msg.includes('1st of a month')) return 'Startdatum måste vara den första i månaden.'
   if (msg.includes('last day of a month')) return 'Slutdatum måste vara den sista i månaden.'
   if (msg.includes('exceeds maximum 18 months')) return 'Räkenskapsåret får vara högst 18 månader (BFL 3 kap.).'
-  if (msg.includes('at least 6 months')) return 'Första räkenskapsåret måste vara minst 6 månader (BFL 3 kap.).'
   return msg
 }
 
