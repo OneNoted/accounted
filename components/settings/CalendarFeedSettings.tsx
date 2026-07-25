@@ -1,6 +1,7 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
+import { formatDateLong } from '@/lib/utils'
 import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ interface CalendarFeedWithUrls extends CalendarFeed {
 
 export function CalendarFeedSettings() {
   const t = useTranslations('settings_calendar_feed')
+  const locale = useLocale()
   const { toast } = useToast()
 
   const [isLoading, setIsLoading] = useState(true)
@@ -176,7 +178,7 @@ export function CalendarFeedSettings() {
       <SettingsGroup label={t('title')} help={t('description')}>
         <SettingsRow label={t('activate_sync')} help={t('empty_intro')}>
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" onClick={createFeed} disabled={isSaving}>
+            <Button variant="outline" size="sm" onClick={createFeed} disabled={isSaving}>
               {isSaving ? (
                 <>
                   <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
@@ -221,7 +223,7 @@ export function CalendarFeedSettings() {
             {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
           </Button>
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" onClick={openWebcal}>
+            <Button variant="outline" size="sm" onClick={openWebcal}>
               <Calendar className="mr-2 h-3.5 w-3.5" />
               {t('add_to_apple_calendar')}
             </Button>
@@ -233,19 +235,14 @@ export function CalendarFeedSettings() {
           {feed.last_accessed_at && (
             <SettingsRowNote className="tabular-nums">
               {t('last_fetched')}{' '}
-              {new Date(feed.last_accessed_at).toLocaleDateString('sv-SE', {
-                day: 'numeric',
-                month: 'short',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
+              {formatDateLong(feed.last_accessed_at, locale)}
               {' · '}
               {t('times_count', { count: feed.access_count })}
             </SettingsRowNote>
           )}
           <SettingsRowEnd>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={regenerateToken}
               disabled={isRegenerating}

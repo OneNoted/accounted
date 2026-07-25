@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -91,7 +92,19 @@ export function BankIdSettings() {
   return (
     <>
       <SettingsRow
-        label={t('title')}
+        label={
+          <span className="inline-flex items-center gap-2">
+            <Image
+              src="/logos/bankid-seeklogo.svg"
+              alt=""
+              aria-hidden="true"
+              width={16}
+              height={16}
+              className="dark:invert"
+            />
+            {t('title')}
+          </span>
+        }
         help={identity ? t('linked_description') : t('not_linked_description')}
         borderless={isLinking}
       >
@@ -105,7 +118,7 @@ export function BankIdSettings() {
             </SettingsRowNote>
             <SettingsRowEnd>
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 onClick={handleUnlink}
                 disabled={isUnlinking}
@@ -121,7 +134,15 @@ export function BankIdSettings() {
           <SettingsRowNote>{t('link_bankid_description')}</SettingsRowNote>
         ) : (
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" onClick={() => setIsLinking(true)}>
+            <Button variant="outline" size="sm" onClick={() => setIsLinking(true)}>
+              <Image
+                src="/logos/bankid-seeklogo.svg"
+                alt=""
+                aria-hidden="true"
+                width={16}
+                height={16}
+                className="mr-2 dark:invert"
+              />
               {t('link_button')}
             </Button>
           </SettingsRowEnd>
@@ -131,8 +152,13 @@ export function BankIdSettings() {
       {/* QR flow: an expanding block below the row. Mounted only while
           linking so the BankID session starts exactly when requested. */}
       {isLinking && (
-        <div className="flex flex-col items-center border-b border-border px-1 py-4">
+        <div className="flex flex-col items-center gap-3 border-b border-border px-1 py-4">
           <BankIdAuth mode="link" onComplete={handleLinkComplete} />
+          {/* BankIdAuth's own Avbryt only resets its internal session; give
+              the row an exit so isLinking can't get stuck. */}
+          <Button variant="outline" size="sm" onClick={() => setIsLinking(false)}>
+            {t('cancel_linking')}
+          </Button>
         </div>
       )}
     </>

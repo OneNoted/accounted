@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -187,7 +187,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
         {text}
       </pre>
       <Button
-        variant="ghost"
+        variant="outline"
         size="sm"
         className="absolute right-1.5 top-1.5 h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={handleCopy}
@@ -249,6 +249,7 @@ function ScopeCard({
 
 export function ApiKeysPanel() {
   const t = useTranslations('settings_api_keys')
+  const locale = useLocale()
   const { toast } = useToast()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
   const { dialogProps: sodDialogProps, confirm: confirmSod } = useDestructiveConfirm()
@@ -439,10 +440,10 @@ export function ApiKeysPanel() {
                     <span className="font-mono">{key.key_prefix}...</span>
                   </span>
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {t('created')} {formatDateLong(key.created_at)}
+                    {t('created')} {formatDateLong(key.created_at, locale)}
                     {' · '}
                     {key.last_used_at
-                      ? t('used_on', { date: formatDateLong(key.last_used_at) })
+                      ? t('used_on', { date: formatDateLong(key.last_used_at, locale) })
                       : t('never_used')}
                   </span>
                 </div>
@@ -685,7 +686,7 @@ export function ApiKeysPanel() {
               {newKeyValue}
             </code>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               className="absolute right-2 top-2"
               onClick={handleCopy}
