@@ -584,6 +584,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           unit: item.unit || 'st',
           price_excl_vat: Number(item.unit_price) || 0,
           vat_rate: item.vat_rate ?? 25,
+          // The typed unit price is in the invoice's currency: without this an
+          // EUR invoice line becomes an SEK article with the EUR number.
+          currency: getValues('currency'),
         }),
       })
       const result = await response.json()

@@ -18,6 +18,8 @@ import {
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   Package,
   Wrench,
@@ -56,6 +58,7 @@ export default function ArticleDetailPage({
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isTogglingActive, setIsTogglingActive] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   useEffect(() => {
@@ -125,6 +128,46 @@ export default function ArticleDetailPage({
       }
     } finally {
       setIsUpdating(false)
+    }
+  }
+
+  // Soft retire/restore: the only path for articles already used on invoices,
+  // where hard delete is refused (ARTICLE_IN_USE) to keep invoice history.
+  async function handleToggleActive() {
+    if (!article) return
+    const deactivating = article.active
+    if (deactivating) {
+      const ok = await confirmAction({
+        title: t('deactivate_confirm_title', { name: article.name }),
+        description: t('deactivate_confirm_description'),
+        confirmLabel: t('deactivate_confirm_label'),
+        variant: 'destructive',
+      })
+      if (!ok) return
+    }
+
+    setIsTogglingActive(true)
+    try {
+      const response = await fetch(`/api/articles/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: !article.active }),
+      })
+      await throwOnStructuredError(response)
+      toast({
+        title: deactivating ? t('deactivated_title') : t('activated_title'),
+        description: article.name,
+      })
+      fetchArticle()
+    } catch (err) {
+      const body = (err as { body?: unknown }).body
+      toast({
+        title: deactivating ? t('deactivate_failed_title') : t('activate_failed_title'),
+        description: getErrorMessage(body ?? err, { context: 'article', locale: errorLocale }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsTogglingActive(false)
     }
   }
 
@@ -220,6 +263,24 @@ export default function ArticleDetailPage({
           <Button
             variant="outline"
             size="sm"
+            onClick={handleToggleActive}
+            disabled={isTogglingActive || !canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            {isTogglingActive ? (
+              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            ) : !canWrite ? (
+              <Lock className="h-4 w-4 mr-1" />
+            ) : article.active ? (
+              <Archive className="h-4 w-4 mr-1" />
+            ) : (
+              <ArchiveRestore className="h-4 w-4 mr-1" />
+            )}
+            {article.active ? t('deactivate') : t('activate')}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={handleDelete}
             className="min-h-10 text-destructive hover:text-destructive"
             disabled={isDeleting || !canWrite}
@@ -247,7 +308,7 @@ export default function ArticleDetailPage({
           <CardContent className="space-y-3">
             <div className="text-sm flex items-center justify-between">
               <span className="text-muted-foreground">{t('label_price')}</span>
-              <span className="tabular-nums">{formatCurrency(article.price_excl_vat)}</span>
+              <span className="tabular-nums">{formatCurrency(article.price_excl_vat, article.currency)}</span>
             </div>
             <div className="text-sm flex items-center justify-between">
               <span className="text-muted-foreground">{t('label_vat')}</span>
@@ -260,7 +321,7 @@ export default function ArticleDetailPage({
             {article.cost_price != null && (
               <div className="text-sm flex items-center justify-between">
                 <span className="text-muted-foreground">{t('label_cost_price')}</span>
-                <span className="tabular-nums">{formatCurrency(article.cost_price)}</span>
+                <span className="tabular-nums">{formatCurrency(article.cost_price, article.currency)}</span>
               </div>
             )}
           </CardContent>
@@ -351,6 +412,7 @@ export default function ArticleDetailPage({
               unit: article.unit,
               price_excl_vat: article.price_excl_vat,
               vat_rate: article.vat_rate,
+              currency: article.currency,
               revenue_account: article.revenue_account || undefined,
               cost_price: article.cost_price ?? undefined,
               ean: article.ean || undefined,

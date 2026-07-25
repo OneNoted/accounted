@@ -32,6 +32,7 @@ const ARTICLE = {
   unit: 'st',
   price_excl_vat: 1200,
   vat_rate: 25,
+  currency: 'EUR',
   revenue_account: '3001',
   cost_price: 400,
   ean: '7350000000001',
@@ -80,6 +81,13 @@ describe('GET /api/export/articles', () => {
     expect(detected.price_col).not.toBeNull()
     expect(detected.vat_rate_col).not.toBeNull()
     expect(detected.revenue_account_col).not.toBeNull()
+
+    // Non-SEK prices export their currency; the price column must still map
+    // to Försäljningspris, not be swallowed by the new Valuta column.
+    const valutaIdx = headers.indexOf('Valuta')
+    expect(valutaIdx).toBeGreaterThanOrEqual(0)
+    expect((rows[1] as string[])[valutaIdx]).toBe('EUR')
+    expect(headers[detected.price_col as number]).toBe('Försäljningspris')
   })
 
   it('returns a UTF-8 BOM CSV when format=csv', async () => {

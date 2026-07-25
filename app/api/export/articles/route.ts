@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { textColumn, currencyColumn, integerColumn } from '@/lib/reports/xlsx-export'
+import { textColumn, decimalColumn, integerColumn } from '@/lib/reports/xlsx-export'
 import { buildRegisterExport, parseExportFormat, todayIso } from '@/lib/export/register-export'
 import type { Article } from '@/types'
 
@@ -11,7 +11,8 @@ import type { Article } from '@/types'
  *
  * Downloads the article register as xlsx (default) or csv. Read-only: viewers
  * may export. Column headers match the article importer's detector keywords so
- * the file round-trips (export → edit → re-import).
+ * the file round-trips (export → edit → re-import). Exception: the importer
+ * does not yet detect Valuta, so re-imported articles default to SEK.
  */
 export const GET = withRouteContext(
   'article.export',
@@ -48,10 +49,13 @@ export const GET = withRouteContext(
               textColumn('Benämning (engelska)'),
               textColumn('Typ'),
               textColumn('Enhet'),
-              currencyColumn('Försäljningspris'),
+              // Prices are decimal (not the kr-suffixed currency format):
+              // articles can carry a non-SEK currency, exported in Valuta.
+              decimalColumn('Försäljningspris'),
+              textColumn('Valuta'),
               integerColumn('Moms %'),
               textColumn('Försäljningskonto'),
-              currencyColumn('Inköpspris'),
+              decimalColumn('Inköpspris'),
               textColumn('EAN'),
               textColumn('ROT/RUT'),
               textColumn('Anteckning'),
@@ -64,6 +68,7 @@ export const GET = withRouteContext(
               a.type,
               a.unit,
               a.price_excl_vat,
+              a.currency,
               a.vat_rate,
               a.revenue_account,
               a.cost_price,
