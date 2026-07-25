@@ -140,11 +140,14 @@ export const DELETE = withRouteContext(
       })
     }
 
+    // invoice_items has NO company_id column: filtering on it made PostgREST
+    // 42703 here, which the error branch below turned into ARTICLE_DELETE_FAILED
+    // for EVERY delete (support: odinaero.se). Tenancy is already enforced by
+    // the article lookup above: article_id is a UUID owned by this company.
     const { count: usageCount, error: usageError } = await supabase
       .from('invoice_items')
       .select('id', { count: 'exact', head: true })
       .eq('article_id', id)
-      .eq('company_id', companyId)
 
     if (usageError) {
       opLog.error('article usage check failed', usageError)
