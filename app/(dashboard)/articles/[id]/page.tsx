@@ -24,8 +24,6 @@ import {
   Package,
   Wrench,
   Edit2,
-  Archive,
-  ArchiveRestore,
   Trash2,
   Loader2,
   Lock,
@@ -61,7 +59,6 @@ export default function ArticleDetailPage({
   const [isUpdating, setIsUpdating] = useState(false)
   const [isTogglingActive, setIsTogglingActive] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
-  const [isTogglingActive, setIsTogglingActive] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   useEffect(() => {
