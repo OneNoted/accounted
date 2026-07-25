@@ -95,9 +95,11 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     <form onSubmit={handleSubmit} className={className}>
       {children}
 
-      <div className="flex items-center justify-end gap-3 mt-8">
+      {/* Radslutet: the save row closes the form under a hairline, status on
+          the left, the action on the right (converged settings design). */}
+      <div className="mt-8 flex items-center justify-end gap-3 border-t border-border pt-4">
         {saved && (
-          <span className="flex items-center gap-1.5 text-sm text-muted-foreground animate-in fade-in duration-200">
+          <span className="mr-auto flex items-center gap-1.5 text-sm text-muted-foreground animate-in fade-in duration-200">
             <Check className="h-3.5 w-3.5" />
             {t('wrapper_saved')}
           </span>

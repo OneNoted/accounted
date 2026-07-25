@@ -24,6 +24,21 @@ export interface SettingsNavGroup {
 const GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', 'accounting', 'sales', 'tools']
 
 /**
+ * Whether `pathname` is a settings section the sheet owns. The cold-load sheet
+ * (`@settingsModal/default.tsx`) and the settings layout both branch on this:
+ * one draws the sheet, the other must then draw nothing in the panel, so they
+ * cannot be allowed to disagree about a given URL. Everything else under
+ * /settings (team, backup, skatteverket, company-profile, and registry sections
+ * hidden by visibility rules but reached by deep link) keeps the legacy page.
+ */
+export function isSheetSection(pathname: string, items: SettingsNavItem[]): boolean {
+  return (
+    pathname === '/settings' ||
+    items.some((i) => pathname === i.href || pathname.startsWith(i.href + '/'))
+  )
+}
+
+/**
  * Single source of truth for the settings sections, their conditional
  * visibility, and their grouping. Consumed by both the full-page rail and the
  * routed settings modal so the two can never drift on which sections show for

@@ -2,9 +2,9 @@
 
 import { useTranslations } from 'next-intl'
 import { useCallback, useState } from 'react'
-import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import type { CompanySettings } from '@/types'
 
 interface InvoicePaymentLinkSettingsProps {
@@ -40,23 +40,15 @@ export function InvoicePaymentLinkSettings({ settings, onUpdate }: InvoicePaymen
   }, [onUpdate, toast, t])
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('heading')}
-      </h2>
-
-      <div className="flex items-center justify-between">
-        <div>
-          <Label>{t('enable_label')}</Label>
-          <p className="text-xs text-muted-foreground">{t('enable_help')}</p>
-        </div>
+    <div className="divide-y divide-border">
+      <SettingsFieldRow label={t('enable_label')} description={t('enable_help')}>
         <Switch
           checked={settings.invoice_payment_links_enabled ?? false}
           onCheckedChange={saveToggle}
           disabled={isSaving}
           aria-label={t('enable_label')}
         />
-      </div>
-    </section>
+      </SettingsFieldRow>
+    </div>
   )
 }

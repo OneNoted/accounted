@@ -1,20 +1,21 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Card, CardContent } from '@/components/ui/card'
-import { Switch } from '@/components/ui/switch'
-import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
-import { AgentSkillsPanel } from '@/components/settings/AgentSkillsPanel'
-import { AgentKnowledgePanel } from '@/components/agent-knowledge/AgentKnowledgePanel'
+import {
+  AssistantKnowledgeSettings,
+  AssistantMemorySettings,
+  AssistantSkillsSettings,
+  AssistantFabVisibilitySettings,
+} from './AssistantSubsections'
 
 // "Assistenten": the ledger profile the agent reads before booking (Kunskap =
 // "Vad din agent vet", opens on the konteringskarta and is the default view),
 // what the assistant remembers about this company (Minne, editable), and the
 // domain knowledge it ships with (Kompetens, read-only). Tabs keep all three
-// one click away instead of stacked.
+// one click away instead of stacked. The settings sheet renders the same
+// subsections as accordion panels via the sheet registry
+// (components/settings/sheet/subsections.tsx).
 type View = 'knowledge' | 'memory' | 'skills'
 
 const VIEW_ROUTE: Record<View, string> = {
@@ -46,81 +47,17 @@ export function AssistantSettingsContent() {
         {/* Radix unmounts the inactive panel, so each panel's data is fetched
             lazily the first time its tab is opened. */}
         <TabsContent value="knowledge">
-          <AgentKnowledgePanel />
+          <AssistantKnowledgeSettings />
         </TabsContent>
         <TabsContent value="memory">
-          <AgentMemoryPanel />
+          <AssistantMemorySettings />
         </TabsContent>
         <TabsContent value="skills">
-          <AgentSkillsPanel />
+          <AssistantSkillsSettings />
         </TabsContent>
       </Tabs>
 
-      <FabVisibilityCard />
+      <AssistantFabVisibilitySettings />
     </div>
-  )
-}
-
-// Per-user toggle for the floating assistant button bottom-right. The value
-// lives on user_preferences (server-rendered into the dashboard layout), so
-// a successful save triggers router.refresh() to make the button react
-// immediately instead of on next navigation.
-function FabVisibilityCard() {
-  const t = useTranslations('settings_assistant')
-  const router = useRouter()
-  // null = not yet loaded (switch disabled meanwhile)
-  const [hideFab, setHideFab] = useState<boolean | null>(null)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    fetch('/api/user/preferences')
-      .then((res) => res.json())
-      .then((body) => {
-        if (!cancelled) setHideFab(Boolean(body?.data?.hide_assistant_fab))
-      })
-      .catch(() => {
-        if (!cancelled) setHideFab(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  async function handleToggle(showFab: boolean) {
-    const nextHide = !showFab
-    const previous = hideFab
-    setHideFab(nextHide)
-    setSaving(true)
-    try {
-      const res = await fetch('/api/user/preferences', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hide_assistant_fab: nextHide }),
-      })
-      if (!res.ok) throw new Error('save failed')
-      router.refresh()
-    } catch {
-      setHideFab(previous)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Card>
-      <CardContent className="p-6 flex items-center justify-between gap-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">{t('fab_title')}</p>
-          <p className="text-sm text-muted-foreground">{t('fab_description')}</p>
-        </div>
-        <Switch
-          checked={hideFab === null ? true : !hideFab}
-          onCheckedChange={handleToggle}
-          disabled={hideFab === null || saving}
-          aria-label={t('fab_title')}
-        />
-      </CardContent>
-    </Card>
   )
 }

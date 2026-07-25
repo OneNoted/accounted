@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import {
   Select,
   SelectContent,
@@ -117,34 +117,27 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   }
 
   return (
-    <section className="space-y-4">
-      <div className="space-y-1">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Verifikationsserier per typ
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          Tilldela en standardserie per typ av verifikat. Vanlig svensk
-          praxis: leverantörsfakturor på serie B, löner på serie C, övrigt på
-          serie A. Kan alltid ändras per verifikat när du bokför.
-        </p>
-      </div>
+    <div>
+      <p className="mb-2 text-xs text-muted-foreground">
+        Tilldela en standardserie per typ av verifikat. Vanlig svensk
+        praxis: leverantörsfakturor på serie B, löner på serie C, övrigt på
+        serie A. Kan alltid ändras per verifikat när du bokför.
+      </p>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="divide-y divide-border">
         {VISIBLE_SOURCE_TYPES.map(({ key, labelKey }) => (
-          <div key={key} className="flex items-center justify-between gap-3">
-            <Label
-              htmlFor={`series-${key}`}
-              className="text-sm text-foreground flex-1 cursor-pointer"
-            >
-              {SV_LABELS[labelKey] ?? key}
-            </Label>
+          <SettingsFieldRow
+            key={key}
+            label={SV_LABELS[labelKey] ?? key}
+            htmlFor={`series-${key}`}
+          >
             <Select
               value={(draft[key] as string | undefined) || 'A'}
               onValueChange={(v) => handleChange(key, v)}
             >
               <SelectTrigger
                 id={`series-${key}`}
-                className="w-16 font-mono"
+                className="h-9 w-16 rounded-lg font-mono"
                 aria-label={SV_LABELS[labelKey] ?? key}
               >
                 <SelectValue />
@@ -157,11 +150,12 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </SettingsFieldRow>
         ))}
       </div>
 
-      <div className="flex justify-end pt-2">
+      {/* Radslutet: the save row closes the panel under a hairline. */}
+      <div className="mt-8 flex justify-end border-t border-border pt-4">
         <Button
           type="button"
           onClick={handleSave}
@@ -171,6 +165,6 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
           Spara serier
         </Button>
       </div>
-    </section>
+    </div>
   )
 }

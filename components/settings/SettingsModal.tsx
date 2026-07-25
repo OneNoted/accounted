@@ -1,73 +1,137 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { useCompany } from '@/contexts/CompanyContext'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { SETTINGS_SECTIONS } from './sections'
-import { SettingsShell } from './SettingsShell'
-import { ActiveCompanyBadge } from './ActiveCompanyBadge'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { X } from 'lucide-react'
+import { SettingsMasterDetail } from './sheet/SettingsMasterDetail'
+
+/** Exit duration. Must stay in sync with the `data-[state=closed]` duration on
+ *  the sheet: the history entry is popped when the slide-down has finished. */
+const SHEET_CLOSE_MS = 300
 
 /**
- * The settings popup. Rendered only by the intercepting route
- * (`@settings/(.)settings/[[...section]]`) on in-app soft navigation, so its
- * mere presence means "open". Closing pops the history entry that opened it,
- * returning the user to the page they came from (which stayed mounted in the
- * `children` slot behind the scrim). On hard load / refresh / deep-link the
- * interceptor doesn't fire and the real full-page settings render instead.
+ * The settings sheet: the one presentation of settings. It slides up from the
+ * bottom and fills exactly the main panel area (the sidebar and the frame stay
+ * visible), with an X top right, and slides back down on close.
+ *
+ * Two routes render it, and the difference is only where closing leads:
+ * - The intercepting route (`@settingsModal/(.)settings/[[...section]]`) on
+ *   in-app soft navigation. The page the user came from is still mounted in the
+ *   `children` slot behind the sheet, so closing pops the history entry that
+ *   opened it and lands back on that page.
+ * - `@settingsModal/default.tsx` on hard load / refresh / deep link, where the
+ *   interceptor never fires. Nothing is mounted underneath, so closing goes to
+ *   the dashboard (`closeTo="home"`).
+ *
+ * It is deliberately non-modal and does not dismiss on outside clicks: the
+ * sidebar stays live underneath, so the account popover and the company
+ * switcher work with settings up. Three things close it: the X, Esc, and
+ * navigating away (a sidebar link), which the derived `open` picks up.
+ *
+ * The active section is derived from the pathname inside SettingsMasterDetail
+ * (tab clicks swap the URL shallowly); the sectionId route param only exists
+ * for the intercepting route's contract.
  */
-export function SettingsModal({ sectionId }: { sectionId?: string }) {
+export function SettingsModal({
+  sectionId: _sectionId,
+  closeTo = 'back',
+}: {
+  sectionId?: string
+  /** 'back' pops the history entry that opened the sheet; 'home' navigates to
+   *  the dashboard, for the cold-load case where there is no such entry. */
+  closeTo?: 'back' | 'home'
+}) {
   const router = useRouter()
   const pathname = usePathname()
-  const { company } = useCompany()
-  const t = useTranslations('settings_modal')
+  const t = useTranslations('settings_sheet')
+  // Portal into the dashboard shell so the sheet geometry can read the
+  // --nav-w custom property (sidebar width, incl. collapsed state) that is
+  // defined on #dash-shell. Falls back to <body> before mount.
+  const [container, setContainer] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    setContainer(document.getElementById('dash-shell'))
+  }, [])
 
-  // Tab clicks inside the modal update the URL shallowly (see SettingsRail),
-  // so the pathname is the live source of truth for the active section; the
-  // sectionId route param only covers the very first intercepted render.
-  // Bare /settings (or an unknown section) defaults to company, or to account
-  // when there is no active company (the no-company escape hatch).
-  const urlSection = pathname.split('/')[2] ?? sectionId
-  const resolved =
-    urlSection && SETTINGS_SECTIONS[urlSection]
-      ? urlSection
-      : company
-        ? 'company'
-        : 'account'
+  // Open is controlled, not hardcoded. The slot mounts open; closing flips this
+  // to false first so Radix renders data-state="closed" and the slide-down
+  // actually plays. Popping the history entry straight from onOpenChange (as
+  // this used to) unmounted the slot on the same tick, so the sheet vanished
+  // instead of sliding out.
+  const [dismissed, setDismissed] = useState(false)
 
-  function onOpenChange(open: boolean) {
-    if (!open) router.back()
+  // Leaving /settings closes the sheet too: a sidebar link, or a cross-link
+  // inside the sheet like "Kontoplan". Next.js can keep the intercepted slot
+  // mounted over the new page, so without this the sheet would sit stranded on
+  // top of it. Deriving it rather than syncing in an effect means Radix sees a
+  // plain true -> false flip and runs the same exit animation as the X.
+  const open = !dismissed && pathname.startsWith('/settings')
+
+  // Cold load: the dashboard is where closing leads but nothing has fetched it
+  // yet, so warm it while the user is in settings and the reveal is immediate.
+  useEffect(() => {
+    if (closeTo === 'home') router.prefetch('/')
+  }, [closeTo, router])
+
+  function onOpenChange(next: boolean) {
+    // `open` doubles as the re-entrancy guard: false already means closing.
+    if (next || !open) return
+    setDismissed(true)
+    if (closeTo === 'home') {
+      // Nothing is mounted behind a cold-loaded sheet, so navigate immediately:
+      // the dashboard paints behind while the sheet is still sliding down, and
+      // the animation reveals it instead of an empty panel. ColdLoadSettingsSheet
+      // keeps this mounted across that navigation.
+      router.push('/')
+      return
+    }
+    // The page underneath is already mounted, so wait: popping the history
+    // entry unmounts this slot and would cut the animation short. Reduced
+    // motion has no animation to wait for.
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    window.setTimeout(() => router.back(), reduced ? 0 : SHEET_CLOSE_MS)
   }
 
-  // Parallel-route safety net. This modal lives in the @settingsModal slot and
-  // should only ever show on /settings/* routes. On a soft navigation to a
-  // non-settings route (e.g. a cross-link inside the modal like "Kontoplan"),
-  // Next.js can keep this intercepted slot mounted over the new page. Once the
-  // URL is no longer a settings route, render nothing so those links actually
-  // leave the modal instead of appearing to do nothing.
-  if (!pathname.startsWith('/settings')) return null
-
   return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent
-        className="flex h-[100dvh] max-h-[100dvh] max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 md:h-auto md:max-h-[85dvh] md:max-w-4xl md:rounded-lg"
-      >
-        <div className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-4">
-          <DialogTitle className="font-display text-lg tracking-tight">
-            {t('title')}
-          </DialogTitle>
-          {/* The modal covers the sidebar's CompanySwitcher, so the active
-              company must stay visible here (mr-6 clears the close button). */}
-          <ActiveCompanyBadge className="ml-auto mr-6" />
-        </div>
-        <DialogDescription className="sr-only">{t('description')}</DialogDescription>
-        <SettingsShell variant="modal" activeSection={resolved} />
-      </DialogContent>
-    </Dialog>
+    // Non-modal: the sidebar is not "outside a dialog" here, it is the app's
+    // chrome and stays fully usable with the sheet up. Modal would put
+    // pointer-events: none on everything else, so the account popover at the
+    // bottom left could not open and a nav link could not be followed.
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogPrimitive.Portal container={container ?? undefined}>
+        {/* No veil: the sheet covers the panel exactly; sidebar and frame stay
+            visible and untinted. */}
+        <DialogPrimitive.Content
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          // Clicking outside does not dismiss. The sheet closes on the X, on
+          // Esc, or by navigating away (which `open` above picks up), so
+          // opening the account popover or the company switcher leaves it be.
+          onInteractOutside={(e) => e.preventDefault()}
+          className={
+            'fixed inset-0 z-50 flex flex-col overflow-hidden bg-background focus:outline-none ' +
+            'md:inset-auto md:bottom-[10px] md:left-[var(--nav-w,248px)] md:right-[10px] md:top-[10px] ' +
+            'md:rounded-xl md:border md:border-border ' +
+            'data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom data-[state=open]:duration-[420ms] ' +
+            'data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=closed]:duration-300 ' +
+            'ease-[cubic-bezier(0.32,0.72,0.28,1)] motion-reduce:animate-none'
+          }
+        >
+          <DialogPrimitive.Title className="sr-only">{t('title')}</DialogPrimitive.Title>
+          <DialogPrimitive.Description className="sr-only">
+            {t('description')}
+          </DialogPrimitive.Description>
+          <DialogPrimitive.Close
+            aria-label={t('close')}
+            className="absolute right-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X className="h-4 w-4" aria-hidden />
+          </DialogPrimitive.Close>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <SettingsMasterDetail variant="sheet" />
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }

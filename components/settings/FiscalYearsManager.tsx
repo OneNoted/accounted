@@ -114,13 +114,14 @@ export function FiscalYearsManager() {
 
   return (
     <section className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('fy_heading')}
-        </h2>
+      {/* The accordion header already names this panel, so the row carries the
+          help text and the create action instead of a repeated heading. */}
+      <div className="flex items-start justify-between gap-4">
+        <p className="max-w-prose text-xs text-muted-foreground">{t('fy_help')}</p>
         <Button
           variant="outline"
           size="sm"
+          className="shrink-0"
           onClick={() => setDialogOpen(true)}
           disabled={isLoading}
         >
@@ -128,8 +129,6 @@ export function FiscalYearsManager() {
           {t('fy_create')}
         </Button>
       </div>
-
-      <p className="text-xs text-muted-foreground">{t('fy_help')}</p>
 
       {isLoading ? (
         <div className="space-y-2">

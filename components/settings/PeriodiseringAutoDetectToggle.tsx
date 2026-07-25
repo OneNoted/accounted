@@ -4,7 +4,7 @@ import { useCallback, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { ExternalLink } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 
 /**
  * Per-user toggle for the periodisering wizard's auto-detection step.
@@ -76,33 +76,25 @@ export function PeriodiseringAutoDetectToggle() {
   }, [])
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Periodisering
-      </h2>
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <Label htmlFor="periodisering-autodetect" className="text-sm">
-            Aktivera automatisk periodiseringsdetektering
-          </Label>
-          <p className="text-xs text-muted-foreground max-w-md">
-            Skannar fakturor i bokslutet efter datumintervall som sträcker sig
-            in i nästa räkenskapsår och föreslår periodiseringar i bokslut-wizarden.
-          </p>
-        </div>
+    <div>
+      <SettingsFieldRow
+        label="Aktivera automatisk periodiseringsdetektering"
+        htmlFor="periodisering-autodetect"
+        description="Skannar fakturor i bokslutet efter datumintervall som sträcker sig in i nästa räkenskapsår och föreslår periodiseringar i bokslut-wizarden."
+      >
         <Switch
           id="periodisering-autodetect"
           checked={enabled}
           onCheckedChange={handleChange}
         />
-      </div>
+      </SettingsFieldRow>
       <Link
         href="/bookkeeping/year-end/periodisering"
-        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        className="mt-2 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ExternalLink className="h-3.5 w-3.5" />
         Öppna periodiserings-wizarden
       </Link>
-    </section>
+    </div>
   )
 }

@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import {
   EMAIL_PATTERN,
   MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
@@ -107,17 +107,16 @@ export function InvoiceEmailRecipientsSettings({
   }
 
   return (
-    <section className="space-y-4">
-      <div className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('heading')}
-        </h2>
-        <p className="text-sm text-muted-foreground">{t('description')}</p>
-      </div>
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">{t('description')}</p>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="invoice-email-cc">{t('cc_label')}</Label>
+      <div className="divide-y divide-border">
+        <SettingsFieldRow
+          stacked
+          label={t('cc_label')}
+          htmlFor="invoice-email-cc"
+          description={t('cc_hint')}
+        >
           <Textarea
             id="invoice-email-cc"
             value={ccText}
@@ -125,10 +124,14 @@ export function InvoiceEmailRecipientsSettings({
             placeholder={t('cc_placeholder')}
             rows={3}
           />
-          <p className="text-xs text-muted-foreground">{t('cc_hint')}</p>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="invoice-email-bcc">{t('bcc_label')}</Label>
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          stacked
+          label={t('bcc_label')}
+          htmlFor="invoice-email-bcc"
+          description={t('bcc_hint')}
+        >
           <Textarea
             id="invoice-email-bcc"
             value={bccText}
@@ -136,8 +139,7 @@ export function InvoiceEmailRecipientsSettings({
             placeholder={t('bcc_placeholder')}
             rows={3}
           />
-          <p className="text-xs text-muted-foreground">{t('bcc_hint')}</p>
-        </div>
+        </SettingsFieldRow>
       </div>
 
       <div className="flex justify-end">
@@ -145,6 +147,6 @@ export function InvoiceEmailRecipientsSettings({
           {isSaving ? t('saving') : t('save')}
         </Button>
       </div>
-    </section>
+    </div>
   )
 }

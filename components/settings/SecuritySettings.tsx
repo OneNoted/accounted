@@ -4,12 +4,15 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, ShieldOff, KeyRound } from 'lucide-react'
+import {
+  SettingsFieldRow,
+  settingsInputClassName,
+} from '@/components/settings/sheet/SettingsFieldRow'
+import { cn } from '@/lib/utils'
+import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
@@ -171,120 +174,120 @@ export function SecuritySettings() {
 
       {/* BankID-only users with no password: banner above everything else */}
       {hasPassword === false && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <KeyRound className="h-4 w-4" />
-              Sätt ett lösenord
-            </CardTitle>
-            <CardDescription>
-              Du loggade in med BankID och har inget lösenord ännu. Sätt ett
-              lösenord för att kunna aktivera 2FA eller logga in när BankID
-              inte är tillgängligt.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <div className="divide-y divide-border">
+          <SettingsFieldRow
+            label="Sätt ett lösenord"
+            description={
+              <>
+                Du loggade in med BankID och har inget lösenord ännu. Sätt ett
+                lösenord för att kunna aktivera 2FA eller logga in när BankID
+                inte är tillgängligt.
+              </>
+            }
+          >
             <Button
+              size="sm"
               onClick={() =>
                 router.push('/account/set-password?returnTo=/settings/account')
               }
             >
               Sätt lösenord
             </Button>
-          </CardContent>
-        </Card>
+          </SettingsFieldRow>
+        </div>
       )}
 
       {/* Change password: hidden when the user has no password (the banner
           above handles the set-initial-password flow). */}
       {hasPassword !== false && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <KeyRound className="h-5 w-5" />
+      <form onSubmit={handleChangePassword} className="space-y-3">
+        <div>
+          <h3 className="text-sm font-medium text-muted-foreground pt-2">
             {t('change_password_title')}
-          </CardTitle>
-          <CardDescription>
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
             {t('change_password_description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
-            <div className="space-y-2">
-              <Label htmlFor="new_password">{t('new_password_label')}</Label>
-              <Input
-                id="new_password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t('new_password_placeholder')}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isChangingPassword}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm_new_password">{t('confirm_password_label')}</Label>
-              <Input
-                id="confirm_new_password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t('confirm_password_placeholder')}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isChangingPassword}
-              />
-            </div>
-            <Button type="submit" disabled={isChangingPassword}>
-              {isChangingPassword ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('saving')}
-                </>
-              ) : (
-                t('update_password_button')
-              )}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+          </p>
+        </div>
+        <div className="divide-y divide-border">
+          <SettingsFieldRow label={t('new_password_label')} htmlFor="new_password">
+            <Input
+              id="new_password"
+              type="password"
+              autoComplete="new-password"
+              placeholder={t('new_password_placeholder')}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              minLength={8}
+              disabled={isChangingPassword}
+              className={cn(settingsInputClassName, 'w-56')}
+            />
+          </SettingsFieldRow>
+          <SettingsFieldRow
+            label={t('confirm_password_label')}
+            htmlFor="confirm_new_password"
+          >
+            <Input
+              id="confirm_new_password"
+              type="password"
+              autoComplete="new-password"
+              placeholder={t('confirm_password_placeholder')}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              minLength={8}
+              disabled={isChangingPassword}
+              className={cn(settingsInputClassName, 'w-56')}
+            />
+          </SettingsFieldRow>
+        </div>
+        <div className="flex justify-end">
+          <Button type="submit" size="sm" disabled={isChangingPassword}>
+            {isChangingPassword ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                {t('saving')}
+              </>
+            ) : (
+              t('update_password_button')
+            )}
+          </Button>
+        </div>
+      </form>
       )}
 
       {/* MFA: hidden for self-hosted */}
       {!isSelfHosted && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5" />
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground pt-2">
               {t('mfa_title')}
-            </CardTitle>
-            <CardDescription>
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
               {t('mfa_description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoadingMfa ? (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {t('loading')}
-              </div>
-            ) : hasMfa ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 rounded-lg border border-border bg-secondary">
-                  <ShieldCheck className="h-5 w-5 text-success" />
-                  <div>
-                    <p className="font-medium text-foreground">{t('mfa_active_title')}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {t('mfa_active_description')}
-                    </p>
-                  </div>
-                </div>
+            </p>
+          </div>
+          {isLoadingMfa ? (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {t('loading')}
+            </div>
+          ) : hasMfa ? (
+            <div className="divide-y divide-border">
+              <SettingsFieldRow
+                label={
+                  <span className="flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-success" />
+                    {t('mfa_active_title')}
+                  </span>
+                }
+                description={t('mfa_active_description')}
+              >
                 {!mfaRequired && (
                   <Button
                     variant="outline"
+                    size="sm"
                     onClick={handleUnenrollMfa}
                     disabled={isUnenrolling}
                   >
@@ -302,24 +305,26 @@ export function SecuritySettings() {
                   </Button>
                 )}
                 {mfaRequired && (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="max-w-[14rem] text-right text-xs text-muted-foreground">
                     {t('mfa_required_note')}
                   </p>
                 )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 rounded-lg border">
-                  <ShieldOff className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">{t('mfa_inactive_title')}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {t('mfa_inactive_description')}
-                    </p>
-                  </div>
-                </div>
+              </SettingsFieldRow>
+            </div>
+          ) : (
+            <div className="divide-y divide-border">
+              <SettingsFieldRow
+                label={
+                  <span className="flex items-center gap-2">
+                    <ShieldOff className="h-4 w-4 text-muted-foreground" />
+                    {t('mfa_inactive_title')}
+                  </span>
+                }
+                description={t('mfa_inactive_description')}
+              >
                 {hasPassword === false ? (
                   <Button
+                    size="sm"
                     onClick={() =>
                       router.push(
                         '/account/set-password?returnTo=/mfa/enroll',
@@ -330,16 +335,17 @@ export function SecuritySettings() {
                   </Button>
                 ) : (
                   <Button
+                    size="sm"
                     onClick={() => router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)}
                   >
                     <ShieldCheck className="mr-2 h-4 w-4" />
                     {t('enable_mfa')}
                   </Button>
                 )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              </SettingsFieldRow>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

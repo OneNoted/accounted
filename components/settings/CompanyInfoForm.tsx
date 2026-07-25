@@ -2,7 +2,11 @@
 
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import {
+  SettingsFieldRow,
+  settingsInputClassName,
+} from '@/components/settings/sheet/SettingsFieldRow'
+import { cn } from '@/lib/utils'
 import type { CompanySettings } from '@/types'
 
 interface CompanyInfoFormProps {
@@ -12,95 +16,90 @@ interface CompanyInfoFormProps {
 export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
   const t = useTranslations('settings_company')
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('company_info_heading')}
-      </h2>
+    <div className="divide-y divide-border">
+      <SettingsFieldRow
+        label={t('company_name_label')}
+        htmlFor="company_name"
+        description={t('company_name_help')}
+      >
+        <Input
+          id="company_name"
+          name="company_name"
+          defaultValue={settings.company_name || ''}
+          className={cn(settingsInputClassName, 'w-64')}
+        />
+      </SettingsFieldRow>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="company_name">{t('company_name_label')}</Label>
-          <Input
-            id="company_name"
-            name="company_name"
-            defaultValue={settings.company_name || ''}
-          />
-          <p className="text-xs text-muted-foreground">
-            {t('company_name_help')}
-          </p>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="org_number">{t('org_number_label')}</Label>
-          <Input
-            id="org_number"
-            name="org_number"
-            defaultValue={settings.org_number || ''}
-            disabled={settings.onboarding_complete === true}
-          />
-          {settings.onboarding_complete && (
-            <p className="text-xs text-muted-foreground">{t('org_number_locked')}</p>
-          )}
-        </div>
-      </div>
+      <SettingsFieldRow
+        label={t('org_number_label')}
+        htmlFor="org_number"
+        description={settings.onboarding_complete ? t('org_number_locked') : undefined}
+      >
+        <Input
+          id="org_number"
+          name="org_number"
+          defaultValue={settings.org_number || ''}
+          disabled={settings.onboarding_complete === true}
+          className={cn(settingsInputClassName, 'w-48 tabular-nums')}
+        />
+      </SettingsFieldRow>
 
-      <div className="space-y-2">
-        <Label htmlFor="address_line1">{t('address_label')}</Label>
+      <SettingsFieldRow label={t('address_label')} htmlFor="address_line1">
         <Input
           id="address_line1"
           name="address_line1"
           defaultValue={settings.address_line1 || ''}
+          className={cn(settingsInputClassName, 'w-64')}
         />
-      </div>
+      </SettingsFieldRow>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="postal_code">{t('postal_code_label')}</Label>
-          <Input
-            id="postal_code"
-            name="postal_code"
-            defaultValue={settings.postal_code || ''}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="city">{t('city_label')}</Label>
-          <Input
-            id="city"
-            name="city"
-            defaultValue={settings.city || ''}
-          />
-        </div>
-      </div>
+      <SettingsFieldRow label={t('postal_code_label')} htmlFor="postal_code">
+        <Input
+          id="postal_code"
+          name="postal_code"
+          defaultValue={settings.postal_code || ''}
+          className={cn(settingsInputClassName, 'w-24 tabular-nums')}
+        />
+      </SettingsFieldRow>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="phone">{t('phone_label')}</Label>
-          <Input
-            id="phone"
-            name="phone"
-            type="tel"
-            defaultValue={settings.phone || ''}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="email">{t('email_label')}</Label>
-          <Input
-            id="email"
-            name="email"
-            type="email"
-            defaultValue={settings.email || ''}
-          />
-        </div>
-      </div>
+      <SettingsFieldRow label={t('city_label')} htmlFor="city">
+        <Input
+          id="city"
+          name="city"
+          defaultValue={settings.city || ''}
+          className={cn(settingsInputClassName, 'w-48')}
+        />
+      </SettingsFieldRow>
 
-      <div className="space-y-2">
-        <Label htmlFor="website">{t('website_label')}</Label>
+      <SettingsFieldRow label={t('phone_label')} htmlFor="phone">
+        <Input
+          id="phone"
+          name="phone"
+          type="tel"
+          defaultValue={settings.phone || ''}
+          className={cn(settingsInputClassName, 'w-48')}
+        />
+      </SettingsFieldRow>
+
+      <SettingsFieldRow label={t('email_label')} htmlFor="email">
+        <Input
+          id="email"
+          name="email"
+          type="email"
+          defaultValue={settings.email || ''}
+          className={cn(settingsInputClassName, 'w-64')}
+        />
+      </SettingsFieldRow>
+
+      <SettingsFieldRow label={t('website_label')} htmlFor="website">
         <Input
           id="website"
           name="website"
           defaultValue={settings.website || ''}
           placeholder="https://"
+          className={cn(settingsInputClassName, 'w-64')}
         />
-      </div>
-    </section>
+      </SettingsFieldRow>
+    </div>
   )
 }

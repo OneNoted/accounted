@@ -3,9 +3,12 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import {
+  SettingsFieldRow,
+  settingsInputClassName,
+} from '@/components/settings/sheet/SettingsFieldRow'
 import { roundOre } from '@/lib/money'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 
 // Deliberately narrow (data minimisation): the form only ever needs the two
 // share-capital fields, not the whole CompanySettings object.
@@ -40,14 +43,17 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
       : null
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+    <div className="space-y-3">
+      <h3 className="text-sm font-medium text-muted-foreground pt-2">
         {t('share_capital_heading')}
-      </h2>
+      </h3>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="aktiekapital">{t('aktiekapital_label')}</Label>
+      <div className="divide-y divide-border">
+        <SettingsFieldRow
+          label={t('aktiekapital_label')}
+          htmlFor="aktiekapital"
+          description={t('aktiekapital_help')}
+        >
           <Input
             id="aktiekapital"
             name="aktiekapital"
@@ -58,11 +64,15 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
             value={aktiekapital}
             onChange={(e) => setAktiekapital(e.target.value)}
             required={antalAktier.trim() !== ''}
+            className={cn(settingsInputClassName, 'w-32 tabular-nums')}
           />
-          <p className="text-xs text-muted-foreground">{t('aktiekapital_help')}</p>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="antal_aktier">{t('antal_aktier_label')}</Label>
+        </SettingsFieldRow>
+
+        <SettingsFieldRow
+          label={t('antal_aktier_label')}
+          htmlFor="antal_aktier"
+          description={t('antal_aktier_help')}
+        >
           <Input
             id="antal_aktier"
             name="antal_aktier"
@@ -73,9 +83,9 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
             value={antalAktier}
             onChange={(e) => setAntalAktier(e.target.value)}
             required={aktiekapital.trim() !== ''}
+            className={cn(settingsInputClassName, 'w-32 tabular-nums')}
           />
-          <p className="text-xs text-muted-foreground">{t('antal_aktier_help')}</p>
-        </div>
+        </SettingsFieldRow>
       </div>
 
       {kvotvarde !== null && (
@@ -83,6 +93,6 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
           {t('kvotvarde_display', { value: formatCurrency(kvotvarde) })}
         </p>
       )}
-    </section>
+    </div>
   )
 }

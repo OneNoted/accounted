@@ -4,9 +4,9 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 
 interface VoucherSeries {
   voucher_series: string
@@ -48,11 +48,7 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
   const seriesEntries = Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b))
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('heading')}
-      </h2>
-
+    <div>
       {isLoading ? (
         <div className="space-y-2">
           <Skeleton className="h-4 w-32" />
@@ -63,29 +59,30 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
           {t('empty_state', { series: defaultSeries || 'A' })}
         </p>
       ) : (
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">{t('active_series_label')}</Label>
-          <div className="divide-y divide-border/8">
-            {seriesEntries.map(([letter, lastNum]) => (
-              <div key={letter} className="flex items-center justify-between py-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium tabular-nums">{t('series_prefix')} {letter}</span>
+        <div className="divide-y divide-border">
+          {seriesEntries.map(([letter, lastNum]) => (
+            <SettingsFieldRow
+              key={letter}
+              label={
+                <span className="flex items-center gap-2">
+                  <span className="tabular-nums">{t('series_prefix')} {letter}</span>
                   {letter === (defaultSeries || 'A') && (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">{t('default_badge')}</Badge>
+                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">{t('default_badge')}</Badge>
                   )}
-                </div>
-                <span className="text-sm text-muted-foreground tabular-nums">
-                  {t('latest_number')}: {lastNum}
                 </span>
-              </div>
-            ))}
-          </div>
+              }
+            >
+              <span className="text-sm tabular-nums text-muted-foreground">
+                {t('latest_number')}: {lastNum}
+              </span>
+            </SettingsFieldRow>
+          ))}
         </div>
       )}
 
-      <p className="text-xs text-muted-foreground">
+      <p className="mt-4 text-xs text-muted-foreground">
         {t('footnote')}
       </p>
-    </section>
+    </div>
   )
 }

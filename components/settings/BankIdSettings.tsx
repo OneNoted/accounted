@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import { Shield, ShieldCheck, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDateLong } from '@/lib/utils'
@@ -78,73 +78,59 @@ export function BankIdSettings() {
 
   if (isLoading) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-center py-6">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
     )
   }
 
   if (isLinking) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('link_bankid_title')}</CardTitle>
-          <CardDescription>{t('link_bankid_description')}</CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col items-center">
+      <div className="space-y-3 py-2">
+        <div>
+          <p className="text-sm">{t('link_bankid_title')}</p>
+          <p className="text-xs text-muted-foreground">{t('link_bankid_description')}</p>
+        </div>
+        <div className="flex flex-col items-center">
           <BankIdAuth mode="link" onComplete={handleLinkComplete} />
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     )
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+    <SettingsFieldRow
+      label={
+        <span className="flex items-center gap-2">
           {identity ? (
             <ShieldCheck className="h-4 w-4 text-success" />
           ) : (
             <Shield className="h-4 w-4 text-muted-foreground" />
           )}
           {t('title')}
-        </CardTitle>
-        <CardDescription>
-          {identity ? t('linked_description') : t('not_linked_description')}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {identity ? (
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">
-                {identity.given_name} {identity.surname}
-              </span>
-              <span className="ml-2">
-                {t('linked_on', { date: formatDateLong(identity.linked_at) })}
-              </span>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleUnlink}
-              disabled={isUnlinking}
-              className="text-destructive hover:text-destructive"
-            >
-              {isUnlinking ? t('unlinking') : t('unlink_button')}
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="outline"
-            onClick={() => setIsLinking(true)}
-          >
-            {t('link_button')}
-          </Button>
-        )}
-      </CardContent>
-    </Card>
+        </span>
+      }
+      description={
+        identity
+          ? `${identity.given_name} ${identity.surname} · ${t('linked_on', { date: formatDateLong(identity.linked_at) })}`
+          : t('not_linked_description')
+      }
+    >
+      {identity ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleUnlink}
+          disabled={isUnlinking}
+          className="text-destructive hover:text-destructive"
+        >
+          {isUnlinking ? t('unlinking') : t('unlink_button')}
+        </Button>
+      ) : (
+        <Button variant="outline" onClick={() => setIsLinking(true)}>
+          {t('link_button')}
+        </Button>
+      )}
+    </SettingsFieldRow>
   )
 }
