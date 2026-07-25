@@ -16,6 +16,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
+import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { BankFileParseResult } from '@/lib/import/bank-file/types'
@@ -41,6 +42,9 @@ export default function BankFileConfirmStep({
   const { transactions, stats, date_from, date_to, issues } = parseResult
   const refsCount = transactions.filter((t) => t.reference).length
   const warnings = issues.filter((i) => i.severity === 'warning')
+  // Same per-currency grouping as the preview step: parser-level totals sum
+  // across currencies, which misleads on Wise/camt.053 multi-currency files.
+  const currencyTotals = summarizeByCurrency(transactions)
 
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [selectedAccount, setSelectedAccount] = useState('1930')
@@ -128,18 +132,22 @@ export default function BankFileConfirmStep({
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-xs">Inkomster</span>
               </div>
-              <p className="text-xl font-display tabular-nums">
-                {formatCurrency(stats.total_income)}
-              </p>
+              {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
+                <p key={row.currency} className="text-xl font-display tabular-nums">
+                  {formatCurrency(row.total_income, row.currency)}
+                </p>
+              ))}
             </div>
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-xs">Utgifter</span>
               </div>
-              <p className="text-xl font-display tabular-nums">
-                {formatCurrency(stats.total_expenses)}
-              </p>
+              {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
+                <p key={row.currency} className="text-xl font-display tabular-nums">
+                  {formatCurrency(row.total_expenses, row.currency)}
+                </p>
+              ))}
             </div>
           </div>
 
