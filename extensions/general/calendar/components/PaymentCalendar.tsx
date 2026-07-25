@@ -10,13 +10,13 @@ import { CalendarGrid } from './CalendarGrid'
 import { CalendarWeekView } from './CalendarWeekView'
 import { CalendarDayView } from './CalendarDayView'
 import { DayDetailModal } from './DayDetailModal'
-import { DeadlineForm } from '@/components/deadlines/DeadlineForm'
+import { DeadlineForm, type DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
 
 interface PaymentCalendarProps {
   invoices: Invoice[]
   deadlines: Deadline[]
   customers: { id: string; name: string }[]
-  onDeadlineCreate: (data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>) => Promise<void>
+  onDeadlineCreate: (data: DeadlineFormValues) => Promise<void>
   onDeadlineToggle: (deadline: Deadline) => Promise<void>
 }
 
@@ -125,7 +125,7 @@ export function PaymentCalendar({
     setDeadlineFormDate(null)
   }, [])
 
-  const handleDeadlineSubmit = useCallback(async (data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>) => {
+  const handleDeadlineSubmit = useCallback(async (data: DeadlineFormValues) => {
     await onDeadlineCreate(data)
     handleDeadlineFormClose()
   }, [onDeadlineCreate])
