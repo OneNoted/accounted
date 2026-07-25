@@ -55,7 +55,9 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
         tab.close()
         toast({
           title: 'Kunde inte öppna dokumentet',
-          description: 'Tillåt popupfönster för Accounted i webbläsaren och försök igen.',
+          description: tab.blocked
+            ? 'Tillåt popupfönster för Accounted i webbläsaren och försök igen.'
+            : 'Försök igen om en stund.',
           variant: 'destructive',
         })
       }

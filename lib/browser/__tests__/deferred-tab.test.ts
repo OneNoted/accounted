@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 
 function makeFakeTab() {
@@ -14,6 +14,11 @@ function makeFakeTab() {
     },
   }
 }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.unstubAllGlobals()
+})
 
 afterEach(() => {
   vi.unstubAllGlobals()

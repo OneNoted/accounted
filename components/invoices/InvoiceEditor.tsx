@@ -1352,6 +1352,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       if (!tab.navigate(url)) {
+        tab.close()
         window.URL.revokeObjectURL(url)
         toast({
           title: t('preview_pdf_failed'),
