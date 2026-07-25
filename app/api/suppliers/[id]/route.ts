@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { roundOre } from '@/lib/money'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -50,8 +51,8 @@ export const GET = withRouteContext(
       by_currency: [...perCurrency.entries()]
         .map(([currency, row]) => ({
           currency,
-          total_outstanding: Math.round(row.total_outstanding * 100) / 100,
-          total_paid: Math.round(row.total_paid * 100) / 100,
+          total_outstanding: roundOre(row.total_outstanding),
+          total_paid: roundOre(row.total_paid),
         }))
         .sort((a, b) => a.currency.localeCompare(b.currency)),
     }

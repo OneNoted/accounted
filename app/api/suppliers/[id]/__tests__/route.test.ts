@@ -96,7 +96,7 @@ describe('GET /api/suppliers/[id]', () => {
       data: { stats: { by_currency: { currency: string; total_outstanding: number }[] } }
     }>(response)
 
-    // Also pins the öre-rounding rule (Math.round(x * 100) / 100).
+    // Also pins the öre rounding (roundOre from lib/money).
     expect(body.data.stats.by_currency).toEqual([
       { currency: 'SEK', total_outstanding: 100.01, total_paid: 0 },
     ])
