@@ -350,8 +350,16 @@ export default function JournalEntryForm({
     }
   }, [entryDate])
 
+  // Edit mode hydrates the draft's STORED rate: the mount-time fetch must not
+  // replace it with today's rate, or a text-only edit would silently save a
+  // different FX rate. Fetch only after the user changes currency (or date).
+  const skipInitialRateFetch = useRef(initialExchangeRate != null)
   useEffect(() => {
     if (entryCurrency !== 'SEK') {
+      if (skipInitialRateFetch.current) {
+        skipInitialRateFetch.current = false
+        return
+      }
       fetchRate(entryCurrency)
     }
   }, [entryCurrency, fetchRate])
