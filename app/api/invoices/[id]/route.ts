@@ -148,7 +148,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // received self-billing document) may be edited.
     const { data: existing, error: fetchError } = await supabase
       .from('invoices')
-      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id')
+      .select('id, status, invoice_number, journal_entry_id, is_self_billed, credited_invoice_id, deduction_personnummer_encrypted, deduction_personnummer_last4')
       .eq('id', id)
       .eq('company_id', companyId!)
       .single()
@@ -186,6 +186,15 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       customer,
       documentType,
       input,
+      // The stored personnummer exists only as ciphertext (client sees _last4
+      // at most), so an edit that leaves the field empty keeps it rather than
+      // failing ROT/RUT validation (issue #1175).
+      existingPersonnummer: existing.deduction_personnummer_encrypted
+        ? {
+            encrypted: existing.deduction_personnummer_encrypted,
+            last4: existing.deduction_personnummer_last4 ?? null,
+          }
+        : null,
     })
     if (!build.ok) {
       if ('dbError' in build) {
