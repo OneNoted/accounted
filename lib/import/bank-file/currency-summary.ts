@@ -1,3 +1,4 @@
+import { roundOre } from '@/lib/money'
 import type { ParsedBankTransaction } from './types'
 
 export interface BankFileCurrencyTotals {
@@ -28,8 +29,8 @@ export function summarizeByCurrency(
   return [...perCurrency.entries()]
     .map(([currency, totals]) => ({
       currency,
-      total_income: Math.round(totals.total_income * 100) / 100,
-      total_expenses: Math.round(totals.total_expenses * 100) / 100,
+      total_income: roundOre(totals.total_income),
+      total_expenses: roundOre(totals.total_expenses),
     }))
     .sort((a, b) => a.currency.localeCompare(b.currency))
 }
