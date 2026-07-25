@@ -101,6 +101,7 @@ export function parseArticlesFile(
       type_col: null,
       unit_col: null,
       price_col: null,
+      currency_col: null,
       vat_rate_col: null,
       revenue_account_col: null,
       cost_price_col: null,
@@ -139,6 +140,7 @@ export function parseArticlesFile(
 
   let vatNoteCount = 0
   let droppedAccountCount = 0
+  let droppedCurrencyCount = 0
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
@@ -153,6 +155,16 @@ export function parseArticlesFile(
 
     const priceRaw = cell(row, columns.price_col)
     const price = priceRaw !== null ? parseAmount(priceRaw) : 0
+
+    // Keep only well-formed ISO 4217 codes; the execute route validates them
+    // against the currencies table. null = column absent/blank (imports as SEK).
+    const currencyRaw = cell(row, columns.currency_col)
+    let currency: string | null = null
+    if (currencyRaw) {
+      const normalized = currencyRaw.trim().toUpperCase()
+      if (/^[A-Z]{3}$/.test(normalized)) currency = normalized
+      else droppedCurrencyCount++
+    }
 
     const { rate: vatRate, note: vatNote } = normalizeVatRate(cell(row, columns.vat_rate_col))
     if (vatNote) vatNoteCount++
@@ -186,6 +198,7 @@ export function parseArticlesFile(
       type,
       unit,
       price_excl_vat: price,
+      currency,
       vat_rate: vatRate,
       // A note means the rate was snapped or defaulted: flag it for review.
       vat_rate_adjusted: vatNote !== null,
@@ -204,6 +217,9 @@ export function parseArticlesFile(
   }
   if (droppedAccountCount > 0) {
     warnings.push(`${droppedAccountCount} rad${droppedAccountCount === 1 ? '' : 'er'} hade ett ogiltigt bokföringskonto (måste vara klass 1-3) som ignorerades.`)
+  }
+  if (droppedCurrencyCount > 0) {
+    warnings.push(`${droppedCurrencyCount} rad${droppedCurrencyCount === 1 ? '' : 'er'} hade en ogiltig valutakod (måste vara tre bokstäver, t.ex. EUR) som ignorerades: priset importeras som SEK.`)
   }
   if (rows.length === 0) {
     warnings.push('Inga giltiga artiklar hittades. Kontrollera att namn-/benämningskolumnen är korrekt mappad.')

@@ -11,8 +11,7 @@ import type { Article } from '@/types'
  *
  * Downloads the article register as xlsx (default) or csv. Read-only: viewers
  * may export. Column headers match the article importer's detector keywords so
- * the file round-trips (export → edit → re-import). Exception: the importer
- * does not yet detect Valuta, so re-imported articles default to SEK.
+ * the file round-trips (export → edit → re-import), including Valuta.
  */
 export const GET = withRouteContext(
   'article.export',

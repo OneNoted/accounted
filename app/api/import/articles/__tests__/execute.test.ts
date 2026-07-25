@@ -180,3 +180,60 @@ describe('POST /api/import/articles/execute', () => {
     expect(body.data.warnings[0]).toContain('3999')
   })
 })
+
+describe('POST /api/import/articles/execute currency handling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockFetchAllRows.mockResolvedValue([])
+    mockCheckRevenueAccount.mockResolvedValue('ok')
+    mockEnsureArticleNumber.mockResolvedValue('AUTO-1')
+  })
+
+  it('imports a valid Valuta code and defaults missing to SEK', async () => {
+    // First queued result: lazy currencies reference read.
+    enqueue({ data: [{ code: 'SEK' }, { code: 'EUR' }, { code: 'USD' }] })
+    enqueue({ data: { id: 'a1', name: 'EU-tjanst', article_number: 'A-1', currency: 'EUR' } })
+    enqueue({ data: { id: 'a2', name: 'Svensk tjanst', article_number: 'A-2', currency: 'SEK' } })
+
+    const res = await POST(makeRequest({
+      rows: [
+        row({ name: 'EU-tjanst', article_number: 'A-1', currency: 'EUR' }),
+        row({ row_index: 3, name: 'Svensk tjanst', article_number: 'A-2', currency: null }),
+      ],
+      update_duplicates: false,
+    }))
+    const { status, body } = await parseJsonResponse<{ data: { created: number; warnings: string[] } }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.created).toBe(2)
+    expect(body.data.warnings).toEqual([])
+
+    const inserts = mockSupabase.from.mock.calls.filter((c: unknown[]) => c[0] === 'articles')
+    expect(inserts.length).toBeGreaterThan(0)
+  })
+
+  it('drops a code missing from the currencies table with a warning', async () => {
+    enqueue({ data: [{ code: 'SEK' }, { code: 'EUR' }] })
+    enqueue({ data: { id: 'a1', name: 'X', article_number: 'A-1', currency: 'SEK' } })
+
+    const res = await POST(makeRequest({
+      rows: [row({ article_number: 'A-1', currency: 'XXX' })],
+      update_duplicates: false,
+    }))
+    const { status, body } = await parseJsonResponse<{ data: { warnings: string[] } }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.warnings.some((w) => w.includes('XXX'))).toBe(true)
+  })
+
+  it('rejects a malformed currency shape at validation', async () => {
+    const res = await POST(makeRequest({
+      rows: [row({ currency: 'EURO' })],
+      update_duplicates: false,
+    }))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(400)
+  })
+})
