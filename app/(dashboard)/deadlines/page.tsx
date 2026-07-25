@@ -8,7 +8,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DeadlineList } from '@/components/deadlines/DeadlineList'
-import { DeadlineForm } from '@/components/deadlines/DeadlineForm'
+import { DeadlineForm, type DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -145,9 +145,7 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleDeadlineCreate = async (
-    data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>
-  ) => {
+  const handleDeadlineCreate = async (data: DeadlineFormValues) => {
     try {
       const response = await fetch('/api/deadlines', {
         method: 'POST',
@@ -228,12 +226,15 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleDeadlineEdit = async (deadline: Deadline) => {
+  // Sends ONLY the form-managed fields: the PUT route whitelists to the same
+  // set, and posting a whole Deadline row from here would fabricate system
+  // fields (source, status, reminder_offsets) that only the whitelist drops.
+  const handleDeadlineEdit = async (id: string, data: DeadlineFormValues) => {
     try {
-      const response = await fetch(`/api/deadlines/${deadline.id}`, {
+      const response = await fetch(`/api/deadlines/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(deadline),
+        body: JSON.stringify(data),
       })
 
       if (!response.ok) {
@@ -281,11 +282,9 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleFormSubmit = async (
-    data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>,
-  ) => {
+  const handleFormSubmit = async (data: DeadlineFormValues) => {
     if (editingDeadline) {
-      await handleDeadlineEdit({ ...editingDeadline, ...data })
+      await handleDeadlineEdit(editingDeadline.id, data)
     } else {
       await handleDeadlineCreate(data)
     }

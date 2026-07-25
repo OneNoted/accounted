@@ -24,10 +24,21 @@ import { formatDateISO, DEADLINE_TYPE_LABELS, PRIORITY_LABELS } from '@/lib/cale
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { Lock } from 'lucide-react'
 
+/**
+ * Only the fields the form actually manages. Both API routes whitelist to
+ * this set; the form must never fabricate values for system fields (source,
+ * status, reminder_offsets, tax_*), or editing a system-generated tax
+ * deadline would depend on the server whitelist alone to avoid data loss.
+ */
+export type DeadlineFormValues = Pick<
+  Deadline,
+  'title' | 'due_date' | 'due_time' | 'deadline_type' | 'priority' | 'customer_id' | 'notes'
+>
+
 interface DeadlineFormProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>) => Promise<void>
+  onSubmit: (data: DeadlineFormValues) => Promise<void>
   onDelete?: (deadline: Partial<Deadline>) => void
   initialData?: Partial<Deadline>
   initialDate?: Date | null
@@ -107,20 +118,6 @@ export function DeadlineForm({
         priority: formData.priority,
         customer_id: formData.customer_id || null,
         notes: formData.notes || null,
-        is_completed: initialData?.is_completed || false,
-        completed_at: initialData?.completed_at || null,
-        is_auto_generated: false,
-        // New tax deadline fields with defaults for user-created deadlines
-        tax_deadline_type: null,
-        tax_period: null,
-        source: 'user',
-        reminder_offsets: [14, 7, 1, 0],
-        status: 'upcoming',
-        status_changed_at: new Date().toISOString(),
-        linked_report_type: null,
-        linked_report_period: null,
-        dismissed_at: null,
-        tax_assessment_notice_id: null,
       })
     } finally {
       setIsLoading(false)
