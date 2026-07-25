@@ -5,7 +5,7 @@ import { usePathname, useSearchParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { SettingsShell } from '@/components/settings/SettingsShell'
-import { isSheetSection, useSettingsNavItems } from '@/components/settings/useSettingsNavItems'
+import { isSheetSection } from '@/components/settings/useSettingsNavItems'
 import { ActiveCompanyBadge } from '@/components/settings/ActiveCompanyBadge'
 
 const TAB_TO_ROUTE: Record<string, string> = {
@@ -28,7 +28,6 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const router = useRouter()
   const pathname = usePathname()
   const t = useTranslations('settings_nav')
-  const { items } = useSettingsNavItems()
 
   // Handle legacy ?tab= URLs
   useEffect(() => {
@@ -43,10 +42,12 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   // a cold load. Both cover the panel exactly, so drawing the surface here as
   // well would stack a second copy behind the sheet and run every section's
   // fetches twice. Their page components are route stubs, so this renders
-  // nothing. Everything else under /settings (team, backup, skatteverket,
-  // company-profile, ...) keeps the legacy header + rail layout, including
-  // registry sections hidden by visibility rules but reached via deep link.
-  if (isSheetSection(pathname, items)) {
+  // nothing. That covers every registry route, including one hidden by a
+  // visibility rule but reached via deep link: the stub still renders null, so
+  // the sheet has to be the surface that answers for it. Everything else under
+  // /settings (team, backup, skatteverket, company-profile, ...) keeps the
+  // legacy header + rail layout.
+  if (isSheetSection(pathname)) {
     return <>{children}</>
   }
 

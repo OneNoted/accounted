@@ -112,10 +112,21 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
  * Provider reason texts routinely quote the address that failed
  * ("550 5.1.1 <anna@example.se>: user unknown"). Keep the diagnostic value,
  * drop the local part, matching how the recipient list itself is masked.
+ *
+ * The local part is matched by exclusion, not by an allow-list of ASCII mail
+ * characters: an allow-list stops at the first character it does not know, so
+ * it leaks the head of every address it cannot spell. `anna.bergström@` would
+ * mask only the `m`, and a quoted local part ("anna berg"@example.com) would
+ * not match at all. Anything up to the delimiters that genuinely cannot sit
+ * inside an address (whitespace, the angle brackets and punctuation providers
+ * wrap addresses in) is treated as local part, so over-masking is the failure
+ * mode rather than a partial disclosure.
  */
+const ADDRESS_LOCAL_PART = /"[^"]*"@|[^\s<>()[\],;:"@]+@/gu
+
 function maskAddressesInText(text: string | null): string | null {
   if (!text) return null
-  return text.replace(/[A-Za-z0-9._%+-]+@/g, '***@')
+  return text.replace(ADDRESS_LOCAL_PART, '***@')
 }
 
 function maskRecipientDomain(address: string): MaskedRecipientAddress {

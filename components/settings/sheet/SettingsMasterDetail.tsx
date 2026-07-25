@@ -69,6 +69,9 @@ export function SettingsMasterDetail({ variant }: SettingsMasterDetailProps) {
   const pendingSubRef = useRef<string | null>(null)
   const [query, setQuery] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+  const trimmedQuery = query.trim().toLowerCase()
+  // Search mode: the hit list replaces the rail + accordion entirely.
+  const searching = trimmedQuery.length > 0
 
   useEffect(() => {
     setOpenSub(pendingSubRef.current)
@@ -103,6 +106,10 @@ export function SettingsMasterDetail({ variant }: SettingsMasterDetailProps) {
         searchRef.current?.focus()
         return
       }
+      // Search mode replaces the accordion with the hit list, so a digit there
+      // has nothing to jump to: acting anyway would open a panel the user
+      // cannot see and spring it on them when they clear the query.
+      if (searching) return
       if (/^[1-9]$/.test(e.key) && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const index = parseInt(e.key, 10) - 1
         const def = subsections?.[index]
@@ -111,7 +118,7 @@ export function SettingsMasterDetail({ variant }: SettingsMasterDetailProps) {
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [subsections])
+  }, [subsections, searching])
 
   function navigate(href: string, subId: string | null) {
     pendingSubRef.current = subId
@@ -160,8 +167,7 @@ export function SettingsMasterDetail({ variant }: SettingsMasterDetailProps) {
     return entries
   }, [groups, subsectionContext, t])
 
-  const trimmedQuery = query.trim().toLowerCase()
-  const hits = trimmedQuery
+  const hits = searching
     ? searchIndex.filter((e) => e.haystack.includes(trimmedQuery))
     : []
 
@@ -195,7 +201,7 @@ export function SettingsMasterDetail({ variant }: SettingsMasterDetailProps) {
           </kbd>
         </label>
 
-        {trimmedQuery ? (
+        {searching ? (
           <div className="mt-6" role="list">
             {hits.length === 0 ? (
               <p className="py-6 text-sm text-muted-foreground">

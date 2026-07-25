@@ -18,6 +18,7 @@ interface CalendarFeedWithUrls extends CalendarFeed {
 
 export function CalendarFeedSettings() {
   const t = useTranslations('settings_calendar_feed')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
 
   const [isLoading, setIsLoading] = useState(true)
@@ -205,7 +206,12 @@ export function CalendarFeedSettings() {
               readOnly
               className="h-9 rounded-lg font-mono text-xs"
             />
-            <Button variant="outline" size="icon" onClick={() => copyToClipboard(feed.httpsUrl)}>
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label={tCommon('copy')}
+              onClick={() => copyToClipboard(feed.httpsUrl)}
+            >
               {copied ? (
                 <Check className="h-4 w-4" />
               ) : (

@@ -169,4 +169,49 @@ describe('GET /api/invoices/[id]/deliveries', () => {
       '550 5.1.1 <***@example.com>: Recipient address rejected Permanent/General',
     )
   })
+
+  // An ASCII allow-list stops at the first character it cannot spell and leaks
+  // the head of the address ("anna.bergstr" out of anna.bergström@). Each of
+  // these forms is a real local part a provider can quote back at us.
+  it.each([
+    ['non-ASCII local part', 'anna.bergström@example.se avvisad', '***@example.se avvisad'],
+    ['quoted local part', '"anna berg"@example.com bounced', '***@example.com bounced'],
+    ['apostrophe in local part', "o'brien@example.se hard bounce", '***@example.se hard bounce'],
+    [
+      'several addresses in one reason',
+      'delivered to anna@example.se but not bob@example.com',
+      'delivered to ***@example.se but not ***@example.com',
+    ],
+  ])('masks the %s in the provider reason text', async (_label, detail, expected) => {
+    enqueue({ data: { id: INVOICE_ID }, error: null })
+    enqueue({
+      data: [{
+        id: 'delivery-3',
+        channel: 'email',
+        status: 'sent',
+        to_addresses: ['customer@example.com'],
+        cc_addresses: [],
+        provider: 'resend',
+        provider_status: 'bounced',
+        provider_status_at: '2026-07-22T10:31:00.000Z',
+        provider_status_detail: detail,
+        error_code: null,
+        document_attachment_id: null,
+        attachment_filename: null,
+        sent_at: '2026-07-22T10:30:00.000Z',
+        failed_at: null,
+        created_at: '2026-07-22T10:29:59.000Z',
+      }],
+      error: null,
+    })
+
+    const response = await GET(
+      createMockRequest(`/api/invoices/${INVOICE_ID}/deliveries`),
+      createMockRouteParams({ id: INVOICE_ID }),
+    )
+    const { body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(response)
+
+    expect(body.data[0].provider_status_detail).toBe(expected)
+    expect(body.data[0].provider_status_detail).not.toContain('anna')
+  })
 })

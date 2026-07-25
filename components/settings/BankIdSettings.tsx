@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import { Shield, ShieldCheck, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
-import { formatDateLong } from '@/lib/utils'
+import { useFormat } from '@/lib/hooks/use-format'
 
 interface BankIdIdentity {
   given_name: string | null
@@ -24,6 +24,7 @@ export function BankIdSettings() {
   const [isLinking, setIsLinking] = useState(false)
   const [isUnlinking, setIsUnlinking] = useState(false)
   const { toast } = useToast()
+  const { formatDateLong } = useFormat()
 
   const fetchIdentity = useCallback(async () => {
     const supabase = createClient()
@@ -98,6 +99,18 @@ export function BankIdSettings() {
     )
   }
 
+  // Either name part can be absent in the BankID payload; joining blindly
+  // renders "null null" in the row. Whatever is present carries the line, and
+  // with neither the linked-on date stands alone.
+  const linkedDescription = identity
+    ? [
+        [identity.given_name, identity.surname].filter(Boolean).join(' '),
+        t('linked_on', { date: formatDateLong(identity.linked_at) }),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : null
+
   return (
     <SettingsFieldRow
       label={
@@ -110,11 +123,7 @@ export function BankIdSettings() {
           {t('title')}
         </span>
       }
-      description={
-        identity
-          ? `${identity.given_name} ${identity.surname} · ${t('linked_on', { date: formatDateLong(identity.linked_at) })}`
-          : t('not_linked_description')
-      }
+      description={linkedDescription ?? t('not_linked_description')}
     >
       {identity ? (
         <Button

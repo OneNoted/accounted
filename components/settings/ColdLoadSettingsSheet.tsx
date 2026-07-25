@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { SettingsModal } from './SettingsModal'
-import { isSheetSection, useSettingsNavItems } from './useSettingsNavItems'
+import { isSheetSection } from './useSettingsNavItems'
 
 /**
  * The settings sheet on a cold load. Interception is a soft-navigation feature:
@@ -23,8 +23,7 @@ import { isSheetSection, useSettingsNavItems } from './useSettingsNavItems'
  */
 export function ColdLoadSettingsSheet() {
   const pathname = usePathname()
-  const { items } = useSettingsNavItems()
-  const active = isSheetSection(pathname, items)
+  const active = isSheetSection(pathname)
 
   // Latch, because closing to the dashboard navigates *before* the slide-down
   // has finished (so the dashboard is what the animation reveals). Re-reading
