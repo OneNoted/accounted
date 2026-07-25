@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { JournalEntry, JournalEntryLine } from '@/types'
+import type { Currency, JournalEntry, JournalEntryLine } from '@/types'
 
 interface Props {
   entry: JournalEntry
@@ -27,19 +27,31 @@ interface Props {
 export default function EditDraftEntryDialog({ entry, open, onOpenChange, onUpdated }: Props) {
   const t = useTranslations('bookkeeping')
 
-  const initialLines: FormLine[] = ((entry.lines || []) as JournalEntryLine[])
+  const sortedLines = ((entry.lines || []) as JournalEntryLine[])
     .slice()
     .sort((a, b) => a.sort_order - b.sort_order)
-    .map((l) => ({
-      account_number: l.account_number,
-      debit_amount: Number(l.debit_amount) > 0 ? String(l.debit_amount) : '',
-      credit_amount: Number(l.credit_amount) > 0 ? String(l.credit_amount) : '',
-      line_description: l.line_description || '',
-      // Carry the line's dimensions into the form: the PATCH replaces all
-      // lines, so omitting this would silently strip existing tags.
-      dimensions:
-        l.dimensions && Object.keys(l.dimensions).length > 0 ? { ...l.dimensions } : undefined,
-    }))
+
+  // The PATCH replaces all lines wholesale, so EVERYTHING a line carries must
+  // round-trip through the form: dimensions, per-line FX metadata (currency /
+  // amount_in_currency / exchange_rate) and tax_code. Omitting any of them
+  // meant a plain text edit silently reset a foreign-currency draft to SEK
+  // and stripped its tax code (issue #1174).
+  const initialLines: FormLine[] = sortedLines.map((l) => ({
+    account_number: l.account_number,
+    debit_amount: Number(l.debit_amount) > 0 ? String(l.debit_amount) : '',
+    credit_amount: Number(l.credit_amount) > 0 ? String(l.credit_amount) : '',
+    line_description: l.line_description || '',
+    currency: l.currency && l.currency !== 'SEK' ? l.currency : undefined,
+    amount_in_currency: l.amount_in_currency ?? undefined,
+    exchange_rate: l.exchange_rate ?? undefined,
+    tax_code: l.tax_code ?? undefined,
+    dimensions:
+      l.dimensions && Object.keys(l.dimensions).length > 0 ? { ...l.dimensions } : undefined,
+  }))
+
+  // Hydrate the form's currency picker + FX fields from the stored FX line so
+  // a EUR draft is displayed as EUR instead of silently reading SEK.
+  const fxLine = sortedLines.find((l) => l.currency && l.currency !== 'SEK')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -62,6 +74,9 @@ export default function EditDraftEntryDialog({ entry, open, onOpenChange, onUpda
           initialDescription={entry.description}
           initialNotes={entry.notes ?? undefined}
           initialVoucherSeries={entry.voucher_series}
+          initialCurrency={fxLine ? (fxLine.currency as Currency) : undefined}
+          initialExchangeRate={fxLine?.exchange_rate ?? undefined}
+          initialForeignAmount={fxLine?.amount_in_currency ?? undefined}
           onUpdated={onUpdated}
         />
       </DialogContent>
