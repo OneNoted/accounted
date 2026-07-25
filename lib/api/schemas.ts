@@ -2166,6 +2166,10 @@ const ImportedArticleRowSchema = z.object({
   type: ArticleTypeSchema,
   unit: z.string(),
   price_excl_vat: nonNegativeAmount,
+  // ISO 4217 shape only; the execute route validates against the currencies
+  // table and drops unknown codes (mirrors revenue_account). Optional so rows
+  // parsed before this field existed still validate.
+  currency: z.string().regex(/^[A-Z]{3}$/).nullable().optional(),
   vat_rate: vatRatePercent,
   // The execute route re-validates against the chart of accounts (and drops
   // unknown/inactive overrides), so a loose nullable string is enough here.
@@ -2192,6 +2196,9 @@ export const ArticleColumnOverridesSchema = z.object({
   type_col: articleColumnIndex,
   unit_col: articleColumnIndex,
   price_col: articleColumnIndex,
+  // Optional + defaulted so a mapping payload from a client rendered before
+  // this column existed still validates.
+  currency_col: articleColumnIndex.optional().default(null),
   vat_rate_col: articleColumnIndex,
   revenue_account_col: articleColumnIndex,
   cost_price_col: articleColumnIndex,

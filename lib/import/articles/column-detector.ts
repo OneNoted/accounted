@@ -61,6 +61,10 @@ const NOTES_KEYWORDS = [
   'note', 'övrigt', 'ovrigt',
 ]
 
+// Matches our own register export header ("Valuta", #1166) plus common
+// English variants. Deliberately NO bare 'kod'/'code': collides with Momskod.
+const CURRENCY_KEYWORDS = ['valuta', 'valutakod', 'currency', 'currency code']
+
 /**
  * Detect article-register columns from headers.
  *
@@ -78,6 +82,7 @@ export function detectArticleColumns(headers: string[]): DetectedArticleColumns 
   // generic name column dead last.
   const name_en_col = findColumn(headers, NAME_EN_KEYWORDS, taken)
   const ean_col = findColumn(headers, EAN_KEYWORDS, taken)
+  const currency_col = findColumn(headers, CURRENCY_KEYWORDS, taken)
   const article_number_col = findColumn(headers, ARTICLE_NUMBER_KEYWORDS, taken)
   const revenue_account_col = findColumn(headers, REVENUE_ACCOUNT_KEYWORDS, taken)
   const cost_price_col = findColumn(headers, COST_PRICE_KEYWORDS, taken)
@@ -106,6 +111,7 @@ export function detectArticleColumns(headers: string[]): DetectedArticleColumns 
     type_col,
     unit_col,
     price_col,
+    currency_col,
     vat_rate_col,
     revenue_account_col,
     cost_price_col,
