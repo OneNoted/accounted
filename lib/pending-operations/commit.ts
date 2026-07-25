@@ -488,6 +488,7 @@ async function commitCreateArticle(
       type: validated.type,
       unit: validated.unit ?? 'st',
       price_excl_vat: validated.price_excl_vat,
+      currency: validated.currency ?? 'SEK',
       vat_rate: validated.vat_rate,
       revenue_account: validated.revenue_account ?? null,
       cost_price: validated.cost_price ?? null,
@@ -499,7 +500,13 @@ async function commitCreateArticle(
     .select()
     .single()
 
-  if (error) return { error: error.message, status: 500 }
+  if (error) {
+    // FK to public.currencies: the reference table is the allow-list.
+    if (error.code === '23503' && error.message.includes('currency')) {
+      return { error: `Currency ${validated.currency} is not supported`, status: 400 }
+    }
+    return { error: error.message, status: 500 }
+  }
 
   if (!data.article_number) {
     try {
@@ -552,6 +559,10 @@ async function commitUpdateArticle(
 
   if (error) {
     if (error.code === 'PGRST116') return { error: 'Article not found', status: 404 }
+    // FK to public.currencies: the reference table is the allow-list.
+    if (error.code === '23503' && error.message.includes('currency')) {
+      return { error: `Currency ${validated.currency} is not supported`, status: 400 }
+    }
     return { error: error.message, status: 500 }
   }
 

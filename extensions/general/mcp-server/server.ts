@@ -3910,6 +3910,7 @@ export const tools: McpTool[] = [
         type: { type: 'string', enum: ['vara', 'tjanst'], description: 'Good (vara) or service (tjanst). Default tjanst.' },
         unit: { type: 'string', description: 'Unit, e.g. st, tim, kg. Default st.' },
         price_excl_vat: { type: 'number', description: 'Unit price EXCLUDING VAT.' },
+        currency: { type: 'string', description: 'Price currency as ISO 4217 code (e.g. EUR). Default SEK. Pre-fills the invoice currency when the article is added.' },
         vat_rate: { type: 'number', enum: [0, 6, 12, 25], description: 'VAT rate percent. Default 25.' },
         revenue_account: { type: 'string', description: 'Optional BAS class-3 revenue account (e.g. 3041). Omit to derive from VAT.' },
         cost_price: { type: 'number', description: 'Optional cost price (margin only; never booked).' },
@@ -3941,6 +3942,7 @@ export const tools: McpTool[] = [
         type: (args.type as string) || 'tjanst',
         unit: (args.unit as string) || undefined,
         price_excl_vat: args.price_excl_vat,
+        currency: (args.currency as string) || undefined,
         vat_rate: typeof args.vat_rate === 'number' ? args.vat_rate : 25,
         revenue_account: (args.revenue_account as string) || null,
         cost_price: typeof args.cost_price === 'number' ? args.cost_price : null,
@@ -3982,6 +3984,7 @@ export const tools: McpTool[] = [
         type: { type: 'string', enum: ['vara', 'tjanst'] },
         unit: { type: 'string' },
         price_excl_vat: { type: 'number' },
+        currency: { type: 'string', description: 'Price currency as ISO 4217 code (e.g. EUR), or omit to leave unchanged.' },
         vat_rate: { type: 'number', enum: [0, 6, 12, 25] },
         revenue_account: { type: 'string', description: 'BAS class-3 revenue account, or omit to leave unchanged.' },
         cost_price: { type: 'number' },
@@ -4007,7 +4010,7 @@ export const tools: McpTool[] = [
 
       const params: Record<string, unknown> = { article_id: articleId }
       for (const key of [
-        'name', 'type', 'unit', 'price_excl_vat', 'vat_rate', 'revenue_account',
+        'name', 'type', 'unit', 'price_excl_vat', 'currency', 'vat_rate', 'revenue_account',
         'cost_price', 'ean', 'housework_type', 'name_en', 'notes', 'active',
       ]) {
         if (args[key] !== undefined) params[key] = args[key]
