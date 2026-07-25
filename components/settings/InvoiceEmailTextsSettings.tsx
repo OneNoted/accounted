@@ -132,14 +132,10 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
     void persist(next)
   }
 
+  // No heading or intro: the accordion header names this panel and carries
+  // the explanation behind its "?" (settings_sheet).
   return (
     <section className="space-y-6">
-      <div>
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('heading')}
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">{t('description')}</p>
-      </div>
 
       <Tabs defaultValue="sv">
         <TabsList>

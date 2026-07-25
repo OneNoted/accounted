@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { SettingsFieldRow } from '@/components/settings/sheet/SettingsFieldRow'
 import {
   Select,
   SelectContent,
@@ -101,17 +101,24 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
 
   return (
     <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Redovisningsregelverk
-      </h2>
-      <div className="space-y-2">
-        <Label htmlFor="accounting_framework">Regelverk</Label>
-        <Select
-          value={selected}
-          onValueChange={handleChange}
-          disabled={saving}
-        >
-          <SelectTrigger id="accounting_framework" className="w-full max-w-sm">
+      {/* No section heading: the accordion header above already says
+          "Redovisningsregelverk", and the field label says "Regelverk". */}
+      <SettingsFieldRow
+        label="Regelverk"
+        htmlFor="accounting_framework"
+        help={
+          <>
+            K2 är standard för mindre bolag och innebär förenklade regler. K3 krävs när
+            bolaget når två av tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar
+            &gt; 40 MSEK, eller fler än 50 anställda). K3 ställer högre krav:
+            kassaflödesanalys, komponentavskrivning på materiella anläggningstillgångar och
+            redovisning av uppskjuten skatt på obeskattade reserver (79,4 % eget kapital /
+            20,6 % skuld).
+          </>
+        }
+      >
+        <Select value={selected} onValueChange={handleChange} disabled={saving}>
+          <SelectTrigger id="accounting_framework" className="w-[280px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -119,14 +126,7 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
             <SelectItem value="k3">K3 (BFNAR 2012:1): större företag</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs text-muted-foreground">
-          K2 är standard för mindre bolag och innebär förenklade regler. K3 krävs när
-          bolaget når två av tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar
-          &gt; 40 MSEK, eller fler än 50 anställda). K3 ställer högre krav: kassaflödesanalys,
-          komponentavskrivning på materiella anläggningstillgångar och redovisning av
-          uppskjuten skatt på obeskattade reserver (79,4 % eget kapital / 20,6 % skuld).
-        </p>
-      </div>
+      </SettingsFieldRow>
 
       <Dialog
         open={pending !== null}

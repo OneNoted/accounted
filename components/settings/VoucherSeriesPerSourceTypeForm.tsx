@@ -118,12 +118,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
 
   return (
     <div>
-      <p className="mb-2 text-xs text-muted-foreground">
-        Tilldela en standardserie per typ av verifikat. Vanlig svensk
-        praxis: leverantörsfakturor på serie B, löner på serie C, övrigt på
-        serie A. Kan alltid ändras per verifikat när du bokför.
-      </p>
-
+      {/* The intro lives on the accordion header's "?" (settings_sheet
+          .sub_bookkeeping_series_map_help): 14 rows of selects should start at
+          the top of the panel, not below a paragraph. */}
       <div className="divide-y divide-border">
         {VISIBLE_SOURCE_TYPES.map(({ key, labelKey }) => (
           <SettingsFieldRow

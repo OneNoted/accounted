@@ -2,6 +2,7 @@
 
 import { Suspense } from 'react'
 import { ChevronRight } from 'lucide-react'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { cn } from '@/lib/utils'
 import { SettingsLoadingSkeleton } from '../SettingsLoadingSkeleton'
 import type { SheetSubsection } from './subsections'
@@ -10,7 +11,7 @@ interface SettingsAccordionProps {
   /** Section id, used to scope panel element ids for aria wiring. */
   sectionId: string
   /** Visible subsections in display order. */
-  items: Array<SheetSubsection & { title: string; countLabel?: string }>
+  items: Array<SheetSubsection & { title: string; countLabel?: string; help?: string }>
   /** Currently open subsection id (exactly one open at a time, or none). */
   openId: string | null
   onOpenChange: (id: string | null) => void
@@ -31,27 +32,33 @@ export function SettingsAccordion({ sectionId, items, openId, onOpenChange }: Se
         const Component = item.Component
         return (
           <div key={item.id} className="border-t border-border first:border-t-0">
-            <button
-              type="button"
-              onClick={() => onOpenChange(open ? null : item.id)}
-              aria-expanded={open}
-              aria-controls={panelId}
-              className="flex min-h-12 w-full items-center gap-3 py-3 text-left transition-colors duration-150 hover:text-foreground"
-            >
-              <ChevronRight
-                aria-hidden
-                className={cn(
-                  'h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none',
-                  open && 'rotate-90',
+            {/* The "?" is a button, so it cannot sit inside the header button.
+                The row is a flex wrapper and the header button stretches to
+                fill it, keeping the whole title clickable. */}
+            <div className="flex min-h-12 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onOpenChange(open ? null : item.id)}
+                aria-expanded={open}
+                aria-controls={panelId}
+                className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left transition-colors duration-150 hover:text-foreground"
+              >
+                <ChevronRight
+                  aria-hidden
+                  className={cn(
+                    'h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none',
+                    open && 'rotate-90',
+                  )}
+                />
+                <span className="font-display text-base tracking-tight">{item.title}</span>
+                {item.countLabel && (
+                  <span className="ml-auto shrink-0 pl-3 text-xs text-muted-foreground">
+                    {item.countLabel}
+                  </span>
                 )}
-              />
-              <span className="font-display text-base tracking-tight">{item.title}</span>
-              {item.countLabel && (
-                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                  {item.countLabel}
-                </span>
-              )}
-            </button>
+              </button>
+              {item.help && <HelpPopover>{item.help}</HelpPopover>}
+            </div>
             {open && (
               <div
                 id={panelId}

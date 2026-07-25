@@ -114,10 +114,10 @@ export function FiscalYearsManager() {
 
   return (
     <section className="space-y-4">
-      {/* The accordion header already names this panel, so the row carries the
-          help text and the create action instead of a repeated heading. */}
-      <div className="flex items-start justify-between gap-4">
-        <p className="max-w-prose text-xs text-muted-foreground">{t('fy_help')}</p>
+      {/* No heading and no intro: the accordion header names this panel and
+          carries the explanation behind its "?" (settings_sheet), so the year
+          list starts at the top and the create action sits beside it. */}
+      <div className="flex items-start justify-end gap-4">
         <Button
           variant="outline"
           size="sm"

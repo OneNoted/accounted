@@ -41,7 +41,7 @@ export function InvoicePaymentLinkSettings({ settings, onUpdate }: InvoicePaymen
 
   return (
     <div className="divide-y divide-border">
-      <SettingsFieldRow label={t('enable_label')} description={t('enable_help')}>
+      <SettingsFieldRow label={t('enable_label')} help={t('enable_help')}>
         <Switch
           checked={settings.invoice_payment_links_enabled ?? false}
           onCheckedChange={saveToggle}

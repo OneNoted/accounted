@@ -28,6 +28,11 @@ export interface SheetSubsectionContext {
 export interface SheetSubsection {
   id: string
   titleKey: string
+  /** Explanation for the subsection as a whole, shown behind a "?" on the
+   *  accordion header. Resolves in `settings_sheet` like titleKey. This is
+   *  where an intro paragraph belongs: in the panel it pushed the actual
+   *  settings down every single time the panel was opened. */
+  helpKey?: string
   keywords?: string[]
   /** Approximate number of individual settings in the panel, shown muted on
    *  the accordion header ("N inställningar"). Purely informational scent. */
@@ -266,6 +271,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<string, SheetSubsection[]>> = 
     {
       id: 'first-fiscal-period',
       titleKey: 'sub_company_fiscal_period',
+      helpKey: 'sub_company_fiscal_period_help',
       keywords: ['räkenskapsår', 'startdatum', 'brutet räkenskapsår', 'period'],
       fieldCount: 3,
       show: (ctx) => ctx.role === 'owner' || ctx.role === 'admin',
@@ -309,6 +315,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<string, SheetSubsection[]>> = 
     {
       id: 'fiscal-years',
       titleKey: 'sub_bookkeeping_fiscal_years',
+      helpKey: 'sub_bookkeeping_fiscal_years_help',
       keywords: ['räkenskapsår', 'period', 'lås', 'stängt', 'öppet', 'bokslut'],
       fieldCount: 1,
       Component: FiscalYears,
@@ -316,6 +323,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<string, SheetSubsection[]>> = 
     {
       id: 'series-map',
       titleKey: 'sub_bookkeeping_series_map',
+      helpKey: 'sub_bookkeeping_series_map_help',
       keywords: ['verifikationsserie', 'serie', 'verifikat', 'nummerserie'],
       fieldCount: 14,
       Component: BookkeepingSeriesMap,
@@ -356,6 +364,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<string, SheetSubsection[]>> = 
     {
       id: 'tax-tables',
       titleKey: 'sub_salary_tax_tables',
+      helpKey: 'sub_salary_tax_tables_help',
       keywords: ['skattetabell', 'skatteavdrag', 'preliminärskatt'],
       fieldCount: 1,
       Component: SalaryTaxTables,
@@ -412,6 +421,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<string, SheetSubsection[]>> = 
     {
       id: 'payment-accounts',
       titleKey: 'sub_invoicing_accounts',
+      helpKey: 'sub_invoicing_accounts_help',
       keywords: ['bankgiro', 'plusgiro', 'iban', 'valuta', 'betalningskonto', 'swift', 'swish'],
       fieldCount: 8,
       Component: InvoicingAccounts,
@@ -447,6 +457,7 @@ export const SETTINGS_SUBSECTIONS: Partial<Record<string, SheetSubsection[]>> = 
     {
       id: 'email-texts',
       titleKey: 'sub_invoicing_email_texts',
+      helpKey: 'sub_invoicing_email_texts_help',
       keywords: ['e-posttext', 'ämnesrad', 'hälsning', 'mejltext', 'standardtext'],
       fieldCount: 8,
       Component: InvoicingEmailTexts,

@@ -113,7 +113,7 @@ export function BookkeepingMethodSettings() {
         <SettingsFieldRow
           label={t('method_label')}
           htmlFor="accounting_method"
-          description={t('method_help')}
+          help={t('method_help')}
         >
           <select
             id="accounting_method"
@@ -131,7 +131,7 @@ export function BookkeepingMethodSettings() {
         <SettingsFieldRow
           label={t('defer_booking_label')}
           htmlFor="defer_invoice_booking"
-          description={t('defer_booking_help')}
+          help={t('defer_booking_help')}
         >
           <select
             id="defer_invoice_booking"

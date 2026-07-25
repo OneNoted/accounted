@@ -422,7 +422,13 @@
     "sub_salary_payment": "Payout & accounting",
     "sub_salary_tax_tables": "Tax tables",
     "sub_salary_vacation": "Vacation",
-    "sub_salary_info": "Information"
+    "sub_salary_info": "Information",
+    "sub_company_fiscal_period_help": "If you picked the wrong fiscal year at setup you can adjust it here, as long as no vouchers have been posted yet.",
+    "sub_invoicing_email_texts_help": "The texts in the email sent with the invoice. Edit freely: only your changes are saved. Does not apply to credit notes, proforma invoices or delivery notes.",
+    "sub_invoicing_accounts_help": "The invoice automatically shows the account matching its currency. A foreign-currency account must have an IBAN before the invoice can be sent.",
+    "sub_bookkeeping_fiscal_years_help": "Fiscal years are created automatically when you book or import data outside existing years, but you can also set up a new year in advance here. A new year must chain directly onto an existing year, and the prior year may need to be locked first.",
+    "sub_salary_tax_tables_help": "Tax tables and municipal tax rates are fetched automatically from Skatteverket's open data on every payroll run. No manual update is needed. If Skatteverket's API is unavailable, an embedded fallback copy is used until the service is back.",
+    "sub_bookkeeping_series_map_help": "Assign a default series per voucher type. Common Swedish practice: supplier invoices on series B, salaries on series C, everything else on series A. Can always be changed per voucher when you post."
   },
   "settings": {
     "section_name": "Name",
@@ -436,7 +442,6 @@
     "language_description": "Choose the language for the interface. Invoices and reports always stay in Swedish.",
     "language_saved": "Language updated",
     "language_save_failed": "Could not save language preference",
-    "install_app_title": "Install as an app",
     "install_app_description": "Use Accounted in its own window with its own icon in the Dock or taskbar.",
     "install_app_button": "Install",
     "install_app_hint_ios": "Open the share menu in Safari and choose \"Add to Home Screen\" to install Accounted as an app.",
@@ -1451,7 +1456,6 @@
     "members_invite_revoke_failed": "Could not revoke invitation.",
     "invitations_pending_title": "Pending invitations",
     "invitations_expires": "Expires {date}",
-    "logo_heading": "Logo",
     "logo_help": "Shown in the header of your invoices. Max 10 MB, PNG/JPG/SVG/WebP.",
     "logo_disallowed_type_title": "File type not allowed",
     "logo_disallowed_type_description": "PNG, JPG, SVG or WebP.",
@@ -1465,8 +1469,6 @@
     "logo_remove": "Remove",
     "logo_uploading": "Uploading...",
     "logo_pick_or_drop": "Choose a file or drop one here",
-    "fp_heading": "First fiscal year",
-    "fp_intro": "If you picked the wrong fiscal year at setup you can adjust it here, as long as no vouchers have been posted yet.",
     "fp_load_error_periods": "Could not load fiscal years",
     "fp_load_error_entry_count": "Could not load voucher count",
     "fp_load_error_unknown": "Unknown error",
@@ -1542,7 +1544,6 @@
     "series_label": "Series",
     "series_help": "Which series is preselected for manual bookkeeping. Can be changed per voucher.",
     "fy_heading": "Fiscal years",
-    "fy_help": "Fiscal years are created automatically when you book or import data outside existing years, but you can also set up a new year in advance here. A new year must chain directly onto an existing year, and the prior year may need to be locked first.",
     "fy_create": "Create fiscal year",
     "fy_empty": "No fiscal years created yet.",
     "fy_load_error": "Could not load fiscal years. Please try again.",
@@ -1587,7 +1588,6 @@
     "voucher_series_l": "L: Löner",
     "voucher_series_help": "Can be changed per payroll run. Each series has unbroken voucher numbers per fiscal year.",
     "tax_tables_heading": "Skattetabeller",
-    "tax_tables_help": "Tax tables and municipal tax rates are fetched automatically from Skatteverket's open data on every payroll run. No manual update is needed. If Skatteverket's API is unavailable, an embedded fallback copy is used until the service is back.",
     "vacation_heading": "Vacation",
     "vacation_rule_label": "Default vacation rule",
     "vacation_rule_percentage": "Procentregeln (12%)",
@@ -1783,8 +1783,6 @@
     "credit_terms_placeholder": "E.g. Payment is made to the specified bankgiro."
   },
   "settings_email_texts": {
-    "heading": "Email texts",
-    "description": "The texts in the email sent with the invoice. Edit freely: only your changes are saved. Does not apply to credit notes, proforma invoices or delivery notes.",
     "reset_label": "Reset to standard",
     "tab_sv": "Swedish",
     "tab_en": "English",
@@ -1818,8 +1816,6 @@
     "save": "Save recipients"
   },
   "settings_invoice_payment_accounts": {
-    "heading": "Payment accounts by currency",
-    "description": "The invoice automatically shows the account matching its currency. A foreign-currency account must have an IBAN before the invoice can be sent.",
     "currency_tabs_label": "Configured currencies",
     "add_currency_label": "Add currency",
     "add_currency_placeholder": "Select currency",

@@ -86,7 +86,7 @@ export function SalaryPaymentSettings() {
         <SettingsFieldRow
           label={t('pay_day_label')}
           htmlFor="salary_pay_day"
-          description={t('pay_day_help')}
+          help={t('pay_day_help')}
         >
           <Input
             id="salary_pay_day"
@@ -105,7 +105,7 @@ export function SalaryPaymentSettings() {
           <SettingsFieldRow
             label={t('format_label')}
             htmlFor="preferred_payment_format"
-            description={t('format_help')}
+            help={t('format_help')}
           >
             <select
               id="preferred_payment_format"
@@ -168,11 +168,11 @@ export function SalaryPaymentSettings() {
 
 /** Tax table status (read-only). */
 export function SalaryTaxTables() {
-  const t = useTranslations('settings_salary')
+  // The explanation lives on the accordion header's "?"
+  // (settings_sheet.sub_salary_tax_tables_help), so this panel is just status.
   return (
     <section className="space-y-3">
       <TaxTableStatus />
-      <p className="text-xs text-muted-foreground">{t('tax_tables_help')}</p>
     </section>
   )
 }

@@ -93,7 +93,7 @@ export function DimensionsToggle() {
       <SettingsFieldRow
         label={t('settings_toggle_label')}
         htmlFor="dimensions-enabled"
-        description={t('settings_toggle_help')}
+        help={t('settings_toggle_help')}
       >
         <Switch
           id="dimensions-enabled"

@@ -52,7 +52,7 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
         <SettingsFieldRow
           label={t('aktiekapital_label')}
           htmlFor="aktiekapital"
-          description={t('aktiekapital_help')}
+          help={t('aktiekapital_help')}
         >
           <Input
             id="aktiekapital"

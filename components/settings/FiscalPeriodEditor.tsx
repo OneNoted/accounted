@@ -175,16 +175,9 @@ export function FiscalPeriodEditor() {
 
   return (
     <>
+      {/* No heading or intro: the accordion header names this panel and
+          carries the explanation behind its "?" (settings_sheet). */}
       <section className="space-y-4 border-t border-border pt-8">
-        <div className="space-y-1">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-            {t('fp_heading')}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {t('fp_intro')}
-          </p>
-        </div>
-
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />

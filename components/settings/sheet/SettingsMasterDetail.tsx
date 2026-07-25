@@ -251,6 +251,7 @@ export function SettingsMasterDetail({ variant }: SettingsMasterDetailProps) {
                   items={subsections.map((d: SheetSubsection) => ({
                     ...d,
                     title: t(d.titleKey),
+                    help: d.helpKey ? t(d.helpKey) : undefined,
                     countLabel:
                       d.fieldCount != null
                         ? t('sub_count', { count: d.fieldCount })

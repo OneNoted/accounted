@@ -20,7 +20,7 @@ export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
       <SettingsFieldRow
         label={t('company_name_label')}
         htmlFor="company_name"
-        description={t('company_name_help')}
+        help={t('company_name_help')}
       >
         <Input
           id="company_name"

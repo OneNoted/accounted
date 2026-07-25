@@ -170,7 +170,7 @@ export function TaxSettingsForm({
             <SettingsFieldRow
               label={t('vat_taxable_base_over_40m_label')}
               htmlFor="vat_taxable_base_over_40m"
-              description={t('vat_taxable_base_over_40m_help')}
+              help={t('vat_taxable_base_over_40m_help')}
             >
               <Checkbox
                 id="vat_taxable_base_over_40m"
@@ -233,7 +233,7 @@ export function TaxSettingsForm({
                 <SettingsFieldRow
                   label={t('periodisk_enabled_label')}
                   htmlFor="periodisk_sammanstallning_enabled"
-                  description={t('periodisk_enabled_help')}
+                  help={t('periodisk_enabled_help')}
                 >
                   <Checkbox
                     id="periodisk_sammanstallning_enabled"
@@ -253,7 +253,7 @@ export function TaxSettingsForm({
                     <SettingsFieldRow
                       label={t('periodisk_label')}
                       htmlFor="periodisk_sammanstallning_period"
-                      description={t('periodisk_help')}
+                      help={t('periodisk_help')}
                     >
                       <Select
                         name="periodisk_sammanstallning_period"
@@ -382,7 +382,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('pays_salaries_label')}
             htmlFor="pays_salaries"
-            description={t('pays_salaries_help')}
+            help={t('pays_salaries_help')}
           >
             <Checkbox
               id="pays_salaries"
@@ -401,7 +401,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('employer_registered_label')}
             htmlFor="employer_registered"
-            description={t('employer_registered_help')}
+            help={t('employer_registered_help')}
           >
             <Checkbox
               id="employer_registered"
@@ -424,7 +424,7 @@ export function TaxSettingsForm({
             <SettingsFieldRow
               label={t('employer_seasonal_label')}
               htmlFor="employer_seasonal"
-              description={t('employer_seasonal_help')}
+              help={t('employer_seasonal_help')}
             >
               <Checkbox
                 id="employer_seasonal"
@@ -459,7 +459,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('kontrolluppgifter_label')}
             htmlFor="kontrolluppgifter_enabled"
-            description={t('kontrolluppgifter_help')}
+            help={t('kontrolluppgifter_help')}
           >
             <Checkbox
               id="kontrolluppgifter_enabled"
@@ -493,7 +493,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('rot_rut_label')}
             htmlFor="rot_rut_enabled"
-            description={t('rot_rut_help')}
+            help={t('rot_rut_help')}
           >
             <Checkbox
               id="rot_rut_enabled"
@@ -518,7 +518,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('preliminary_tax_monthly_label')}
             htmlFor="preliminary_tax_monthly"
-            description={t('preliminary_tax_monthly_help')}
+            help={t('preliminary_tax_monthly_help')}
           >
             <Input
               id="preliminary_tax_monthly"
@@ -544,7 +544,7 @@ export function TaxSettingsForm({
               <SettingsFieldRow
                 label={t('oss_label')}
                 htmlFor="oss_enabled"
-                description={t('oss_help')}
+                help={t('oss_help')}
               >
                 <Checkbox
                   id="oss_enabled"
@@ -558,7 +558,7 @@ export function TaxSettingsForm({
               <SettingsFieldRow
                 label={t('ioss_label')}
                 htmlFor="ioss_enabled"
-                description={t('ioss_help')}
+                help={t('ioss_help')}
               >
                 <Checkbox
                   id="ioss_enabled"
@@ -572,7 +572,7 @@ export function TaxSettingsForm({
               <SettingsFieldRow
                 label={t('intrastat_label')}
                 htmlFor="intrastat_enabled"
-                description={t('intrastat_help')}
+                help={t('intrastat_help')}
               >
                 <Checkbox
                   id="intrastat_enabled"
@@ -592,7 +592,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('punktskatt_label')}
             htmlFor="punktskatt_enabled"
-            description={t('punktskatt_help')}
+            help={t('punktskatt_help')}
           >
             <Checkbox
               id="punktskatt_enabled"
@@ -610,7 +610,7 @@ export function TaxSettingsForm({
           <SettingsFieldRow
             label={t('fyllnadsinbetalning_label')}
             htmlFor="fyllnadsinbetalning_enabled"
-            description={t('fyllnadsinbetalning_help')}
+            help={t('fyllnadsinbetalning_help')}
           >
             <Checkbox
               id="fyllnadsinbetalning_enabled"

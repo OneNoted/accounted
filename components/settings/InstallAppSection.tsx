@@ -73,11 +73,9 @@ export function InstallAppSection() {
       ? t('install_app_hint_safari')
       : t('install_app_hint_generic')
 
+  // No heading: the accordion header above already names this panel.
   return (
     <section className="space-y-4 border-t border-border pt-8">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('install_app_title')}
-      </h2>
       <div className="flex items-center justify-between gap-4 p-4 border rounded-lg">
         <p className="text-sm text-muted-foreground max-w-md">
           {installPrompt ? t('install_app_description') : hint}

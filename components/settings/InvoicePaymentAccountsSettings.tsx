@@ -281,14 +281,10 @@ export function InvoicePaymentAccountsSettings({
     }
   }
 
+  // No heading or intro: the accordion header names this panel and carries
+  // the explanation behind its "?" (settings_sheet).
   return (
     <section className="space-y-5">
-      <div className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('heading')}
-        </h2>
-        <p className="text-sm text-muted-foreground">{t('description')}</p>
-      </div>
 
       {hasExternalUpdate && (
         <div

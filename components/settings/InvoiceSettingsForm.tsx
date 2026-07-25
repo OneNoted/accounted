@@ -54,7 +54,7 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
         <SettingsFieldRow
           label={t('arrival_start_label')}
           htmlFor="next_arrival_number"
-          description={t('arrival_start_help')}
+          help={t('arrival_start_help')}
         >
           <Input
             id="next_arrival_number"
