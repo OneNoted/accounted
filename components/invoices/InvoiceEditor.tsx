@@ -2074,7 +2074,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                       {...register('deduction_personnummer')}
                     />
                     <p className="text-xs text-muted-foreground">
-                      {t('deduction_personnummer_hint')}
+                      {/* Stored pn exists only as ciphertext: an empty field on
+                          edit keeps it server-side instead of failing validation. */}
+                      {initial?.deduction_personnummer_last4
+                        ? t('deduction_personnummer_kept_hint', { last4: initial.deduction_personnummer_last4 })
+                        : t('deduction_personnummer_hint')}
                     </p>
                   </div>
                   {hasAnyRotLine && (

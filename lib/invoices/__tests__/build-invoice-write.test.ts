@@ -159,3 +159,73 @@ describe('buildInvoiceWriteData', () => {
     expect(result.items[0]).toMatchObject({ line_type: 'text', line_total: 0, vat_amount: 0 })
   })
 })
+
+describe('buildInvoiceWriteData stored ROT/RUT personnummer (edit path)', () => {
+  const rutItem = {
+    description: 'Städning',
+    quantity: 10,
+    unit: 'tim',
+    unit_price: 500,
+    vat_rate: 25,
+    deduction_type: 'rut' as const,
+    labor_hours: 10,
+  }
+
+  it('keeps the stored ciphertext when the edit leaves personnummer empty', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'individual' })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [rutItem] },
+      existingPersonnummer: { encrypted: 'stored-ciphertext', last4: '1234' },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.deduction_personnummer_encrypted).toBe('stored-ciphertext')
+    expect(result.invoiceFields.deduction_personnummer_last4).toBe('1234')
+  })
+
+  it('still rejects a deduction invoice with no personnummer anywhere (create path)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'individual' })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [rutItem] },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect('code' in result && result.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+  })
+
+  it('does not resurrect the stored personnummer when all deduction lines are removed', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'individual' })
+    const result = await buildInvoiceWriteData({
+      supabase: supabase as unknown as SupabaseClient,
+      companyId: 'company-1',
+      customer,
+      documentType: 'invoice',
+      input: { ...baseHeader, items: [{ description: 'Vanlig tjänst', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 25 }] },
+      existingPersonnummer: { encrypted: 'stored-ciphertext', last4: '1234' },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.deduction_personnummer_encrypted).toBeNull()
+    expect(result.invoiceFields.deduction_personnummer_last4).toBeNull()
+  })
+})
