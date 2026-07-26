@@ -18,6 +18,7 @@
  * invoice payment).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 /** ± days around the transaction date considered "the same payment". */
 const DATE_WINDOW_DAYS = 7
@@ -74,37 +75,6 @@ export async function detectDuplicatePaymentVoucher(
     .toISOString()
     .split('T')[0]
 
-  // Query journal_entry_lines for bank-account debits within the window.
-  // The join filters by company_id at the parent: RLS handles isolation,
-  // but we filter explicitly as defense-in-depth.
-  const { data: lines, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      `account_number,
-       debit_amount,
-       journal_entry:journal_entries!inner(
-         id,
-         entry_date,
-         description,
-         voucher_series,
-         voucher_number,
-         status,
-         source_type,
-         company_id
-       )`,
-    )
-    .eq('journal_entry.company_id', companyId)
-    .eq('journal_entry.status', 'posted')
-    .gte('journal_entry.entry_date', lowDate)
-    .lte('journal_entry.entry_date', highDate)
-    .gte('account_number', String(BANK_ACCOUNT_LOW))
-    .lte('account_number', String(BANK_ACCOUNT_HIGH))
-    .gt('debit_amount', 0)
-    .limit(50)
-
-  if (error || !lines || lines.length === 0) return null
-
-  // Narrow to lines whose debit matches the transaction amount within 0.01 SEK.
   type LineRow = {
     account_number: string
     debit_amount: number | string
@@ -118,7 +88,43 @@ export async function detectDuplicatePaymentVoucher(
       source_type: string | null
     }
   }
-  const candidates = (lines as unknown as LineRow[])
+
+  // Find bank-account debits within the window. The scope filters live on
+  // journal_entries and the query is driven from there: the old
+  // `journal_entries!inner` embed made PostgREST compile a correlated LATERAL
+  // join that walked the ENTIRE journal_entry_lines table across all tenants
+  // (see lib/bookkeeping/entry-lines.ts). RLS handles isolation; the
+  // company_id filter is defense-in-depth. The old `.limit(50)` is gone with
+  // the embed: it capped a ±7-day window of one company's bank legs and could
+  // hide the real duplicate behind unrelated ones.
+  let lines: LineRow[]
+  try {
+    lines = await fetchEntryLines<LineRow>({
+      supabase,
+      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
+      lineColumns: 'account_number, debit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .gte('entry_date', lowDate)
+          .lte('entry_date', highDate),
+      filterLines: (q: EntryLinesQuery) =>
+        q
+          .gte('account_number', String(BANK_ACCOUNT_LOW))
+          .lte('account_number', String(BANK_ACCOUNT_HIGH))
+          .gt('debit_amount', 0),
+      // The old embed was aliased: journal_entry:journal_entries!inner(...).
+      attachEntriesAs: 'journal_entry',
+    })
+  } catch {
+    // Fail-open, as before: a detection failure must not block the match.
+    return null
+  }
+  if (lines.length === 0) return null
+
+  // Narrow to lines whose debit matches the transaction amount within 0.01 SEK.
+  const candidates = lines
     .filter((l) => {
       const debit = Math.round(Number(l.debit_amount) * 100) / 100
       return Math.abs(debit - targetAmount) < 0.01

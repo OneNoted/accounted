@@ -3,6 +3,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import type { SkattekontoBalanceSnapshot } from '../types'
 import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY } from './skattekonto-sync'
 import { createLogger } from '@/lib/logger'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 const log = createLogger('skattekonto-drift')
 
@@ -139,21 +140,33 @@ async function sumGl1630(
   companyId: string,
   cutoffDate: string,
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select('debit_amount, credit_amount, journal_entries!inner(company_id, entry_date, status)')
-    .eq('account_number', SKATTEKONTO_BAS_ACCOUNT)
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .lte('journal_entries.entry_date', cutoffDate)
-
-  if (error || !data) {
-    log.warn('sumGl1630 failed', { companyId, cutoffDate, error: error?.message })
+  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
+  // the scope filters used to sit on a `journal_entries!inner` embed, which
+  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
+  // journal_entry_lines table across all tenants. Both steps paginate, so a
+  // company with more than 1000 skattekonto lines is no longer silently
+  // truncated (which would have under-reported the drift).
+  let data: Array<{ debit_amount: number | string; credit_amount: number | string }>
+  try {
+    data = await fetchEntryLines({
+      supabase,
+      lineColumns: 'debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q.eq('company_id', companyId).eq('status', 'posted').lte('entry_date', cutoffDate),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_BAS_ACCOUNT),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
+    log.warn('sumGl1630 failed', {
+      companyId,
+      cutoffDate,
+      error: err instanceof Error ? err.message : String(err),
+    })
     return 0
   }
 
   let sum = 0
-  for (const row of data as Array<{ debit_amount: number | string; credit_amount: number | string }>) {
+  for (const row of data) {
     sum += Number(row.debit_amount || 0) - Number(row.credit_amount || 0)
   }
   return Math.round(sum * 100) / 100

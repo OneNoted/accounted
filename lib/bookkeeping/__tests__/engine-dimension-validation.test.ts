@@ -39,6 +39,24 @@ function buildSupabase(tables: Record<string, TableResult>) {
   const inserts: Record<string, unknown[]> = {}
   const updates: Record<string, unknown[]> = {}
 
+  // commitEntry's mandatory-dimension check uses the two-step entry-lines
+  // fetch (lib/bookkeeping/entry-lines.ts): journal_entries is paged first,
+  // then journal_entry_lines by parent id, and the parent is reattached under
+  // `journal_entries`. Fixtures stay embed-shaped (a line carrying its parent
+  // source_type); the two pages are derived from them here. `.range()` is the
+  // paging terminal, while `.single()`/`.maybeSingle()` keep serving the
+  // row-shaped results the rest of the engine reads.
+  const lineFixtures = (tables.journal_entry_lines?.data ?? null) as
+    | Array<Record<string, unknown>>
+    | null
+  const entryPage = lineFixtures
+    ? [{ id: 'entry-1', ...((lineFixtures[0]?.journal_entries as object) ?? {}) }]
+    : []
+  const linePage = (lineFixtures ?? []).map((line, i) => {
+    const { journal_entries: _parent, ...rest } = line
+    return { id: `line-${i}`, journal_entry_id: 'entry-1', ...rest }
+  })
+
   const from = vi.fn().mockImplementation((table: string) => {
     const result = tables[table] ?? {}
     const resolved = { data: result.data ?? null, error: result.error ?? null }
@@ -46,6 +64,11 @@ function buildSupabase(tables: Record<string, TableResult>) {
     for (const m of ['select', 'eq', 'in', 'delete', 'order', 'limit', 'lte', 'gte']) {
       chain[m] = vi.fn().mockReturnValue(chain)
     }
+    chain.range = vi.fn().mockImplementation(() => {
+      if (table === 'journal_entries') return Promise.resolve({ data: entryPage, error: null })
+      if (table === 'journal_entry_lines') return Promise.resolve({ data: linePage, error: null })
+      return Promise.resolve(resolved)
+    })
     chain.insert = vi.fn().mockImplementation((payload: unknown) => {
       ;(inserts[table] ??= []).push(payload)
       return chain

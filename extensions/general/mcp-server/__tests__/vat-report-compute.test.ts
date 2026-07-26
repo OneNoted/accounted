@@ -14,27 +14,47 @@ interface MockLine {
   debit_amount: number
   credit_amount: number
   journal_entry_id?: string
-  journal_entries?: { source_type: string | null } | Array<{ source_type: string | null }>
+  journal_entries?: { source_type: string | null }
 }
 
 function mockSupabaseWithLines(lines: MockLine[]) {
-  // Build a chain that matches the call path in computeVatReport:
-  //   .from('journal_entry_lines').select(...).eq(...).in(...).gte(...).lte(...).range(from, to)
-  // computeVatReport now paginates via fetchAllRows, so the terminal call is
-  // `.range(from, to)`. Returning all lines on the first page (always < the
-  // 1000-row PAGE_SIZE for these fixtures) makes fetchAllRows stop after one page.
-  const terminal = { data: lines, error: null }
-  const chain: Record<string, () => unknown> = {}
-  chain.range = () => terminal
-  chain.order = () => chain
-  chain.lte = () => chain
-  chain.gte = () => chain
-  chain.neq = () => chain
-  chain.in = () => chain
-  chain.eq = () => chain
-  chain.select = () => chain
-  chain.from = () => chain
-  return { from: chain.from } as never
+  // computeVatReport uses the two-step entry-lines fetch
+  // (lib/bookkeeping/entry-lines.ts): journal_entries is queried first, then
+  // journal_entry_lines by parent id, and the parent is reattached under
+  // `journal_entries`. Both steps page with `.order('id').range(from, to)`,
+  // so `.range()` is the terminal; one short page (always < the 1000-row
+  // PAGE_SIZE for these fixtures) ends the paging loop.
+  //
+  // Fixtures stay line-shaped for readability; the parent rows are derived
+  // from them here.
+  const entries = [
+    ...new Map(
+      lines.map((l, i) => {
+        const id = l.journal_entry_id ?? `entry-${i}`
+        return [id, { id, source_type: l.journal_entries?.source_type ?? null }]
+      }),
+    ).values(),
+  ]
+  const bareLines = lines.map((l, i) => ({
+    id: `line-${String(i).padStart(4, '0')}`,
+    journal_entry_id: l.journal_entry_id ?? `entry-${i}`,
+    account_number: l.account_number,
+    debit_amount: l.debit_amount,
+    credit_amount: l.credit_amount,
+  }))
+
+  const makeChain = (rows: unknown[]) => {
+    const chain: Record<string, () => unknown> = {}
+    chain.range = () => ({ data: rows, error: null })
+    for (const m of ['order', 'lte', 'gte', 'neq', 'in', 'eq', 'select', 'limit', 'contains', 'filter']) {
+      chain[m] = () => chain
+    }
+    return chain
+  }
+
+  return {
+    from: (table: string) => (table === 'journal_entries' ? makeChain(entries) : makeChain(bareLines)),
+  } as never
 }
 
 describe('computeVatReport', () => {
@@ -210,16 +230,15 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta49).toBe(250)
   })
 
-  it('settlement-shape exclusion handles the array-typed embed and exempts opening balances', async () => {
+  it('settlement-shape exclusion covers stornos and exempts opening balances', async () => {
     const lines: MockLine[] = [
-      // Storno of a settlement, with the embed in array form (the client's
-      // inferred shape): must be excluded from ruta10.
-      { journal_entry_id: 'e3', account_number: '2611', debit_amount: 0, credit_amount: 100, journal_entries: [{ source_type: 'storno' }] },
-      { journal_entry_id: 'e3', account_number: '2650', debit_amount: 100, credit_amount: 0, journal_entries: [{ source_type: 'storno' }] },
+      // Storno of a settlement: must be excluded from ruta10.
+      { journal_entry_id: 'e3', account_number: '2611', debit_amount: 0, credit_amount: 100, journal_entries: { source_type: 'storno' } },
+      { journal_entry_id: 'e3', account_number: '2650', debit_amount: 100, credit_amount: 0, journal_entries: { source_type: 'storno' } },
       // Opening balance carrying undeclared input VAT and a prior VAT debt:
       // stays IN the projection.
-      { journal_entry_id: 'ib', account_number: '2641', debit_amount: 500, credit_amount: 0, journal_entries: [{ source_type: 'opening_balance' }] },
-      { journal_entry_id: 'ib', account_number: '2650', debit_amount: 0, credit_amount: 300, journal_entries: [{ source_type: 'opening_balance' }] },
+      { journal_entry_id: 'ib', account_number: '2641', debit_amount: 500, credit_amount: 0, journal_entries: { source_type: 'opening_balance' } },
+      { journal_entry_id: 'ib', account_number: '2650', debit_amount: 0, credit_amount: 300, journal_entries: { source_type: 'opening_balance' } },
     ]
 
     const result = await computeVatReport(

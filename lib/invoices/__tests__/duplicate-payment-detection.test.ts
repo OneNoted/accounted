@@ -36,6 +36,31 @@ describe('detectDuplicatePaymentVoucher', () => {
     }
   }
 
+  /**
+   * Enqueue the two pages the two-step entry-lines fetch reads
+   * (lib/bookkeeping/entry-lines.ts): the parent entries first, then the bare
+   * lines keyed by journal_entry_id. Fixtures stay embed-shaped; the helper
+   * reattaches the parent under `journal_entry`, which is exactly what the
+   * old aliased `journal_entry:journal_entries!inner(...)` embed produced.
+   */
+  function enqueueLines(rows: ReturnType<typeof makeLineRow>[]) {
+    const entries = [
+      ...new Map(rows.map((r) => [r.journal_entry.id, r.journal_entry])).values(),
+    ]
+    enqueue({ data: entries, error: null })
+    // No entries means the helper never queries the lines at all.
+    if (entries.length === 0) return
+    enqueue({
+      data: rows.map((r, i) => ({
+        id: `line-${String(i).padStart(4, '0')}`,
+        journal_entry_id: r.journal_entry.id,
+        account_number: r.account_number,
+        debit_amount: r.debit_amount,
+      })),
+      error: null,
+    })
+  }
+
   it('returns null when transaction amount is 0', async () => {
     const result = await detectDuplicatePaymentVoucher(supabase as never, {
       companyId: 'company-1',
@@ -68,18 +93,15 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('returns the candidate when an unlinked manual JE matches exactly on the same date', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-1',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-          voucher_label: 'A12',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-1',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+        voucher_label: 'A12',
+      }),
+    ])
     // invoice_payments link check (no links)
     enqueue({ data: [], error: null })
     // transactions link check (no links)
@@ -99,19 +121,57 @@ describe('detectDuplicatePaymentVoucher', () => {
     expect(result!.amount).toBe(1000)
   })
 
-  it('returns within_window reason when JE date is close but not equal', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-2',
-          account: '1930',
-          debit: 500,
-          date: '2026-05-12',
-          voucher_label: 'A5',
-        }),
-      ],
-      error: null,
+  it('drives the scan from journal_entries and reattaches the parent under journal_entry', async () => {
+    // Shape guard for the entry-lines conversion: no query starts on
+    // journal_entry_lines with the tenant scope buried in an embed, and the
+    // candidate is still built from the parent fields (voucher label, date,
+    // description) plus the line fields (account, debit).
+    // The mock client is module-level, so only this test's calls are read.
+    const callsBefore = supabase.from.mock.calls.length
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-shape',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+        voucher_label: 'A12',
+        description: 'Manuell inbetalning',
+      }),
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 1000,
     })
+
+    const tables = supabase.from.mock.calls.slice(callsBefore).map((c) => c[0])
+    expect(tables[0]).toBe('journal_entries')
+    expect(tables[1]).toBe('journal_entry_lines')
+    expect(result).toEqual({
+      journal_entry_id: 'je-shape',
+      voucher_label: 'A12',
+      entry_date: '2026-05-15',
+      description: 'Manuell inbetalning',
+      amount: 1000,
+      bank_account_number: '1930',
+      reason: 'exact_amount_same_date',
+    })
+  })
+
+  it('returns within_window reason when JE date is close but not equal', async () => {
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-2',
+        account: '1930',
+        debit: 500,
+        date: '2026-05-12',
+        voucher_label: 'A5',
+      }),
+    ])
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
 
@@ -127,17 +187,14 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('excludes JEs that are already linked via invoice_payments', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-3',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-3',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+      }),
+    ])
     // invoice_payments has a row linking this JE
     enqueue({ data: [{ journal_entry_id: 'je-3' }], error: null })
     enqueue({ data: [], error: null })
@@ -153,17 +210,14 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('excludes JEs already linked from another transaction', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-4',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-4',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+      }),
+    ])
     enqueue({ data: [], error: null })
     // another transaction already links this JE
     enqueue({ data: [{ id: 'tx-other', journal_entry_id: 'je-4' }], error: null })
@@ -179,18 +233,15 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('excludes storno entries', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-storno',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-          source_type: 'storno',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-storno',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+        source_type: 'storno',
+      }),
+    ])
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
 
@@ -205,18 +256,15 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('excludes correction entries', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-corr',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-          source_type: 'correction',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-corr',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+        source_type: 'correction',
+      }),
+    ])
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
 
@@ -231,25 +279,22 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('picks the same-date candidate over a within-window candidate', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-far',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-12',
-          voucher_label: 'A1',
-        }),
-        makeLineRow({
-          je_id: 'je-same',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-          voucher_label: 'A2',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-far',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-12',
+        voucher_label: 'A1',
+      }),
+      makeLineRow({
+        je_id: 'je-same',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+        voucher_label: 'A2',
+      }),
+    ])
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
 
@@ -266,17 +311,14 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('matches absolute value for negative transaction amounts (expense)', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-x',
-          account: '1930',
-          debit: 250,
-          date: '2026-05-15',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-x',
+        account: '1930',
+        debit: 250,
+        date: '2026-05-15',
+      }),
+    ])
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
 
@@ -296,17 +338,14 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('skips lines whose amount differs by more than 0.01', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-off',
-          account: '1930',
-          debit: 1001,
-          date: '2026-05-15',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-off',
+        account: '1930',
+        debit: 1001,
+        date: '2026-05-15',
+      }),
+    ])
 
     const result = await detectDuplicatePaymentVoucher(supabase as never, {
       companyId: 'company-1',
@@ -319,17 +358,14 @@ describe('detectDuplicatePaymentVoucher', () => {
   })
 
   it('ignores the caller transaction even if it carries a journal_entry_id link', async () => {
-    enqueue({
-      data: [
-        makeLineRow({
-          je_id: 'je-caller',
-          account: '1930',
-          debit: 1000,
-          date: '2026-05-15',
-        }),
-      ],
-      error: null,
-    })
+    enqueueLines([
+      makeLineRow({
+        je_id: 'je-caller',
+        account: '1930',
+        debit: 1000,
+        date: '2026-05-15',
+      }),
+    ])
     enqueue({ data: [], error: null })
     // The caller transaction itself links the JE (defensive: shouldn't happen
     // in normal flow because we call this before the link, but a retry could).

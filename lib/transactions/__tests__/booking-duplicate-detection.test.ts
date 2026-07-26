@@ -5,7 +5,7 @@
  * filters by öre + cash-account compatibility in JS, then resolves the voucher
  * label from `journal_entries`. The mock returns the rows each query yields.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import {
   detectBookedDuplicateTransaction,
   detectLedgerDuplicateVoucher,
@@ -190,6 +190,26 @@ function ledgerChain(result: { data: unknown; error: unknown }) {
   return c
 }
 
+/**
+ * Chain for the two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts):
+ * the helper pages both journal_entries and journal_entry_lines with
+ * `.order('id').range(from, to)`, so `.range()` is the terminal. One short
+ * page ends the paging loop.
+ */
+function entryLinesChain(rows: unknown[], singleRow: unknown = null) {
+  const c: Record<string, unknown> = {}
+  for (const m of ['select', 'eq', 'neq', 'not', 'gt', 'gte', 'lte', 'in', 'contains', 'ilike', 'filter', 'order', 'limit']) {
+    c[m] = () => c
+  }
+  c.range = () => Promise.resolve({ data: rows, error: null })
+  c.maybeSingle = () => Promise.resolve({ data: singleRow, error: null })
+  c.single = () => Promise.resolve({ data: singleRow, error: null })
+  return c
+}
+
+/** Tables the ledger scan touches, in call order. */
+const tablesTouched: string[] = []
+
 function makeLedgerSupabase(opts: {
   ledgerAccount?: string | null
   lines?: Jel[]
@@ -197,16 +217,35 @@ function makeLedgerSupabase(opts: {
   payLinks?: { journal_entry_id: string }[]
   transactionRows?: TxRow[] // siblings for the orchestrator fall-through
 }) {
+  // Fixtures stay embed-shaped for readability; the two-step fetch reads the
+  // parent entries and the bare lines separately, so split them here. The
+  // helper reattaches the parent under `journal_entry`, reproducing exactly
+  // what the old aliased embed returned.
+  const jels = opts.lines ?? []
+  const entries = [...new Map(jels.map((l) => [l.journal_entry.id, l.journal_entry])).values()]
+  const bareLines = jels.map((l, i) => ({
+    id: `line-${i}`,
+    journal_entry_id: l.journal_entry.id,
+    account_number: l.account_number,
+    debit_amount: l.debit_amount,
+    credit_amount: l.credit_amount,
+  }))
+
   return {
     from: (table: string) => {
+      tablesTouched.push(table)
       switch (table) {
         case 'cash_accounts':
           return ledgerChain({
             data: opts.ledgerAccount != null ? { ledger_account: opts.ledgerAccount } : null,
             error: null,
           })
+        case 'journal_entries':
+          // Two roles: the entry-side page of the two-step fetch (.range) and
+          // the sibling scan's voucher-label lookup (.maybeSingle).
+          return entryLinesChain(entries, null)
         case 'journal_entry_lines':
-          return ledgerChain({ data: opts.lines ?? [], error: null })
+          return entryLinesChain(bareLines)
         case 'invoice_payments':
           return ledgerChain({ data: opts.payLinks ?? [], error: null })
         case 'transactions':
@@ -240,6 +279,24 @@ const jel = (over: Partial<Jel> = {}): Jel => ({
 })
 
 describe('detectLedgerDuplicateVoucher', () => {
+  beforeEach(() => {
+    tablesTouched.length = 0
+  })
+
+  it('drives the scan from journal_entries, never from a cross-tenant line embed', async () => {
+    // Shape guard for the entry-lines conversion: the parent entries are
+    // fetched first and the lines are fetched by journal_entry_id, so no
+    // query starts on journal_entry_lines with the scope on an embed.
+    const supabase = makeLedgerSupabase({ lines: [jel()] })
+    await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+    })
+    expect(tablesTouched.indexOf('journal_entries')).toBeGreaterThanOrEqual(0)
+    expect(tablesTouched.indexOf('journal_entries')).toBeLessThan(
+      tablesTouched.indexOf('journal_entry_lines'),
+    )
+  })
+
   it('flags an inbound receipt already booked as a 19xx debit voucher (no sibling tx)', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel()] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {

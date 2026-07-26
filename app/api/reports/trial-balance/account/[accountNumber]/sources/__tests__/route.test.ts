@@ -18,36 +18,67 @@ interface SupabaseShape {
   from: ReturnType<typeof vi.fn>
 }
 
+interface EmbedShapedLine {
+  debit_amount: number
+  credit_amount: number
+  journal_entry_id: string
+  dimensions?: Record<string, string> | null
+  journal_entries: Record<string, unknown>
+}
+
+/**
+ * The route uses the two-step entry-lines fetch
+ * (lib/bookkeeping/entry-lines.ts): journal_entries is queried first, then
+ * journal_entry_lines by parent id, and the parent is reattached under
+ * `journal_entries`. Both steps page with `.order('id').range(from, to)`, so
+ * `.range()` is the terminal and one short page (< the 1000-row PAGE_SIZE)
+ * ends the loop.
+ *
+ * Fixtures stay embed-shaped; the mock splits them into the two row sets, so
+ * the route sees exactly what the old `journal_entries!inner` embed returned.
+ */
 function buildSupabase(
   account: { account_number: string; account_name: string } | null,
   linesResult: { data: unknown; error: unknown }
 ): SupabaseShape {
+  const fixtures = (linesResult.data ?? []) as EmbedShapedLine[]
+  const entries = linesResult.error
+    ? []
+    : [...new Map(fixtures.map((l) => [l.journal_entry_id, l.journal_entries])).values()]
+  const bareLines = linesResult.error
+    ? []
+    : fixtures.map((l, i) => ({
+        id: `line-${String(i).padStart(5, '0')}`,
+        journal_entry_id: l.journal_entry_id,
+        debit_amount: l.debit_amount,
+        credit_amount: l.credit_amount,
+        dimensions: l.dimensions ?? null,
+      }))
+
+  const rowsChain = (rows: unknown[]) => ({
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
+    gte: vi.fn().mockReturnThis(),
+    lte: vi.fn().mockReturnThis(),
+    contains: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    or: vi.fn().mockReturnThis(),
+    range: vi.fn().mockResolvedValue({ data: rows, error: linesResult.error }),
+    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: linesResult.error }),
+  })
+
   return {
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'chart_of_accounts') {
-        const chain = {
+        return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
           maybeSingle: vi.fn().mockResolvedValue({ data: account, error: null }),
         }
-        return chain
       }
-      // journal_entry_lines: terminates on `.range()` (fetchAllRows), which
-      // resolves to the line result. `data.length < PAGE_SIZE` so a single
-      // page is fetched.
-      const chain = {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        in: vi.fn().mockReturnThis(),
-        gte: vi.fn().mockReturnThis(),
-        lte: vi.fn().mockReturnThis(),
-        order: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockReturnThis(),
-        or: vi.fn().mockReturnThis(),
-        range: vi.fn().mockResolvedValue(linesResult),
-        then: (resolve: (v: unknown) => void) => resolve(linesResult),
-      }
-      return chain
+      return rowsChain(table === 'journal_entries' ? entries : bareLines)
     }),
   }
 }

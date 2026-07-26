@@ -26,6 +26,7 @@ import {
 } from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import type { SupplierInvoice, Supplier } from '@/types'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 const log = createLogger('supplier-voucher-matching')
 
@@ -57,7 +58,9 @@ export interface SupplierVoucherCandidate {
   currency: string
   /** Currency of the AP-debit line; nullable when the line stores SEK only. */
   ap_line_currency: string | null
-  /** True when the voucher's fiscal period is closed or locked. */
+  /** True when the voucher's fiscal period is closed (`is_closed`) or locked
+   *  (`locked_at`), and also when that state could not be read: the flag never
+   *  reports "open" on a failed lookup. */
   period_locked: boolean
   /** Confidence score 0..1 (or 0.99 for OCR match). */
   confidence: number
@@ -85,9 +88,14 @@ interface VoucherRow {
   fiscal_period_id: string
 }
 
+/** fiscal_periods carries no `status` column: lock state is the (is_closed,
+ *  locked_at) pair, which is exactly what enforce_period_lock() reads in
+ *  migration 20240101000017 and what resolvePeriodStatusForDate() uses in
+ *  lib/core/bookkeeping/period-service.ts. */
 interface FiscalPeriodRow {
   id: string
-  status: string
+  is_closed: boolean | null
+  locked_at: string | null
 }
 
 interface CandidateContext {
@@ -121,37 +129,34 @@ export async function findMatchingVouchersForSupplierInvoice(
   const dateTo = new Date(dueDate)
   dateTo.setDate(dateTo.getDate() + windowDays)
 
-  const { data: lines, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      `
-      id,
-      journal_entry_id,
-      account_number,
-      debit_amount,
-      credit_amount,
-      currency,
-      journal_entries!inner (
-        id,
-        voucher_series,
-        voucher_number,
-        entry_date,
-        description,
-        status,
-        source_type,
-        fiscal_period_id,
-        company_id
-      )
-      `,
-    )
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .like('account_number', `${AP_ACCOUNT_PREFIX}%`)
-    .gt('debit_amount', 0)
-    .gte('journal_entries.entry_date', dateFrom.toISOString().slice(0, 10))
-    .lte('journal_entries.entry_date', dateTo.toISOString().slice(0, 10))
-    .limit(limit * 10)
-  if (error || !lines) return []
+  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
+  // the scope filters used to sit on a `journal_entries!inner` embed, which
+  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
+  // journal_entry_lines table across all tenants. The old `.limit(limit * 10)`
+  // went with the embed: the match set is one company's AP debits inside a
+  // date window around the due date, and an arbitrary cap could drop the
+  // exact-amount voucher the ranking below is looking for.
+  let lines: Array<JournalEntryLine & { journal_entries: VoucherRow }>
+  try {
+    lines = await fetchEntryLines({
+      supabase,
+      entryColumns:
+        'id, voucher_series, voucher_number, entry_date, description, status, source_type, fiscal_period_id, company_id',
+      lineColumns: 'id, journal_entry_id, account_number, debit_amount, credit_amount, currency',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .gte('entry_date', dateFrom.toISOString().slice(0, 10))
+          .lte('entry_date', dateTo.toISOString().slice(0, 10)),
+      filterLines: (q: EntryLinesQuery) =>
+        q.like('account_number', `${AP_ACCOUNT_PREFIX}%`).gt('debit_amount', 0),
+    })
+  } catch {
+    // Unchanged posture: a candidate-search failure returns no candidates
+    // rather than breaking the reconciliation screen.
+    return []
+  }
 
   // Sum the AP debit per voucher across multiple 2440 lines (a samlings-
   // verifikation paying several supplier invoices in one shot will have one
@@ -161,10 +166,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     { entry: VoucherRow; apDebitTotal: number; lineCurrency: string | null }
   >()
 
-  for (const raw of lines) {
-    const line = raw as unknown as JournalEntryLine & {
-      journal_entries: VoucherRow
-    }
+  for (const line of lines) {
     const entry = line.journal_entries
     if (!entry) continue
     if (EXCLUDED_SOURCE_TYPES.includes(entry.source_type ?? '')) continue
@@ -208,18 +210,29 @@ export async function findMatchingVouchersForSupplierInvoice(
   const periodIds = Array.from(
     new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id)),
   )
-  const { data: periods } = await supabase
+  const { data: periods, error: periodsError } = await supabase
     .from('fiscal_periods')
-    .select('id, status')
+    .select('id, is_closed, locked_at')
     .in('id', periodIds)
+
+  // Fail closed when the period state cannot be read: the flag is advisory
+  // (linking mutates no journal entry), so over-flagging costs a badge, while
+  // claiming "open" would tell the user a period is writable right before the
+  // enforce_period_lock trigger refuses the write.
+  const periodStateUnknown = !!periodsError || !periods
+  if (periodStateUnknown) {
+    log.warn('fiscal period lock state unavailable, flagging candidates as locked', {
+      companyId,
+      supplierInvoiceId: invoice.id,
+      reason: periodsError?.message,
+    })
+  }
   const lockedPeriods = new Set(
-    (periods ?? [])
-      .filter(
-        (p) =>
-          (p as FiscalPeriodRow).status === 'closed' ||
-          (p as FiscalPeriodRow).status === 'locked',
-      )
-      .map((p) => (p as FiscalPeriodRow).id),
+    periodStateUnknown
+      ? periodIds
+      : (periods as FiscalPeriodRow[])
+          .filter((p) => Boolean(p.is_closed) || Boolean(p.locked_at))
+          .map((p) => p.id),
   )
 
   const ctx: CandidateContext = { invoice, remainingAmount }

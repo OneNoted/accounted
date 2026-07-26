@@ -25,6 +25,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 /** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -246,35 +247,6 @@ export async function detectLedgerDuplicateVoucher(
   }
 
   const amountColumn = inbound ? 'debit_amount' : 'credit_amount'
-  let query = supabase
-    .from('journal_entry_lines')
-    .select(
-      `account_number,
-       debit_amount,
-       credit_amount,
-       journal_entry:journal_entries!inner(
-         id,
-         entry_date,
-         description,
-         voucher_series,
-         voucher_number,
-         status,
-         source_type,
-         company_id
-       )`,
-    )
-    .eq('journal_entry.company_id', companyId)
-    .eq('journal_entry.status', 'posted')
-    .gte('journal_entry.entry_date', lowDate)
-    .lte('journal_entry.entry_date', highDate)
-    .gt(amountColumn, 0)
-
-  query = settlementAccount
-    ? query.eq('account_number', settlementAccount)
-    : query.gte('account_number', String(BANK_ACCOUNT_LOW)).lte('account_number', String(BANK_ACCOUNT_HIGH))
-
-  const { data: lines, error } = await query.limit(50)
-  if (error || !lines || lines.length === 0) return null
 
   type LineRow = {
     account_number: string
@@ -290,7 +262,45 @@ export async function detectLedgerDuplicateVoucher(
       source_type: string | null
     }
   }
-  const candidates = (lines as unknown as LineRow[])
+
+  // Two-step fetch instead of a `journal_entries!inner` embed: PostgREST
+  // compiles that embed into a correlated LATERAL join that walks the ENTIRE
+  // journal_entry_lines table across all tenants (see
+  // lib/bookkeeping/entry-lines.ts). The scope is the same as before: this
+  // company's posted entries inside the date window, with the 19xx leg picked
+  // on the line side. The old `.limit(50)` is gone with the embed: the window
+  // is ±7 days of one company's vouchers, and an arbitrary 50-row cap could
+  // hide the real twin behind unrelated bank legs.
+  let lines: LineRow[]
+  try {
+    lines = await fetchEntryLines<LineRow>({
+      supabase,
+      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
+      lineColumns: 'account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .gte('entry_date', lowDate)
+          .lte('entry_date', highDate),
+      filterLines: (q: EntryLinesQuery) => {
+        const scoped = q.gt(amountColumn, 0)
+        return settlementAccount
+          ? scoped.eq('account_number', settlementAccount)
+          : scoped
+              .gte('account_number', String(BANK_ACCOUNT_LOW))
+              .lte('account_number', String(BANK_ACCOUNT_HIGH))
+      },
+      // The old embed was aliased: journal_entry:journal_entries!inner(...).
+      attachEntriesAs: 'journal_entry',
+    })
+  } catch {
+    // Fail-open, as before: a detection failure must never block a booking.
+    return null
+  }
+  if (lines.length === 0) return null
+
+  const candidates = lines
     // Same-batch vouchers are this run's own fresh bookings, never duplicates.
     .filter((l) => !excludeJournalEntryIds.has(l.journal_entry.id))
     .filter((l) => {

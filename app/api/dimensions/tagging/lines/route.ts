@@ -29,6 +29,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { DimensionTaggingLinesQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
 
 ensureInitialized()
@@ -169,28 +170,39 @@ export const GET = withRouteContext(
     }
 
     // Step 2: the COMPLETE line set for each qualifying voucher, so voucher-
-    // level tagging always covers the whole verifikat. The entry IDs already
-    // come from the company-filtered step-1 query; the explicit parent scope
-    // here is defense in depth (repo convention).
-    const { data: lineData, error: lineError } = await supabase
-      .from('journal_entry_lines')
-      .select('id, account_number, debit_amount, credit_amount, dimensions, journal_entry_id, sort_order, journal_entries!inner(company_id)')
-      .eq('journal_entries.company_id', companyId)
-      .in('journal_entry_id', entries.map((e) => e.id))
-      .order('journal_entry_id', { ascending: true })
-      .order('sort_order', { ascending: true })
-      .order('id', { ascending: true })
-
-    if (lineError) {
-      log.error('tagging voucher line fetch failed', lineError)
-      return errorResponse(lineError, log, { requestId })
+    // level tagging always covers the whole verifikat.
+    //
+    // The entry IDs already come from the company-filtered step-1 query, so
+    // the old `journal_entries!inner(company_id)` embed added nothing but the
+    // correlated LATERAL join PostgREST compiles it into, which walks every
+    // tenant's journal_entry_lines (see lib/bookkeeping/entry-lines.ts).
+    // fetchLinesByEntryIds keeps the same `.in('journal_entry_id', ...)`
+    // scope, chunks it, and pages each chunk: the whole line set for a full
+    // page of vouchers no longer silently stops at PostgREST's 1000-row cap.
+    let lineData: RawLine[]
+    try {
+      lineData = await fetchLinesByEntryIds<RawLine>(
+        supabase,
+        entries.map((e) => e.id),
+        'id, account_number, debit_amount, credit_amount, dimensions, sort_order',
+      )
+    } catch (err) {
+      log.error('tagging voucher line fetch failed', err as Error)
+      return errorResponse(err, log, { requestId })
     }
 
     const linesByEntry = new Map<string, RawLine[]>()
-    for (const line of (lineData ?? []) as unknown as RawLine[]) {
+    for (const line of lineData) {
       const bucket = linesByEntry.get(line.journal_entry_id) ?? []
       bucket.push(line)
       linesByEntry.set(line.journal_entry_id, bucket)
+    }
+    // The helper orders on the line PK for stable paging; the workbench shows
+    // lines in voucher order, which is (sort_order, id) inside each verifikat.
+    for (const bucket of linesByEntry.values()) {
+      bucket.sort(
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id.localeCompare(b.id),
+      )
     }
 
     const vouchers = entries.map((e) => ({

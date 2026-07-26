@@ -28,6 +28,7 @@ import {
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { ACCOUNT_RUTA, VAT_SETTLEMENT_NET_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
@@ -1116,34 +1117,36 @@ export async function computeVatReport(
     endDate = `${year}-12-31`
   }
 
-  // Paginate. An unbounded .select() caps at PostgREST's 1000-row default,
-  // which silently truncates a yearly (or busy quarterly) VAT period with
-  // >1000 entry lines and under-reports the momsdeklaration.
-  // journal_entries is a to-one embed: PostgREST returns an object at
-  // runtime, but the untyped client infers an array, so accept both shapes.
-  const lines = await fetchAllRows<{
+  // Two-step fetch (lib/bookkeeping/entry-lines.ts) rather than a
+  // `journal_entries!inner` embed: PostgREST compiles that embed into a
+  // correlated LATERAL join that walks every tenant's journal_entry_lines.
+  // Both steps paginate, so a yearly (or busy quarterly) VAT period with
+  // >1000 entry lines is no longer silently truncated at PostgREST's
+  // 1000-row default.
+  // The helper reattaches the parent entry as an OBJECT under
+  // `journal_entries`, so the old "embed may be an object or an array" shape
+  // guard is gone with the embed.
+  const lines = await fetchEntryLines<{
     journal_entry_id: string
     account_number: string
     debit_amount: number
     credit_amount: number
-    journal_entries?: { source_type: string | null } | Array<{ source_type: string | null }>
-  }>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select('journal_entry_id, account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, user_id, source_type)')
-      .eq('journal_entries.company_id', companyId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      // Momsredovisning entries (the settlement verifikat clearing 26xx to
-      // 2650/1650) would zero the rutor once booked; exclude them so this
-      // report matches lib/reports/vat-declaration.ts (fetchVatAccountTotals).
-      .neq('journal_entries.source_type', 'vat_settlement')
-      .gte('journal_entries.entry_date', startDate)
-      .lte('journal_entries.entry_date', endDate)
-      // Stable total order for correct paging (see fetch-all.ts): without it,
-      // rows can shift across page boundaries on reports over 1000 lines.
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
+    journal_entries?: { source_type: string | null }
+  }>({
+    supabase,
+    entryColumns: 'entry_date, status, user_id, source_type',
+    lineColumns: 'journal_entry_id, account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .in('status', ['posted', 'reversed'])
+        // Momsredovisning entries (the settlement verifikat clearing 26xx to
+        // 2650/1650) would zero the rutor once booked; exclude them so this
+        // report matches lib/reports/vat-declaration.ts (fetchVatAccountTotals).
+        .neq('source_type', 'vat_settlement')
+        .gte('entry_date', startDate)
+        .lte('entry_date', endDate),
+  })
 
   // Settlements booked WITHOUT the vat_settlement tag (manual momsomföring,
   // SIE-imported settlements, stornos of a settlement) are excluded by shape,
@@ -1164,8 +1167,7 @@ export async function computeVatReport(
   for (const line of lines) {
     const id = line.journal_entry_id
     if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
-    const embedded = line.journal_entries
-    const entry = Array.isArray(embedded) ? embedded[0] : embedded
+    const entry = line.journal_entries
     if (!entry || entry.source_type === 'opening_balance') continue
     settlementShapedIds.add(id)
   }
@@ -5942,45 +5944,7 @@ export const tools: McpTool[] = [
       const resolvedBag = bags[0] as Record<string, string>
 
       // ── Match the lines. POSTED entries only: drafts are edited directly
-      //    (the retag RPC rejects them too). Fetch cap+1 to detect overflow.
-      let q = supabase
-        .from('journal_entry_lines')
-        .select('id, account_number, debit_amount, credit_amount, sort_order, journal_entries!inner(id, entry_date, voucher_number, voucher_series, status, company_id)')
-        .eq('journal_entries.company_id', companyId)
-        .eq('journal_entries.status', 'posted')
-
-      if (accounts && accounts.length > 0) {
-        q = q.in('account_number', accounts)
-      } else {
-        if (accountFrom) q = q.gte('account_number', accountFrom)
-        if (accountTo) q = q.lte('account_number', accountTo)
-      }
-      if (dateFrom) q = q.gte('journal_entries.entry_date', dateFrom)
-      if (dateTo) q = q.lte('journal_entries.entry_date', dateTo)
-      if (text) {
-        // LIKE wildcards escaped so the filter matches literal % / _: same
-        // treatment as gnubok_query_journal's text legs. v1 searches the
-        // ENTRY description only (documented in the schema); the two-leg
-        // line+entry union query_journal runs is overkill for a write filter.
-        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
-        q = q.ilike('journal_entries.description', `%${escaped}%`)
-      }
-      // Pragmatic v1 (documented in the schema): only-untagged means the bag
-      // is EXACTLY '{}' (column is NOT NULL DEFAULT '{}'). Partially tagged
-      // lines (e.g. only dim 1 set) do not match.
-      if (onlyUntagged) q = q.filter('dimensions', 'eq', '{}')
-
-      const res = await q
-        .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
-        .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
-        .order('sort_order', { ascending: true })
-        .limit(RETAG_MAX_LINES + 1)
-
-      if (res.error) {
-        log.warn('tag_journal_lines match query failed', { companyId, userId, error: res.error.message })
-        throw new Error('Database error while matching journal lines')
-      }
-
+      //    (the retag RPC rejects them too).
       type MatchedRow = {
         id: string
         account_number: string
@@ -5989,7 +5953,74 @@ export const tools: McpTool[] = [
         sort_order: number
         journal_entries: { id: string; entry_date: string; voucher_number: number; voucher_series: string }
       }
-      const rows = (res.data ?? []) as unknown as MatchedRow[]
+
+      // Two-step fetch (lib/bookkeeping/entry-lines.ts) instead of a
+      // `journal_entries!inner` embed, which PostgREST compiled into a
+      // correlated LATERAL join over every tenant's journal_entry_lines.
+      // The DB-side `.limit(RETAG_MAX_LINES + 1)` is replaced by the JS
+      // overflow check below: the cap counts MATCHED lines, and the old
+      // limit could not be expressed across the two steps. At least one
+      // filter is mandatory (guard above), so the match set stays bounded by
+      // the user's own filter, not by the whole ledger.
+      let rows: MatchedRow[]
+      try {
+        rows = await fetchEntryLines<MatchedRow>({
+          supabase,
+          entryColumns: 'id, entry_date, voucher_number, voucher_series, status',
+          lineColumns: 'id, account_number, debit_amount, credit_amount, sort_order',
+          filterEntries: (eq: EntryLinesQuery) => {
+            let e = eq.eq('company_id', companyId).eq('status', 'posted')
+            if (dateFrom) e = e.gte('entry_date', dateFrom)
+            if (dateTo) e = e.lte('entry_date', dateTo)
+            if (text) {
+              // LIKE wildcards escaped so the filter matches literal % / _:
+              // same treatment as gnubok_query_journal's text legs. v1
+              // searches the ENTRY description only (documented in the
+              // schema); the two-leg line+entry union query_journal runs is
+              // overkill for a write filter.
+              const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+              e = e.ilike('description', `%${escaped}%`)
+            }
+            return e
+          },
+          filterLines: (lq: EntryLinesQuery) => {
+            let l = lq
+            if (accounts && accounts.length > 0) {
+              l = l.in('account_number', accounts)
+            } else {
+              if (accountFrom) l = l.gte('account_number', accountFrom)
+              if (accountTo) l = l.lte('account_number', accountTo)
+            }
+            // Pragmatic v1 (documented in the schema): only-untagged means the
+            // bag is EXACTLY '{}' (column is NOT NULL DEFAULT '{}'). Partially
+            // tagged lines (e.g. only dim 1 set) do not match.
+            if (onlyUntagged) l = l.filter('dimensions', 'eq', '{}')
+            return l
+          },
+        })
+      } catch (err) {
+        log.warn('tag_journal_lines match query failed', {
+          companyId,
+          userId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        throw new Error('Database error while matching journal lines')
+      }
+
+      // Verifikat-major preview order, newest first, then line order inside
+      // the voucher. Done in JS: the sort keys live on the parent entry and
+      // PostgREST's `.order(col, { foreignTable })` sorts the EMBEDDED rows,
+      // not the parent result set.
+      rows.sort((a, b) => {
+        const ad = a.journal_entries.entry_date
+        const bd = b.journal_entries.entry_date
+        if (ad !== bd) return ad < bd ? 1 : -1
+        const av = a.journal_entries.voucher_number
+        const bv = b.journal_entries.voucher_number
+        if (av !== bv) return bv - av
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+      })
 
       if (rows.length === 0) {
         throw new Error(
@@ -6400,11 +6431,17 @@ export const tools: McpTool[] = [
       // The dimensions jsonb only rides along when a group needs it: it is
       // the widest column on the line and the aggregate pass fetches ALL rows.
       const dimsSelect = groupByDimension ? ', dimensions' : ''
+      // Free-text legs only. The embed survives here on purpose: each leg is
+      // capped at `legLimit` rows, and that cap (which drives legCapHit and
+      // the `truncated` signal) has no equivalent in the two-step fetch,
+      // which would have to pull the whole ilike match set unbounded. Every
+      // other pass uses fetchEntryLines: see ENTRY_COLUMNS/LINE_COLUMNS.
       const DISPLAY_SELECT = `id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center${dimsSelect}, sort_order, journal_entries!inner(id, voucher_number, voucher_series, entry_date, description, notes, source_type, status, company_id)`
-      // Lean projection for the full-match aggregate pass: only what totals
-      // and group buckets need. journal_entries stays embedded (!inner)
-      // because the entry-level filters bind to it.
-      const AGGREGATE_SELECT = `id, account_number, debit_amount, credit_amount, project, cost_center${dimsSelect}, journal_entries!inner(voucher_series, source_type, company_id)`
+      // Column lists for the two-step entry-lines fetch (the non-text path).
+      // Same fields as DISPLAY_SELECT, split across the two queries the
+      // helper issues; company_id is implied by the entry-side filter.
+      const ENTRY_COLUMNS = 'id, voucher_number, voucher_series, entry_date, description, notes, source_type, status'
+      const LINE_COLUMNS = `id, account_number, debit_amount, credit_amount, currency, line_description, project, cost_center${dimsSelect}, sort_order`
 
       // Each query pass needs its own builder instance: PostgREST query
       // builders are not reusable across awaits. The factory closes over the
@@ -6445,12 +6482,34 @@ export const tools: McpTool[] = [
         return q
       }
 
-      const applyOrderAndLimit = <T extends ReturnType<typeof buildFilteredQuery>>(q: T): T =>
-        q
-          .order('entry_date', { foreignTable: 'journal_entries', ascending: false })
-          .order('voucher_number', { foreignTable: 'journal_entries', ascending: false })
-          .order('sort_order', { ascending: true })
-          .limit(limit) as T
+      // Same filter set as buildFilteredQuery, split for the two-step
+      // entry-lines fetch: entry-level predicates become plain column filters
+      // on journal_entries, line-level ones stay on journal_entry_lines. Keep
+      // the three in sync: they must always describe one match set.
+      const filterEntries = (q: EntryLinesQuery): EntryLinesQuery => {
+        let e = q.eq('company_id', companyId)
+        e = status === 'all' ? e.in('status', ['posted', 'reversed']) : e.eq('status', status)
+        if (dateFrom) e = e.gte('entry_date', dateFrom)
+        if (dateTo) e = e.lte('entry_date', dateTo)
+        if (voucherSeries) e = e.eq('voucher_series', voucherSeries)
+        if (typeof vnFrom === 'number') e = e.gte('voucher_number', vnFrom)
+        if (typeof vnTo === 'number') e = e.lte('voucher_number', vnTo)
+        if (sourceType) e = e.eq('source_type', sourceType)
+        return e
+      }
+
+      const filterLines = (q: EntryLinesQuery): EntryLinesQuery => {
+        let l = q
+        if (accounts && accounts.length > 0) {
+          l = l.in('account_number', accounts)
+        } else {
+          if (accountFrom) l = l.gte('account_number', accountFrom)
+          if (accountTo) l = l.lte('account_number', accountTo)
+        }
+        if (project) l = l.eq('project', project)
+        if (costCenter) l = l.eq('cost_center', costCenter)
+        return l
+      }
 
       type LineRow = {
         id: string
@@ -6475,18 +6534,21 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Lean row shape of the full-match aggregate pass. Field-compatible
-      // with LineRow everywhere groupKey/totals read, so both can feed the
-      // same aggregation code.
-      type AggregateRow = {
-        id: string
-        account_number: string
-        debit_amount: number
-        credit_amount: number
-        project: string | null
-        cost_center: string | null
-        dimensions?: Record<string, string> | null
-        journal_entries: { voucher_series: string; source_type: string }
+      // Display ordering: verifikat-major, newest first, then line order
+      // inside the voucher, with the line id as a deterministic tiebreak.
+      // Applied in JS because the sort keys live on the parent entry:
+      // PostgREST's `.order(col, { foreignTable })` sorts the EMBEDDED rows,
+      // not the parent result set, so this order was never produced server
+      // side.
+      const byDisplayOrder = (a: LineRow, b: LineRow) => {
+        const ad = a.journal_entries.entry_date
+        const bd = b.journal_entries.entry_date
+        if (ad !== bd) return ad < bd ? 1 : -1
+        const av = a.journal_entries.voucher_number
+        const bv = b.journal_entries.voucher_number
+        if (av !== bv) return bv - av
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
       }
 
       // Free-text search runs as two parallel .ilike() queries: one against
@@ -6498,6 +6560,11 @@ export const tools: McpTool[] = [
       const text = (args.text as string | undefined)?.trim()
       let data: LineRow[] = []
       let dbMatched = 0
+      // Full match set (non-text path only) so totals and groups are exact
+      // regardless of `limit`. The free-text path stays slice-scoped (its
+      // per-leg windows make a full pass unbounded) and says so via
+      // totals_scope='returned_slice'.
+      let fullRows: LineRow[] | null = null
       // True when at least one text-search leg filled its per-leg fetch
       // window: i.e. more matches probably exist on the DB side that didn't
       // make it into the merge. Drives the `truncated` signal honestly even
@@ -6557,17 +6624,7 @@ export const tools: McpTool[] = [
         for (const row of (byEntry.data ?? []) as unknown as LineRow[]) {
           if (!merged.has(row.id)) merged.set(row.id, row)
         }
-        data = Array.from(merged.values())
-          .sort((a, b) => {
-            const ad = a.journal_entries.entry_date
-            const bd = b.journal_entries.entry_date
-            if (ad !== bd) return ad < bd ? 1 : -1
-            const av = a.journal_entries.voucher_number
-            const bv = b.journal_entries.voucher_number
-            if (av !== bv) return bv - av
-            return a.sort_order - b.sort_order
-          })
-          .slice(0, limit)
+        data = Array.from(merged.values()).sort(byDisplayOrder).slice(0, limit)
 
         // Honest distinct-row count among what we fetched. If a leg hit its
         // window cap, more distinct matches may exist; `legCapHit` carries
@@ -6577,42 +6634,31 @@ export const tools: McpTool[] = [
           (byLine.data?.length ?? 0) >= legLimit ||
           (byEntry.data?.length ?? 0) >= legLimit
       } else {
-        const res = await applyOrderAndLimit(buildFilteredQuery(DISPLAY_SELECT))
-        if (res.error) {
-          log.warn('query_journal failed', { companyId, userId, error: res.error.message })
-          throw new Error('Database error while running journal query')
-        }
-        data = (res.data ?? []) as unknown as LineRow[]
-        dbMatched = data.length
-      }
-
-      // Full-match aggregate pass (non-text path only): re-run the same
-      // filters with a lean projection over ALL matching rows so totals and
-      // groups are exact regardless of `limit`. The free-text path stays
-      // slice-scoped (its per-leg windows make a full pass unbounded) and
-      // says so via totals_scope='returned_slice'.
-      let fullRows: AggregateRow[] | null = null
-      if (!text) {
+        // Non-text path: ONE two-step fetch (lib/bookkeeping/entry-lines.ts)
+        // feeds both the display slice and the full-match aggregate pass.
+        // The old code ran two `journal_entries!inner` embed queries here (a
+        // display one and a lean aggregate one), each of which PostgREST
+        // compiled into a correlated LATERAL join that walked every tenant's
+        // journal_entry_lines. The display projection is a superset of the
+        // aggregate one, so one pass over the same match set replaces both.
         try {
-          fullRows = await fetchAllRows<AggregateRow>(
-            ({ from, to }) =>
-              buildFilteredQuery(AGGREGATE_SELECT)
-                // Stable total order on the line PK for correct paging.
-                .order('id', { ascending: true })
-                .range(from, to) as unknown as PromiseLike<{
-                data: AggregateRow[] | null
-                error: { message: string } | null
-              }>,
-            { dedupeBy: (r) => r.id },
-          )
+          fullRows = await fetchEntryLines<LineRow>({
+            supabase,
+            entryColumns: ENTRY_COLUMNS,
+            lineColumns: LINE_COLUMNS,
+            filterEntries,
+            filterLines,
+          })
         } catch (err) {
-          log.warn('query_journal aggregate pass failed', {
+          log.warn('query_journal failed', {
             companyId,
             userId,
             error: err instanceof Error ? err.message : String(err),
           })
           throw new Error('Database error while running journal query')
         }
+        data = [...fullRows].sort(byDisplayOrder).slice(0, limit)
+        dbMatched = data.length
       }
 
       // Apply amount filter post-fetch: PostgREST can't OR an abs(debit) >= n
@@ -6670,8 +6716,8 @@ export const tools: McpTool[] = [
         | Array<{ key: string; debit: number; credit: number; net: number; line_count: number }>
         | undefined
       if (wantsGroups) {
-        const groupSource: Array<AggregateRow | LineRow> = fullFiltered ?? filtered
-        const keyOf = (r: AggregateRow | LineRow): string => {
+        const groupSource: LineRow[] = fullFiltered ?? filtered
+        const keyOf = (r: LineRow): string => {
           if (groupByDimension) return r.dimensions?.[groupByDimension] ?? '(utan dimension)'
           switch (groupBy) {
             case 'voucher_series': return r.journal_entries.voucher_series

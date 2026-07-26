@@ -174,6 +174,30 @@ describe('GET /api/dimensions/tagging/lines', () => {
     expect(second.lines.map((l) => l.id)).toEqual(['line-3'])
   })
 
+  it('orders each voucher lines by sort_order regardless of fetch order', async () => {
+    // The two-step fetch (lib/bookkeeping/entry-lines.ts) pages the lines on
+    // their PK for stable paging, so the workbench's voucher order
+    // (sort_order, then id) has to be restored per verifikat.
+    enqueue({ data: [makeRawEntry()] })
+    enqueue({
+      data: [
+        makeRawLine({ id: 'line-c', sort_order: 2, account_number: '2641' }),
+        makeRawLine({ id: 'line-a', sort_order: 0, account_number: '4010' }),
+        makeRawLine({ id: 'line-b', sort_order: 1, account_number: '1930' }),
+      ],
+    })
+
+    const response = await GET(request(), noParams)
+    const { status, body } = await parseJsonResponse<VouchersBody>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.vouchers[0].lines.map((l) => l.id)).toEqual([
+      'line-a',
+      'line-b',
+      'line-c',
+    ])
+  })
+
   it('caps the result at limit vouchers and reports total_capped', async () => {
     // limit=2 → route fetches 3 entries; a third means "there is more".
     enqueue({

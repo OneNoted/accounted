@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TaxCode } from '@/types'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 /**
  * Tax Code Service
@@ -77,29 +78,37 @@ export async function calculateMomsFromTaxCodes(
   periodEnd: string
 ): Promise<MomsBoxResult[]> {
 
-  // Fetch journal entry lines with tax_code in the period
-  const { data: lines, error: linesError } = await supabase
-    .from('journal_entry_lines')
-    .select(`
-      tax_code,
-      debit_amount,
-      credit_amount,
-      journal_entry_id,
-      journal_entries!inner (
-        user_id,
-        entry_date,
-        status,
-        fiscal_period_id
-      )
-    `)
-    .not('tax_code', 'is', null)
-    .eq('journal_entries.company_id', userId)
-    .eq('journal_entries.status', 'posted')
-    .gte('journal_entries.entry_date', periodStart)
-    .lte('journal_entries.entry_date', periodEnd)
-
-  if (linesError) {
-    throw new Error(`Failed to fetch journal lines: ${linesError.message}`)
+  // Fetch journal entry lines with tax_code in the period.
+  //
+  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
+  // the scope filters used to sit on a `journal_entries!inner` embed, which
+  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
+  // journal_entry_lines table across all tenants. Both steps paginate, so a
+  // period with more than 1000 tax-coded lines is no longer silently
+  // truncated at PostgREST's default cap either.
+  let lines: Array<{
+    tax_code: string | null
+    debit_amount: number | null
+    credit_amount: number | null
+    journal_entry_id: string
+  }>
+  try {
+    lines = await fetchEntryLines({
+      supabase,
+      entryColumns: 'user_id, entry_date, status, fiscal_period_id',
+      lineColumns: 'tax_code, debit_amount, credit_amount, journal_entry_id',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', userId)
+          .eq('status', 'posted')
+          .gte('entry_date', periodStart)
+          .lte('entry_date', periodEnd),
+      filterLines: (q: EntryLinesQuery) => q.not('tax_code', 'is', null),
+    })
+  } catch (err) {
+    throw new Error(
+      `Failed to fetch journal lines: ${err instanceof Error ? err.message : String(err)}`
+    )
   }
 
   // Fetch all tax codes for lookup
@@ -115,7 +124,7 @@ export async function calculateMomsFromTaxCodes(
   // Aggregate amounts by moms box
   const boxTotals = new Map<string, number>()
 
-  for (const line of lines || []) {
+  for (const line of lines) {
     if (!line.tax_code) continue
 
     const taxCode = taxCodeMap.get(line.tax_code)

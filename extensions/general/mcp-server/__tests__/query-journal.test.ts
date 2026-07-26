@@ -63,6 +63,57 @@ function makeChainMock(lines: unknown[], count: number) {
 }
 
 /**
+ * Mock for the NON-text path, which uses the two-step entry-lines fetch
+ * (lib/bookkeeping/entry-lines.ts): journal_entries is queried first, then
+ * journal_entry_lines by parent id, and the parent is reattached under
+ * `journal_entries`. Both steps page with `.order('id').range(from, to)`, so
+ * `.range()` is the terminal and one short page ends the paging loop.
+ *
+ * Fixtures stay embed-shaped (a line with its `journal_entries` parent); the
+ * mock splits them into the two row sets the helper actually fetches, so the
+ * value the tool sees is byte-identical to the old embed result.
+ */
+function makeEntryLinesMock(rows: Array<Record<string, unknown>>) {
+  const tables: string[] = []
+  const entries = [
+    ...new Map(
+      rows.map((r) => {
+        const e = r.journal_entries as { id: string }
+        return [e.id, e]
+      }),
+    ).values(),
+  ]
+  const bareLines = rows.map((r) => {
+    const { journal_entries: parent, ...line } = r
+    return { ...line, journal_entry_id: (parent as { id: string }).id }
+  })
+
+  const chain = (data: unknown[]): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data, error: null, count: data.length })
+          }
+          if (prop === 'range') return () => ({ data, error: null, count: data.length })
+          return () => chain(data)
+        },
+      },
+    )
+
+  const supabase = {
+    from: vi.fn().mockImplementation((table: string) => {
+      tables.push(table)
+      return chain(table === 'journal_entries' ? entries : bareLines)
+    }),
+  } as never
+
+  return { supabase, tables }
+}
+
+/**
  * Richer mock for the text-search path: returns queued results across
  * successive .from() calls and records every .ilike(column, pattern) call so
  * tests can assert what was actually sent to PostgREST.
@@ -162,13 +213,16 @@ describe('gnubok_query_journal: entry notes (verifikat-anteckningar)', () => {
       makeLineRow({ id: 'l1', entry_notes: 'Avser Q1-hyran, se mail 12/3' }),
       makeLineRow({ id: 'l2' }),
     ]
-    const supabase = makeChainMock(rows, rows.length)
+    const { supabase, tables } = makeEntryLinesMock(rows)
 
     const result = (await tool.execute(
       { accounts: ['4010'] },
       'company-1', 'user-1', supabase,
     )) as { lines: Array<{ line_id: string; entry_notes: string | null }> }
 
+    // The parent entry is reattached under the same key the old embed used,
+    // so every mapped field still resolves.
+    expect(tables).toEqual(['journal_entries', 'journal_entry_lines'])
     expect(result.lines.find((l) => l.line_id === 'l1')?.entry_notes).toBe(
       'Avser Q1-hyran, se mail 12/3',
     )
@@ -203,7 +257,7 @@ describe('gnubok_query_journal: execute', () => {
         },
       },
     ]
-    const supabase = makeChainMock(lines, 2)
+    const { supabase } = makeEntryLinesMock(lines)
 
     const result = (await tool.execute(
       { account_from: '4000', account_to: '4999', amount_min: 1000, limit: 100 },
@@ -243,23 +297,18 @@ describe('gnubok_query_journal: execute', () => {
   })
 
   it('marks truncated=true and computes totals over the FULL match set when the slice is capped', async () => {
-    // Regression for the slice-totals bug: the display query is capped at
-    // `limit`, but totals/total_lines must come from the fetchAllRows
-    // aggregate pass over ALL matching lines (totals_scope='full_match').
+    // Regression for the slice-totals bug: the returned lines are capped at
+    // `limit`, but totals/total_lines must cover ALL matching lines
+    // (totals_scope='full_match'). One two-step fetch feeds both: the full
+    // match set is sorted and sliced in JS for the display window.
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
-    const displaySlice = [makeLineRow({ id: 'l1', account_number: '1930', debit_amount: 100 })]
     const fullMatchSet = [
       makeLineRow({ id: 'l1', account_number: '1930', debit_amount: 100 }),
       makeLineRow({ id: 'l2', account_number: '1930', debit_amount: 200 }),
       makeLineRow({ id: 'l3', account_number: '1930', debit_amount: 300 }),
     ]
 
-    // .from() call order: display query first, then the aggregate pass
-    // (single page: 3 rows < PAGE_SIZE ends the fetchAllRows loop).
-    const { supabase, callCount } = makeQueueMock([
-      { data: displaySlice, count: 1 },
-      { data: fullMatchSet, count: 3 },
-    ])
+    const { supabase, tables } = makeEntryLinesMock(fullMatchSet)
 
     const result = (await tool.execute(
       { accounts: ['1930'], limit: 1 },
@@ -274,7 +323,9 @@ describe('gnubok_query_journal: execute', () => {
       totals_scope: string
     }
 
-    expect(callCount()).toBe(2)
+    // Entry side first, then the lines: no query starts on
+    // journal_entry_lines with the tenant scope hidden in an embed.
+    expect(tables).toEqual(['journal_entries', 'journal_entry_lines'])
     expect(result.truncated).toBe(true)
     expect(result.total_lines).toBe(3)
     expect(result.returned_lines).toBe(1)
@@ -303,8 +354,8 @@ describe('gnubok_query_journal: execute', () => {
       makeLineRow({ id: 'l2', account_number: '4010', debit_amount: 50 }),
       makeLineRow({ id: 'l3', account_number: '5010', debit_amount: 0, credit_amount: 30 }),
     ]
-    // makeChainMock feeds the SAME rows to display + aggregate passes.
-    const supabase = makeChainMock(rows, 3)
+    // One two-step fetch feeds both the display slice and the aggregate.
+    const { supabase } = makeEntryLinesMock(rows)
 
     const result = (await tool.execute(
       { group_by: 'account_number', limit: 100 },
@@ -333,7 +384,7 @@ describe('gnubok_query_journal: execute', () => {
       { ...makeLineRow({ id: 'l2', account_number: '4011', debit_amount: 50 }), dimensions: { '6': 'P001', '1': 'KS01' } },
       { ...makeLineRow({ id: 'l3', account_number: '5010', debit_amount: 0, credit_amount: 30 }), dimensions: null },
     ]
-    const supabase = makeChainMock(rows, 3)
+    const { supabase } = makeEntryLinesMock(rows)
 
     const result = (await tool.execute(
       { group_by_dimension: '6', limit: 100 },

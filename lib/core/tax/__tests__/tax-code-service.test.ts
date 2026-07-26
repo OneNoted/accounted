@@ -15,6 +15,9 @@ function makeBuilder() {
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.maybeSingle = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
+  // Paging terminal for the two-step entry-lines fetch
+  // (lib/bookkeeping/entry-lines.ts). One short page ends the paging loop.
+  b.range = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
 }
@@ -81,16 +84,22 @@ describe('calculateMomsFromTaxCodes', () => {
       is_output_vat: false,
     })
 
+    // The lines are fetched in two steps (lib/bookkeeping/entry-lines.ts):
+    // the parent entries first, then the lines keyed by journal_entry_id,
+    // with the parent reattached under `journal_entries`.
+    const entries = [{ id: 'je1' }, { id: 'je2' }, { id: 'je3' }]
     const lines = [
-      { tax_code: 'MP1', debit_amount: 0, credit_amount: 10000, journal_entry_id: 'je1', journal_entries: {} },
-      { tax_code: 'MP1', debit_amount: 0, credit_amount: 5000, journal_entry_id: 'je2', journal_entries: {} },
-      { tax_code: 'IP1', debit_amount: 2500, credit_amount: 0, journal_entry_id: 'je3', journal_entries: {} },
+      { id: 'l1', tax_code: 'MP1', debit_amount: 0, credit_amount: 10000, journal_entry_id: 'je1' },
+      { id: 'l2', tax_code: 'MP1', debit_amount: 0, credit_amount: 5000, journal_entry_id: 'je2' },
+      { id: 'l3', tax_code: 'IP1', debit_amount: 2500, credit_amount: 0, journal_entry_id: 'je3' },
     ]
 
     results = [
-      // 0: journal lines query (thenable: no .single())
+      // 0: parent entries page (.range terminal)
+      { data: entries, error: null },
+      // 1: journal lines page (.range terminal)
       { data: lines, error: null },
-      // 1: getTaxCodes query (thenable: no .single())
+      // 2: getTaxCodes query (thenable: no .single())
       { data: [mp1, ip1], error: null },
     ]
 

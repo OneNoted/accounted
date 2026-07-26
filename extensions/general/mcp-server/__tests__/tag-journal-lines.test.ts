@@ -40,6 +40,30 @@ function makeLineRow(i: number, overrides: Record<string, unknown> = {}) {
   }
 }
 
+/**
+ * Enqueue the two pages the two-step entry-lines fetch reads
+ * (lib/bookkeeping/entry-lines.ts): the parent entries first, then the bare
+ * lines keyed by journal_entry_id. Fixtures stay embed-shaped; the helper
+ * reattaches the parent under `journal_entries`, so the tool sees exactly
+ * what the old `journal_entries!inner` embed produced.
+ */
+function enqueueMatchedLines(
+  enqueue: (result: { data?: unknown; error?: unknown }) => void,
+  rows: ReturnType<typeof makeLineRow>[],
+) {
+  const entries = [
+    ...new Map(rows.map((r) => [r.journal_entries.id, r.journal_entries])).values(),
+  ]
+  enqueue({ data: entries, error: null })
+  enqueue({
+    data: rows.map(({ journal_entries: parent, ...line }) => ({
+      ...line,
+      journal_entry_id: parent.id,
+    })),
+    error: null,
+  })
+}
+
 // ── Registration + contracts ─────────────────────────────────────────────────
 
 describe('gnubok_tag_journal_lines registration', () => {
@@ -96,7 +120,7 @@ describe('gnubok_tag_journal_lines: filter gates', () => {
   it('throws a helpful error when no posted lines match', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null }) // resolveDimensionBags passthrough
-    enqueue({ data: [], error: null }) // line match query → empty
+    enqueue({ data: [], error: null }) // entry match query, empty: no line query runs
 
     await expect(
       tagJournalLines.execute(
@@ -111,7 +135,7 @@ describe('gnubok_tag_journal_lines: filter gates', () => {
   it('throws asking to narrow the filter when more than 500 lines match', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null })
-    enqueue({ data: Array.from({ length: 501 }, (_, i) => makeLineRow(i)), error: null })
+    enqueueMatchedLines(enqueue, Array.from({ length: 501 }, (_, i) => makeLineRow(i)))
 
     await expect(
       tagJournalLines.execute(
@@ -133,7 +157,7 @@ describe('gnubok_tag_journal_lines: staging', () => {
   it('stages a retag_line_dimensions op with matched line_ids + preview sample', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null }) // passthrough (free-text era)
-    enqueue({ data: [makeLineRow(1), makeLineRow(2)], error: null }) // line match query
+    enqueueMatchedLines(enqueue, [makeLineRow(1), makeLineRow(2)]) // line match query
     enqueue({ data: { id: 'op-retag-1' }, error: null }) // pending_operations insert
 
     const result = (await tagJournalLines.execute(
@@ -192,7 +216,7 @@ describe('gnubok_tag_journal_lines: staging', () => {
       ],
       error: null,
     })
-    enqueue({ data: [makeLineRow(1)], error: null }) // line match query
+    enqueueMatchedLines(enqueue, [makeLineRow(1)]) // line match query
     enqueue({ data: { id: 'op-retag-2' }, error: null }) // pending_operations insert
 
     const result = (await tagJournalLines.execute(
@@ -259,7 +283,7 @@ describe('gnubok_tag_journal_lines: staging', () => {
   it('dry_run previews the match without inserting a pending operation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { dimensions_enabled: false }, error: null })
-    enqueue({ data: [makeLineRow(1)], error: null }) // line match query
+    enqueueMatchedLines(enqueue, [makeLineRow(1)]) // line match query
 
     const result = (await tagJournalLines.execute(
       {
