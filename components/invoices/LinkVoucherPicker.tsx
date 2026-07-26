@@ -84,11 +84,19 @@ export default function LinkVoucherPicker({
   const { toast } = useToast()
   const t = useTranslations('invoice_link_voucher')
 
-  // Kontantmetoden links against a bank/cash debit (19xx), not an AR credit:
-  // describe that. Only the customer-invoice copy varies by method.
+  // Supplier mode links against an AP debit (2440), kontantmetoden against a
+  // bank/cash debit (19xx), and the accrual customer mode against an AR credit
+  // (1510): the intro + empty copy must describe the right side, otherwise the
+  // empty state tells the user to look for a verifikat that can never match
+  // (support case 2026-07-26: supplier dialog spoke of kundfordran/1510).
+  const isSupplier = mode === 'supplier_invoice'
   const isCash = mode === 'customer_invoice' && accountingMethod === 'cash'
-  const introKey = isCash ? 'intro_cash' : 'intro'
-  const emptyDescriptionKey = isCash ? 'empty_description_cash' : 'empty_description'
+  const introKey = isSupplier ? 'intro_supplier' : isCash ? 'intro_cash' : 'intro'
+  const emptyDescriptionKey = isSupplier
+    ? 'empty_description_supplier'
+    : isCash
+      ? 'empty_description_cash'
+      : 'empty_description'
 
   const apiBase =
     mode === 'supplier_invoice'

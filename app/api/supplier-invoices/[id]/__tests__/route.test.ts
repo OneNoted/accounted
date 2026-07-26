@@ -89,6 +89,31 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
     expect(mockSupabase.from).toHaveBeenCalledTimes(1)
   })
 
+  it('blocks deletion when a payment row references the invoice', async () => {
+    // Belt-and-braces: payments normally move the status past the deletable
+    // list, but a payment row must block deletion regardless.
+    enqueue({
+      data: {
+        status: 'overdue',
+        registration_journal_entry_id: null,
+        is_credit_note: false,
+      },
+    })
+    enqueue({ data: { id: 'pay-1' } }) // supplier_invoice_payments lookup
+
+    const response = await deleteRequest()
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { reason: string; paymentId: string } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_DELETE_HAS_BOOKING')
+    expect(body.error.details.reason).toBe('payments')
+    expect(body.error.details.paymentId).toBe('pay-1')
+    // Only the existence fetch + payments lookup ran: no item deletion.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(2)
+  })
+
   it('blocks deletion when an accrual schedule references the invoice', async () => {
     enqueue({
       data: {
@@ -97,6 +122,7 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
         is_credit_note: false,
       },
     })
+    enqueue({ data: null }) // supplier_invoice_payments lookup: none
     // accrual_schedules lookup finds a linked schedule (ON DELETE RESTRICT
     // would otherwise fail AFTER the items were already deleted).
     enqueue({ data: { id: 'sched-1' } })
@@ -110,8 +136,17 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
     expect(body.error.code).toBe('SI_DELETE_HAS_BOOKING')
     expect(body.error.details.reason).toBe('accrual_schedule')
     expect(body.error.details.scheduleId).toBe('sched-1')
-    // Only the existence fetch + schedule lookup ran: no item deletion.
-    expect(mockSupabase.from).toHaveBeenCalledTimes(2)
+    // Existence fetch + payments lookup + schedule lookup: no item deletion.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(3)
+  })
+
+  it('blocks deletion for a paid invoice', async () => {
+    enqueue({
+      data: { status: 'paid', registration_journal_entry_id: null, is_credit_note: false },
+    })
+
+    const { status } = await parseJsonResponse(await deleteRequest())
+    expect(status).toBe(400)
   })
 
   it('deletes an unbooked registered invoice', async () => {
@@ -122,6 +157,30 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
         is_credit_note: false,
       },
     })
+    enqueue({ data: null }) // supplier_invoice_payments lookup: none
+    enqueue({ data: null }) // accrual_schedules lookup: none
+    enqueue({ data: null }) // items delete
+    enqueue({ data: null }) // invoice delete
+
+    const response = await deleteRequest()
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+  })
+
+  it('deletes an unbooked, unpaid overdue invoice', async () => {
+    // The overdue cron flips unbooked invoices past due_date from
+    // registered/approved to 'overdue'; a registered-only gate made them
+    // permanently undeletable just by aging (support case 2026-07-26).
+    enqueue({
+      data: {
+        status: 'overdue',
+        registration_journal_entry_id: null,
+        is_credit_note: false,
+      },
+    })
+    enqueue({ data: null }) // supplier_invoice_payments lookup: none
     enqueue({ data: null }) // accrual_schedules lookup: none
     enqueue({ data: null }) // items delete
     enqueue({ data: null }) // invoice delete

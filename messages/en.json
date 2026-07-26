@@ -3457,6 +3457,8 @@
     "empty_title": "No matching journal entries found",
     "empty_description": "No posted entry credits 1510 in this invoice's currency and date window. Post a new payment instead, or correct the prior bookkeeping first.",
     "empty_description_cash": "No posted entry debits a cash/bank account (19xx) in this invoice's currency and date window. Post a new payment instead, or correct the prior bookkeeping first.",
+    "intro_supplier": "Pick an existing posted journal entry that debits accounts payable (2440). No new entry is created: you only link the existing one as the payment.",
+    "empty_description_supplier": "No posted entry debits accounts payable (2440) in this invoice's currency and date window. If the cost was booked straight against e.g. the bank account without 2440, it cannot be linked as a payment here: book the invoice from supplier invoices instead, or record a new payment.",
     "confirmation": "This links voucher {voucher} ({amount}) as the payment for the invoice.",
     "no_new_je_note": "No new bookkeeping is created: the existing journal entry is the payment posting.",
     "cancel": "Cancel",

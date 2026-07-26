@@ -147,16 +147,18 @@ export class CannotReverseNonPostedError extends Error {
 
 /**
  * Raised when a storno (reversal) is attempted on an entry that is itself a
- * storno or a correction. Reversing such an entry would produce a
- * storno-of-a-storno and make the original verifikat's cancellation chain
- * ambiguous, violating the traceable-correction requirement of BFL 5 kap 5§.
- * The UI hides the "Återför" action for these source types; this is the
+ * storno. Reversing a storno would produce a storno-of-a-storno and make the
+ * original verifikat's cancellation chain ambiguous, violating the
+ * traceable-correction requirement of BFL 5 kap 5§. Correction entries are
+ * NOT covered: a rättelseverifikation is a regular live verifikat and may be
+ * stornoed like any other (its correction_of_id link keeps the chain
+ * traceable). The UI hides the "Återför" action for stornos; this is the
  * server-side backstop so a direct API call cannot bypass it.
  */
 export class CannotReverseStornoError extends Error {
   readonly code = CANNOT_REVERSE_STORNO
   constructor(public readonly sourceType: string) {
-    super('Cannot reverse a storno or correction entry')
+    super('Cannot reverse a storno entry')
     this.name = 'CannotReverseStornoError'
   }
 }

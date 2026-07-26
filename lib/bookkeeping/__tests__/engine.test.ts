@@ -612,10 +612,12 @@ describe('reverseEntry: entry_date defaults to original entry date', () => {
   })
 })
 
-describe('reverseEntry: rejects reversing a storno or correction', () => {
+describe('reverseEntry: storno guard', () => {
   // BFL 5 kap 5§: a storno-of-a-storno makes the original verifikat's
-  // cancellation chain ambiguous. The UI hides "Återför" for these source
-  // types; the engine is the server-side backstop against a direct API call.
+  // cancellation chain ambiguous, so stornos are never reversible. A
+  // correction entry, by contrast, is a regular live verifikation (it can be
+  // a duplicate of an affärshändelse booked by another verifikat) and must
+  // stay reversible: the guard covers 'storno' only.
   function supabaseReturningOriginal(original: Record<string, unknown>) {
     return {
       rpc: vi.fn(),
@@ -631,34 +633,101 @@ describe('reverseEntry: rejects reversing a storno or correction', () => {
     }
   }
 
-  for (const sourceType of ['storno', 'correction'] as const) {
-    it(`throws CannotReverseStornoError for source_type '${sourceType}'`, async () => {
-      const original = {
-        id: 'entry-1',
-        company_id: 'company-1',
-        status: 'posted',
-        fiscal_period_id: 'period-1',
-        voucher_series: 'A',
-        voucher_number: 3,
-        entry_date: '2024-11-15',
-        description: 'Makulering: Hyra november',
-        source_type: sourceType,
-        source_id: null,
-        lines: [
-          { account_number: '1930', debit_amount: 10000, credit_amount: 0 },
-          { account_number: '5010', debit_amount: 0, credit_amount: 10000 },
-        ],
-      }
-      const supabase = supabaseReturningOriginal(original)
+  it(`throws CannotReverseStornoError for source_type 'storno'`, async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 3,
+      entry_date: '2024-11-15',
+      description: 'Makulering: Hyra november',
+      source_type: 'storno',
+      source_id: null,
+      lines: [
+        { account_number: '1930', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '5010', debit_amount: 0, credit_amount: 10000 },
+      ],
+    }
+    const supabase = supabaseReturningOriginal(original)
 
-      await expect(
-        reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1'),
-      ).rejects.toBeInstanceOf(CannotReverseStornoError)
+    await expect(
+      reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1'),
+    ).rejects.toBeInstanceOf(CannotReverseStornoError)
 
-      // No reversal was written: the guard fires before any voucher number is drawn.
-      expect(supabase.rpc).not.toHaveBeenCalled()
-    })
-  }
+    // No reversal was written: the guard fires before any voucher number is drawn.
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it(`reverses a correction entry like any regular verifikat`, async () => {
+    // A rättelseverifikation that turned out to duplicate another booking
+    // (support case 2026-07-26) is nullified with a normal storno; the
+    // correction_of_id link keeps the chain traceable.
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 3,
+      entry_date: '2024-11-15',
+      description: 'Rättelse: Hyra november',
+      source_type: 'correction',
+      source_id: null,
+      correction_of_id: 'entry-0',
+      lines: [
+        { account_number: '5010', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 10000 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+
+    let insertedEntry: Record<string, unknown> | undefined
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update']) b[m] = vi.fn().mockReturnValue(b)
+      b.insert = vi.fn().mockImplementation((payload: unknown) => {
+        insertedEntry = payload as Record<string, unknown>
+        return b
+      })
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 4, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({ data: [{ id: 'acc-5010', account_number: '5010' }, { id: 'acc-1930', account_number: '1930' }], error: null })
+          return b
+        }
+        if (table === 'journal_entry_lines') return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        return createMockChain()
+      }),
+    }
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(insertedEntry).toBeDefined()
+    expect(insertedEntry!.source_type).toBe('storno')
+    expect(insertedEntry!.reverses_id).toBe('entry-1')
+    expect(insertedEntry!.description).toBe('Makulering: Rättelse: Hyra november')
+  })
 })
 
 describe('reverseEntry: bank transaction unlink', () => {
