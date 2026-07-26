@@ -14,7 +14,7 @@ import { seedCompany, insertAuthUser, insertCompanyMember } from '@/tests/pg/fix
 //     pointer if it came from the import, and resets voucher_sequences
 //     so the next re-import restarts the series. User-created entries
 //     (source_type='manual', 'bank_transaction', etc.) are left intact.
-//  3. Since 20260726090000 the RPC takes a third argument, p_user_id, and
+//  3. Since 20260727120000 the RPC takes a third argument, p_user_id, and
 //     gates on owner/admin membership resolved from
 //     COALESCE(p_user_id, auth.uid()). Before that migration the function was
 //     SECURITY DEFINER with EXECUTE held by `anon` and no authorization check
@@ -417,7 +417,7 @@ describe('sie_imports: partial unique index + replace flow', () => {
   })
 })
 
-// Migration 20260726090000_replace_sie_import_authorize_actor.sql.
+// Migration 20260727120000_replace_sie_import_authorize_actor.sql.
 //
 // Before it, replace_sie_import was a SECURITY DEFINER function with EXECUTE
 // held by PUBLIC and by `anon`, no company_members lookup, no auth.uid() and

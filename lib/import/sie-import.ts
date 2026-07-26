@@ -203,7 +203,7 @@ async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<Supabas
  * The whole cleanup is atomic via the replace_sie_import DB RPC.
  *
  * `userId` is the authorising user and is required. Since migration
- * 20260726090000 the RPC gates on owner/admin membership resolved from
+ * 20260727120000 the RPC gates on owner/admin membership resolved from
  * COALESCE(p_user_id, auth.uid()), and it usually runs on the service client
  * (see rpcClientForBulkDelete) where auth.uid() is NULL: without an explicit
  * actor the gate can never match and always raises. Making the parameter
