@@ -19,6 +19,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { StoredStagedOperation } from '@/types'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -418,8 +419,53 @@ export default function AgentChat({
     }
     if (lastUserIdx === -1) return
     const userMsg = messages[lastUserIdx]
-    setMessages(messages.slice(0, lastUserIdx + 1))
-    void startTurn({ conversationId, userMessage: userMsg.text })
+
+    // Anything the discarded turn staged has to be withdrawn BEFORE the
+    // replacement runs. Otherwise the operation stays pending server-side while
+    // the regenerated turn stages a second proposal for the same booking: two
+    // live proposals for one action, each with its own 30-day expiry. Rejecting
+    // is the same path the Avslå button uses, so the audit trail records why it
+    // went away.
+    const abandoned = messages
+      .slice(lastUserIdx + 1)
+      .flatMap((m) => m.staged ?? [])
+      .map((s) => s.operation_id)
+      .filter((id): id is string => typeof id === 'string')
+
+    void (async () => {
+      const withdrawn = await Promise.all(
+        abandoned.map(async (operationId) => {
+          try {
+            const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                rejection_category: 'other',
+                rejection_reason: 'Ersatt: användaren begärde ett nytt svar.',
+              }),
+            })
+            // 409 means someone already resolved it (approved in Granskning, or
+            // a parallel client): it is no longer pending either way, which is
+            // all we need.
+            return res.ok || res.status === 409
+          } catch {
+            return false
+          }
+        }),
+      )
+
+      if (withdrawn.some((ok) => !ok)) {
+        // Leave the turn on screen: hiding a card whose operation is still
+        // pending is the failure mode this whole change exists to remove.
+        setErrorMessage(
+          'Kunde inte dra tillbaka det tidigare förslaget, så svaret behölls. Försök igen.',
+        )
+        return
+      }
+
+      setMessages((prev) => prev.slice(0, lastUserIdx + 1))
+      void startTurn({ conversationId, userMessage: userMsg.text })
+    })()
   }
 
   // Fired after the user rejects a proposal with a reason. The rejection is
@@ -994,6 +1040,54 @@ function prettyToolName(name: string): string {
 // Helper used by /chat/[id] server component to normalize agent_messages
 // rows into the ChatMessage shape this component expects. Exported here so
 // both the sheet (for future "resume" support) and the page can use it.
+/**
+ * Re-attach unanswered proposals to a hydrated thread.
+ *
+ * Approval cards ride on streamed events that are never persisted, so without
+ * this a resumed conversation shows the tool trace and the answer but no card,
+ * and the proposal quietly waits out its 30-day expiry in Granskning. They land
+ * on the last assistant message so they read as that turn's proposal, which is
+ * where they were when the turn streamed.
+ */
+/**
+ * `pending_operations.operation_type` stores the bare action name
+ * ('categorize_transaction'), while the live streamed card carries the MCP tool
+ * name ('gnubok_categorize_transaction') and ApprovalCard's PreviewBlock
+ * dispatches on that. Without this, every hydrated card fell through to the
+ * flat generic preview instead of the journal-line one, so a resumed proposal
+ * looked materially worse than the same proposal did live.
+ */
+export function toolNameFor(operationType: string): string {
+  return operationType.startsWith('gnubok_') ? operationType : `gnubok_${operationType}`
+}
+
+export function attachStagedOperations(
+  messages: ChatMessage[],
+  staged: StoredStagedOperation[],
+): ChatMessage[] {
+  if (staged.length === 0) return messages
+
+  const cards: StagedOperation[] = staged.map((op) => ({
+    // Hydrated cards have no tool_use_id (it lived only in the stream); the
+    // operation id is the stable key and the only thing commit/reject need.
+    tool_use_id: `hydrated:${op.id}`,
+    operation_id: op.id,
+    risk_level:
+      op.risk_level === 'high' || op.risk_level === 'medium' ? op.risk_level : 'low',
+    message: op.title ?? 'Förslag väntar på granskning.',
+    tool_name: toolNameFor(op.operation_type),
+    preview: op.preview_data,
+  }))
+
+  const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf('assistant')
+  if (lastAssistantIdx === -1) {
+    return [...messages, { role: 'assistant', text: '', staged: cards }]
+  }
+  return messages.map((m, i) =>
+    i === lastAssistantIdx ? { ...m, staged: [...(m.staged ?? []), ...cards] } : m,
+  )
+}
+
 export function normalizeStoredMessages(
   rows: { role: string; content: unknown; hidden?: boolean | null }[],
 ): ChatMessage[] {
