@@ -33,6 +33,13 @@ Flag concrete deviations, each tied to `file:line` and a rule:
 - **Motion**: press-scale / hover-lift / spring overshoot (all forbidden); missing `transition-colors`.
 - **A11y**: contrast < AA, icon-only button without `aria-label`, no visible focus ring, touch target < 40px.
 - **UX friction**: unclear labels, redundant `PageHeader.description`, slow paths for the 90-second session.
+- **Locked migration conventions** (2026-07, the numbered list in `.claude/rules/design.md`): sub-rows or
+  two-line rows in list tables; the same Badge on every row (chips mark exceptions only); banners instead
+  of one `.attn` sentence; instructional copy in the page flow instead of the "?" popover after the H1;
+  context picker missing, duplicated, or not far-right (`FyPicker`/`ContextPicker`); per-call-site radius
+  overrides on `<Button>` (pills are app-wide); `shadow-*` on cards; outcome text written into the page
+  instead of an up-front confirm dialog; settings tabs not using the Fönster language (flat hairline rows,
+  switches, dirty-only sticky save bar).
 
 ## 4. Adversarial verification (kill false positives)
 Prefer the **`.claude/workflows/design-scan.js`** workflow: it fans out one agent per page, then runs a
