@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { getPool } from '@/tests/pg/setup'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { getPool, withUserContext } from '@/tests/pg/setup'
+import { seedCompany, insertAuthUser, insertCompanyMember } from '@/tests/pg/fixtures'
 
 // Covers the Fortnox re-sync flow:
 //  1. The partial unique index `sie_imports_company_id_file_hash_active_idx`
@@ -14,6 +14,14 @@ import { seedCompany } from '@/tests/pg/fixtures'
 //     pointer if it came from the import, and resets voucher_sequences
 //     so the next re-import restarts the series. User-created entries
 //     (source_type='manual', 'bank_transaction', etc.) are left intact.
+//  3. Since 20260726090000 the RPC takes a third argument, p_user_id, and
+//     gates on owner/admin membership resolved from
+//     COALESCE(p_user_id, auth.uid()). Before that migration the function was
+//     SECURITY DEFINER with EXECUTE held by `anon` and no authorization check
+//     at all, while it set gnubok.allow_delete: an unauthenticated caller
+//     could hard-delete any tenant's imported verifikationer. These tests run
+//     over the raw pool (auth.uid() is NULL), which is exactly the situation
+//     the service-role client creates, so every call must pass an owner actor.
 
 async function insertSIEImport(params: {
   companyId: string
@@ -124,6 +132,16 @@ async function insertDocumentAttachment(params: {
   return id
 }
 
+// Every call goes through the 3-arg shape with an explicit actor: the pool
+// connection has no JWT, so auth.uid() is NULL and the owner/admin gate can
+// only resolve through p_user_id.
+async function callReplace(companyId: string, importId: string, actor: string | null) {
+  return getPool().query<{ deleted: number }>(
+    `SELECT public.replace_sie_import($1::uuid, $2::uuid, $3::uuid) AS deleted`,
+    [companyId, importId, actor],
+  )
+}
+
 describe('sie_imports: partial unique index + replace flow', () => {
   it('blocks a second active row with the same (company_id, file_hash)', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
@@ -219,11 +237,8 @@ describe('sie_imports: partial unique index + replace flow', () => {
       openingBalanceEntryId: obEntry,
     })
 
-    const { rows } = await getPool().query<{ replace_sie_import: number }>(
-      `SELECT public.replace_sie_import($1::uuid, $2::uuid) AS replace_sie_import`,
-      [companyId, importId],
-    )
-    expect(rows[0]!.replace_sie_import).toBe(3) // OB + 2 import entries
+    const { rows } = await callReplace(companyId, importId, userId)
+    expect(rows[0]!.deleted).toBe(3) // OB + 2 import entries
 
     // The import entries (and their lines) are gone
     const entries = await getPool().query<{ id: string; status: string }>(
@@ -301,10 +316,7 @@ describe('sie_imports: partial unique index + replace flow', () => {
       fiscalPeriodId,
     })
 
-    await getPool().query(
-      `SELECT public.replace_sie_import($1::uuid, $2::uuid)`,
-      [companyId, importId],
-    )
+    await callReplace(companyId, importId, userId)
 
     const vs = await getPool().query<{ last_number: number }>(
       `SELECT last_number FROM public.voucher_sequences
@@ -339,10 +351,7 @@ describe('sie_imports: partial unique index + replace flow', () => {
       fiscalPeriodId,
     })
 
-    await getPool().query(
-      `SELECT public.replace_sie_import($1::uuid, $2::uuid)`,
-      [companyId, importId],
-    )
+    await callReplace(companyId, importId, userId)
 
     // The document attached to the deleted import entry is detached but preserved
     const detached = await getPool().query<{
@@ -400,16 +409,258 @@ describe('sie_imports: partial unique index + replace flow', () => {
       fiscalPeriodId,
     })
 
-    await getPool().query(
-      `SELECT public.replace_sie_import($1::uuid, $2::uuid)`,
-      [companyId, importId],
+    await callReplace(companyId, importId, userId)
+
+    await expect(callReplace(companyId, importId, userId)).rejects.toThrow(
+      /not found or not in completed status/,
+    )
+  })
+})
+
+// Migration 20260726090000_replace_sie_import_authorize_actor.sql.
+//
+// Before it, replace_sie_import was a SECURITY DEFINER function with EXECUTE
+// held by PUBLIC and by `anon`, no company_members lookup, no auth.uid() and
+// no raise, while it called set_config('gnubok.allow_delete', 'true', true) to
+// disarm the BFL immutability and retention triggers. That combination made it
+// an unauthenticated cross-tenant data-destruction primitive over PostgREST.
+//
+// The gate mirrors undo_sie_import (20260624120000) and must fail CLOSED: a
+// NULL role (no membership at all, which is what an anon caller has) is
+// rejected just like a member/viewer role.
+describe('replace_sie_import: owner/admin authorization gate', () => {
+  it('succeeds for an owner actor and still deletes the import entries', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+
+    const importEntry = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const manualEntry = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'manual', voucherNumber: 2,
+    })
+
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    const { rows } = await callReplace(companyId, importId, userId)
+    expect(rows[0]!.deleted).toBe(1)
+
+    const surviving = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.journal_entries WHERE id = ANY($1)`,
+      [[importEntry, manualEntry]],
+    )
+    expect(surviving.rows.map(r => r.id)).toEqual([manualEntry])
+
+    const importRow = await getPool().query<{ status: string }>(
+      `SELECT status FROM public.sie_imports WHERE id = $1`,
+      [importId],
+    )
+    expect(importRow.rows[0]?.status).toBe('replaced')
+  })
+
+  it('succeeds for an admin actor', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const adminId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: adminId, role: 'admin' })
+
+    await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    const { rows } = await callReplace(companyId, importId, adminId)
+    expect(rows[0]!.deleted).toBe(1)
+  })
+
+  it('raises for an actor with no membership in the company', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const importEntry = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    // A real user who simply belongs to a different company: the cross-tenant
+    // case the pre-fix function allowed outright.
+    const { userId: strangerId } = await seedCompany()
+    await expect(callReplace(companyId, importId, strangerId)).rejects.toThrow(
+      /owners and admins/i,
     )
 
+    // And an id that matches no user at all.
+    await expect(callReplace(companyId, importId, randomUUID())).rejects.toThrow(
+      /owners and admins/i,
+    )
+
+    await expectUntouched(companyId, importId, importEntry)
+  })
+
+  it('raises for a viewer-role member', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const viewerId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: viewerId, role: 'viewer' })
+
+    const importEntry = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    await expect(callReplace(companyId, importId, viewerId)).rejects.toThrow(
+      /owners and admins/i,
+    )
+    await expectUntouched(companyId, importId, importEntry)
+  })
+
+  it('raises for a member-role member', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+
+    const importEntry = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    await expect(callReplace(companyId, importId, memberId)).rejects.toThrow(
+      /owners and admins/i,
+    )
+    await expectUntouched(companyId, importId, importEntry)
+  })
+
+  it('raises when no authorising identity is supplied at all', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const importEntry = await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    // Explicit NULL p_user_id, auth.uid() NULL over the raw pool.
+    await expect(callReplace(companyId, importId, null)).rejects.toThrow(
+      /owners and admins/i,
+    )
+
+    // 2-arg shape (p_user_id defaults to NULL): this is the exact call the
+    // pre-fix function accepted from anon, and it must now raise.
     await expect(
       getPool().query(
         `SELECT public.replace_sie_import($1::uuid, $2::uuid)`,
         [companyId, importId],
       ),
-    ).rejects.toThrow(/not found or not in completed status/)
+    ).rejects.toThrow(/owners and admins/i)
+
+    await expectUntouched(companyId, importId, importEntry)
+  })
+
+  it('still resolves the actor from auth.uid() when p_user_id is omitted', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    await insertPostedEntry({
+      userId, companyId, fiscalPeriodId, sourceType: 'import', voucherNumber: 1,
+    })
+    const importId = await insertSIEImport({
+      companyId,
+      userId,
+      fileHash: `hash-${randomUUID()}`,
+      status: 'completed',
+      fiscalPeriodId,
+    })
+
+    // withUserContext sets the JWT sub to the owner and rolls back on return,
+    // so assert inside the callback.
+    const deleted = await withUserContext(userId, async (client) => {
+      const res = await client.query<{ deleted: number }>(
+        `SELECT public.replace_sie_import($1::uuid, $2::uuid) AS deleted`,
+        [companyId, importId],
+      )
+      const imp = await client.query<{ status: string }>(
+        `SELECT status FROM public.sie_imports WHERE id = $1`,
+        [importId],
+      )
+      expect(imp.rows[0]!.status).toBe('replaced')
+      return res.rows[0]!.deleted
+    })
+    expect(deleted).toBe(1)
+  })
+
+  it('exposes exactly one signature and does not grant EXECUTE to anon', async () => {
+    // The 2-arg overload is dropped by the migration: leaving it in place
+    // would keep an unguarded, unrevoked entry point alive and would make the
+    // 2-arg PostgREST call ambiguous against the new DEFAULT NULL parameter.
+    const { rows: overloads } = await getPool().query<{ signature: string }>(
+      `SELECT p.oid::regprocedure::text AS signature
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = 'replace_sie_import'`,
+    )
+    expect(overloads.map(r => r.signature)).toEqual([
+      'replace_sie_import(uuid,uuid,uuid)',
+    ])
+
+    const { rows } = await getPool().query<{
+      anon_can: boolean
+      public_can: boolean
+      authenticated_can: boolean
+      service_role_can: boolean
+    }>(
+      `SELECT has_function_privilege('anon', 'public.replace_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS anon_can,
+              has_function_privilege('public', 'public.replace_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS public_can,
+              has_function_privilege('authenticated', 'public.replace_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', 'public.replace_sie_import(uuid,uuid,uuid)', 'EXECUTE') AS service_role_can`,
+    )
+    expect(rows[0]!.anon_can, 'anon must not be able to call replace_sie_import').toBe(false)
+    expect(rows[0]!.public_can, 'PUBLIC must not hold EXECUTE').toBe(false)
+    // The app calls the RPC on the service client, falling back to the
+    // caller's session client when SUPABASE_SERVICE_ROLE_KEY is unset
+    // (rpcClientForBulkDelete in lib/import/sie-import.ts).
+    expect(rows[0]!.authenticated_can).toBe(true)
+    expect(rows[0]!.service_role_can).toBe(true)
   })
 })
+
+// The gate must fire before any mutation: the import row, its verifikat and
+// the allow_delete-protected data are all still there after a rejected call.
+async function expectUntouched(companyId: string, importId: string, entryId: string) {
+  const imp = await getPool().query<{ status: string }>(
+    `SELECT status FROM public.sie_imports WHERE id = $1 AND company_id = $2`,
+    [importId, companyId],
+  )
+  expect(imp.rows[0]?.status).toBe('completed')
+
+  const je = await getPool().query<{ status: string }>(
+    `SELECT status FROM public.journal_entries WHERE id = $1`,
+    [entryId],
+  )
+  expect(je.rows[0]?.status).toBe('posted')
+}

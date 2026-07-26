@@ -201,11 +201,20 @@ async function rpcClientForBulkDelete(fallback: SupabaseClient): Promise<Supabas
  * on each journal_entries DELETE (old_state JSONB snapshot).
  *
  * The whole cleanup is atomic via the replace_sie_import DB RPC.
+ *
+ * `userId` is the authorising user and is required. Since migration
+ * 20260726090000 the RPC gates on owner/admin membership resolved from
+ * COALESCE(p_user_id, auth.uid()), and it usually runs on the service client
+ * (see rpcClientForBulkDelete) where auth.uid() is NULL: without an explicit
+ * actor the gate can never match and always raises. Making the parameter
+ * required means a caller that has no authenticated user fails to compile
+ * rather than discovering the closed gate at runtime.
  */
 export async function replaceSIEImport(
   supabase: SupabaseClient,
   companyId: string,
-  importId: string
+  importId: string,
+  userId: string
 ): Promise<{ success: boolean; deletedEntries: number; error?: string }> {
   // 1. Fetch and validate the import record
   const { data: importRecord } = await supabase
@@ -238,11 +247,15 @@ export async function replaceSIEImport(
   }
 
   // 3. Atomically delete entries and mark import as replaced via DB RPC.
-  // Runs on the service client: see rpcClientForBulkDelete.
+  // Runs on the service client: see rpcClientForBulkDelete. Pass the
+  // authorising user explicitly: on the service client auth.uid() is NULL,
+  // so the RPC's owner/admin gate resolves against p_user_id instead.
+  const actorId = userId
   const rpcClient = await rpcClientForBulkDelete(supabase)
   const { data: deletedCount, error: rpcError } = await rpcClient.rpc('replace_sie_import', {
     p_company_id: companyId,
     p_import_id: importId,
+    p_user_id: actorId,
   })
 
   if (rpcError) {
@@ -1894,8 +1907,11 @@ export async function executeSIEImport(
           supabase, companyId, fyStart, fyEnd
         )
         if (priorPeriodImport) {
+          // Pass the authorising user: this path often runs on an API-key /
+          // MCP client where auth.uid() is NULL, and the replace_sie_import
+          // owner/admin gate would otherwise fail closed.
           const replaceResult = await replaceSIEImport(
-            supabase, companyId, priorPeriodImport.id
+            supabase, companyId, priorPeriodImport.id, userId
           )
           if (!replaceResult.success) {
             result.errors.push(

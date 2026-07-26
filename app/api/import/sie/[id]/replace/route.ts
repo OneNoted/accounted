@@ -18,10 +18,13 @@ export const POST = withRouteContext(
   'sie_import.replace',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ sieImportId: id })
 
-    const result = await replaceSIEImport(supabase, companyId!, id)
+    // The replace_sie_import RPC gates on owner/admin membership resolved from
+    // COALESCE(p_user_id, auth.uid()), and it runs on the service client where
+    // auth.uid() is NULL, so the authorising user has to be passed explicitly.
+    const result = await replaceSIEImport(supabase, companyId!, id, user.id)
 
     if (!result.success) {
       return errorResponseFromCode('SIE_REPLACE_FAILED', opLog, {
