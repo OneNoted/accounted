@@ -221,4 +221,40 @@ describe('POST /api/agent/invoke', () => {
     await res.text()
     expect(runChatTurnMock).toHaveBeenCalledTimes(1)
   })
+
+  it('hands the first-turn profile summary to the turn instead of re-reading it', async () => {
+    // On a first turn the route reads agent_profiles to build the intent's
+    // prompt template. run-turn needs the same value for the system prompt, so
+    // it is passed through rather than read a second time.
+    getIntentMock.mockReturnValue({
+      id: 'general.help',
+      sheetTitle: 'Assistenten',
+      capture: vi.fn().mockResolvedValue({ some: 'context' }),
+      promptTemplate: vi.fn().mockReturnValue('templated first turn'),
+    })
+
+    enqueuePreamble()
+    enqueue({ data: { id: CONVERSATION_ID } })             // conversation insert
+    enqueueAcceptedTail()
+    enqueue({ data: { profile_summary: 'Byggkonsult, K2' } }) // agent_profiles
+    enqueue({ data: [] })                                     // agent_memory
+
+    const res = await POST(
+      createMockRequest('/api/agent/invoke', {
+        method: 'POST',
+        body: { intent_id: 'general.help' }, // no user_message => first turn
+      }),
+    )
+    await res.text()
+
+    expect(runChatTurnMock).toHaveBeenCalledTimes(1)
+    const args = runChatTurnMock.mock.calls[0]![0] as {
+      preloadedProfileSummary?: string | null
+      userMessage: string
+      userMessageHidden?: boolean
+    }
+    expect(args.preloadedProfileSummary).toBe('Byggkonsult, K2')
+    expect(args.userMessage).toBe('templated first turn')
+    expect(args.userMessageHidden).toBe(true)
+  })
 })

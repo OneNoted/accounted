@@ -219,6 +219,9 @@ export async function POST(request: Request) {
   // client can also explicitly request a hidden turn (rejection correction)
   // even when it DID supply a user_message.
   let userMessageHidden = body.user_message_hidden === true
+  // Set on a first turn, where the prompt template needs it anyway; handed to
+  // runChatTurn so the system prompt reuses it instead of re-reading.
+  let preloadedProfileSummary: string | null | undefined
   if (!effectiveUserMessage) {
     try {
       const captured = await intent.capture(body.intent_args ?? {}, {
@@ -226,13 +229,17 @@ export async function POST(request: Request) {
         userId: user.id,
         companyId,
       })
-      const profileSummary = await loadProfileSummary(supabase, companyId)
-      const memory = await loadRankedMemory(supabase, companyId, 30)
+      const [profileSummary, memory] = await Promise.all([
+        loadProfileSummary(supabase, companyId),
+        loadRankedMemory(supabase, companyId, 30),
+      ])
       effectiveUserMessage = intent.promptTemplate({
         captured,
         profileSummary,
         activeMemory: memory,
       })
+      // Hand it to the turn so it doesn't re-read it for the system prompt.
+      preloadedProfileSummary = profileSummary
       userMessageHidden = true
     } catch (err) {
       return NextResponse.json(
@@ -279,6 +286,7 @@ export async function POST(request: Request) {
           userMessage: effectiveUserMessage,
           userMessageHidden,
           persist: true,
+          preloadedProfileSummary,
           emit: (event) => emit(event),
         })
       } catch (err) {

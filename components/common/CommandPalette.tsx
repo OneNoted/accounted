@@ -141,14 +141,14 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
         id: 'anna-fallback',
         label: `Fråga Anna: "${query.trim()}"`,
         icon: Wand2,
-        href: `/chat?prompt=${encodeURIComponent(query.trim())}`,
+        href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
       }
     : q
       ? {
           id: 'anna-followup',
           label: `Fråga Anna istället: "${query.trim()}"`,
           icon: Wand2,
-          href: `/chat?prompt=${encodeURIComponent(query.trim())}`,
+          href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
         }
       : null
 
