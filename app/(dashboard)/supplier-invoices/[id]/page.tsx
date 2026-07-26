@@ -491,15 +491,23 @@ export default function SupplierInvoiceDetailPage() {
             size="default"
           />
           {invoice.status === 'registered' && !invoice.is_credit_note && (
-            <>
-              <Button
-                onClick={handleApprove}
-                disabled={isProcessing || !canWrite}
-                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-              >
-                {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('approve')}
-              </Button>
+            <Button
+              onClick={handleApprove}
+              disabled={isProcessing || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('approve')}
+            </Button>
+          )}
+          {/* Delete is allowed while nothing would be orphaned: no booking, no
+              payments (server re-checks). 'approved'/'overdue' are included
+              because the overdue cron flips unbooked invoices there and a
+              registered-only gate made them undeletable just by aging. */}
+          {['registered', 'approved', 'overdue'].includes(invoice.status) &&
+            !invoice.is_credit_note &&
+            !invoice.registration_journal_entry_id &&
+            payments.length === 0 && (
               <Button
                 variant="destructive"
                 size="icon"
@@ -510,8 +518,7 @@ export default function SupplierInvoiceDetailPage() {
               >
                 {canWrite ? <Trash2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
               </Button>
-            </>
-          )}
+            )}
           {['approved', 'overdue', 'partially_paid'].includes(invoice.status) && (
             <>
               <Button

@@ -103,18 +103,27 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     )
   }
 
-  if (existing.status !== 'registered') {
+  // 'overdue' and 'approved' are included: the daily cron flips unbooked
+  // invoices past due_date from registered/approved to 'overdue', and a
+  // registered-only gate made such an invoice permanently undeletable just by
+  // aging (support case 2026-07-26). What actually protects the books is the
+  // orphan-safety checks below (no registration verifikat, no payments, no
+  // accrual schedule), not the lifecycle label.
+  if (!['registered', 'approved', 'overdue'].includes(existing.status)) {
     return NextResponse.json(
-      { error: 'Kan bara ta bort registrerade fakturor' },
+      { error: 'Endast obetalda fakturor utan bokföring kan tas bort' },
       { status: 400 }
     )
   }
 
   // Booked invoices must go through the credit flow (mirrors the credit-note
-  // guard above). Two independent blockers:
+  // guard above). Three independent blockers:
   //   (a) a posted registration verifikat: deleting the row would orphan it
   //       and silently understate 2440/2641 for the momsdeklaration;
-  //   (b) an accrual schedule: accrual_schedules.supplier_invoice_id is
+  //   (b) a payment row: deleting the invoice would orphan the payment's
+  //       journal-entry link (belt-and-braces: payments normally move the
+  //       status to partially_paid/paid, which the gate above already blocks);
+  //   (c) an accrual schedule: accrual_schedules.supplier_invoice_id is
   //       ON DELETE RESTRICT, so the invoice DELETE below would fail AFTER the
   //       items were already deleted, leaving a broken invoice with zero rows.
   if (existing.registration_journal_entry_id) {
@@ -123,13 +132,38 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  const { data: linkedSchedule } = await supabase
+  // Both orphan-safety lookups fail CLOSED: a lookup error must block the
+  // delete, otherwise a transient DB/RLS failure would read as "no payment /
+  // no schedule" and let the delete through unverified.
+  const { data: linkedPayment, error: paymentLookupError } = await supabase
+    .from('supplier_invoice_payments')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', id)
+    .limit(1)
+    .maybeSingle()
+
+  if (paymentLookupError) {
+    return NextResponse.json({ error: getUserErrorMessage(paymentLookupError) }, { status: 500 })
+  }
+
+  if (linkedPayment) {
+    return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
+      details: { reason: 'payments', paymentId: linkedPayment.id },
+    })
+  }
+
+  const { data: linkedSchedule, error: scheduleLookupError } = await supabase
     .from('accrual_schedules')
     .select('id')
     .eq('company_id', companyId)
     .eq('supplier_invoice_id', id)
     .limit(1)
     .maybeSingle()
+
+  if (scheduleLookupError) {
+    return NextResponse.json({ error: getUserErrorMessage(scheduleLookupError) }, { status: 500 })
+  }
 
   if (linkedSchedule) {
     return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
