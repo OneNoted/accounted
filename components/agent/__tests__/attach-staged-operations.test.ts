@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { attachStagedOperations, type StoredStagedOperation } from '../AgentChat'
+import {
+  attachStagedOperations,
+  toolNameFor,
+  type StoredStagedOperation,
+} from '../AgentChat'
 
 /**
  * Approval cards ride on streamed `staged_operation` events, which are never
@@ -11,7 +15,10 @@ import { attachStagedOperations, type StoredStagedOperation } from '../AgentChat
 
 const op = (overrides: Partial<StoredStagedOperation> = {}): StoredStagedOperation => ({
   id: 'op-1',
-  operation_type: 'gnubok_categorize_transaction',
+  // As actually stored: pending_operations.operation_type is the bare action
+  // name, verified against prod (categorize_transaction / create_voucher /
+  // approve_supplier_invoice are the values in the wild).
+  operation_type: 'categorize_transaction',
   title: 'Kontering: Circle K, 689 kr',
   risk_level: 'low',
   preview_data: { lines: [] },
@@ -42,6 +49,26 @@ describe('attachStagedOperations', () => {
       tool_name: 'gnubok_categorize_transaction',
       message: 'Kontering: Circle K, 689 kr',
     })
+  })
+
+  it('maps the stored operation_type onto the tool name the preview dispatches on', () => {
+    // pending_operations stores the bare action name; the live card carries the
+    // MCP tool name, and ApprovalCard's PreviewBlock keys off that. Getting this
+    // wrong is invisible in a mock but drops every hydrated card to the flat
+    // generic preview instead of the journal-line one. These four are the
+    // operation types that have a specialized renderer.
+    for (const t of [
+      'categorize_transaction',
+      'create_invoice',
+      'create_voucher',
+      'correct_entry',
+    ]) {
+      expect(toolNameFor(t)).toBe(`gnubok_${t}`)
+    }
+  })
+
+  it('leaves an already-prefixed operation type alone', () => {
+    expect(toolNameFor('gnubok_create_voucher')).toBe('gnubok_create_voucher')
   })
 
   it('keeps risk level for medium and high, and floors anything unknown to low', () => {
