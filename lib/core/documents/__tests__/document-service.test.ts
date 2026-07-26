@@ -50,8 +50,16 @@ vi.mock('@/lib/auth/api-keys', () => ({
 import {
   uploadDocument,
   createNewVersion,
+  deleteDocument,
   verifyIntegrity,
   validateDocumentMagicBytes,
+  buildDocumentStoragePath,
+  isCompanyScopedDocumentPath,
+  companyScopedDocumentPath,
+  legacyDocumentPath,
+  documentStoragePathCandidates,
+  downloadDocumentObject,
+  createDocumentSignedUrl,
   _resetBucketVerified,
 } from '../document-service'
 
@@ -251,6 +259,25 @@ describe('uploadDocument', () => {
       })
     )
   })
+
+  it('writes to the company-scoped key, not the legacy uploader-scoped key', async () => {
+    results = [{ data: makeDocumentAttachment({ id: 'doc-1' }), error: null }]
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    await uploadDocument(supabase as never, 'user-1', 'company-1', {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer(),
+      type: 'application/pdf',
+    })
+
+    const key = upload.mock.calls[0]![0] as string
+    expect(key).toMatch(/^documents\/company-1\/user-1\/\d+_kvitto\.pdf$/)
+    // The legacy layout put userId directly under `documents/`, which left
+    // company_id out of the RLS-visible path entirely.
+    expect(key).not.toMatch(/^documents\/user-1\//)
+  })
 })
 
 describe('createNewVersion', () => {
@@ -269,8 +296,9 @@ describe('createNewVersion', () => {
     })
 
     results = [
-      { data: current, error: null },     // fetch current
-      { data: newVersion, error: null },   // insert new version
+      { data: { company_id: 'company-1' }, error: null }, // resolve owning company
+      { data: current, error: null },                     // create_document_version RPC
+      { data: newVersion, error: null },                  // fetch new version row
     ]
 
     const supabase = makeClient()
@@ -283,6 +311,204 @@ describe('createNewVersion', () => {
     expect(result.version).toBe(2)
     expect(result.original_id).toBe('doc-1')
     expect(result.is_current_version).toBe(true)
+  })
+
+  it('writes the new version under the ORIGINAL document company prefix', async () => {
+    results = [
+      { data: { company_id: 'company-1' }, error: null },
+      { data: 'doc-2', error: null },
+      { data: makeDocumentAttachment({ id: 'doc-2', version: 2 }), error: null },
+    ]
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    await createNewVersion(supabase as never, 'user-1', 'doc-1', {
+      name: 'test-v2.pdf',
+      buffer: pdfBuffer('new content'),
+      type: 'application/pdf',
+    })
+
+    expect(upload.mock.calls[0]![0]).toMatch(
+      /^documents\/company-1\/user-1\/\d+_test-v2\.pdf$/,
+    )
+  })
+
+  it('refuses to upload when the original document cannot be resolved', async () => {
+    results = [{ data: null, error: null }]
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    await expect(
+      createNewVersion(supabase as never, 'user-1', 'doc-missing', {
+        name: 'test-v2.pdf',
+        buffer: pdfBuffer('new content'),
+        type: 'application/pdf',
+      }),
+    ).rejects.toThrow(/original document not found/)
+    expect(upload).not.toHaveBeenCalled()
+  })
+})
+
+describe('storage key layout helpers', () => {
+  const company = '11111111-1111-4111-8111-111111111111'
+  const user = '22222222-2222-4222-8222-222222222222'
+
+  it('builds a company-scoped key and sanitizes the filename', () => {
+    // sanitizeFileName replaces non-ASCII with '_', collapses runs, and trims
+    // leading/trailing underscores: "Kvitto å ä ö" ends up as "Kvitto".
+    expect(buildDocumentStoragePath(company, user, 'Kvitto å ä ö.pdf', 1700000000000)).toBe(
+      `documents/${company}/${user}/1700000000000_Kvitto.pdf`,
+    )
+    expect(buildDocumentStoragePath(company, user, 'faktura 2026-05.pdf', 1700000000000)).toBe(
+      `documents/${company}/${user}/1700000000000_faktura_2026-05.pdf`,
+    )
+  })
+
+  it('recognises company-scoped keys', () => {
+    expect(isCompanyScopedDocumentPath(`documents/${company}/${user}/1_a.pdf`, company)).toBe(true)
+    expect(isCompanyScopedDocumentPath(`documents/${user}/1_a.pdf`, company)).toBe(false)
+  })
+
+  it('translates legacy to company-scoped and back', () => {
+    const legacy = `documents/${user}/1_a.pdf`
+    const scoped = `documents/${company}/${user}/1_a.pdf`
+    expect(companyScopedDocumentPath(legacy, company)).toBe(scoped)
+    expect(legacyDocumentPath(scoped, company)).toBe(legacy)
+    // Already in the target layout: no translation offered.
+    expect(companyScopedDocumentPath(scoped, company)).toBeNull()
+    expect(legacyDocumentPath(legacy, company)).toBeNull()
+  })
+
+  it('offers no alternate for keys outside the documents/ root', () => {
+    // The MCP audit-package tool writes `{userId}/audit-packages/...`, which
+    // is not a document_attachments key and must never be rewritten.
+    const foreign = `${user}/audit-packages/1_archive.zip`
+    expect(companyScopedDocumentPath(foreign, company)).toBeNull()
+    expect(documentStoragePathCandidates(foreign, company)).toEqual([foreign])
+  })
+
+  it('lists the stored pointer first, then the alternate layout', () => {
+    const legacy = `documents/${user}/1_a.pdf`
+    const scoped = `documents/${company}/${user}/1_a.pdf`
+    expect(documentStoragePathCandidates(legacy, company)).toEqual([legacy, scoped])
+    expect(documentStoragePathCandidates(scoped, company)).toEqual([scoped, legacy])
+    // No companyId: nothing to derive, stored pointer only.
+    expect(documentStoragePathCandidates(legacy, null)).toEqual([legacy])
+  })
+})
+
+describe('dual-layout read helpers', () => {
+  const company = 'company-1'
+  const user = 'user-1'
+  const legacy = `documents/${user}/1_a.pdf`
+  const scoped = `documents/${company}/${user}/1_a.pdf`
+
+  it('downloadDocumentObject falls back to the company-scoped key', async () => {
+    const download = vi.fn(async (path: string) =>
+      path === scoped
+        ? { data: new Blob(['ok']), error: null }
+        : { data: null, error: { message: 'Object not found' } },
+    )
+    const supabase = makeClient({ download })
+
+    const result = await downloadDocumentObject(supabase as never, legacy, company)
+
+    expect(result.blob).not.toBeNull()
+    expect(result.resolvedPath).toBe(scoped)
+    expect(download).toHaveBeenCalledTimes(2)
+    expect(download.mock.calls[0]![0]).toBe(legacy)
+  })
+
+  it('downloadDocumentObject falls back to the legacy key', async () => {
+    const download = vi.fn(async (path: string) =>
+      path === legacy
+        ? { data: new Blob(['ok']), error: null }
+        : { data: null, error: { message: 'Object not found' } },
+    )
+    const supabase = makeClient({ download })
+
+    const result = await downloadDocumentObject(supabase as never, scoped, company)
+    expect(result.resolvedPath).toBe(legacy)
+  })
+
+  it('downloadDocumentObject reports the stored-pointer error when both fail', async () => {
+    const download = vi.fn(async (path: string) => ({
+      data: null,
+      error: { message: `missing:${path}` },
+    }))
+    const supabase = makeClient({ download })
+
+    const result = await downloadDocumentObject(supabase as never, legacy, company)
+    expect(result.blob).toBeNull()
+    expect(result.resolvedPath).toBeNull()
+    expect(result.error?.message).toBe(`missing:${legacy}`)
+  })
+
+  it('createDocumentSignedUrl falls back to the alternate layout', async () => {
+    const createSignedUrl = vi.fn(async (path: string) =>
+      path === scoped
+        ? { data: { signedUrl: 'https://example.com/signed' }, error: null }
+        : { data: null, error: { message: 'Object not found' } },
+    )
+    const supabase = makeClient({ createSignedUrl })
+
+    const result = await createDocumentSignedUrl(supabase as never, legacy, company, 3600)
+    expect(result.signedUrl).toBe('https://example.com/signed')
+    expect(result.resolvedPath).toBe(scoped)
+  })
+})
+
+describe('deleteDocument', () => {
+  it('removes BOTH key layouts so no readable orphan copy survives', async () => {
+    const company = 'company-1'
+    const legacy = 'documents/user-1/1_a.pdf'
+
+    results = [
+      {
+        data: {
+          id: 'doc-1',
+          file_name: 'a.pdf',
+          storage_path: legacy,
+          journal_entry_id: null,
+          user_id: 'user-1',
+        },
+        error: null,
+      },
+      { data: null, error: null }, // delete
+    ]
+
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const supabase = makeClient({ remove })
+
+    const result = await deleteDocument(supabase as never, company, 'doc-1')
+
+    expect(result.ok).toBe(true)
+    expect(remove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`])
+  })
+
+  it('refuses to delete a document linked to a journal entry (BFL 7 kap 2§)', async () => {
+    results = [
+      {
+        data: {
+          id: 'doc-1',
+          file_name: 'a.pdf',
+          storage_path: 'documents/user-1/1_a.pdf',
+          journal_entry_id: 'entry-1',
+          user_id: 'user-1',
+        },
+        error: null,
+      },
+    ]
+
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const supabase = makeClient({ remove })
+
+    const result = await deleteDocument(supabase as never, 'company-1', 'doc-1')
+
+    expect(result).toMatchObject({ ok: false, reason: 'linked_to_entry', status: 409 })
+    expect(remove).not.toHaveBeenCalled()
   })
 })
 

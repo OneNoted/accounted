@@ -191,7 +191,14 @@ describe('DELETE /api/documents/[id]', () => {
 
     expect(mockSupabase.storage.from).toHaveBeenCalledWith('documents')
     const storageBucket = mockSupabase.storage.from.mock.results[0]?.value
-    expect(storageBucket.remove).toHaveBeenCalledWith(['documents/user-1/kvitto.pdf'])
+    // Both storage layouts are removed: the stored pointer plus the alternate
+    // candidate key. During the company-scoped path migration a document can
+    // exist under either prefix, and removing only the stored one would leave a
+    // readable orphan copy of a document the user asked to erase.
+    expect(storageBucket.remove).toHaveBeenCalledWith([
+      'documents/user-1/kvitto.pdf',
+      'documents/company-1/user-1/kvitto.pdf',
+    ])
 
     expect(handler).toHaveBeenCalledOnce()
     expect(handler).toHaveBeenCalledWith(
