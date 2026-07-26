@@ -44,10 +44,19 @@ let markdownPromise: Promise<unknown> | null = null
 /** Start the markdown chunk before anything needs to render with it. */
 function prefetchMarkdown(): Promise<unknown> {
   if (!markdownPromise) {
-    markdownPromise = import('./MarkdownMessage').then((mod) => {
-      markdownReady = true
-      return mod
-    })
+    markdownPromise = import('./MarkdownMessage')
+      .then((mod) => {
+        markdownReady = true
+        return mod
+      })
+      .catch(() => {
+        // A chunk can 404 after a deploy, or the network can blip. Clear the
+        // cached promise so a later surface retries, instead of every bubble
+        // for the rest of the session being stuck on the plain-text fallback,
+        // and swallow the rejection so it is not an unhandled one.
+        markdownPromise = null
+        return null
+      })
   }
   return markdownPromise
 }

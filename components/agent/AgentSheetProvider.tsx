@@ -31,14 +31,19 @@ function AgentSheetSkeleton() {
 function useSheetPrefetch() {
   useEffect(() => {
     const warm = () => {
-      void import('./AgentSheet')
+      // Swallow a failed prefetch: the real import on click will surface any
+      // genuine problem, and warming must never produce an unhandled rejection.
+      void import('./AgentSheet').catch(() => {})
     }
     const w = window as Window & {
-      requestIdleCallback?: (cb: () => void) => number
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
       cancelIdleCallback?: (id: number) => void
     }
     if (typeof w.requestIdleCallback === 'function') {
-      const id = w.requestIdleCallback(warm)
+      // A busy page can stay non-idle indefinitely, so cap the wait: the point
+      // is to have the chunk ready before the first click, not to hold out for
+      // a quiet moment that may never arrive.
+      const id = w.requestIdleCallback(warm, { timeout: 2000 })
       return () => w.cancelIdleCallback?.(id)
     }
     const t = setTimeout(warm, 2000)
