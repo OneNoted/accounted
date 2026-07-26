@@ -20,8 +20,6 @@
     "load_more": "Ladda fler",
     "retry": "Försök igen",
     "load_error": "Kunde inte ladda data",
-    "popup_blocked_title": "Webbläsaren blockerade fliken",
-    "popup_blocked_description": "Tillåt popupfönster för Accounted i webbläsaren och försök igen.",
     "confirm": "Bekräfta",
     "yes": "Ja",
     "no": "Nej",
@@ -66,7 +64,9 @@
       "matched": "Matchad",
       "unmatched": "Omatchad"
     },
-    "more_options": "Fler alternativ"
+    "more_options": "Fler alternativ",
+    "popup_blocked_title": "Webbläsaren blockerade fliken",
+    "popup_blocked_description": "Tillåt popupfönster för Accounted i webbläsaren och försök igen."
   },
   "nav": {
     "dashboard": "Översikt",
@@ -386,7 +386,10 @@
     "transaction_sync_never_synced": "Inte synkad ännu",
     "transaction_sync_enabled_toast": "Transaktionssynk aktiverad. Historiken hämtas vid nästa synkning.",
     "transaction_sync_disabled_toast": "Transaktionssynk avaktiverad.",
-    "transaction_sync_toggle_failed": "Kunde inte spara inställningen. Försök igen."
+    "transaction_sync_toggle_failed": "Kunde inte spara inställningen. Försök igen.",
+    "sync_done_transactions": "{imported} transaktion(er) importerade, {linked} länkade till verifikat.",
+    "sync_done_feed": "{fetched} transaktion(er) hämtade: {imported} nya i inkorgen, {linked} länkade till verifikat.",
+    "sync_done_empty": "Stripe returnerade inga transaktioner för perioden. Kontrollera att rätt konto är anslutet om du väntade dig transaktioner."
   },
   "settings_modal": {
     "title": "Inställningar",
@@ -1387,6 +1390,13 @@
     "accept_spent_body": "Inbjudan har redan använts eller gått ut. Be den som bjöd in dig att skicka en ny."
   },
   "settings_company": {
+    "members_remove_aria": "Ta bort medlem",
+    "members_revoke_aria": "Återkalla inbjudan",
+    "members_role_label": "Roll",
+    "fp_start_date_label": "Startdatum",
+    "fp_start_date_help": "Första räkenskapsåret kan börja valfri dag.",
+    "fp_range": "{start} till {end}",
+    "fp_months": "{count} månader",
     "company_info_heading": "Företagsuppgifter",
     "share_capital_heading": "Aktiekapital",
     "aktiekapital_label": "Aktiekapital (kr)",
@@ -2273,6 +2283,7 @@
     "env_prod": "Produktion"
   },
   "settings_bankid": {
+    "cancel_linking": "Avbryt",
     "title": "BankID",
     "toast_already_linked": "Detta BankID är redan kopplat till ett annat konto.",
     "toast_link_failed": "Kunde inte koppla BankID.",
@@ -2290,6 +2301,9 @@
     "link_button": "Koppla BankID"
   },
   "settings_security": {
+    "set_password_title": "Sätt ett lösenord",
+    "set_password_description": "Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt.",
+    "set_password_button": "Sätt lösenord",
     "group_security": "Säkerhet",
     "toast_weak_password_title": "Lösenordet är för svagt",
     "toast_weak_password_description": "Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.",
@@ -2951,8 +2965,6 @@
     "preview_pdf": "Förhandsgranska PDF",
     "preview_pdf_generating": "Genererar...",
     "preview_pdf_failed": "Kunde inte generera PDF",
-    "review_customer_missing_title": "Kunduppgifterna kunde inte laddas",
-    "review_customer_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper.",
     "create_invoice_failed_title": "Kunde inte skapa faktura",
     "doc_created_title": "{docLabel} skapad",
     "doc_created_description": "{docLabel} {number} har skapats",
@@ -2994,7 +3006,9 @@
     "deduction_cap_check": "Kunden behöver kontrollera sitt återstående utrymme själv.",
     "deduction_summary_label": "Skattereduktion ROT/RUT",
     "to_pay_label": "Att betala",
-    "total_incl_vat_label": "Totalt inkl. moms"
+    "total_incl_vat_label": "Totalt inkl. moms",
+    "review_customer_missing_title": "Kunduppgifterna kunde inte laddas",
+    "review_customer_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper."
   },
   "invoice_review": {
     "assigned_number_prefix": "Tilldelas fakturanummer",
@@ -3089,21 +3103,6 @@
     "delivery_status_sent": "Skickad",
     "delivery_status_failed": "Misslyckad",
     "delivery_status_marked_sent": "Manuell",
-    "delivery_status_delivered": "Levererad",
-    "delivery_status_delayed": "Fördröjd",
-    "delivery_status_complained": "Spam-anmäld",
-    "delivery_status_bounced": "Studsade",
-    "delivery_status_suppressed": "Blockerad",
-    "delivery_status_explanation_sent": "Mailet är accepterat av e-posttjänsten. Besked om att mottagarens server tagit emot det har inte kommit in ännu.",
-    "delivery_status_explanation_delivered": "Mottagarens server tog emot mailet. Hittar kunden det ändå inte: be dem titta i skräpposten. Karantän hos mottagarens IT-avdelning syns aldrig för avsändaren.",
-    "delivery_status_explanation_delayed": "Mottagarens server har inte tagit emot mailet ännu, men nya försök pågår. Kommer inget besked inom några timmar: hör av dig till kunden.",
-    "delivery_status_explanation_complained": "Mottagaren markerade mailet som skräppost. Fortsatta utskick till adressen kan komma att blockeras.",
-    "delivery_status_explanation_bounced": "Mottagarens server avvisade mailet. Fakturan kom inte fram.",
-    "delivery_status_explanation_failed": "Mailet kunde inte skickas ut. Fakturan kom inte fram.",
-    "delivery_status_explanation_suppressed": "Adressen är spärrad hos e-posttjänsten efter tidigare studs eller spam-anmälan, så mailet skickades aldrig.",
-    "delivery_status_whole_send_note": "Beskedet gäller hela utskicket, inte enskilda mottagare.",
-    "delivery_provider_status_label": "Leveransstatus",
-    "delivery_provider_reason_label": "Besked från mottagaren",
     "delivery_manual_unknown_details": "Utskicket gjordes utanför Accounted. Mottagare, meddelande och den levererade filen är därför inte kända.",
     "delivery_to_label": "Till",
     "delivery_cc_label": "Kopia",
@@ -3260,7 +3259,22 @@
     "cancelled_draft": "Utkastet har makulerats.",
     "cancel_failed_title": "Kunde inte makulera fakturan",
     "paid_toast_title": "Betald",
-    "paid_toast_description": "Faktura {number} har markerats som betald och bokförts"
+    "paid_toast_description": "Faktura {number} har markerats som betald och bokförts",
+    "delivery_status_delivered": "Levererad",
+    "delivery_status_delayed": "Fördröjd",
+    "delivery_status_complained": "Spam-anmäld",
+    "delivery_status_bounced": "Studsade",
+    "delivery_status_suppressed": "Blockerad",
+    "delivery_status_explanation_sent": "Mailet är accepterat av e-posttjänsten. Besked om att mottagarens server tagit emot det har inte kommit in ännu.",
+    "delivery_status_explanation_delivered": "Mottagarens server tog emot mailet. Hittar kunden det ändå inte: be dem titta i skräpposten. Karantän hos mottagarens IT-avdelning syns aldrig för avsändaren.",
+    "delivery_status_explanation_delayed": "Mottagarens server har inte tagit emot mailet ännu, men nya försök pågår. Kommer inget besked inom några timmar: hör av dig till kunden.",
+    "delivery_status_explanation_complained": "Mottagaren markerade mailet som skräppost. Fortsatta utskick till adressen kan komma att blockeras.",
+    "delivery_status_explanation_bounced": "Mottagarens server avvisade mailet. Fakturan kom inte fram.",
+    "delivery_status_explanation_failed": "Mailet kunde inte skickas ut. Fakturan kom inte fram.",
+    "delivery_status_explanation_suppressed": "Adressen är spärrad hos e-posttjänsten efter tidigare studs eller spam-anmälan, så mailet skickades aldrig.",
+    "delivery_status_whole_send_note": "Beskedet gäller hela utskicket, inte enskilda mottagare.",
+    "delivery_provider_status_label": "Leveransstatus",
+    "delivery_provider_reason_label": "Besked från mottagaren"
   },
   "invoice_credit": {
     "back": "Tillbaka",
@@ -3507,6 +3521,8 @@
     "empty_title": "Inga matchande verifikationer hittades",
     "empty_description": "Det finns ingen bokförd verifikation som krediterar 1510 i fakturans valuta och period. Bokför istället en ny betalning, eller rätta tidigare bokföring först.",
     "empty_description_cash": "Det finns ingen bokförd verifikation som debiterar ett likvidkonto (19xx) i fakturans valuta och period. Bokför istället en ny betalning, eller rätta tidigare bokföring först.",
+    "intro_supplier": "Välj en befintlig verifikation som debiterar leverantörsskulder (2440). Ingen ny verifikation skapas: du länkar bara den befintliga som betalning.",
+    "empty_description_supplier": "Det finns ingen bokförd verifikation som debiterar leverantörsskulder (2440) i fakturans valuta och period. Om kostnaden bokfördes direkt mot t.ex. bank utan 2440 kan den inte länkas som betalning här: bokför istället fakturan från leverantörsfakturor, eller registrera en ny betalning.",
     "confirmation": "Detta länkar verifikat {voucher} ({amount}) som betalning för fakturan.",
     "no_new_je_note": "Ingen ny bokföring skapas: den befintliga verifikationen utgör betalningsposten.",
     "cancel": "Avbryt",
@@ -4025,7 +4041,6 @@
     "remove_blocked_cancel_cta": "Stäng",
     "replace_uploading": "Ersätter...",
     "remove_failed": "Kunde inte ta bort underlaget.",
-    "download_failed": "Kunde inte öppna dokumentet",
     "replace_failed": "Kunde inte ladda upp ny version.",
     "choose_from_inbox": "Välj från inkorgen",
     "picker_title": "Välj underlag från inkorgen",
@@ -4041,7 +4056,8 @@
     "picker_preview": "Förhandsgranska",
     "picker_attach": "Koppla underlag",
     "picker_close": "Stäng",
-    "picker_preview_unavailable": "Förhandsgranskning kunde inte visas."
+    "picker_preview_unavailable": "Förhandsgranskning kunde inte visas.",
+    "download_failed": "Kunde inte öppna dokumentet"
   },
   "journal_status": {
     "status_draft": "Utkast",

@@ -177,8 +177,8 @@ export function SecuritySettings() {
       {/* BankID-only users with no password: set-password row before the rest */}
       {hasPassword === false && (
         <SettingsRow
-          label="Sätt ett lösenord"
-          help="Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt."
+          label={t('set_password_title')}
+          help={t('set_password_description')}
         >
           <SettingsRowEnd>
             <Button
@@ -187,7 +187,7 @@ export function SecuritySettings() {
                 router.push('/account/set-password?returnTo=/settings/account')
               }
             >
-              Sätt lösenord
+              {t('set_password_button')}
             </Button>
           </SettingsRowEnd>
         </SettingsRow>
@@ -276,7 +276,7 @@ export function SecuritySettings() {
                   <SettingsRowNote>{t('mfa_required_note')}</SettingsRowNote>
                 ) : (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     onClick={handleUnenrollMfa}
                     disabled={isUnenrolling}
@@ -302,7 +302,7 @@ export function SecuritySettings() {
               <SettingsRowEnd>
                 {hasPassword === false ? (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     onClick={() =>
                       router.push('/account/set-password?returnTo=/mfa/enroll')
@@ -312,7 +312,7 @@ export function SecuritySettings() {
                   </Button>
                 ) : (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     onClick={() =>
                       router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)

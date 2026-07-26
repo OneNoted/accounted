@@ -1,9 +1,55 @@
 'use client'
 
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 
-const AgentSheet = dynamic(() => import('./AgentSheet'))
+// The sheet is a lazy chunk, and it used to have no loading state at all: a
+// click on the launcher produced NOTHING until the chunk arrived, then the
+// whole panel appeared at once. Two fixes: a skeleton in the same geometry so
+// the surface is there on the first frame, and a prefetch once the page is
+// idle so the chunk is usually already loaded before anyone clicks.
+const AgentSheet = dynamic(() => import('./AgentSheet'), {
+  loading: () => <AgentSheetSkeleton />,
+})
+
+function AgentSheetSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-[480px] flex-col border-l border-border bg-background shadow-lg"
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+    >
+      <div className="flex items-center gap-2 border-b border-border px-4 py-4">
+        <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-secondary" />
+        <div className="h-4 w-32 animate-pulse rounded bg-secondary" />
+      </div>
+    </div>
+  )
+}
+
+/** Warm the sheet chunk when the browser is idle, never on the critical path. */
+function useSheetPrefetch() {
+  useEffect(() => {
+    const warm = () => {
+      // Swallow a failed prefetch: the real import on click will surface any
+      // genuine problem, and warming must never produce an unhandled rejection.
+      void import('./AgentSheet').catch(() => {})
+    }
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (typeof w.requestIdleCallback === 'function') {
+      // A busy page can stay non-idle indefinitely, so cap the wait: the point
+      // is to have the chunk ready before the first click, not to hold out for
+      // a quiet moment that may never arrive.
+      const id = w.requestIdleCallback(warm, { timeout: 2000 })
+      return () => w.cancelIdleCallback?.(id)
+    }
+    const t = setTimeout(warm, 2000)
+    return () => clearTimeout(t)
+  }, [])
+}
 
 export interface AgentIdentity {
   displayName: string | null
@@ -69,6 +115,7 @@ interface AgentSheetProviderProps {
 }
 
 export function AgentSheetProvider({ children, identity }: AgentSheetProviderProps) {
+  useSheetPrefetch()
   const [activeArgs, setActiveArgs] = useState<OpenAgentSheetArgs | null>(null)
   // Collapsed = session alive but hidden. Kept separate from activeArgs so
   // collapsing never unmounts AgentChat (which would wipe the conversation).

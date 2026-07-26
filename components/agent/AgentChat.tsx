@@ -20,15 +20,62 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-// Markdown parser loads on the first assistant message instead of with the
-// chat surface itself; react-markdown + remark-gfm pull in the whole
-// unified/remark tree. The chunk starts fetching as soon as a reply begins
-// rendering, well before a human can read it, so a null fallback is invisible
-// in practice.
+// Markdown parser loads separately from the chat surface: react-markdown +
+// remark-gfm pull in the whole unified/remark tree.
+//
+// It used to render `null` while the chunk loaded. That is invisible while a
+// reply streams (nobody reads that fast) but very visible on RESUME: every
+// assistant bubble in a hydrated conversation was an empty bordered card until
+// the chunk landed, then all the text appeared at once and reflowed the thread.
+// Two changes: the chunk is prefetched as soon as any chat surface mounts, and
+// until it resolves the raw text renders in place of nothing, so a bubble is
+// never blank.
 const MarkdownMessage = dynamic(() => import('./MarkdownMessage'), {
   ssr: false,
   loading: () => null,
 })
+
+// Module-scoped so the chunk is fetched once per page load and every later
+// chat surface (sheet, /chat, a resumed conversation) renders markdown on its
+// first frame instead of falling back to plain text again.
+let markdownReady = false
+let markdownPromise: Promise<unknown> | null = null
+
+/** Start the markdown chunk before anything needs to render with it. */
+function prefetchMarkdown(): Promise<unknown> {
+  if (!markdownPromise) {
+    markdownPromise = import('./MarkdownMessage')
+      .then((mod) => {
+        markdownReady = true
+        return mod
+      })
+      .catch(() => {
+        // A chunk can 404 after a deploy, or the network can blip. Clear the
+        // cached promise so a later surface retries, instead of every bubble
+        // for the rest of the session being stuck on the plain-text fallback,
+        // and swallow the rejection so it is not an unhandled one.
+        markdownPromise = null
+        return null
+      })
+  }
+  return markdownPromise
+}
+
+/** True once the markdown chunk is usable; triggers the fetch if it isn't. */
+function useMarkdownReady(): boolean {
+  const [ready, setReady] = useState(markdownReady)
+  useEffect(() => {
+    if (ready) return
+    let alive = true
+    void prefetchMarkdown().then(() => {
+      if (alive) setReady(true)
+    })
+    return () => {
+      alive = false
+    }
+  }, [ready])
+  return ready
+}
 
 // Reusable chat surface: used both inside the right-hand AgentSheet and on
 // the full-page /chat route. Owns:
@@ -676,6 +723,7 @@ function MessageBubble({
   // suppress the empty cursor bubble underneath it.
   const isThinking = !isUser && streamingTail && !message.text && !!message.reasoning
   const hideEmptyBubble = (!isUser && !message.text && !streamingTail) || isThinking
+  const markdownLoaded = useMarkdownReady()
   return (
     <div className={cn('flex flex-col gap-2', isUser ? 'items-end' : 'items-start')}>
       {!isUser && message.reasoning && (
@@ -694,7 +742,14 @@ function MessageBubble({
           message.text || (streamingTail ? <Cursor /> : '')
         ) : message.text ? (
           <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
-            <MarkdownMessage text={message.text} />
+            {markdownLoaded ? (
+              <MarkdownMessage text={message.text} />
+            ) : (
+              // One frame at most, and only before the chunk resolves. Plain
+              // text keeps a resumed thread readable instead of showing a
+              // column of empty cards.
+              <p className="whitespace-pre-wrap">{message.text}</p>
+            )}
           </div>
         ) : streamingTail ? (
           <Cursor />

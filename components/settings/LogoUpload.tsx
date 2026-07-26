@@ -135,7 +135,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               {t('logo_change')}
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={handleDelete}
               disabled={isDeleting}

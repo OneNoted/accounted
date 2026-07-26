@@ -647,10 +647,15 @@ export async function verifyIntegrity(
     throw new Error('Document not found')
   }
 
-  // Download file from storage, tolerating the legacy and the company-scoped
-  // key layout while the Phase B backfill is in flight.
+  // Download via the service-role client: the storage SELECT policy only
+  // covers the uploader's own folder (documents/{uid}/...), so a caller-bound
+  // client cannot read colleague-uploaded files. The company-filtered row
+  // fetch above (RLS on document_attachments) is the authorization. The
+  // helper tolerates the legacy and the company-scoped key layout while the
+  // Phase B backfill is in flight.
+  const serviceClient = createServiceClientNoCookies()
   const { blob: fileData, error: downloadError } = await downloadDocumentObject(
-    supabase,
+    serviceClient,
     doc.storage_path,
     companyId
   )

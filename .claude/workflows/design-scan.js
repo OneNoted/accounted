@@ -22,7 +22,14 @@ status colors via <Badge variant> only (no bg-blue-100 / bg-emerald-500/10 as ch
 primitives PageHeader/Table/EmptyState/Skeleton/InfoTooltip (hand-rolled equivalents are violations);
 Hedvig serif display must NOT be font-medium; financial numbers need tabular-nums; motion is
 transition-colors only (no press-scale/hover-lift/spring); a11y WCAG AA, aria-label on icon buttons,
-visible focus, touch targets >=40px. A "finding" must cite file:line and the exact rule it breaks.`
+visible focus, touch targets >=40px. Locked 2026-07 migration conventions (numbered list in design.md):
+frame layout with pill Buttons (per-call-site rounded-* overrides are violations); cards flat and
+shadow-free (shadow-* on a card is a violation; overlays keep shadows); one-line table rows (sub-rows
+are violations); chips mark exceptions only (same Badge on every row is a violation); attention is one
+.attn sentence, banners are violations; help behind the "?" popover after the H1; one context picker
+far right in the toolbar (FyPicker/ContextPicker); confirm-up-front dialogs, not outcome text written
+into the page; .stagger-enter on list entry; settings tabs use the Fonster row language (flat hairline
+rows, switches, dirty-only sticky save bar). A "finding" must cite file:line and the exact rule it breaks.`
 
 const FINDINGS_SCHEMA = {
   type: 'object',

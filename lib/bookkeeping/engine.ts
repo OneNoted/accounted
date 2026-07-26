@@ -749,11 +749,16 @@ export async function reverseEntry(
     throw new CannotReverseNonPostedError(original.status)
   }
 
-  // A storno or correction entry must never itself be reversed: a
-  // storno-of-a-storno makes the original verifikat's cancellation chain
-  // ambiguous (BFL 5 kap 5§). The UI hides "Återför" for these source types;
-  // this is the server-side backstop against a direct API call.
-  if (original.source_type === 'storno' || original.source_type === 'correction') {
+  // A storno entry must never itself be reversed: a storno-of-a-storno makes
+  // the original verifikat's cancellation chain ambiguous (BFL 5 kap 5§). A
+  // correction entry, by contrast, is a regular live verifikation and must
+  // stay reversible: it can be a duplicate (the affärshändelse already booked
+  // by another verifikat) or plain wrong, and blocking it left users with no
+  // sanctioned way out (support case 2026-07-26). Its correction_of_id link
+  // keeps the chain traceable either way; the original it corrected stays
+  // 'reversed'. The UI hides "Återför" for stornos; this is the server-side
+  // backstop against a direct API call.
+  if (original.source_type === 'storno') {
     throw new CannotReverseStornoError(original.source_type)
   }
 

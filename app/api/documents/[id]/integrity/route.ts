@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { createServiceClient } from '@/lib/supabase/server'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
 import { createLogger } from '@/lib/logger'
 
@@ -74,11 +75,14 @@ export async function GET(
     return NextResponse.json({ data: { valid: true } })
   }
 
-  // Use the user-scoped supabase client so the storage download is subject
-  // to RLS on storage.objects, not just the application-layer membership
-  // check above. A logic bug in the membership check would still be
-  // arrested at the storage layer.
-  const { data: blob, error: downloadError } = await supabase.storage
+  // Download via the service-role client: the storage SELECT policy only
+  // covers the uploader's own folder (documents/{uid}/...), so the
+  // user-scoped client cannot read colleague-uploaded files even within
+  // the same company. The document_attachments RLS fetch plus the explicit
+  // membership check above are the authorization (same model as the
+  // inline proxy route).
+  const serviceClient = createServiceClient()
+  const { data: blob, error: downloadError } = await serviceClient.storage
     .from('documents')
     .download(doc.storage_path)
 

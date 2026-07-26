@@ -43,8 +43,13 @@ function makeClient(storageOverrides: Record<string, unknown> = {}) {
   }
 }
 
+// verifyIntegrity downloads via the service-role client (the storage SELECT
+// policy is per-uploader-folder); tests set this override to control the
+// downloaded bytes.
+let serviceClientOverride: ReturnType<typeof makeClient> | null = null
+
 vi.mock('@/lib/auth/api-keys', () => ({
-  createServiceClientNoCookies: vi.fn(() => makeClient()),
+  createServiceClientNoCookies: vi.fn(() => serviceClientOverride ?? makeClient()),
 }))
 
 import {
@@ -74,6 +79,7 @@ beforeEach(() => {
   _resetBucketVerified()
   resultIdx = 0
   results = []
+  serviceClientOverride = null
 })
 
 describe('validateDocumentMagicBytes: application/xhtml+xml', () => {
@@ -524,15 +530,15 @@ describe('verifyIntegrity', () => {
       { data: { storage_path: 'docs/test.pdf', sha256_hash: expectedHash }, error: null },
     ]
 
-    // Create a client with matching download content
-    const supabase = makeClient({
+    // The download runs on the service-role client; give it matching bytes.
+    serviceClientOverride = makeClient({
       download: vi.fn().mockResolvedValue({
         data: new Blob([content]),
         error: null,
       }),
     })
 
-    const result = await verifyIntegrity(supabase as never, 'user-1', 'doc-1')
+    const result = await verifyIntegrity(makeClient() as never, 'user-1', 'doc-1')
     expect(result.valid).toBe(true)
     expect(result.storedHash).toBe(expectedHash)
     expect(result.computedHash).toBe(expectedHash)
@@ -543,14 +549,14 @@ describe('verifyIntegrity', () => {
       { data: { storage_path: 'docs/test.pdf', sha256_hash: 'stored-hash-abc' }, error: null },
     ]
 
-    const supabase = makeClient({
+    serviceClientOverride = makeClient({
       download: vi.fn().mockResolvedValue({
         data: new Blob(['different content']),
         error: null,
       }),
     })
 
-    const result = await verifyIntegrity(supabase as never, 'user-1', 'doc-1')
+    const result = await verifyIntegrity(makeClient() as never, 'user-1', 'doc-1')
     expect(result.valid).toBe(false)
     expect(result.storedHash).toBe('stored-hash-abc')
     expect(result.computedHash).not.toBe('stored-hash-abc')

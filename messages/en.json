@@ -20,8 +20,6 @@
     "load_more": "Load more",
     "retry": "Try again",
     "load_error": "Could not load data",
-    "popup_blocked_title": "The browser blocked the tab",
-    "popup_blocked_description": "Allow pop-ups for Accounted in your browser and try again.",
     "confirm": "Confirm",
     "yes": "Yes",
     "no": "No",
@@ -66,7 +64,9 @@
       "matched": "Matched",
       "unmatched": "Unmatched"
     },
-    "more_options": "More options"
+    "more_options": "More options",
+    "popup_blocked_title": "The browser blocked the tab",
+    "popup_blocked_description": "Allow pop-ups for Accounted in your browser and try again."
   },
   "nav": {
     "dashboard": "Overview",
@@ -386,7 +386,10 @@
     "transaction_sync_never_synced": "Not synced yet",
     "transaction_sync_enabled_toast": "Transaction sync enabled. History is fetched on the next sync.",
     "transaction_sync_disabled_toast": "Transaction sync disabled.",
-    "transaction_sync_toggle_failed": "Could not save the setting. Please try again."
+    "transaction_sync_toggle_failed": "Could not save the setting. Please try again.",
+    "sync_done_transactions": "{imported} transaction(s) imported, {linked} linked to vouchers.",
+    "sync_done_feed": "{fetched} transaction(s) fetched: {imported} new in the inbox, {linked} linked to vouchers.",
+    "sync_done_empty": "Stripe returned no transactions for the period. If you expected transactions, check that the right account is connected."
   },
   "settings_modal": {
     "title": "Settings",
@@ -1387,6 +1390,13 @@
     "accept_spent_body": "The invitation has already been used or has expired. Ask the person who invited you to send a new one."
   },
   "settings_company": {
+    "members_remove_aria": "Remove member",
+    "members_revoke_aria": "Revoke invitation",
+    "members_role_label": "Role",
+    "fp_start_date_label": "Start date",
+    "fp_start_date_help": "The first fiscal year can start on any day.",
+    "fp_range": "{start} to {end}",
+    "fp_months": "{count} months",
     "company_info_heading": "Company details",
     "share_capital_heading": "Share capital",
     "aktiekapital_label": "Share capital (SEK)",
@@ -2273,6 +2283,7 @@
     "env_prod": "Production"
   },
   "settings_bankid": {
+    "cancel_linking": "Cancel",
     "title": "BankID",
     "toast_already_linked": "This BankID is already linked to another account.",
     "toast_link_failed": "Could not link BankID.",
@@ -2290,6 +2301,9 @@
     "link_button": "Link BankID"
   },
   "settings_security": {
+    "set_password_title": "Set a password",
+    "set_password_description": "You signed in with BankID and have no password yet. Set one to enable 2FA or to sign in when BankID is unavailable.",
+    "set_password_button": "Set password",
     "group_security": "Security",
     "toast_weak_password_title": "Password is too weak",
     "toast_weak_password_description": "The password must be at least 8 characters and include uppercase, lowercase, digits and a special character.",
@@ -2951,8 +2965,6 @@
     "preview_pdf": "Preview PDF",
     "preview_pdf_generating": "Generating...",
     "preview_pdf_failed": "Could not generate PDF",
-    "review_customer_missing_title": "Customer details could not be loaded",
-    "review_customer_missing_description": "Reload the page and try again. Contact support if the problem persists.",
     "create_invoice_failed_title": "Could not create invoice",
     "doc_created_title": "{docLabel} created",
     "doc_created_description": "{docLabel} {number} has been created",
@@ -2994,7 +3006,9 @@
     "deduction_cap_check": "The customer needs to check their remaining allowance themselves.",
     "deduction_summary_label": "Tax reduction ROT/RUT",
     "to_pay_label": "Amount to pay",
-    "total_incl_vat_label": "Total incl. VAT"
+    "total_incl_vat_label": "Total incl. VAT",
+    "review_customer_missing_title": "Customer details could not be loaded",
+    "review_customer_missing_description": "Reload the page and try again. Contact support if the problem persists."
   },
   "invoice_review": {
     "assigned_number_prefix": "Will be assigned invoice number",
@@ -3089,21 +3103,6 @@
     "delivery_status_sent": "Sent",
     "delivery_status_failed": "Failed",
     "delivery_status_marked_sent": "Manual",
-    "delivery_status_delivered": "Delivered",
-    "delivery_status_delayed": "Delayed",
-    "delivery_status_complained": "Marked as spam",
-    "delivery_status_bounced": "Bounced",
-    "delivery_status_suppressed": "Blocked",
-    "delivery_status_explanation_sent": "The email provider accepted the message. No word yet on whether the recipient's server took it.",
-    "delivery_status_explanation_delivered": "The recipient's server accepted the message. If the customer still cannot find it, ask them to check their spam folder. Quarantine on the recipient's side is never visible to the sender.",
-    "delivery_status_explanation_delayed": "The recipient's server has not accepted the message yet, but delivery is still being retried. If nothing changes within a few hours, contact the customer.",
-    "delivery_status_explanation_complained": "The recipient marked the message as spam. Further sends to this address may be blocked.",
-    "delivery_status_explanation_bounced": "The recipient's server rejected the message. The invoice did not arrive.",
-    "delivery_status_explanation_failed": "The message could not be sent. The invoice did not arrive.",
-    "delivery_status_explanation_suppressed": "The email provider has blocked this address after an earlier bounce or spam complaint, so the message was never sent.",
-    "delivery_status_whole_send_note": "This applies to the whole send, not to individual recipients.",
-    "delivery_provider_status_label": "Delivery status",
-    "delivery_provider_reason_label": "Reason from the recipient",
     "delivery_manual_unknown_details": "The invoice was delivered outside Accounted, so its recipients, message, and delivered file are unknown.",
     "delivery_to_label": "To",
     "delivery_cc_label": "Cc",
@@ -3260,7 +3259,22 @@
     "cancelled_draft": "The draft has been cancelled.",
     "cancel_failed_title": "Could not cancel the invoice",
     "paid_toast_title": "Paid",
-    "paid_toast_description": "Invoice {number} has been marked as paid and posted"
+    "paid_toast_description": "Invoice {number} has been marked as paid and posted",
+    "delivery_status_delivered": "Delivered",
+    "delivery_status_delayed": "Delayed",
+    "delivery_status_complained": "Marked as spam",
+    "delivery_status_bounced": "Bounced",
+    "delivery_status_suppressed": "Blocked",
+    "delivery_status_explanation_sent": "The email provider accepted the message. No word yet on whether the recipient's server took it.",
+    "delivery_status_explanation_delivered": "The recipient's server accepted the message. If the customer still cannot find it, ask them to check their spam folder. Quarantine on the recipient's side is never visible to the sender.",
+    "delivery_status_explanation_delayed": "The recipient's server has not accepted the message yet, but delivery is still being retried. If nothing changes within a few hours, contact the customer.",
+    "delivery_status_explanation_complained": "The recipient marked the message as spam. Further sends to this address may be blocked.",
+    "delivery_status_explanation_bounced": "The recipient's server rejected the message. The invoice did not arrive.",
+    "delivery_status_explanation_failed": "The message could not be sent. The invoice did not arrive.",
+    "delivery_status_explanation_suppressed": "The email provider has blocked this address after an earlier bounce or spam complaint, so the message was never sent.",
+    "delivery_status_whole_send_note": "This applies to the whole send, not to individual recipients.",
+    "delivery_provider_status_label": "Delivery status",
+    "delivery_provider_reason_label": "Reason from the recipient"
   },
   "invoice_credit": {
     "back": "Back",
@@ -3507,6 +3521,8 @@
     "empty_title": "No matching journal entries found",
     "empty_description": "No posted entry credits 1510 in this invoice's currency and date window. Post a new payment instead, or correct the prior bookkeeping first.",
     "empty_description_cash": "No posted entry debits a cash/bank account (19xx) in this invoice's currency and date window. Post a new payment instead, or correct the prior bookkeeping first.",
+    "intro_supplier": "Pick an existing posted journal entry that debits accounts payable (2440). No new entry is created: you only link the existing one as the payment.",
+    "empty_description_supplier": "No posted entry debits accounts payable (2440) in this invoice's currency and date window. If the cost was booked straight against e.g. the bank account without 2440, it cannot be linked as a payment here: book the invoice from supplier invoices instead, or record a new payment.",
     "confirmation": "This links voucher {voucher} ({amount}) as the payment for the invoice.",
     "no_new_je_note": "No new bookkeeping is created: the existing journal entry is the payment posting.",
     "cancel": "Cancel",
@@ -4025,7 +4041,6 @@
     "remove_blocked_cancel_cta": "Close",
     "replace_uploading": "Replacing...",
     "remove_failed": "Could not remove the document.",
-    "download_failed": "Could not open the document",
     "replace_failed": "Could not upload new version.",
     "choose_from_inbox": "Choose from inbox",
     "picker_title": "Choose a document from the inbox",
@@ -4041,7 +4056,8 @@
     "picker_preview": "Preview",
     "picker_attach": "Attach document",
     "picker_close": "Close",
-    "picker_preview_unavailable": "Preview could not be displayed."
+    "picker_preview_unavailable": "Preview could not be displayed.",
+    "download_failed": "Could not open the document"
   },
   "journal_status": {
     "status_draft": "Draft",

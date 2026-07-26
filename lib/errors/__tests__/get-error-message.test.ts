@@ -137,14 +137,18 @@ describe('getErrorMessage: typed bookkeeping Error instances (issue #337)', () =
   })
 
   it('CannotReverseStornoError instance → registry Swedish message (no dynamic branch)', () => {
-    const msg = getErrorMessage(new CannotReverseStornoError('reversal'))
-    expect(msg).toBe('En stornering eller rättelse kan inte stornas.')
+    const msg = getErrorMessage(new CannotReverseStornoError('storno'))
+    expect(msg).toBe(
+      'En stornering kan inte stornas. Om verifikationen makulerades av misstag, bokför den på nytt (kopiera originalet).',
+    )
     expect(msg).not.toContain('Cannot reverse')
   })
 
   it('locale "en" on a typed instance → registry English message', () => {
-    const msg = getErrorMessage(new CannotReverseStornoError('reversal'), { locale: 'en' })
-    expect(msg).toBe('A storno or correction entry cannot be reversed.')
+    const msg = getErrorMessage(new CannotReverseStornoError('storno'), { locale: 'en' })
+    expect(msg).toBe(
+      'A storno entry cannot be reversed. If the entry was cancelled by mistake, re-book it (copy the original).',
+    )
   })
 
   it('regression: plain-object bare envelope with a Swedish message passes through unchanged', () => {

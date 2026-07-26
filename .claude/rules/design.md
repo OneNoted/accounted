@@ -53,6 +53,7 @@ Decided during the 2026-07 concept work (dev_docs/ui_migration_plan.md); they ap
 12. **Status colors are data, not chrome**: sage/ochre/terracotta only in numbers, exception chips and `.attn`.
 13. **Overlays**: centered modal for create/confirm (template, assistant, confirmations, settings); right slide-over for reviewing an object (Granskning detail). Both with veil, Esc, and click-outside.
 14. **Manual base, AI as opt-in.** Base flows work without AI; AI entry points are clearly labeled discrete choices (e.g. "Skapa med assistenten") and no AI suggestion posts without Granskning.
+15. **Settings speak "Fönster"** (founder-chosen 2026-07-25, applies to every settings tab). Settings content is flat hairline rows, never boxed cards: `SettingsGroup` / `SettingsRow` / `SettingsSectionHeader` from `components/settings/SettingsRows.tsx`. Toggles are switches, not checkboxes. Saving is a sticky bar that fades in only when the form is dirty (`components/settings/SettingsFormWrapper.tsx`); no always-visible save button. The settings surface is a 920x680 modal (`components/settings/SettingsModal.tsx`); switching tabs inside it updates the URL shallowly via `history.replaceState` (`SettingsRail.tsx`), never `router.replace`, which would remount the modal.
 
 ## Design System Tokens
 
@@ -89,7 +90,8 @@ Compact metric cards (e.g. dashboard tiles, salary KPI row) use `p-4`. Detail ca
 | No-data state | `components/ui/empty-state.tsx` `EmptyState` | Don't hand-roll `<div className="flex flex-col items-center py-12">…</div>`. Preset variants exist (`EmptyInvoices`, `EmptyCustomers`, `EmptyTransactions`, etc.). |
 | Loading placeholder | `components/ui/skeleton.tsx` `<Skeleton>` | Don't hand-roll `bg-muted rounded animate-pulse` divs. |
 | Inline help / formulas | `components/ui/info-tooltip.tsx` `InfoTooltip` | Hover-revealed; don't use always-visible info buttons. |
-| Fiscal year picker | `components/common/FiscalYearSelector.tsx` | Don't use raw `<select>` for fiscal periods. |
+| Fiscal year picker | `components/common/FyPicker.tsx` | The chip-dropdown context picker of convention 8 (wraps `ContextPicker`). `FiscalYearSelector` is the legacy pre-frame control: don't add new uses. Never use a raw `<select>` for fiscal periods. |
+| Settings rows / save | `components/settings/SettingsRows.tsx`, `SettingsFormWrapper.tsx` | Fönster language (convention 15): flat hairline rows, dirty-only sticky save bar. Don't hand-roll settings cards or per-field save buttons. |
 
 **Tabular display rules.**
 - All financial values get `tabular-nums`.

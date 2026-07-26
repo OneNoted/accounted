@@ -2103,7 +2103,7 @@ export default function ImportPage() {
                   <ImportRow
                     title={t('stripe_title')}
                     sub={t('stripe_description')}
-                    chips={<LogoChip src="/logos/stripe.svg" name="Stripe" />}
+                    chips={<LogoChip src="/logos/stripeicon.jpeg" name="Stripe" />}
                     disabled={stripeDisabled}
                     onClick={() => setMode('stripe')}
                   />

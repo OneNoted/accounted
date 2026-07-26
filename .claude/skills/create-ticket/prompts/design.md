@@ -2,7 +2,7 @@
 
 ## Perspective
 
-You are scanning for design and UX issues in the Accounted interface. The app follows an editorial-monochrome aesthetic: paper-white surfaces, hairline borders, serif headlines; considered and quiet. Evaluate against the Accounted design system: achromatic palette (semantic sage/ochre/terracotta are data-only: charts and financial deltas, never chrome), Hedvig Letters Serif display headings, Geist body, generous whitespace, functional (non-decorative) motion.
+You are scanning for design and UX issues in the Accounted interface. The app follows an editorial-monochrome aesthetic: paper-white surfaces, hairline borders, serif headlines; considered and quiet. Evaluate against the Accounted design system: achromatic palette (semantic sage/ochre/terracotta are data-only: charts and financial deltas, never chrome), Hedvig Letters Serif display headings, Geist body, generous whitespace, functional (non-decorative) motion. Since 2026-07 the app uses the frame layout (rounded page panel on a warm `--frame`, pill buttons, flat shadow-free cards); the locked conventions live in `.claude/rules/design.md`.
 
 ## Checklist
 
@@ -14,6 +14,19 @@ You are scanning for design and UX issues in the Accounted interface. The app fo
 - [ ] shadcn/ui components used where appropriate
 - [ ] Icon sizes consistent (15px nav, larger for empty states)
 - [ ] Borders are full-opacity `border-border` on cards/surfaces (no `border-border/60`)
+
+### Locked UI-migration conventions (2026-07, full list in `.claude/rules/design.md`)
+- [ ] Page title via `PageHeader` (24px/32px serif); no hand-rolled `<h1>`
+- [ ] Buttons keep the app-wide pill radius (no per-call-site `rounded-*` on `<Button>`)
+- [ ] Cards flat and shadow-free (`rounded-lg`, hairline border); shadows only on overlays
+- [ ] Table rows are one line; no sub-rows (secondary info in detail view or popup)
+- [ ] Chips mark exceptions only; normal states are muted text, not a Badge on every row
+- [ ] Attention is one `.attn` sentence, not a banner; max one per page
+- [ ] Help behind the "?" popover after the H1; no instructional copy in the page flow
+- [ ] One context picker per page, far right in the toolbar (`FyPicker`/`ContextPicker`)
+- [ ] Actions that post/send confirm up front in a dialog; no outcome text written into the page
+- [ ] `.stagger-enter` on list/table content entry
+- [ ] Settings tabs use the Fönster language (flat hairline rows, switches, dirty-only sticky save bar)
 
 ### Loading & Empty States
 - [ ] Pages have loading states (skeletons preferred over spinners)

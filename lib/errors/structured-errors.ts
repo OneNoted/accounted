@@ -191,8 +191,10 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
   },
   CANNOT_REVERSE_STORNO: {
     httpStatus: 400,
-    message_sv: 'En stornering eller rättelse kan inte stornas.',
-    message_en: 'A storno or correction entry cannot be reversed.',
+    message_sv:
+      'En stornering kan inte stornas. Om verifikationen makulerades av misstag, bokför den på nytt (kopiera originalet).',
+    message_en:
+      'A storno entry cannot be reversed. If the entry was cancelled by mistake, re-book it (copy the original).',
   },
   CANNOT_CORRECT_NON_POSTED: {
     httpStatus: 400,
@@ -2041,9 +2043,9 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_DELETE_HAS_BOOKING: {
     httpStatus: 400,
     message_sv:
-      'Leverantörsfakturan är bokförd eller har en periodisering och kan inte tas bort. Skapa en kreditfaktura i stället för att återställa bokföringen.',
+      'Leverantörsfakturan är bokförd, har registrerade betalningar eller en periodisering och kan inte tas bort. Skapa en kreditfaktura i stället för att återställa bokföringen.',
     message_en:
-      'The supplier invoice has a posted journal entry or an accrual schedule and cannot be deleted. Create a credit note instead to reverse the bookkeeping.',
+      'The supplier invoice has a posted journal entry, recorded payments, or an accrual schedule and cannot be deleted. Create a credit note instead to reverse the bookkeeping.',
   },
   SI_PAID_ALREADY: {
     httpStatus: 409,

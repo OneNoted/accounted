@@ -117,6 +117,43 @@ export async function POST(request: Request) {
   const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.ai)
   if (capBlocked) return capBlocked
 
+  // Resolve the conversation BEFORE any side effect below (the onboarding
+  // intake stamp): a request that is about to be rejected must not write.
+  let conversationId = body.conversation_id ?? null
+  if (conversationId) {
+    // A resumed conversation id comes straight from the client, so ownership
+    // has to be proven here. RLS on agent_conversations/agent_messages is
+    // COMPANY-scoped (migration 20260517204000), not user-scoped, so RLS alone
+    // would happily load a colleague's thread into the prompt and append this
+    // user's turns to it. The conversations list route filters on user_id for
+    // exactly this reason; the same rule applies to the turn itself.
+    //
+    // The company check matters too: a user who belongs to several companies
+    // must not resume a thread from company B while the turn runs with company
+    // A's ledger, tools and staged operations.
+    const { data: conv } = await supabase
+      .from('agent_conversations')
+      .select('id, user_id, company_id, intent_id')
+      .eq('id', conversationId)
+      .maybeSingle()
+
+    if (!conv || conv.user_id !== user.id || conv.company_id !== companyId) {
+      // Same response for "doesn't exist" and "isn't yours": a 403 here would
+      // confirm that someone else's conversation id is real.
+      return NextResponse.json({ error: 'Konversationen hittades inte.' }, { status: 404 })
+    }
+
+    // The intent decides the tool loadout and the system prompt. Letting a
+    // resumed thread switch intent mid-conversation would swap the tool
+    // whitelist under history the model has already been shown.
+    if (conv.intent_id !== body.intent_id) {
+      return NextResponse.json(
+        { error: 'Konversationen hör till ett annat sammanhang.' },
+        { status: 400 },
+      )
+    }
+  }
+
   // onboarding.intake completion signal: once the user has actually
   // engaged (typed a real reply, not the auto-fired greeting prompt that
   // mounts the chat), stamp intake_completed_at on the profile so re-entry
@@ -149,8 +186,7 @@ export async function POST(request: Request) {
   const companyName = company?.name ?? ''
   const firstName = profile?.full_name?.split(' ')[0] ?? null
 
-  // Resolve / create the conversation row.
-  let conversationId = body.conversation_id ?? null
+  // Create the conversation row when this is a fresh thread.
   if (!conversationId) {
     const { data: newConv, error: convErr } = await supabase
       .from('agent_conversations')
@@ -183,6 +219,9 @@ export async function POST(request: Request) {
   // client can also explicitly request a hidden turn (rejection correction)
   // even when it DID supply a user_message.
   let userMessageHidden = body.user_message_hidden === true
+  // Set on a first turn, where the prompt template needs it anyway; handed to
+  // runChatTurn so the system prompt reuses it instead of re-reading.
+  let preloadedProfileSummary: string | null | undefined
   if (!effectiveUserMessage) {
     try {
       const captured = await intent.capture(body.intent_args ?? {}, {
@@ -190,13 +229,17 @@ export async function POST(request: Request) {
         userId: user.id,
         companyId,
       })
-      const profileSummary = await loadProfileSummary(supabase, companyId)
-      const memory = await loadRankedMemory(supabase, companyId, 30)
+      const [profileSummary, memory] = await Promise.all([
+        loadProfileSummary(supabase, companyId),
+        loadRankedMemory(supabase, companyId, 30),
+      ])
       effectiveUserMessage = intent.promptTemplate({
         captured,
         profileSummary,
         activeMemory: memory,
       })
+      // Hand it to the turn so it doesn't re-read it for the system prompt.
+      preloadedProfileSummary = profileSummary
       userMessageHidden = true
     } catch (err) {
       return NextResponse.json(
@@ -243,6 +286,7 @@ export async function POST(request: Request) {
           userMessage: effectiveUserMessage,
           userMessageHidden,
           persist: true,
+          preloadedProfileSummary,
           emit: (event) => emit(event),
         })
       } catch (err) {

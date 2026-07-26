@@ -12,6 +12,14 @@ vi.mock('@/lib/reports/archive-readme', () => ({
   buildDriveFolderReadme: vi.fn().mockReturnValue('README TEXT'),
 }))
 
+// performSync builds archives with a service-role client (the documents
+// bucket SELECT policy is per-uploader-folder, so a user-bound client would
+// drop colleague-uploaded files from the backup). The archive generators are
+// mocked above, so a bare stub is enough here.
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: vi.fn(() => ({ storage: { from: vi.fn() } })),
+}))
+
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.test' }),
 }))
