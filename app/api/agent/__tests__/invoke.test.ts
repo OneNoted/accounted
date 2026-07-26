@@ -68,9 +68,19 @@ function body(overrides: Record<string, unknown> = {}) {
   }
 }
 
-/** Queue the reads the route performs before it resolves the conversation. */
+/**
+ * Queue the reads the route performs before it resolves the conversation.
+ *
+ * Ownership is validated ahead of every side effect and of the company/profile
+ * reads, so a rejected request costs exactly one membership read plus the
+ * conversation lookup.
+ */
 function enqueuePreamble() {
   enqueue({ data: { role: 'owner' } }) // company_members
+}
+
+/** The company + profile reads that only happen once a request is accepted. */
+function enqueueAcceptedTail() {
   enqueue({ data: { name: 'Nordvik Bygg AB' } }) // companies
   enqueue({ data: { full_name: 'Johan Nordvik' } }) // profiles
 }
@@ -133,7 +143,7 @@ describe('POST /api/agent/invoke', () => {
 
     const { status, body: json } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(404)
-    expect(json.error).toBe('Conversation not found')
+    expect(json.error).toBe('Konversationen hittades inte.')
     expect(runChatTurnMock).not.toHaveBeenCalled()
   })
 
@@ -200,6 +210,7 @@ describe('POST /api/agent/invoke', () => {
         intent_id: 'general.help',
       },
     })
+    enqueueAcceptedTail()
 
     const res = await POST(
       createMockRequest('/api/agent/invoke', { method: 'POST', body: body({ conversation_id: CONVERSATION_ID }) }),

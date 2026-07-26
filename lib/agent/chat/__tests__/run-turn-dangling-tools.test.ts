@@ -106,6 +106,57 @@ describe('repairDanglingToolUse', () => {
     expect(repaired[2]!.content[0].text).toBe('är du kvar?')
   })
 
+  it('repairs a result that arrived after an intervening turn', () => {
+    // Two turns racing on one conversation can persist a user message between
+    // the tool_use and its results. The id IS answered somewhere, but not in
+    // the message immediately following the tool_use, which the API still
+    // rejects: the stub has to go in the gap and the late copy has to go.
+    const messages = [
+      {
+        role: 'assistant' as const,
+        content: [{ type: 'tool_use', id: 'tu_late', name: 'a', input: {} }],
+      },
+      { role: 'user' as const, content: textBlock('hallå?') },
+      {
+        role: 'user' as const,
+        content: [{ type: 'tool_result', tool_use_id: 'tu_late', content: 'sent too late' }],
+      },
+    ]
+
+    const repaired = repairDanglingToolUse(messages)
+
+    // Stub sits directly after the tool_use...
+    expect(repaired[1]!.content[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'tu_late',
+      is_error: true,
+    })
+    // ...the intervening user text survives...
+    expect(repaired[2]!.content[0].text).toBe('hallå?')
+    // ...and the orphaned late result is gone, along with its emptied message.
+    const lateResults = repaired
+      .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+      .filter((b: { content?: string }) => b?.content === 'sent too late')
+    expect(lateResults).toHaveLength(0)
+  })
+
+  it('drops a tool_result whose tool_use never preceded it', () => {
+    const messages = [
+      { role: 'user' as const, content: textBlock('hej') },
+      {
+        role: 'user' as const,
+        content: [{ type: 'tool_result', tool_use_id: 'tu_ghost', content: 'orphan' }],
+      },
+    ]
+
+    const repaired = repairDanglingToolUse(messages)
+
+    // An unmatched tool_result is rejected by the API just as an unanswered
+    // tool_use is, so the emptied message is dropped entirely.
+    expect(repaired).toHaveLength(1)
+    expect(repaired[0]!.content[0].text).toBe('hej')
+  })
+
   it('tolerates string and non-array content without throwing', () => {
     const messages = [
       { role: 'user' as const, content: 'plain string content' as unknown as [] },

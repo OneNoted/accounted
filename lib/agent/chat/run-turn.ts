@@ -635,43 +635,81 @@ async function loadConversationMessages(
 export function repairDanglingToolUse(
   messages: { role: 'user' | 'assistant'; content: ContentBlock }[],
 ): { role: 'user' | 'assistant'; content: ContentBlock }[] {
-  const answered = new Set<string>()
-  for (const m of messages) {
-    if (!Array.isArray(m.content)) continue
-    for (const block of m.content) {
+  const toolResultIds = (content: ContentBlock): Set<string> => {
+    const ids = new Set<string>()
+    if (!Array.isArray(content)) return ids
+    for (const block of content) {
       if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-        answered.add(block.tool_use_id)
+        ids.add(block.tool_use_id)
       }
     }
+    return ids
   }
 
+  // The API requires results in the message IMMEDIATELY following the tool_use,
+  // so position matters, not just presence: a result that landed after an
+  // intervening turn (two turns racing on one conversation) is still an invalid
+  // shape. Walk pairwise, and treat only same-position results as answers.
   const out: { role: 'user' | 'assistant'; content: ContentBlock }[] = []
-  for (const m of messages) {
+  const satisfied = new Set<string>()
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!
     out.push(m)
     if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
 
-    const missing = m.content
-      .filter(
-        (block: ContentBlock) =>
-          block?.type === 'tool_use' &&
-          typeof block.id === 'string' &&
-          !answered.has(block.id),
-      )
-      .map((block: ContentBlock) => ({
-        type: 'tool_result' as const,
-        tool_use_id: block.id as string,
-        content: 'Avbröts innan verktyget hann svara. Kör om det om du behöver resultatet.',
-        is_error: true,
-      }))
+    const pending = m.content
+      .filter((block: ContentBlock) => block?.type === 'tool_use' && typeof block.id === 'string')
+      .map((block: ContentBlock) => block.id as string)
+    if (pending.length === 0) continue
+
+    const answeredHere = toolResultIds(messages[i + 1]?.content)
+    const missing = pending.filter((id) => !answeredHere.has(id))
+    for (const id of pending) {
+      if (answeredHere.has(id)) satisfied.add(id)
+    }
 
     if (missing.length > 0) {
-      // Mark them answered so a later duplicate id (shouldn't happen, but the
-      // store is append-only and has seen retries) doesn't get a second stub.
-      for (const block of missing) answered.add(block.tool_use_id)
-      out.push({ role: 'user', content: missing as ContentBlock })
+      for (const id of missing) satisfied.add(id)
+      out.push({
+        role: 'user',
+        content: missing.map((id) => ({
+          type: 'tool_result' as const,
+          tool_use_id: id,
+          content: 'Avbröts innan verktyget hann svara. Kör om det om du behöver resultatet.',
+          is_error: true,
+        })) as ContentBlock,
+      })
     }
   }
+
+  // Drop any tool_result that is now orphaned: either a late duplicate of one
+  // we just stubbed, or a result whose tool_use never immediately preceded it.
+  // An unmatched tool_result is rejected by the API just as an unanswered
+  // tool_use is, so leaving it in would defeat the repair.
   return out
+    .map((m, idx) => {
+      if (!Array.isArray(m.content)) return m
+      const prev = out[idx - 1]
+      const openedByPrev =
+        prev?.role === 'assistant' && Array.isArray(prev.content)
+          ? new Set(
+              prev.content
+                .filter(
+                  (b: ContentBlock) => b?.type === 'tool_use' && typeof b.id === 'string',
+                )
+                .map((b: ContentBlock) => b.id as string),
+            )
+          : new Set<string>()
+
+      const kept = m.content.filter((block: ContentBlock) => {
+        if (block?.type !== 'tool_result') return true
+        return openedByPrev.has(block.tool_use_id)
+      })
+      if (kept.length === m.content.length) return m
+      return { ...m, content: kept as ContentBlock }
+    })
+    .filter((m) => !Array.isArray(m.content) || m.content.length > 0)
 }
 
 async function persistMessage(

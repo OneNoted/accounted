@@ -20,19 +20,20 @@ import { insertAuthUser } from './fixtures'
  *     an explicit user id: cron, tests and backend jobs rely on that.
  */
 
-async function asAuthenticatedUser<T>(
-  userId: string,
+async function asRole<T>(
+  role: 'authenticated' | 'anon',
+  userId: string | null,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
   const client = await getClient()
   try {
     await client.query('BEGIN')
     await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
-      JSON.stringify({ sub: userId, role: 'authenticated' }),
+      JSON.stringify(userId ? { sub: userId, role } : { role }),
     ])
-    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
-    await client.query(`SELECT set_config('request.jwt.claim.role', $1, true)`, ['authenticated'])
-    await client.query('SET LOCAL ROLE authenticated')
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId ?? ''])
+    await client.query(`SELECT set_config('request.jwt.claim.role', $1, true)`, [role])
+    await client.query(`SET LOCAL ROLE ${role}`)
     const result = await fn(client)
     await client.query('COMMIT')
     return result
@@ -42,6 +43,13 @@ async function asAuthenticatedUser<T>(
   } finally {
     client.release()
   }
+}
+
+function asAuthenticatedUser<T>(
+  userId: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return asRole('authenticated', userId, fn)
 }
 
 async function counterFor(userId: string): Promise<number> {
@@ -82,6 +90,24 @@ describe('check_and_increment_agent_quota caller guard.pg', () => {
         )
       }),
     ).rejects.toMatchObject({ code: '42501' })
+
+    expect(await counterFor(victim)).toBe(0)
+  })
+
+  it('refuses an unauthenticated anon caller entirely', async () => {
+    // The anon key ships in the browser bundle, so this RPC is reachable
+    // without a session. auth.uid() is NULL for anon exactly as it is for
+    // backend roles, so a uid-only guard would have let this through.
+    const victim = await insertAuthUser()
+
+    await expect(
+      asRole('anon', null, async (client) => {
+        await client.query(
+          `SELECT public.check_and_increment_agent_quota($1::uuid, 30, 1000) AS result`,
+          [victim],
+        )
+      }),
+    ).rejects.toMatchObject({ code: expect.stringMatching(/^42501$/) })
 
     expect(await counterFor(victim)).toBe(0)
   })

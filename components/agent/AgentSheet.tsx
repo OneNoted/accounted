@@ -89,8 +89,11 @@ export default function AgentSheet({
       if (e.defaultPrevented) return
 
       if (typeof document !== 'undefined') {
+        // Match on data-state="open", not on the popper wrapper itself: a
+        // force-mounted popper stays in the DOM while closed, and keying off
+        // the wrapper alone would then block Escape for the rest of the session.
         const overlayOpen = document.querySelector(
-          '[data-radix-popper-content-wrapper], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="listbox"][data-state="open"]',
+          '[data-radix-popper-content-wrapper] [data-state="open"], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="listbox"][data-state="open"], [data-radix-menu-content][data-state="open"], [data-radix-select-content][data-state="open"]',
         )
         if (overlayOpen) return
 
