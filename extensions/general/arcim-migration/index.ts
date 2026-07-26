@@ -5,6 +5,7 @@ import {
   getConsent,
   listConsents,
   generateOtc,
+  consumeOAuthState,
   getAuthUrl,
   exchangeAuthToken,
   submitProviderToken,
@@ -32,6 +33,15 @@ import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { createLogger } from '@/lib/logger'
 
 const moduleLog = createLogger('extensions/arcim-migration')
+
+/**
+ * The one answer the unauthenticated OAuth callback gives for every state
+ * failure: forged, unknown, expired, replayed, or pointing at a consent that no
+ * longer exists. Distinguishing them would turn the callback into a probe for
+ * other tenants' consent ids.
+ */
+const STATE_REJECTED_MESSAGE =
+  'Ingen giltig migrationssession hittades. Starta om anslutningen.'
 
 /**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
@@ -64,6 +74,9 @@ function translateOAuthError(error: string, description: string | null): string 
  * refresh-token pair in place: no disconnect/recreate needed.
  */
 async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): Promise<string> {
+  // Server-side state row: consent id, provider (via the consent), expiry and a
+  // consumed marker all live in provider_otc. The `state` handed to the provider
+  // is that row's opaque random primary key, nothing more.
   const otc = await generateOtc(consentId)
 
   // Prefer a provider-specific redirect override (e.g. VISMA_REDIRECT_URI) when
@@ -82,11 +95,11 @@ async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): P
       ? providerRedirectEnv
       : `${appUrl}/api/extensions/ext/arcim-migration/callback`
 
-  // Encode consentId + provider in state so the callback rebinds to this consent
-  const statePayload = JSON.stringify({ otc: otc.code, consentId, provider })
-  const stateEncoded = Buffer.from(statePayload).toString('base64url')
-
-  const { url } = await getAuthUrl(provider, stateEncoded, callbackUrl)
+  // The state is the one-time code itself: an unguessable pointer to the row
+  // above. It deliberately encodes NOTHING. The previous base64url JSON payload
+  // was attacker-authored input the callback trusted, so anyone who learned a
+  // consent id could redirect their own provider tokens onto that consent.
+  const { url } = await getAuthUrl(provider, otc.code, callbackUrl)
   return url
 }
 
@@ -483,35 +496,27 @@ export const arcimMigrationExtension: Extension = {
         }
 
         try {
-          let consentId: string | null = null
-          let provider: ArcimProvider | null = null
+          // Single source of truth for who this callback belongs to: the
+          // server-written provider_otc row, consumed atomically here. The row
+          // carries the consent; the consent carries the provider. Nothing is
+          // read from the query string except the opaque state token itself, so
+          // an attacker who knows a victim's consent id still cannot steer their
+          // own provider tokens onto it.
+          const resolvedState = await consumeOAuthState(stateRaw)
 
-          try {
-            const decoded = JSON.parse(Buffer.from(stateRaw, 'base64url').toString())
-            if (decoded.consentId && decoded.provider) {
-              consentId = decoded.consentId
-              provider = decoded.provider as ArcimProvider
-            }
-          } catch {
-            // Legacy fallback
-          }
-
-          if (!consentId || !provider) {
-            consentId = ctx?.settings
-              ? await ctx.settings.get<string>('consent_id')
-              : null
-            provider = ctx?.settings
-              ? await ctx.settings.get<ArcimProvider>('provider')
-              : null
-          }
-
-          if (!consentId || !provider) {
-            log.error('OAuth callback could not resolve consent or provider', {
-              hasConsentId: !!consentId,
-              hasProvider: !!provider,
+          if (!resolvedState) {
+            // Unknown/forged state, expired state, replayed state and deleted
+            // consent all end here with the SAME message: this route is
+            // unauthenticated, so telling the caller which one it was would
+            // disclose whether a given consent exists.
+            log.error('OAuth callback state rejected', {
+              hasCode: !!code,
+              stateLength: stateRaw.length,
             })
-            return respondWithError('Ingen aktiv migrationssession hittades. Starta om anslutningen.')
+            return respondWithError(STATE_REJECTED_MESSAGE)
           }
+
+          const { consentId, provider } = resolvedState
 
           const redirectUri = `${appUrl}/api/extensions/ext/arcim-migration/callback`
 
@@ -566,7 +571,11 @@ export const arcimMigrationExtension: Extension = {
         }
 
         try {
-          const consent = await getConsent(consentId)
+          // Company-scoped read: the status below is returned to the caller, so
+          // an unscoped lookup would let any authenticated user probe another
+          // tenant's consent id for existence and connection state. A foreign
+          // consent throws ConsentNotFoundError, same as a nonexistent one.
+          const consent = await getConsent(consentId, companyId)
           if (consent.status !== 0 && consent.status !== 1) {
             return errorResponseFromCode('PROVIDER_CONSENT_NOT_READY', moduleLog, {
               details: { consentId, status: consent.status },
@@ -635,6 +644,12 @@ export const arcimMigrationExtension: Extension = {
           })
         } catch (error) {
           log.error('arcim preview failed', error as Error)
+          // Consent missing or owned by another company: same 404 either way.
+          if (error instanceof ConsentNotFoundError) {
+            return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
+              details: { consentId },
+            })
+          }
           // Classify HTTP failures into typed codes so the toast can suggest
           // reconnect / retry instead of a generic "preview failed".
           const classified = classifyProviderError(error)
@@ -975,7 +990,11 @@ export const arcimMigrationExtension: Extension = {
         }
 
         try {
-          const consent = await getConsent(consentId)
+          // Company-scoped read: the status below is returned to the caller, so
+          // an unscoped lookup would let any authenticated user probe another
+          // tenant's consent id for existence and connection state. A foreign
+          // consent throws ConsentNotFoundError, same as a nonexistent one.
+          const consent = await getConsent(consentId, companyId)
           if (consent.status !== 0 && consent.status !== 1) {
             return errorResponseFromCode('PROVIDER_CONSENT_NOT_READY', moduleLog, {
               details: { consentId, status: consent.status },
@@ -1033,6 +1052,12 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ success: true, results })
         } catch (error) {
           log.error('arcim migration failed', error as Error)
+          // Consent missing or owned by another company: same 404 either way.
+          if (error instanceof ConsentNotFoundError) {
+            return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
+              details: { consentId },
+            })
+          }
           const classified = classifyProviderError(error)
           return errorResponseFromCode(classified ?? 'PROVIDER_MIGRATE_FAILED', moduleLog, {
             details: {

@@ -29,6 +29,7 @@ vi.mock('../lib/provider-client', () => ({
   getConsent: vi.fn(),
   listConsents: vi.fn(),
   generateOtc: vi.fn(),
+  consumeOAuthState: vi.fn(),
   getAuthUrl: vi.fn(),
   exchangeAuthToken: vi.fn(),
   submitProviderToken: vi.fn(),
@@ -36,6 +37,9 @@ vi.mock('../lib/provider-client', () => ({
   deleteConsent: vi.fn(),
   resolveConsent: vi.fn(),
   fetchCompanyInfoDirect: vi.fn(),
+  // Real classes: index.ts branches on `instanceof` in the catch blocks.
+  ProviderTokenInvalidError: class ProviderTokenInvalidError extends Error {},
+  ConsentNotFoundError: class ConsentNotFoundError extends Error {},
 }))
 
 import { arcimMigrationExtension } from '../index'

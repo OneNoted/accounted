@@ -6,6 +6,7 @@
  * data fetching to the provider clients in lib/providers/.
  */
 
+import { randomBytes } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase/server'
 import type { ProviderName } from '@/lib/providers/types'
 import { getOAuthConfig } from '@/lib/providers/oauth-config'
@@ -121,17 +122,32 @@ export async function listConsents(companyId: string): Promise<ConsentRecord[]> 
   }))
 }
 
-export async function getConsent(consentId: string): Promise<ConsentRecord> {
+/**
+ * Read a consent, scoped to the company that owns it.
+ *
+ * `ownerCompanyId` is mandatory: this module runs on the service client, which
+ * bypasses RLS, so the predicate below is the only tenant boundary. Without it
+ * any authenticated user could pass a foreign consent id and read back its
+ * status/provider/company name, i.e. a cross-tenant existence oracle. A consent
+ * that exists but belongs to another company throws the same
+ * ConsentNotFoundError as one that does not exist. Mirrors the guard in
+ * submitProviderToken() and resolveConsent().
+ */
+export async function getConsent(
+  consentId: string,
+  ownerCompanyId: string,
+): Promise<ConsentRecord> {
   const supabase = createServiceClient()
 
   const { data, error } = await supabase
     .from('provider_consents')
     .select('*')
     .eq('id', consentId)
-    .single()
+    .eq('company_id', ownerCompanyId)
+    .maybeSingle()
 
   if (error || !data) {
-    throw new Error(`Consent not found: ${error?.message}`)
+    throw new ConsentNotFoundError()
   }
 
   return {
@@ -161,13 +177,23 @@ export async function deleteConsent(consentId: string): Promise<void> {
   }
 }
 
+/**
+ * Mint a one-time code bound to a consent.
+ *
+ * The code doubles as the OAuth `state` parameter: it is an opaque random
+ * identifier for a server-written row, and the callback resolves the consent
+ * from that row rather than from anything the browser carried. 32 random bytes
+ * (not the previous 16 hex chars of a UUID) because this value is now the only
+ * thing standing between an attacker and binding their provider account to
+ * someone else's consent.
+ */
 export async function generateOtc(
   consentId: string,
   expiresInMinutes: number = 60,
 ): Promise<OtcResponse> {
   const supabase = createServiceClient()
 
-  const code = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+  const code = randomBytes(32).toString('base64url')
   const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString()
 
   const { error } = await supabase
@@ -183,6 +209,57 @@ export async function generateOtc(
   }
 
   return { code, consentId, expiresAt }
+}
+
+/**
+ * Atomically consume an OAuth `state` token and resolve what it was minted for.
+ *
+ * The single UPDATE is the entire check: `used_at IS NULL` and
+ * `expires_at > now` sit in the WHERE clause, so a replayed callback loses the
+ * row-lock race (under READ COMMITTED the second statement re-evaluates the
+ * predicate after the first commits, matches nothing, and updates 0 rows).
+ * There is no read-then-write window to exploit.
+ *
+ * The provider is read from the consent row (written server-side at connect
+ * time), never from the callback query string.
+ *
+ * Returns null for every failure mode: unknown/forged state, expired state,
+ * already-consumed state, deleted consent. Callers must not distinguish them,
+ * that distinction is exactly the oracle this function exists to remove.
+ */
+export async function consumeOAuthState(
+  state: string,
+): Promise<{ consentId: string; provider: ProviderName } | null> {
+  const supabase = createServiceClient()
+  const now = new Date().toISOString()
+
+  const { data: consumed, error } = await supabase
+    .from('provider_otc')
+    .update({ used_at: now })
+    .eq('code', state)
+    .is('used_at', null)
+    .gt('expires_at', now)
+    .select('consent_id')
+    .maybeSingle()
+
+  if (error || !consumed?.consent_id) {
+    return null
+  }
+
+  const { data: consent } = await supabase
+    .from('provider_consents')
+    .select('provider')
+    .eq('id', consumed.consent_id)
+    .maybeSingle()
+
+  if (!consent?.provider) {
+    return null
+  }
+
+  return {
+    consentId: consumed.consent_id as string,
+    provider: consent.provider as ProviderName,
+  }
 }
 
 // ── OAuth helpers (direct provider calls) ───────────────────────────
