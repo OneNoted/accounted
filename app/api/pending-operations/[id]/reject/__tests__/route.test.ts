@@ -87,7 +87,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
   it('rejects successfully', async () => {
     enqueueMany([
       { data: { id: 'op-1', status: 'pending' } },   // fetch op
-      { data: null, error: null },                     // update status
+      { data: [{ id: 'op-1' }], error: null },         // guarded update returns the row
     ])
 
     const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
@@ -96,5 +96,23 @@ describe('POST /api/pending-operations/:id/reject', () => {
 
     expect(status).toBe(200)
     expect(body.data.status).toBe('rejected')
+  })
+
+  it('returns 409 when commit claims the row between the status read and the write', async () => {
+    // The status re-check above the write is a read, and commit claims rows
+    // atomically (pending -> committing). Losing that race must not stamp
+    // `rejected` over an operation that has since posted a verifikat, so the
+    // UPDATE is guarded on status and matches zero rows here.
+    enqueueMany([
+      { data: { id: 'op-1', status: 'pending' } },   // fetch op: still pending
+      { data: [], error: null },                       // guarded update matches nothing
+    ])
+
+    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const response = await POST(request, routeParams)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error).toContain('hann behandlas')
   })
 })

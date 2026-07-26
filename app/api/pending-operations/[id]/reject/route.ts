@@ -83,7 +83,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    const { error: updateError } = await supabase
+    // The status check above is a read, and commit claims rows atomically
+    // (pending -> committing). Without a status guard on the write, a reject
+    // that loses that race stamps `rejected` over an operation that has since
+    // posted a verifikat: a booked entry whose row says rejected, which the
+    // committing-state recovery sweep will never find. Guard the UPDATE the
+    // same way bulk-reject does and report a lost race as 409.
+    const { data: updated, error: updateError } = await supabase
       .from('pending_operations')
       .update({
         status: 'rejected',
@@ -92,9 +98,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         ...(rejectionReason ? { rejection_reason: rejectionReason } : {}),
       })
       .eq('id', id)
+      .eq('company_id', companyId)
+      .eq('status', 'pending')
+      .select('id')
 
     if (updateError) {
       return NextResponse.json({ error: getUserErrorMessage(updateError) }, { status: 500 })
+    }
+
+    if (!updated || updated.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            'Åtgärden hann behandlas av någon annan och kunde inte avvisas. ' +
+            'Ladda om sidan och kontrollera resultatet.',
+        },
+        { status: 409 },
+      )
     }
 
     return NextResponse.json({ data: { id, status: 'rejected' } })

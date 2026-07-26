@@ -151,6 +151,39 @@ export async function POST(request: Request) {
 
   // Resolve / create the conversation row.
   let conversationId = body.conversation_id ?? null
+  if (conversationId) {
+    // A resumed conversation id comes straight from the client, so ownership
+    // has to be proven here. RLS on agent_conversations/agent_messages is
+    // COMPANY-scoped (migration 20260517204000), not user-scoped, so RLS alone
+    // would happily load a colleague's thread into the prompt and append this
+    // user's turns to it. The conversations list route filters on user_id for
+    // exactly this reason; the same rule applies to the turn itself.
+    //
+    // The company check matters too: a user who belongs to several companies
+    // must not resume a thread from company B while the turn runs with company
+    // A's ledger, tools and staged operations.
+    const { data: conv } = await supabase
+      .from('agent_conversations')
+      .select('id, user_id, company_id, intent_id')
+      .eq('id', conversationId)
+      .maybeSingle()
+
+    if (!conv || conv.user_id !== user.id || conv.company_id !== companyId) {
+      // Same response for "doesn't exist" and "isn't yours": a 403 here would
+      // confirm that someone else's conversation id is real.
+      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+    }
+
+    // The intent decides the tool loadout and the system prompt. Letting a
+    // resumed thread switch intent mid-conversation would swap the tool
+    // whitelist under history the model has already been shown.
+    if (conv.intent_id !== body.intent_id) {
+      return NextResponse.json(
+        { error: 'Conversation belongs to a different intent' },
+        { status: 400 },
+      )
+    }
+  }
   if (!conversationId) {
     const { data: newConv, error: convErr } = await supabase
       .from('agent_conversations')

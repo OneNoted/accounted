@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { X, Expand, Shrink, PanelRightClose, Eraser, History, ChevronLeft, Loader2 } from 'lucide-react'
 import AgentChat, { normalizeStoredMessages, type ChatMessage } from './AgentChat'
 import AgentAvatar from './AgentAvatar'
@@ -68,12 +68,36 @@ export default function AgentSheet({
   const sheetTitle = intentToTitle(intentId, agentName)
   const displayTitle = loaded ? (loaded.title ?? intentToTitle(loaded.intentId, agentName)) : sheetTitle
   const activeConversationId = loaded?.id ?? conversationId
+  const sheetRef = useRef<HTMLDivElement | null>(null)
 
   // Esc: back out of the session list first, otherwise close. Never while
   // collapsed (the sheet is hidden off-screen, so Esc belongs elsewhere).
+  //
+  // The sheet is deliberately non-modal, so this listener sits on window while
+  // the rest of the page stays interactive: it must therefore only claim the
+  // key when nothing nearer the user wants it. Closing the sheet discards the
+  // whole in-memory conversation, so an Esc meant for a dropdown inside an
+  // approval card, the command palette, or any dialog used to destroy the
+  // session outright. Three guards, cheapest first:
+  //   - defaultPrevented: a Radix popover/dialog that handled Esc marks it.
+  //   - an open overlay anywhere on the page (Radix marks these on the body
+  //     and on the overlay elements themselves) means the key isn't ours.
+  //   - focus sitting outside the sheet means the user is working elsewhere.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (collapsed || e.key !== 'Escape') return
+      if (e.defaultPrevented) return
+
+      if (typeof document !== 'undefined') {
+        const overlayOpen = document.querySelector(
+          '[data-radix-popper-content-wrapper], [role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], [role="listbox"][data-state="open"]',
+        )
+        if (overlayOpen) return
+
+        const active = document.activeElement
+        if (active && sheetRef.current && !sheetRef.current.contains(active)) return
+      }
+
       if (view === 'list') setView('chat')
       else onClose()
     }
@@ -135,6 +159,7 @@ export default function AgentSheet({
 
   return (
     <div
+      ref={sheetRef}
       role="dialog"
       aria-label={displayTitle}
       // z-[60] sits above the mobile bottom nav (z-50) so on phones the sheet

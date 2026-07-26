@@ -605,12 +605,73 @@ async function loadConversationMessages(
     .order('created_at', { ascending: true })
 
   // role='tool' messages were written as user messages on the Anthropic side.
-  return (data ?? []).map((m: { role: string; content: ContentBlock }) => {
+  const messages = (data ?? []).map((m: { role: string; content: ContentBlock }) => {
     if (m.role === 'assistant') {
-      return { role: 'assistant', content: m.content as ContentBlock }
+      return { role: 'assistant' as const, content: m.content as ContentBlock }
     }
-    return { role: 'user', content: m.content as ContentBlock }
+    return { role: 'user' as const, content: m.content as ContentBlock }
   })
+
+  return repairDanglingToolUse(messages)
+}
+
+/**
+ * Synthesize `tool_result` blocks for any `tool_use` the stored history never
+ * answered.
+ *
+ * The assistant message carrying `tool_use` blocks is persisted before the
+ * tools run, and their results only after the whole batch finishes. If the
+ * process dies in between (client disconnect terminating the function, a
+ * deploy, a tool that outlives the request), the stored conversation ends on an
+ * unanswered `tool_use`. The Messages API rejects that shape on replay, so
+ * every later turn 400s: and because agent_messages is append-only by design
+ * (no UPDATE/DELETE policies, BFL audit trail), nothing can repair the row.
+ * The conversation is bricked forever.
+ *
+ * Repairing on read keeps the stored trail untouched and the thread usable.
+ * The synthesized result is flagged as an error so the model treats it as a
+ * failed call rather than silently inventing an outcome from it.
+ */
+export function repairDanglingToolUse(
+  messages: { role: 'user' | 'assistant'; content: ContentBlock }[],
+): { role: 'user' | 'assistant'; content: ContentBlock }[] {
+  const answered = new Set<string>()
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue
+    for (const block of m.content) {
+      if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        answered.add(block.tool_use_id)
+      }
+    }
+  }
+
+  const out: { role: 'user' | 'assistant'; content: ContentBlock }[] = []
+  for (const m of messages) {
+    out.push(m)
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
+
+    const missing = m.content
+      .filter(
+        (block: ContentBlock) =>
+          block?.type === 'tool_use' &&
+          typeof block.id === 'string' &&
+          !answered.has(block.id),
+      )
+      .map((block: ContentBlock) => ({
+        type: 'tool_result' as const,
+        tool_use_id: block.id as string,
+        content: 'Avbröts innan verktyget hann svara. Kör om det om du behöver resultatet.',
+        is_error: true,
+      }))
+
+    if (missing.length > 0) {
+      // Mark them answered so a later duplicate id (shouldn't happen, but the
+      // store is append-only and has seen retries) doesn't get a second stub.
+      for (const block of missing) answered.add(block.tool_use_id)
+      out.push({ role: 'user', content: missing as ContentBlock })
+    }
+  }
+  return out
 }
 
 async function persistMessage(
