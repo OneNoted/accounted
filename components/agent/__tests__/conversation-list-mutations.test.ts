@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ConversationRow } from '../conversation-display'
 import {
   createRevisionGuard,
@@ -46,8 +46,15 @@ function fakeState(initial: ConversationRow[]) {
   }
 }
 
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
 afterEach(() => {
   vi.restoreAllMocks()
+  // restoreAllMocks does not undo vi.stubGlobal, so the stubbed fetch would
+  // otherwise outlive this file.
+  vi.unstubAllGlobals()
 })
 
 describe('restoreRow', () => {
