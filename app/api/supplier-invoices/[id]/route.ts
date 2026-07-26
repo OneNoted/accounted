@@ -132,7 +132,10 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  const { data: linkedPayment } = await supabase
+  // Both orphan-safety lookups fail CLOSED: a lookup error must block the
+  // delete, otherwise a transient DB/RLS failure would read as "no payment /
+  // no schedule" and let the delete through unverified.
+  const { data: linkedPayment, error: paymentLookupError } = await supabase
     .from('supplier_invoice_payments')
     .select('id')
     .eq('company_id', companyId)
@@ -140,19 +143,27 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     .limit(1)
     .maybeSingle()
 
+  if (paymentLookupError) {
+    return NextResponse.json({ error: getUserErrorMessage(paymentLookupError) }, { status: 500 })
+  }
+
   if (linkedPayment) {
     return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
       details: { reason: 'payments', paymentId: linkedPayment.id },
     })
   }
 
-  const { data: linkedSchedule } = await supabase
+  const { data: linkedSchedule, error: scheduleLookupError } = await supabase
     .from('accrual_schedules')
     .select('id')
     .eq('company_id', companyId)
     .eq('supplier_invoice_id', id)
     .limit(1)
     .maybeSingle()
+
+  if (scheduleLookupError) {
+    return NextResponse.json({ error: getUserErrorMessage(scheduleLookupError) }, { status: 500 })
+  }
 
   if (linkedSchedule) {
     return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {

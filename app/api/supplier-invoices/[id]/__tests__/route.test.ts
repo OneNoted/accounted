@@ -149,6 +149,33 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
     expect(status).toBe(400)
   })
 
+  it('fails closed when the payment lookup errors', async () => {
+    // A transient DB/RLS failure must block the delete rather than read as
+    // "no payment exists".
+    enqueue({
+      data: { status: 'registered', registration_journal_entry_id: null, is_credit_note: false },
+    })
+    enqueue({ data: null, error: { message: 'permission denied' } })
+
+    const { status } = await parseJsonResponse(await deleteRequest())
+    expect(status).toBe(500)
+    // Existence fetch + payments lookup only: no item deletion.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails closed when the accrual-schedule lookup errors', async () => {
+    enqueue({
+      data: { status: 'registered', registration_journal_entry_id: null, is_credit_note: false },
+    })
+    enqueue({ data: null }) // supplier_invoice_payments lookup: none
+    enqueue({ data: null, error: { message: 'permission denied' } })
+
+    const { status } = await parseJsonResponse(await deleteRequest())
+    expect(status).toBe(500)
+    // Existence fetch + payments + schedule lookups: no item deletion.
+    expect(mockSupabase.from).toHaveBeenCalledTimes(3)
+  })
+
   it('deletes an unbooked registered invoice', async () => {
     enqueue({
       data: {

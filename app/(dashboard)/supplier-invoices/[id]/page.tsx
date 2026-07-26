@@ -506,7 +506,8 @@ export default function SupplierInvoiceDetailPage() {
               registered-only gate made them undeletable just by aging. */}
           {['registered', 'approved', 'overdue'].includes(invoice.status) &&
             !invoice.is_credit_note &&
-            !invoice.registration_journal_entry_id && (
+            !invoice.registration_journal_entry_id &&
+            payments.length === 0 && (
               <Button
                 variant="destructive"
                 size="icon"
