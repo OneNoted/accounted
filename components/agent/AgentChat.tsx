@@ -695,6 +695,10 @@ export default function AgentChat({
 
   return (
     <div className="relative flex flex-col h-full min-h-0">
+      {/* The pill is positioned against THIS box, not the whole component: the
+          composer below grows as the user types, and a fixed offset from the
+          bottom would slide the pill under it. */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
       <div
         ref={scrollerRef}
         className={cn(
@@ -733,12 +737,13 @@ export default function AgentChat({
         <button
           type="button"
           onClick={jumpToLatest}
-          className="absolute left-1/2 -translate-x-1/2 bottom-28 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-md hover:bg-secondary transition-colors"
+          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-md hover:bg-secondary transition-colors"
         >
           <ArrowDown className="h-3 w-3" />
           Nytt svar
         </button>
       )}
+      </div>
 
       {/* Paywall: /api/agent/invoke 403s without the ai capability. Replace
           the composer with an upsell so an already-open conversation (or a
