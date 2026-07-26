@@ -460,7 +460,9 @@ export async function generateAgiDeclaration(
   // past. Filing deadline is the 12th (17th in Jan/Aug for small employers)
   // of the month after the period; SKV accepts corrections for a long time
   // after, but a period > 13 months in the past is almost certainly a
-  // misclick. Surface via the logger so audit log + Sentry both see it.
+  // misclick. Surface via the logger so it lands in the audit log. These are
+  // warn-level and carry no alert flag, so they do not reach the observability
+  // sink (lib/observability); they are a breadcrumb, not a page.
   {
     const now = new Date()
     const currentYM = now.getUTCFullYear() * 100 + (now.getUTCMonth() + 1)

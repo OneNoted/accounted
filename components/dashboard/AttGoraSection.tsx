@@ -124,9 +124,10 @@ export default function AttGoraSection({
       }
     } catch (err) {
       // Stale counts self-correct on the next page load: never block the
-      // flow, but keep the failure observable (Sentry captures console.error)
-      // so a systematically broken counts endpoint doesn't hide behind
-      // silently frozen numbers.
+      // flow. Note this is a browser console.error and nothing collects it:
+      // the observability sink (lib/observability) is server-side and has no
+      // client adapter, so a systematically broken counts endpoint currently
+      // hides behind silently frozen numbers until someone reports it.
       console.error('[att-gora] worklist counts refetch failed', err)
     }
   }

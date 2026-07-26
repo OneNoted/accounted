@@ -6,6 +6,13 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('year-end-service')
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  fetchPaymentsAsOf,
+  outstandingAsOf,
+  todayIsoDate,
+  type PaymentsAsOf,
+} from '@/lib/reports/reskontra-payments'
 import { lockPeriod, closePeriod, createNextPeriod, findNextPeriod } from './period-service'
 import { generateResultAppropriation } from './result-appropriation-service'
 import {
@@ -218,38 +225,62 @@ export async function validateYearEndReadiness(
     warnings.push('Inga bokförda verifikationer i perioden')
   }
 
-  // Check: foreign currency items exist but haven't been revalued
-  const { count: revalCount } = await supabase
+  // Check: foreign-currency items open on balansdagen (ÅRL 4 kap. 13 §).
+  //
+  // Only a revaluation dated ON balansdagen discharges the duty. The previous
+  // gate accepted any currency_revaluation verifikat anywhere in the period,
+  // so one interim run (a June month-end revaluation) silenced the check for
+  // every item still outstanding on 31 December: "we already did one, so stop
+  // looking". An interim revaluation says nothing about the balansdagen value.
+  const { count: balansdagenRevalCount } = await supabase
     .from('journal_entries')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .eq('source_type', 'currency_revaluation')
     .eq('status', 'posted')
+    .eq('entry_date', period.period_end)
 
-  if ((revalCount ?? 0) === 0) {
-    // Check if there are any open foreign currency items
-    const { count: fxReceivables } = await supabase
-      .from('invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue'])
-      .neq('currency', 'SEK')
-      .not('exchange_rate', 'is', null)
+  // Both states below are warnings, never blockers: nothing in the bokslut
+  // rules makes an unvalued FX item a bar to closing, and executeYearEndClosing
+  // runs the revaluation itself in step 2. Escalating would block a close that
+  // the very next step performs.
+  try {
+    const openFx = await countOpenFxItemsAtBalansdagen(supabase, companyId, period.period_end)
 
-    const { count: fxPayables } = await supabase
-      .from('supplier_invoices')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
-      .neq('currency', 'SEK')
-      .not('exchange_rate', 'is', null)
-
-    if (((fxReceivables ?? 0) + (fxPayables ?? 0)) > 0) {
+    // Loudest case first. A row with no exchange_rate is invisible to the
+    // revaluation: previewCurrencyRevaluation partitions it into
+    // `unconvertedFx` and drops it, so re-running the year-end will never
+    // value it. It needs a rate on the invoice, and these rows are typically
+    // the largest unmeasured exposure precisely because nothing warns on them.
+    // The old query's `.not('exchange_rate','is',null)`, inherited from the
+    // revaluation code, excluded exactly this case: a company whose only open
+    // FX items were unconverted got no warning at all.
+    if (openFx.unconverted > 0) {
       warnings.push(
-        'Öppna poster i utländsk valuta har inte omvärderats (ÅRL 4:13)'
+        `${openFx.unconverted} post(er) i utländsk valuta var öppna på balansdagen ${period.period_end} men saknar valutakurs: de kan inte värderas till balansdagskurs (ÅRL 4 kap. 13 §) och utelämnas ur omvärderingen. Registrera kursen på fakturan.`
       )
     }
+
+    // Separate state, separate remedy: these can be valued, they just have not
+    // been yet. Suppressed only by a revaluation dated on balansdagen.
+    if (openFx.revaluable > 0 && (balansdagenRevalCount ?? 0) === 0) {
+      warnings.push(
+        `${openFx.revaluable} post(er) i utländsk valuta var öppna på balansdagen ${period.period_end} och har inte omvärderats till balansdagskurs (ÅRL 4 kap. 13 §)`
+      )
+    }
+  } catch (err) {
+    // A failed lookup must not read as "no FX exposure". Say the check did not
+    // run rather than let silence pass for a clean bill of health.
+    log.error('year-end: could not measure open FX items at balansdagen', err as Error, {
+      operation: 'year_end.fx_readiness',
+      companyId,
+      entityType: 'fiscal_period',
+      entityId: fiscalPeriodId,
+    })
+    warnings.push(
+      'Kontrollen av öppna poster i utländsk valuta (ÅRL 4 kap. 13 §) kunde inte genomföras: stäm av dem manuellt innan bokslut'
+    )
   }
 
   // Check: continuity_verified flag from prior year-end
@@ -656,9 +687,10 @@ export async function executeYearEndClosing(
     )
   } catch (err) {
     resultAppropriationFailed = true
-    // alert:true marks this for out-of-band alerting (the log sink / Sentry
-    // integration filters on it): a silent accounting failure must not wait
-    // for a manual audit. The new period now opens with 2099 still carrying the
+    // alert:true routes this to the observability sink (lib/observability) in
+    // addition to the log line: a silent accounting failure must not wait for
+    // a manual audit. The sink is a no-op until a provider is configured, so
+    // today this reaches the JSON log only. The new period now opens with 2099 still carrying the
     // prior result; resultAppropriationFailed below drives a UI warning and the
     // catch-up script (scripts/repair-result-appropriation.ts) posts the fix.
     log.error('year-end: result appropriation omföring failed (non-fatal)', err as Error, {
@@ -796,6 +828,155 @@ export async function generateOpeningBalances(
   }
 
   return openingEntry
+}
+
+/**
+ * Open foreign-currency items as they stood on balansdagen, split by whether
+ * the ÅRL 4 kap. 13 § valuation can reach them at all. The two states have
+ * different remedies, so they are counted apart rather than summed.
+ */
+interface OpenFxAtBalansdagen {
+  /** Carries a usable exchange_rate: revaluable to the balansdagen rate. */
+  revaluable: number
+  /**
+   * No exchange_rate on file, so there is no original SEK value to revalue
+   * from. Counted rather than dropped, the same contract `unconverted_fx_count`
+   * carries on the reskontra reports (lib/reports/supplier-ledger.ts): an
+   * excluded row has to show up as a number somewhere.
+   */
+  unconverted: number
+}
+
+/** The subset of an invoice row this check reads. */
+interface FxLedgerRow {
+  id: string
+  status: string | null
+  currency: string | null
+  exchange_rate: number | string | null
+  total: number | string | null
+  paid_amount: number | string | null
+  remaining_amount: number | string | null
+  paid_at: string | null
+}
+
+/** A stored rate is usable only when present and strictly positive. */
+function hasUsableFxRate(rate: number | string | null | undefined): boolean {
+  return rate != null && Number(rate) > 0
+}
+
+/**
+ * Count the foreign-currency receivables and payables that were still open on
+ * balansdagen.
+ *
+ * Measured AS OF balansdagen, not as of now. ÅRL 4 kap. 13 § values monetary
+ * items at the balance-sheet date, so an invoice settled in March of the
+ * following year was still an open FX item on 31 December and still had to be
+ * valued there; the live `status` column only says what is open today. For a
+ * historical balansdagen the population is therefore widened to invoices dated
+ * on or before it (including ones settled since) and the outstanding amount is
+ * recomputed from the payment history, the same reconstruction the reskontra
+ * reports use (lib/reports/ar-ledger.ts, lib/reports/supplier-ledger.ts). For
+ * today or a future balansdagen the stored open-invoice state IS the as-of
+ * state, so no reconstruction is attempted.
+ *
+ * Limits, inherited from `outstandingAsOf` and identical to what the reskontra
+ * reports already accept: an invoice with no payment rows and no `paid_at`
+ * cannot be dated, so its live outstanding is assumed to have stood at
+ * balansdagen; and an invoice cancelled or credited since is treated as never
+ * having been open, because neither event carries a reliable date. The status
+ * population is kept identical to what the revaluation engine actually acts on
+ * (`getOpenForeignCurrencyReceivables` / `...Payables`), so the warning never
+ * points at rows for which no remedy exists.
+ */
+async function countOpenFxItemsAtBalansdagen(
+  supabase: SupabaseClient,
+  companyId: string,
+  balansdagen: string
+): Promise<OpenFxAtBalansdagen> {
+  const isHistorical = balansdagen < todayIsoDate()
+  const columns =
+    'id, status, currency, exchange_rate, total, paid_amount, remaining_amount, paid_at'
+
+  const receivables = await fetchAllRows<FxLedgerRow>(
+    ({ from, to }) => {
+      const base = supabase
+        .from('invoices')
+        .select(columns)
+        .eq('company_id', companyId)
+        .neq('currency', 'SEK')
+      const scoped = isHistorical
+        ? base.in('status', ['sent', 'overdue', 'paid']).lte('invoice_date', balansdagen)
+        : base.in('status', ['sent', 'overdue'])
+      // Stable total order for correct paging (see fetch-all.ts).
+      return scoped.order('id', { ascending: true }).range(from, to)
+    },
+    { dedupeBy: (r) => r.id }
+  )
+
+  const payables = await fetchAllRows<FxLedgerRow>(
+    ({ from, to }) => {
+      const base = supabase
+        .from('supplier_invoices')
+        .select(columns)
+        .eq('company_id', companyId)
+        .neq('currency', 'SEK')
+      const scoped = isHistorical
+        ? base
+            .in('status', ['registered', 'approved', 'overdue', 'partially_paid', 'paid'])
+            .lte('invoice_date', balansdagen)
+        : base.in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
+      return scoped.order('id', { ascending: true }).range(from, to)
+    },
+    { dedupeBy: (r) => r.id }
+  )
+
+  // Payment history is only needed to walk a since-settled invoice back to what
+  // it owed on balansdagen, and only when there is something to walk back.
+  const receivablePayments =
+    isHistorical && receivables.length > 0
+      ? await fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, balansdagen)
+      : null
+  const payablePayments =
+    isHistorical && payables.length > 0
+      ? await fetchPaymentsAsOf(
+          supabase,
+          'supplier_invoice_payments',
+          'supplier_invoice_id',
+          companyId,
+          balansdagen
+        )
+      : null
+
+  const counts: OpenFxAtBalansdagen = { revaluable: 0, unconverted: 0 }
+
+  function tally(
+    rows: FxLedgerRow[],
+    payments: PaymentsAsOf | null,
+    liveOutstanding: (row: FxLedgerRow) => number
+  ): void {
+    for (const row of rows) {
+      const total = Number(row.total) || 0
+      const live = liveOutstanding(row)
+      const outstanding = payments
+        ? outstandingAsOf(row, total, live, payments, balansdagen)
+        : live
+      // Settled on or before balansdagen: nothing was open to value.
+      if (outstanding <= 0) continue
+      if (hasUsableFxRate(row.exchange_rate)) counts.revaluable += 1
+      else counts.unconverted += 1
+    }
+  }
+
+  // Each side uses its own reskontra's definition of outstanding so these
+  // counts reconcile with what the user sees there: kundreskontran derives it
+  // from paid_amount, leverantörsreskontran reads the maintained
+  // remaining_amount.
+  tally(receivables, receivablePayments, (r) =>
+    roundOre((Number(r.total) || 0) - (Number(r.paid_amount) || 0))
+  )
+  tally(payables, payablePayments, (r) => Number(r.remaining_amount) || 0)
+
+  return counts
 }
 
 /**
