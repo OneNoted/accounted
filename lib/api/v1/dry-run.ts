@@ -9,7 +9,13 @@
  *      normal success status (201, 204, etc.). A caller that sees `200`
  *      with `X-Dry-Run` knows the write was NOT committed.
  *   3. Commit by re-issuing the same request without `dry_run=true`, passing
- *      the same `Idempotency-Key` to guarantee at-most-once semantics.
+ *      the same `Idempotency-Key` to guarantee at-most-once semantics. The
+ *      wrapper keeps the two apart: a dry-run response is never written to the
+ *      idempotency cache, and the dry-run flag is folded into the request hash,
+ *      so the commit executes for real instead of replaying the preview.
+ *      Order matters. Once a key has committed for real, re-issuing it WITH
+ *      `dry_run=true` is rejected as key reuse (409 IDEMPOTENCY_KEY_REUSE)
+ *      rather than answered with the committed result dressed up as a preview.
  *
  * Two preview shapes are supported:
  *

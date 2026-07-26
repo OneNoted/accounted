@@ -14,8 +14,11 @@
  *   4. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
  *      supported transparently: the URL is the source of truth.
- *   5. Resolves `Idempotency-Key` (header) and replays cached responses.
- *   6. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
+ *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
+ *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
+ *      dry-run flag is part of the cache identity and dry-run responses are
+ *      never cached, so a simulation can never be replayed in place of the
+ *      real write that follows it.
  *   7. Invokes the handler with a typed RouteContext.
  *   8. Stamps `X-Request-Id`, `Gnubok-Version`, `X-RateLimit-Limit` on the
  *      response.
@@ -202,6 +205,41 @@ function isDryRun(request: Request, url: URL): boolean {
   const headerVal = request.headers.get(DRY_RUN_HEADER)
   if (headerVal && headerVal.toLowerCase() === 'true') return true
   return false
+}
+
+/**
+ * Canonical idempotency hash for a v1 request.
+ *
+ * `dryRun` is part of the identity of the request. The documented commit flow
+ * (see `dry-run.ts`) is "re-issue the exact same request without
+ * `dry_run=true`, same Idempotency-Key", so a simulation and the real write
+ * that follows it share method, path and body. Hashing only those three made
+ * the two indistinguishable: the preview got cached under the commit's hash
+ * and the commit replayed it, returning 200 with `{ dry_run: true, preview }`
+ * while writing nothing.
+ *
+ * The flag is only added to the hashed object when it is TRUE, so an ordinary
+ * (non-dry-run) write hashes byte-identically to previous releases. Idempotency
+ * rows live for 24h; folding `dry_run: false` in unconditionally would make
+ * every key in flight across this deploy fail the `request_hash` comparison and
+ * answer a legitimate retry with IDEMPOTENCY_KEY_REUSE.
+ *
+ * Both the cache lookup and the cache store go through this function: if the
+ * two hash inputs ever drift apart, a stored response can never be found
+ * again, which is a subtler failure than the one this fixes.
+ */
+function buildRequestHash(input: {
+  method: string
+  path: string
+  body: unknown
+  dryRun: boolean
+}): string {
+  return hashRequest({
+    method: input.method,
+    path: input.path,
+    body: input.body,
+    ...(input.dryRun ? { dry_run: true } : {}),
+  })
 }
 
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
@@ -406,14 +444,20 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         })
       }
 
-      // 7. If idempotency-key supplied, check for cached response.
+      // 7. Dry-run resolution. Test keys force it on regardless of the flag.
+      //    Resolved BEFORE the idempotency lookup because it feeds the request
+      //    hash: a preview and its follow-up commit must never share a cache
+      //    entry.
+      const dryRun = isDryRun(request, url) || forceDryRun
+
+      // 8. If idempotency-key supplied, check for cached response.
       let bodyForHash: unknown = null
       let workingRequest = request
       if (idempotencyKey && isMutation && companyId) {
         const { body, cloned } = await readBodyForHash(request)
         bodyForHash = body
         workingRequest = cloned
-        const reqHash = hashRequest({ method: request.method, path, body })
+        const reqHash = buildRequestHash({ method: request.method, path, body, dryRun })
         try {
           const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
           if (hit) {
@@ -433,9 +477,6 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           throw err
         }
       }
-
-      // 8. Dry-run resolution. Test keys force it on regardless of the flag.
-      const dryRun = isDryRun(workingRequest, url) || forceDryRun
 
       const ctx: ApiV1Context = {
         requestId,
@@ -461,10 +502,20 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       }
 
       // 10. Persist idempotency cache (best-effort).
-      if (idempotencyKey && isMutation && companyId && response.status < 500) {
+      //
+      //     Never cache a dry-run: the response describes a write that did not
+      //     happen, and caching it under a real Idempotency-Key is exactly how
+      //     the documented "preview, then commit with the same key" flow used
+      //     to lose the commit. A simulation has nothing worth replaying.
+      if (idempotencyKey && isMutation && companyId && !dryRun && response.status < 500) {
         try {
           const body = await response.clone().json().catch(() => ({}))
-          const reqHash = hashRequest({ method: request.method, path, body: bodyForHash })
+          const reqHash = buildRequestHash({
+            method: request.method,
+            path,
+            body: bodyForHash,
+            dryRun,
+          })
           const status: 'success' | 'error' = response.status >= 400 ? 'error' : 'success'
           await storeIdempotencyResponse(
             supabase,
