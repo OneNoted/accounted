@@ -2,7 +2,7 @@
  * /api/v1/companies/{companyId}/journal-entries: list + create draft.
  *
  * GET   : cursor-paginated list with filters (fiscal_period_id, status, date range).
- *         Cursor on (entry_date DESC, id DESC).
+ *         Cursor on (created_at DESC, id ASC).
  * POST  : create a draft verifikation. Idempotent (mandatory Idempotency-Key).
  *         Dry-runnable. The draft has no voucher number until you call
  *         /commit, so a draft that's never committed produces no löpnummer gap
@@ -79,7 +79,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries',
   summary: 'List journal entries (verifikationer).',
   description:
-    'Cursor-paginated list of journal entries. Filters: fiscal_period_id, status, date_from, date_to. Excludes status=cancelled by default; pass status=cancelled to inspect storno-cancelled drafts.',
+    'Cursor-paginated list of journal entries ordered by created_at DESC, id ASC (newest-booked first; the `entry_date` column is the verifikationsdatum and is filterable via ?date_from / ?date_to but is not the sort key). Filters: fiscal_period_id, status, date_from, date_to. Excludes status=cancelled by default; pass status=cancelled to inspect storno-cancelled drafts.',
   useWhen:
     'You need to walk the verifikationsserie for a period (audit, SIE export, gap detection) or list recent activity for a UI.',
   doNotUseFor:
@@ -87,6 +87,8 @@ registerEndpoint({
   pitfalls: [
     'Cancelled drafts are hidden by default. They are NOT a löpnummer gap (no voucher_number is allocated for drafts); the filter is for noise reduction.',
     'voucher_number=0 indicates a draft that has not been committed. Posted entries always have voucher_number > 0.',
+    'Ordering is by created_at (when the verifikat was booked), not entry_date. A backdated verifikat appears where it was booked: filter on ?date_from / ?date_to when you need entry_date ranges, and walk the whole cursor chain when you need a full period.',
+    'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
   ],
   example: {
     response: {
@@ -141,12 +143,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const filters = fr.data
 
+    // Sort by (created_at DESC, id ASC). created_at is the stable cursor
+    // anchor: it's a real timestamp (passes ISO-8601 validation in
+    // decodeDefaultCursor), NOT NULL, and total-orderable once id breaks
+    // ties. Sorting by `entry_date` directly broke the cursor: a Postgres
+    // `date` serializes as YYYY-MM-DD, the decoder rejected it, the keyset
+    // predicate was never applied, and an integrator syncing verifikat
+    // looped on the newest page forever. entry_date is still on every row
+    // and ?date_from / ?date_to filter on it. Same anchor as the
+    // transactions list.
     let query = ctx.supabase
       .from('journal_entries')
       .select(JE_COLUMNS)
       .eq('company_id', ctx.companyId!)
-      .order('entry_date', { ascending: false })
-      .order('id', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
       .limit(limit + 1)
 
     if (filters.fiscal_period_id) query = query.eq('fiscal_period_id', filters.fiscal_period_id)
@@ -159,7 +170,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.date_to) query = query.lte('entry_date', filters.date_to)
 
     if (decoded) {
-      query = query.or(`entry_date.lt.${decoded.ts},and(entry_date.eq.${decoded.ts},id.lt.${decoded.id})`)
+      // Keyset on (created_at DESC, id ASC): created_at moves backward,
+      // id breaks ties within the same timestamp.
+      query = query.or(
+        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
+      )
     }
 
     const { data, error } = await query
@@ -182,7 +197,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const hasMore = rows.length > limit
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.entry_date })
+      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
       : null
 
     return paginated(

@@ -2,7 +2,7 @@
  * /api/v1/companies/{companyId}/supplier-invoices: list + register endpoints.
  *
  * GET   : list with filters (status, supplier_id, currency, invoice_date range).
- *         Cursor pagination on (invoice_date DESC, id DESC).
+ *         Cursor pagination on (created_at DESC, id ASC).
  * POST  : register a new supplier invoice. Idempotent (mandatory Idempotency-Key).
  *         Dry-runnable.
  *
@@ -85,7 +85,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices',
   summary: 'List supplier invoices for a company.',
   description:
-    'Returns supplier invoices in most-recent-first order. Filters: status, supplier_id, currency, date_from / date_to (filter by invoice_date).',
+    'Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newest-registered first; the `invoice_date` column is the seller\'s invoice date and is filterable via ?date_from / ?date_to but is not the sort key). Filters: status, supplier_id, currency, date_from / date_to (filter by invoice_date).',
   useWhen:
     'You need to enumerate registered supplier invoices for an AP dashboard, a payment run, or a leverantörsreskontra reconciliation.',
   doNotUseFor:
@@ -94,6 +94,8 @@ registerEndpoint({
     'Credit notes (is_credit_note=true) appear in the same list as the originals; filter by status=credited or check the flag to separate.',
     'remaining_amount is the unpaid portion; a partially_paid SI has remaining_amount > 0.',
     'arrival_number is internal book-keeping, not the seller\'s invoice number: use supplier_invoice_number for matching to received documents.',
+    'Ordering is by created_at (registration time), not invoice_date. A late-registered invoice appears where it was registered: filter on ?date_from / ?date_to when you care about the seller\'s invoice date.',
+    'Cursor pagination: pass ?cursor=<next_cursor> from the previous response. A stale or tampered cursor is ignored and the first page is returned again.',
   ],
   example: {
     response: {
@@ -163,12 +165,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const filters = filtersResult.data
 
+    // Sort by (created_at DESC, id ASC). created_at is the stable cursor
+    // anchor: it's a real timestamp (passes ISO-8601 validation in
+    // decodeDefaultCursor), NOT NULL, and total-orderable once id breaks
+    // ties. Sorting by `invoice_date` directly broke the cursor: a Postgres
+    // `date` serializes as YYYY-MM-DD, the decoder rejected it, the keyset
+    // predicate was never applied, and every "next page" silently returned
+    // page 1 forever while still advertising a fresh next_cursor.
+    // invoice_date is still on every row and ?date_from / ?date_to filter
+    // on it. Same anchor as the transactions list.
     let query = ctx.supabase
       .from('supplier_invoices')
       .select(`${SI_SUMMARY_COLUMNS}, supplier:suppliers(${SUPPLIER_NAME_ONLY_COLUMNS})`)
       .eq('company_id', ctx.companyId!)
-      .order('invoice_date', { ascending: false })
-      .order('id', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true })
       .limit(limit + 1)
 
     if (filters.status) query = query.eq('status', filters.status)
@@ -178,9 +189,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.date_to) query = query.lte('invoice_date', filters.date_to)
 
     if (decoded) {
-      // Keyset on (invoice_date DESC, id DESC).
+      // Keyset on (created_at DESC, id ASC): created_at moves backward,
+      // id breaks ties within the same timestamp.
       query = query.or(
-        `invoice_date.lt.${decoded.ts},and(invoice_date.eq.${decoded.ts},id.lt.${decoded.id})`,
+        `created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.gt.${decoded.id})`,
       )
     }
 
@@ -244,7 +256,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const last = trimmed[trimmed.length - 1]
     const nextCursor = hasMore && last
-      ? encodeDefaultCursor({ id: last.id, created_at: last.invoice_date })
+      ? encodeDefaultCursor({ id: last.id, created_at: last.created_at })
       : null
 
     return paginated(supplier_invoices, {
