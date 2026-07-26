@@ -488,8 +488,12 @@ export async function verifyIntegrity(
     throw new Error('Document not found')
   }
 
-  // Download file from storage
-  const { data: fileData, error: downloadError } = await supabase.storage
+  // Download via the service-role client: the storage SELECT policy only
+  // covers the uploader's own folder (documents/{uid}/...), so a caller-bound
+  // client cannot read colleague-uploaded files. The company-filtered row
+  // fetch above (RLS on document_attachments) is the authorization.
+  const serviceClient = createServiceClientNoCookies()
+  const { data: fileData, error: downloadError } = await serviceClient.storage
     .from('documents')
     .download(doc.storage_path)
 

@@ -11,8 +11,14 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(),
 }))
 
+// The storage download goes through the service-role client: the storage
+// SELECT policy only covers the uploader's own folder, so the user-scoped
+// client cannot read colleague-uploaded files within the same company.
+const serviceDownloadMock = vi.fn()
+const serviceStorageFromMock = vi.fn(() => ({ download: serviceDownloadMock }))
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
+  createServiceClient: () => ({ storage: { from: serviceStorageFromMock } }),
 }))
 
 vi.mock('@/lib/core/documents/document-service', () => ({
@@ -106,7 +112,7 @@ describe('GET /api/documents/[id]/integrity', () => {
     const { status, body } = await parseJsonResponse<{ data: { valid: boolean } }>(res)
     expect(status).toBe(200)
     expect(body.data.valid).toBe(true)
-    expect(mockSupabase.storage.from).not.toHaveBeenCalled()
+    expect(serviceStorageFromMock).not.toHaveBeenCalled()
   })
 
   it('returns { valid: true } when the bytes match the declared mime type', async () => {
@@ -123,9 +129,7 @@ describe('GET /api/documents/[id]/integrity', () => {
 
     const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37])
     const blob = new Blob([pdfBytes], { type: 'application/pdf' })
-    mockSupabase.storage.from.mockReturnValue({
-      download: vi.fn().mockResolvedValue({ data: blob, error: null }),
-    } as never)
+    serviceDownloadMock.mockResolvedValue({ data: blob, error: null })
 
     vi.mocked(validateDocumentMagicBytes).mockReturnValue(null)
 
@@ -149,9 +153,7 @@ describe('GET /api/documents/[id]/integrity', () => {
     enqueue({ data: { company_id: companyId }, error: null })
 
     const blob = new Blob([new Uint8Array([0x00, 0x00, 0x00, 0x00])])
-    mockSupabase.storage.from.mockReturnValue({
-      download: vi.fn().mockResolvedValue({ data: blob, error: null }),
-    } as never)
+    serviceDownloadMock.mockResolvedValue({ data: blob, error: null })
 
     vi.mocked(validateDocumentMagicBytes).mockReturnValue('Internal /storage/v1/object error 42')
 
@@ -177,12 +179,10 @@ describe('GET /api/documents/[id]/integrity', () => {
     })
     enqueue({ data: { company_id: companyId }, error: null })
 
-    mockSupabase.storage.from.mockReturnValue({
-      download: vi.fn().mockResolvedValue({
-        data: null,
-        error: { message: 'storage internal: bucket=documents object=secret/path.pdf' },
-      }),
-    } as never)
+    serviceDownloadMock.mockResolvedValue({
+      data: null,
+      error: { message: 'storage internal: bucket=documents object=secret/path.pdf' },
+    })
 
     const res = await GET(req(), createMockRouteParams({ id: validDocId }))
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
@@ -191,17 +191,22 @@ describe('GET /api/documents/[id]/integrity', () => {
     expect(JSON.stringify(body)).not.toContain('secret/path.pdf')
   })
 
-  it('does not import the service-role supabase client', async () => {
-    // The download must go through the per-request user-scoped client so
-    // RLS on storage.objects can act as defense-in-depth. Statically
-    // verifying the source is the cleanest check: runtime mocking of the
-    // service-client export would not catch a future regression where
-    // someone added an import but conditionally used it.
+  it('authorizes on the user-scoped client before the service-role download', async () => {
+    // The storage SELECT policy on the documents bucket only covers the
+    // uploader's own folder, so the download must use the service-role
+    // client or colleague-uploaded files 500 for every other company
+    // member. The compensating control is that both the row fetch and the
+    // explicit membership check run on the user-scoped client first.
+    // Source-level check: the queued mock collapses chained calls, so
+    // runtime introspection cannot distinguish which client ran the fetch.
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
     const routePath = path.resolve(__dirname, '../route.ts')
     const source = await fs.readFile(routePath, 'utf8')
-    expect(source).not.toMatch(/createServiceClient(\b|NoCookies)/)
+    const membershipIdx = source.indexOf("from('company_members')")
+    const downloadIdx = source.indexOf('createServiceClient()')
+    expect(membershipIdx).toBeGreaterThan(-1)
+    expect(downloadIdx).toBeGreaterThan(membershipIdx)
   })
 
   it('filters the document lookup to the current version', async () => {

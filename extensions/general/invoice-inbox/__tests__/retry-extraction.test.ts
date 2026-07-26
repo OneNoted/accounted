@@ -23,6 +23,16 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
+// The attachment download runs on the service-role client (the storage
+// SELECT policy is per-uploader-folder, and inbox documents are attributed
+// to the company creator, not the caller).
+const serviceDownloadMock = vi.fn()
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => ({
+    storage: { from: vi.fn(() => ({ download: serviceDownloadMock })) },
+  }),
+}))
+
 import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { hasCapability } from '@/lib/entitlements/has-capability'
@@ -155,11 +165,9 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: null, error: null }) // inbox update on success
 
-    supabase.storage.from = vi.fn().mockReturnValue({
-      download: vi.fn().mockResolvedValue({
-        data: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }),
-        error: null,
-      }),
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }),
+      error: null,
     })
 
     vi.mocked(extractInvoiceFields).mockResolvedValueOnce(EXTRACTION_SUCCESS as never)
@@ -183,11 +191,9 @@ describe('POST /items/:id/retry-extraction', () => {
     })
     enqueue({ data: null, error: null }) // error-state update
 
-    supabase.storage.from = vi.fn().mockReturnValue({
-      download: vi.fn().mockResolvedValue({
-        data: new Blob([new Uint8Array([1])], { type: 'application/pdf' }),
-        error: null,
-      }),
+    serviceDownloadMock.mockResolvedValue({
+      data: new Blob([new Uint8Array([1])], { type: 'application/pdf' }),
+      error: null,
     })
 
     vi.mocked(extractInvoiceFields).mockRejectedValueOnce(new Error('pdfjs blew up'))

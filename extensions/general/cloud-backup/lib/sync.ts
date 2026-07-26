@@ -7,6 +7,7 @@ import {
 } from '@/lib/reports/full-archive-export'
 import { buildDriveFolderReadme } from '@/lib/reports/archive-readme'
 import { getBranding } from '@/lib/branding/service'
+import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   getOAuthEnv,
@@ -125,6 +126,15 @@ interface PeriodRow {
  */
 export async function performSync(params: PerformSyncParams): Promise<PerformSyncResult> {
   const { supabase, companyId, userId, origin } = params
+
+  // Archive generation reads the private `documents` bucket, whose SELECT
+  // policy only covers the uploader's own folder. User-triggered syncs pass
+  // a user-bound client, which would silently drop every colleague-uploaded
+  // document from the backup (manifest rows flip to 'error'). The service
+  // client is used for archive generation only; authorization happened at
+  // the extension dispatcher (or the cron), and every archive query filters
+  // by the explicit companyId.
+  const archiveClient = createServiceClient()
 
   const connection = await loadExtensionData<GoogleDriveConnection>(
     supabase,
@@ -322,7 +332,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       ].join('|'),
       includeDocuments,
       generate: () =>
-        generateFullArchive(supabase, companyId, {
+        generateFullArchive(archiveClient, companyId, {
           scope: 'period',
           period_id: period.id,
           include_documents: includeDocuments,
@@ -355,7 +365,7 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     ].join('|'),
     includeDocuments: baseDecision.includeDocuments,
     generate: () =>
-      generateBaseDataArchive(supabase, companyId, {
+      generateBaseDataArchive(archiveClient, companyId, {
         include_documents: baseDecision.includeDocuments,
       }),
   })
