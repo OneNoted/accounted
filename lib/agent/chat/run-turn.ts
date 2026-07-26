@@ -605,12 +605,111 @@ async function loadConversationMessages(
     .order('created_at', { ascending: true })
 
   // role='tool' messages were written as user messages on the Anthropic side.
-  return (data ?? []).map((m: { role: string; content: ContentBlock }) => {
+  const messages = (data ?? []).map((m: { role: string; content: ContentBlock }) => {
     if (m.role === 'assistant') {
-      return { role: 'assistant', content: m.content as ContentBlock }
+      return { role: 'assistant' as const, content: m.content as ContentBlock }
     }
-    return { role: 'user', content: m.content as ContentBlock }
+    return { role: 'user' as const, content: m.content as ContentBlock }
   })
+
+  return repairDanglingToolUse(messages)
+}
+
+/**
+ * Synthesize `tool_result` blocks for any `tool_use` the stored history never
+ * answered.
+ *
+ * The assistant message carrying `tool_use` blocks is persisted before the
+ * tools run, and their results only after the whole batch finishes. If the
+ * process dies in between (client disconnect terminating the function, a
+ * deploy, a tool that outlives the request), the stored conversation ends on an
+ * unanswered `tool_use`. The Messages API rejects that shape on replay, so
+ * every later turn 400s: and because agent_messages is append-only by design
+ * (no UPDATE/DELETE policies, BFL audit trail), nothing can repair the row.
+ * The conversation is bricked forever.
+ *
+ * Repairing on read keeps the stored trail untouched and the thread usable.
+ * The synthesized result is flagged as an error so the model treats it as a
+ * failed call rather than silently inventing an outcome from it.
+ */
+export function repairDanglingToolUse(
+  messages: { role: 'user' | 'assistant'; content: ContentBlock }[],
+): { role: 'user' | 'assistant'; content: ContentBlock }[] {
+  const toolResultIds = (content: ContentBlock): Set<string> => {
+    const ids = new Set<string>()
+    if (!Array.isArray(content)) return ids
+    for (const block of content) {
+      if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        ids.add(block.tool_use_id)
+      }
+    }
+    return ids
+  }
+
+  // The API requires results in the message IMMEDIATELY following the tool_use,
+  // so position matters, not just presence: a result that landed after an
+  // intervening turn (two turns racing on one conversation) is still an invalid
+  // shape. Walk pairwise, and treat only same-position results as answers.
+  const out: { role: 'user' | 'assistant'; content: ContentBlock }[] = []
+  const satisfied = new Set<string>()
+
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!
+    out.push(m)
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
+
+    const pending = m.content
+      .filter((block: ContentBlock) => block?.type === 'tool_use' && typeof block.id === 'string')
+      .map((block: ContentBlock) => block.id as string)
+    if (pending.length === 0) continue
+
+    const answeredHere = toolResultIds(messages[i + 1]?.content)
+    const missing = pending.filter((id) => !answeredHere.has(id))
+    for (const id of pending) {
+      if (answeredHere.has(id)) satisfied.add(id)
+    }
+
+    if (missing.length > 0) {
+      for (const id of missing) satisfied.add(id)
+      out.push({
+        role: 'user',
+        content: missing.map((id) => ({
+          type: 'tool_result' as const,
+          tool_use_id: id,
+          content: 'Avbröts innan verktyget hann svara. Kör om det om du behöver resultatet.',
+          is_error: true,
+        })) as ContentBlock,
+      })
+    }
+  }
+
+  // Drop any tool_result that is now orphaned: either a late duplicate of one
+  // we just stubbed, or a result whose tool_use never immediately preceded it.
+  // An unmatched tool_result is rejected by the API just as an unanswered
+  // tool_use is, so leaving it in would defeat the repair.
+  return out
+    .map((m, idx) => {
+      if (!Array.isArray(m.content)) return m
+      const prev = out[idx - 1]
+      const openedByPrev =
+        prev?.role === 'assistant' && Array.isArray(prev.content)
+          ? new Set(
+              prev.content
+                .filter(
+                  (b: ContentBlock) => b?.type === 'tool_use' && typeof b.id === 'string',
+                )
+                .map((b: ContentBlock) => b.id as string),
+            )
+          : new Set<string>()
+
+      const kept = m.content.filter((block: ContentBlock) => {
+        if (block?.type !== 'tool_result') return true
+        return openedByPrev.has(block.tool_use_id)
+      })
+      if (kept.length === m.content.length) return m
+      return { ...m, content: kept as ContentBlock }
+    })
+    .filter((m) => !Array.isArray(m.content) || m.content.length > 0)
 }
 
 async function persistMessage(
