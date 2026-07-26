@@ -19,6 +19,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { StoredStagedOperation } from '@/types'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -419,32 +420,52 @@ export default function AgentChat({
     if (lastUserIdx === -1) return
     const userMsg = messages[lastUserIdx]
 
-    // Anything the discarded turn staged has to be withdrawn first. The card
-    // leaves the screen either way, but the operation stays pending
-    // server-side, and the regenerated turn usually stages a second proposal
-    // for the same booking: two live proposals for one action, each with its
-    // own 30-day expiry. Rejecting is the same path the Avslå button uses, so
-    // the audit trail records why it went away.
+    // Anything the discarded turn staged has to be withdrawn BEFORE the
+    // replacement runs. Otherwise the operation stays pending server-side while
+    // the regenerated turn stages a second proposal for the same booking: two
+    // live proposals for one action, each with its own 30-day expiry. Rejecting
+    // is the same path the Avslå button uses, so the audit trail records why it
+    // went away.
     const abandoned = messages
       .slice(lastUserIdx + 1)
       .flatMap((m) => m.staged ?? [])
       .map((s) => s.operation_id)
       .filter((id): id is string => typeof id === 'string')
 
-    for (const operationId of abandoned) {
-      void fetch(`/api/pending-operations/${operationId}/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rejection_category: 'other',
-          rejection_reason: 'Ersatt: användaren begärde ett nytt svar.',
+    void (async () => {
+      const withdrawn = await Promise.all(
+        abandoned.map(async (operationId) => {
+          try {
+            const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                rejection_category: 'other',
+                rejection_reason: 'Ersatt: användaren begärde ett nytt svar.',
+              }),
+            })
+            // 409 means someone already resolved it (approved in Granskning, or
+            // a parallel client): it is no longer pending either way, which is
+            // all we need.
+            return res.ok || res.status === 409
+          } catch {
+            return false
+          }
         }),
-        // A 409 here just means someone already resolved it, which is fine.
-      }).catch(() => {})
-    }
+      )
 
-    setMessages(messages.slice(0, lastUserIdx + 1))
-    void startTurn({ conversationId, userMessage: userMsg.text })
+      if (withdrawn.some((ok) => !ok)) {
+        // Leave the turn on screen: hiding a card whose operation is still
+        // pending is the failure mode this whole change exists to remove.
+        setErrorMessage(
+          'Kunde inte dra tillbaka det tidigare förslaget, så svaret behölls. Försök igen.',
+        )
+        return
+      }
+
+      setMessages((prev) => prev.slice(0, lastUserIdx + 1))
+      void startTurn({ conversationId, userMessage: userMsg.text })
+    })()
   }
 
   // Fired after the user rejects a proposal with a reason. The rejection is
@@ -1019,18 +1040,6 @@ function prettyToolName(name: string): string {
 // Helper used by /chat/[id] server component to normalize agent_messages
 // rows into the ChatMessage shape this component expects. Exported here so
 // both the sheet (for future "resume" support) and the page can use it.
-/**
- * A pending_operations row this conversation staged and nobody answered yet.
- * Returned by GET /api/agent/conversations/[id]; see attachStagedOperations.
- */
-export interface StoredStagedOperation {
-  id: string
-  operation_type: string
-  title?: string | null
-  risk_level?: string | null
-  preview_data?: unknown
-}
-
 /**
  * Re-attach unanswered proposals to a hydrated thread.
  *

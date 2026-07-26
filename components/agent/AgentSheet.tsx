@@ -6,8 +6,8 @@ import AgentChat, {
   attachStagedOperations,
   normalizeStoredMessages,
   type ChatMessage,
-  type StoredStagedOperation,
 } from './AgentChat'
+import type { StoredStagedOperation } from '@/types'
 import AgentAvatar from './AgentAvatar'
 import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'

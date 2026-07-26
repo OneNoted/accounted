@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import {
-  attachStagedOperations,
-  toolNameFor,
-  type StoredStagedOperation,
-} from '../AgentChat'
+import { attachStagedOperations, toolNameFor } from '../AgentChat'
+import type { StoredStagedOperation } from '@/types'
 
 /**
  * Approval cards ride on streamed `staged_operation` events, which are never

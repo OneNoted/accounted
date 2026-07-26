@@ -38,15 +38,26 @@ function AgentSheetSkeleton() {
  *
  * Key order so the same selection reached by different routes stays one session.
  */
+// Fallback identity for args that cannot be serialized (cycles, non-JSON
+// values). A timestamp would be wrong twice over: two different objects created
+// in the same millisecond would collide, and the same object would get a new
+// key on every render tick, remounting the sheet under the user mid-session.
+// A WeakMap gives each object one stable id for as long as it exists.
+const argsFallbackIds = new WeakMap<object, string>()
+let argsFallbackSeq = 0
+
 function stableArgsKey(args?: Record<string, unknown>): string {
   if (!args) return ''
   try {
     const keys = Object.keys(args).sort()
     return JSON.stringify(keys.map((k) => [k, args[k]]))
   } catch {
-    // Unserializable args (cycles) shouldn't silently collapse two different
-    // selections into one session: fall back to something always-distinct.
-    return String(Date.now())
+    let id = argsFallbackIds.get(args)
+    if (!id) {
+      id = `unserializable:${++argsFallbackSeq}`
+      argsFallbackIds.set(args, id)
+    }
+    return id
   }
 }
 

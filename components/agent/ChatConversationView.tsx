@@ -3,11 +3,8 @@
 import { useMemo } from 'react'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import AgentChat, {
-  attachStagedOperations,
-  normalizeStoredMessages,
-  type StoredStagedOperation,
-} from './AgentChat'
+import AgentChat, { attachStagedOperations, normalizeStoredMessages } from './AgentChat'
+import type { StoredStagedOperation } from '@/types'
 import AgentAvatar from './AgentAvatar'
 import SandboxAgentPreview from './SandboxAgentPreview'
 import { useAgentSheet } from './AgentSheetProvider'

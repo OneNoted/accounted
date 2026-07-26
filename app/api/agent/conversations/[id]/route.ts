@@ -76,13 +76,17 @@ export const GET = withRouteContext(
     // its full 30 days with nothing in the conversation pointing at it.
     // run-turn stamps agent_metadata.conversation_id on every staged row, so
     // the still-open ones can be re-attached here.
-    const { data: staged } = await supabase
+    const { data: staged, error: stagedErr } = await supabase
       .from('pending_operations')
       .select('id, operation_type, title, risk_level, preview_data, created_at')
       .eq('company_id', conv.company_id)
       .eq('status', 'pending')
       .eq('agent_metadata->>conversation_id', id)
       .order('created_at', { ascending: true })
+    // Do not swallow this: silently returning an empty list would drop the very
+    // proposals this query exists to restore, and the thread would look like it
+    // never staged anything. Same handling as the message query above.
+    if (stagedErr) throw stagedErr
 
     return NextResponse.json({
       data: {
