@@ -68,7 +68,29 @@ export const GET = withRouteContext(
       .order('created_at', { ascending: true })
     if (msgErr) throw msgErr
 
-    return NextResponse.json({ data: { conversation: conv, messages: messages ?? [] } })
+    // Proposals this conversation staged that nobody has answered yet.
+    //
+    // Approval cards ride on the streamed `staged_operation` events, which are
+    // not persisted, so a resumed thread rendered the tool trace and the answer
+    // but silently dropped the card: the proposal then sat in Granskning for
+    // its full 30 days with nothing in the conversation pointing at it.
+    // run-turn stamps agent_metadata.conversation_id on every staged row, so
+    // the still-open ones can be re-attached here.
+    const { data: staged } = await supabase
+      .from('pending_operations')
+      .select('id, operation_type, title, risk_level, preview_data, created_at')
+      .eq('company_id', conv.company_id)
+      .eq('status', 'pending')
+      .eq('agent_metadata->>conversation_id', id)
+      .order('created_at', { ascending: true })
+
+    return NextResponse.json({
+      data: {
+        conversation: conv,
+        messages: messages ?? [],
+        staged_operations: staged ?? [],
+      },
+    })
   },
 )
 

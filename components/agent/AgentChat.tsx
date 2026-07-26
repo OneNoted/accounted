@@ -418,6 +418,31 @@ export default function AgentChat({
     }
     if (lastUserIdx === -1) return
     const userMsg = messages[lastUserIdx]
+
+    // Anything the discarded turn staged has to be withdrawn first. The card
+    // leaves the screen either way, but the operation stays pending
+    // server-side, and the regenerated turn usually stages a second proposal
+    // for the same booking: two live proposals for one action, each with its
+    // own 30-day expiry. Rejecting is the same path the Avslå button uses, so
+    // the audit trail records why it went away.
+    const abandoned = messages
+      .slice(lastUserIdx + 1)
+      .flatMap((m) => m.staged ?? [])
+      .map((s) => s.operation_id)
+      .filter((id): id is string => typeof id === 'string')
+
+    for (const operationId of abandoned) {
+      void fetch(`/api/pending-operations/${operationId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rejection_category: 'other',
+          rejection_reason: 'Ersatt: användaren begärde ett nytt svar.',
+        }),
+        // A 409 here just means someone already resolved it, which is fine.
+      }).catch(() => {})
+    }
+
     setMessages(messages.slice(0, lastUserIdx + 1))
     void startTurn({ conversationId, userMessage: userMsg.text })
   }
@@ -994,6 +1019,54 @@ function prettyToolName(name: string): string {
 // Helper used by /chat/[id] server component to normalize agent_messages
 // rows into the ChatMessage shape this component expects. Exported here so
 // both the sheet (for future "resume" support) and the page can use it.
+/**
+ * A pending_operations row this conversation staged and nobody answered yet.
+ * Returned by GET /api/agent/conversations/[id]; see attachStagedOperations.
+ */
+export interface StoredStagedOperation {
+  id: string
+  operation_type: string
+  title?: string | null
+  risk_level?: string | null
+  preview_data?: unknown
+}
+
+/**
+ * Re-attach unanswered proposals to a hydrated thread.
+ *
+ * Approval cards ride on streamed events that are never persisted, so without
+ * this a resumed conversation shows the tool trace and the answer but no card,
+ * and the proposal quietly waits out its 30-day expiry in Granskning. They land
+ * on the last assistant message so they read as that turn's proposal, which is
+ * where they were when the turn streamed.
+ */
+export function attachStagedOperations(
+  messages: ChatMessage[],
+  staged: StoredStagedOperation[],
+): ChatMessage[] {
+  if (staged.length === 0) return messages
+
+  const cards: StagedOperation[] = staged.map((op) => ({
+    // Hydrated cards have no tool_use_id (it lived only in the stream); the
+    // operation id is the stable key and the only thing commit/reject need.
+    tool_use_id: `hydrated:${op.id}`,
+    operation_id: op.id,
+    risk_level:
+      op.risk_level === 'high' || op.risk_level === 'medium' ? op.risk_level : 'low',
+    message: op.title ?? 'Förslag väntar på granskning.',
+    tool_name: op.operation_type,
+    preview: op.preview_data,
+  }))
+
+  const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf('assistant')
+  if (lastAssistantIdx === -1) {
+    return [...messages, { role: 'assistant', text: '', staged: cards }]
+  }
+  return messages.map((m, i) =>
+    i === lastAssistantIdx ? { ...m, staged: [...(m.staged ?? []), ...cards] } : m,
+  )
+}
+
 export function normalizeStoredMessages(
   rows: { role: string; content: unknown; hidden?: boolean | null }[],
 ): ChatMessage[] {

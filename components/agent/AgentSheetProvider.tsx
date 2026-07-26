@@ -27,6 +27,29 @@ function AgentSheetSkeleton() {
   )
 }
 
+/**
+ * Serialize intent args into the sheet's remount key.
+ *
+ * The key used to be intent + contextRef + seed only, but some callers pass a
+ * CONSTANT contextRef with varying args: bulk-book always uses 'inbox:bulk' and
+ * carries the selected item ids. Selecting A+B, collapsing, then selecting C+D
+ * produced the same key, so the sheet did not remount and the earlier
+ * conversation reopened while the user believed C+D were being booked.
+ *
+ * Key order so the same selection reached by different routes stays one session.
+ */
+function stableArgsKey(args?: Record<string, unknown>): string {
+  if (!args) return ''
+  try {
+    const keys = Object.keys(args).sort()
+    return JSON.stringify(keys.map((k) => [k, args[k]]))
+  } catch {
+    // Unserializable args (cycles) shouldn't silently collapse two different
+    // selections into one session: fall back to something always-distinct.
+    return String(Date.now())
+  }
+}
+
 /** Warm the sheet chunk when the browser is idle, never on the critical path. */
 function useSheetPrefetch() {
   useEffect(() => {
@@ -174,7 +197,7 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       {children}
       {activeArgs && (
         <AgentSheet
-          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${activeArgs.seedUserMessage ?? ''}:${restartNonce}`}
+          key={`${activeArgs.intentId}:${activeArgs.contextRef ?? ''}:${stableArgsKey(activeArgs.intentArgs)}:${activeArgs.seedUserMessage ?? ''}:${restartNonce}`}
           intentId={activeArgs.intentId}
           intentArgs={activeArgs.intentArgs}
           contextRef={activeArgs.contextRef}

@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { X, Expand, Shrink, PanelRightClose, Eraser, History, ChevronLeft, Loader2 } from 'lucide-react'
-import AgentChat, { normalizeStoredMessages, type ChatMessage } from './AgentChat'
+import AgentChat, {
+  attachStagedOperations,
+  normalizeStoredMessages,
+  type ChatMessage,
+  type StoredStagedOperation,
+} from './AgentChat'
 import AgentAvatar from './AgentAvatar'
 import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'
@@ -69,6 +74,8 @@ export default function AgentSheet({
   const displayTitle = loaded ? (loaded.title ?? intentToTitle(loaded.intentId, agentName)) : sheetTitle
   const activeConversationId = loaded?.id ?? conversationId
   const sheetRef = useRef<HTMLDivElement | null>(null)
+  // Monotonic counter so a slow conversation fetch can't clobber a newer pick.
+  const selectSeqRef = useRef(0)
 
   // Esc: back out of the session list first, otherwise close. Never while
   // collapsed (the sheet is hidden off-screen, so Esc belongs elsewhere).
@@ -129,6 +136,10 @@ export default function AgentSheet({
     setLoaded(null)
     setLoadingConversation(true)
     setLoadError(null)
+    // Sequence token: picking A (slow) then B (fast) used to end with A's
+    // response overwriting B, leaving the user typing into a conversation they
+    // did not choose. Only the newest selection may write state.
+    const seq = ++selectSeqRef.current
     try {
       const res = await fetch(`/api/agent/conversations/${id}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -141,22 +152,27 @@ export default function AgentSheet({
             title: string | null
           }
           messages: { role: string; content: unknown; hidden?: boolean | null }[]
+          staged_operations?: StoredStagedOperation[]
         }
       }
       const data = json.data
       if (!data) throw new Error('missing data')
+      if (seq !== selectSeqRef.current) return
       setLoaded({
         id: data.conversation.id,
         intentId: data.conversation.intent_id,
         contextRef: data.conversation.context_ref,
         title: data.conversation.title,
-        messages: normalizeStoredMessages(data.messages),
+        messages: attachStagedOperations(
+          normalizeStoredMessages(data.messages),
+          data.staged_operations ?? [],
+        ),
       })
       setConversationId(data.conversation.id)
     } catch {
-      setLoadError('Kunde inte öppna konversationen.')
+      if (seq === selectSeqRef.current) setLoadError('Kunde inte öppna konversationen.')
     } finally {
-      setLoadingConversation(false)
+      if (seq === selectSeqRef.current) setLoadingConversation(false)
     }
   }
 
