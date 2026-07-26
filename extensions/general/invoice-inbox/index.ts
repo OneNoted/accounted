@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { createServiceClient } from '@/lib/supabase/server'
 import { extractInvoiceFields, ExtractionSchema, emptyResult } from './lib/extract-invoice-fields'
 import {
   verifyInboundWebhook,
@@ -1179,7 +1180,12 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Bilagan kunde inte hittas.' }, { status: 404 })
         }
 
-        const { data: blob, error: dlError } = await ctx.supabase.storage
+        // Download via the service-role client: the storage SELECT policy
+        // only covers the uploader's own folder, and inbox documents are
+        // attributed to the company creator, so ctx.supabase (user-bound)
+        // cannot read them for other members. The company-scoped row fetch
+        // above is the authorization.
+        const { data: blob, error: dlError } = await createServiceClient().storage
           .from('documents')
           .download(doc.storage_path)
 
