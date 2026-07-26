@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Pin, PinOff, Archive, Pencil, Search, X, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
@@ -12,8 +12,8 @@ import {
   BUCKET_LABELS,
   relativeTime,
   intentLabel,
-  groupConversations,
 } from './conversation-display'
+import { useConversationList } from './use-conversation-list'
 
 interface Props {
   initialConversations: ConversationRow[]
@@ -24,8 +24,23 @@ export default function ChatSidebar({ initialConversations }: Props) {
   const pathname = usePathname()
   const { openAgentSheet, identity } = useAgentSheet()
   const agentName = identity.displayName?.trim() || null
-  const [conversations, setConversations] = useState<ConversationRow[]>(initialConversations)
-  const [query, setQuery] = useState('')
+  // State + all three mutations live in the shared hook so this surface and the
+  // in-sheet list cannot drift apart again. Pin/archive/rename here used to be
+  // fire-and-forget with no rollback.
+  const {
+    conversations,
+    query,
+    setQuery,
+    grouped,
+    togglePin,
+    archive: archiveConversation,
+    editingId,
+    editValue,
+    setEditValue,
+    startEdit,
+    cancelEdit,
+    commitEdit,
+  } = useConversationList(initialConversations)
   const [, startTransition] = useTransition()
   // Collapsed by default; persisted across reloads so power users keep
   // their preference. Hidden behind a thin rail when collapsed so the
@@ -46,74 +61,10 @@ export default function ChatSidebar({ initialConversations }: Props) {
   const activeId = pathname?.startsWith('/chat/') ? pathname.split('/')[2] : null
   const isConversationOpen = !!activeId
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return conversations
-    return conversations.filter((c) => {
-      return (
-        (c.title ?? '').toLowerCase().includes(q) ||
-        (c.last_message_preview ?? '').toLowerCase().includes(q) ||
-        (c.context_ref ?? '').toLowerCase().includes(q) ||
-        c.intent_id.toLowerCase().includes(q)
-      )
-    })
-  }, [conversations, query])
-
-  // Group filtered into ordered buckets, preserving the sort order already
-  // applied server-side (pinned first, then last_message_at desc).
-  const grouped = useMemo(() => groupConversations(filtered), [filtered])
-
-  async function togglePin(id: string, current: boolean) {
-    setConversations((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, pinned: !current } : c)),
-    )
-    await fetch(`/api/agent/conversations/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pinned: !current }),
-    })
-  }
 
   async function archive(id: string) {
-    setConversations((prev) => prev.filter((c) => c.id !== id))
-    await fetch(`/api/agent/conversations/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ archived: true }),
-    })
-    if (activeId === id) startTransition(() => router.push('/chat'))
-  }
-
-  // Inline rename of a conversation's title (PATCH /api/agent/conversations/[id]).
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editValue, setEditValue] = useState('')
-  // Set by Esc so the blur that fires when the input unmounts doesn't save.
-  const cancelRef = useRef(false)
-
-  function startEdit(c: ConversationRow) {
-    setEditingId(c.id)
-    setEditValue(c.title ?? '')
-    cancelRef.current = false
-  }
-  function cancelEdit() {
-    cancelRef.current = true
-    setEditingId(null)
-  }
-  async function commitEdit(id: string) {
-    if (cancelRef.current) {
-      cancelRef.current = false
-      return
-    }
-    setEditingId(null)
-    const title = editValue.trim()
-    const current = conversations.find((c) => c.id === id)
-    if (!title || title === current?.title) return
-    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)))
-    await fetch(`/api/agent/conversations/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
-    })
+    const removed = await archiveConversation(id)
+    if (removed && activeId === id) startTransition(() => router.push('/chat'))
   }
 
   // Collapsed rail (desktop only). Mobile keeps the existing behavior where
