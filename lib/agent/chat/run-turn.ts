@@ -105,6 +105,15 @@ interface RunTurnArgs {
   // still persisted for Anthropic context on subsequent turns, but flagged
   // hidden=true so /chat/[id] hydration doesn't surface it as a user bubble.
   userMessageHidden?: boolean
+  // Profile summary the caller already loaded for this turn (the invoke route
+  // reads it to build a first-turn prompt template). Passed through so the same
+  // read doesn't happen twice per turn.
+  //
+  // Ranked memory is deliberately NOT shared: the route's variant selects fewer
+  // columns and orders without is_pinned, and this one needs ids to stamp
+  // last_accessed_at. Reusing it there would silently change both the prompt
+  // and memory touch.
+  preloadedProfileSummary?: string | null
   // Emit events back to the caller. Returns false if the stream was cancelled
   // and the loop should stop emitting (best-effort).
   emit: (event: StreamEvent) => boolean
@@ -173,8 +182,14 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   } = args
 
   // 1 + 2: load profile + ranked memory + atoms + tools.
+  //
+  // On a first turn the caller already read the profile summary to build the
+  // intent's prompt template, so it hands it over rather than making the same
+  // round trip again for the system prompt.
   const [profile, memory, vatStatus] = await Promise.all([
-    loadProfileSummary(supabase, companyId),
+    args.preloadedProfileSummary !== undefined
+      ? Promise.resolve(args.preloadedProfileSummary)
+      : loadProfileSummary(supabase, companyId),
     loadRankedMemory(supabase, companyId, 30),
     loadVatStatus(supabase, companyId),
   ])

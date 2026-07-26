@@ -25,7 +25,15 @@ export default function DashboardLoading() {
   if (pathname.startsWith('/chat')) {
     return (
       <div className="flex h-full">
-        <aside className="flex w-full flex-col border-r border-border bg-card/40 md:w-80 shrink-0">
+        {/* Desktop mounts ChatSidebar COLLAPSED (a 48px rail), so the skeleton
+            must be a rail too: a 320px skeleton that snapped to 48px on hydrate
+            was a visible layout jump on every /chat load. Mobile mounts the
+            full-width list, so that shape stays there. */}
+        <aside className="hidden md:flex md:w-12 shrink-0 flex-col items-center border-r border-border bg-card/40 py-3 gap-2">
+          <Skeleton className="h-8 w-8 rounded-full" />
+          <Skeleton className="h-8 w-8 rounded-md" />
+        </aside>
+        <aside className="flex w-full flex-col border-r border-border bg-card/40 md:hidden shrink-0">
           <div className="space-y-3 border-b border-border px-5 py-4">
             <div className="flex items-center gap-2">
               <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
