@@ -161,13 +161,24 @@ export function SalaryCalendar({
         requests.push(fetch(`/api/salary/employees/${employeeId}/worked-hours?from=${from}&to=${to}`))
       }
       const responses = await Promise.all(requests)
-      const absJson = await responses[0]!.json()
-      if (!responses[0]!.ok) throw new Error(absJson.error || t('error_load_absence'))
-      setAbsences(absJson.data ?? [])
+      // Map the parsed body plus the status, never `new Error(json.error)`:
+      // the routes answer thrown errors with the canonical envelope
+      // `{ error: { code, message } }`, and the Error constructor would
+      // stringify that object to "[object Object]", discarding the route's
+      // own Swedish reason.
+      const absJson = await responses[0]!.json().catch(() => null)
+      if (!responses[0]!.ok) {
+        setError(getUserErrorMessage(absJson, { statusCode: responses[0]!.status }))
+        return
+      }
+      setAbsences(absJson?.data ?? [])
       if (isHourly && responses[1]) {
-        const wJson = await responses[1].json()
-        if (!responses[1].ok) throw new Error(wJson.error || t('error_load_worked'))
-        setWorked(wJson.data ?? [])
+        const wJson = await responses[1].json().catch(() => null)
+        if (!responses[1].ok) {
+          setError(getUserErrorMessage(wJson, { statusCode: responses[1].status }))
+          return
+        }
+        setWorked(wJson?.data ?? [])
       }
     } catch (e) {
       setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
@@ -302,8 +313,9 @@ export function SalaryCalendar({
             { method: 'DELETE' },
           )
           if (!wRes.ok) {
-            const j = await wRes.json().catch(() => ({}))
-            throw new Error(j.error || t('error_delete_worked_date', { date }))
+            const j = await wRes.json().catch(() => null)
+            setError(getUserErrorMessage(j, { statusCode: wRes.status }))
+            return
           }
         }
         const aRes = await fetch(
@@ -311,8 +323,9 @@ export function SalaryCalendar({
           { method: 'DELETE' },
         )
         if (!aRes.ok) {
-          const j = await aRes.json().catch(() => ({}))
-          throw new Error(j.error || t('error_delete_absence_date', { date }))
+          const j = await aRes.json().catch(() => null)
+          setError(getUserErrorMessage(j, { statusCode: aRes.status }))
+          return
         }
       }
       clearSelection()
@@ -621,8 +634,9 @@ function BulkWorkedDialog({
             { method: 'DELETE' },
           )
           if (!res.ok) {
-            const j = await res.json().catch(() => ({}))
-            throw new Error(j.error || t('error_delete_date', { date }))
+            const j = await res.json().catch(() => null)
+            setError(getUserErrorMessage(j, { statusCode: res.status }))
+            return
           }
         }
         onSaved([])
@@ -643,7 +657,10 @@ function BulkWorkedDialog({
         setConflicts(json.data?.conflicts ?? [])
         return
       }
-      if (!res.ok) throw new Error(json.error || t('error_save_hours'))
+      if (!res.ok) {
+        setError(getUserErrorMessage(json, { statusCode: res.status }))
+        return
+      }
       onSaved([])
     } catch (e) {
       setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
@@ -782,8 +799,9 @@ function BulkAbsenceDialog({
           continue
         }
         if (!res.ok) {
-          const j = await res.json().catch(() => ({}))
-          throw new Error(j.error || t('error_save_absence_date', { date }))
+          const j = await res.json().catch(() => null)
+          setError(getUserErrorMessage(j, { statusCode: res.status }))
+          return
         }
       }
       if (localConflicts.length > 0) {
@@ -913,8 +931,9 @@ function DayInspectorDialog({
     try {
       const res = await fetch(`/api/salary/employees/${employeeId}/worked-hours?date=${date}`, { method: 'DELETE' })
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}))
-        throw new Error(j.error || t('error_delete_worked'))
+        const j = await res.json().catch(() => null)
+        setError(getUserErrorMessage(j, { statusCode: res.status }))
+        return
       }
       onChanged()
       onClose()
@@ -934,8 +953,9 @@ function DayInspectorDialog({
         { method: 'DELETE' },
       )
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}))
-        throw new Error(j.error || t('error_delete_absence'))
+        const j = await res.json().catch(() => null)
+        setError(getUserErrorMessage(j, { statusCode: res.status }))
+        return
       }
       onChanged()
       // Stay open if there's other content; close if this was the last entry.

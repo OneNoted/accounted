@@ -213,6 +213,71 @@ export function shouldRegenerateTaxDeadlines(
 }
 
 /**
+ * What a regenerated system deadline inherits from the row it replaces.
+ *
+ * Regeneration deletes and reinserts, so anything not carried across here is
+ * silently discarded. ONE rule decides the split, not a list of special
+ * cases: **the generator owns what the statute decides, the row owns every
+ * mark a person put on it.** The template decides which obligation this is,
+ * what it is called, when it falls due and which report it opens; the notes,
+ * the clock time, the priority flag and the manually advanced status are the
+ * user's, and they survive.
+ *
+ * Inherited (user-owned or system state):
+ * - `notes`, `due_time`, `customer_id`: the generator never writes these, so
+ *   a non-null value can only have come from the deadline editor.
+ * - `priority`: the editor's only other non-statutory field.
+ * - `status` + `status_changed_at`: only when the stored status is one a
+ *   human set (see MANUAL_STATUSES); the date-derived ones are recomputed.
+ *
+ * Deliberately NOT inherited, so a corrected template still reaches rows
+ * nobody touched:
+ * - `title`, `due_date`: statutory. A law change, a schedule fix or a
+ *   banking-day correction must propagate. `due_date` additionally forms the
+ *   backfill identity (`type:period:due_date`), so a preserved divergent date
+ *   would make findSettingsMissingUpcomingDeadlines flag the company on every
+ *   cron run without ever converging.
+ * - `deadline_type`: the backfill query filters on `deadline_type = 'tax'`.
+ * - `linked_report_type`, `linked_report_period`, `tax_assessment_notice_id`:
+ *   derived from the obligation, no user surface writes them.
+ * - `reminder_offsets`: template data today, because no surface lets a user
+ *   change it. Move it into the inherited set the day one does.
+ * - `user_id`: system deadlines are company-owned; migration
+ *   20260704100000 made the column nullable precisely so the generator can
+ *   leave it unset.
+ *
+ * The schema cannot distinguish "the user edited this field" from "the
+ * template changed under an untouched row" for the statutory columns: nothing
+ * records the template's value at creation time, and the `deadlines_updated_at`
+ * trigger bumps `updated_at` on every automatic status sweep too. Rather than
+ * guess, the statutory columns always take the template value, which is the
+ * conservative choice for a compliance surface: a stale filing date is a
+ * missed filing, a lost title edit is cosmetic.
+ */
+const SUPERSEDED_ROW_SELECT =
+  'tax_deadline_type, tax_period, status, status_changed_at, notes, due_time, priority, customer_id' as const
+
+interface SupersededDeadlineRow {
+  tax_deadline_type: string | null
+  tax_period: string | null
+  status: DeadlineStatus | null
+  status_changed_at: string | null
+  notes: string | null
+  due_time: string | null
+  priority: 'critical' | 'important' | 'normal' | null
+  customer_id: string | null
+}
+
+/**
+ * Statuses only a human sets. `upcoming`, `action_needed` and `overdue` are
+ * derived from the due date by the nightly status engine, so a replacement
+ * row recomputes them; these three represent work the user reported and are
+ * carried across. (`confirmed` also sets `is_completed`, so such a row is
+ * never replaced in the first place; it is listed for completeness.)
+ */
+const MANUAL_STATUSES = new Set<DeadlineStatus>(['in_progress', 'submitted', 'confirmed'])
+
+/**
  * Format date to YYYY-MM-DD
  */
 function formatDateISO(date: Date): string {
@@ -315,43 +380,45 @@ export async function generateTaxDeadlinesForUser(
     ),
   )
 
-  // Manual progress survives regeneration: a replacement row for the same
-  // obligation keeps its in_progress status instead of resetting to
-  // upcoming. This matters with the rolling horizon, where the backfill
-  // cron regenerates a company every time a new row enters the window.
-  const { data: inProgressRows, error: inProgressError } = await supabase
+  // Everything the user (or the status flow) put on the rows about to be
+  // replaced, keyed by the same tax_deadline_type:tax_period identity the
+  // completed/dismissed check uses. See SUPERSEDED_ROW_SELECT for the rule.
+  const { data: supersededRows, error: supersededError } = await supabase
     .from('deadlines')
-    .select('tax_deadline_type, tax_period, status')
+    .select(SUPERSEDED_ROW_SELECT)
     .eq('company_id', companyId)
     .eq('source', 'system')
     .eq('is_completed', false)
     .is('dismissed_at', null)
-    .eq('status', 'in_progress')
 
-  if (inProgressError) {
-    log.error('Error fetching in-progress deadlines:', inProgressError)
-    throw inProgressError
+  if (supersededError) {
+    log.error('Error fetching superseded deadlines:', supersededError)
+    throw supersededError
   }
 
-  const inProgressKeys = new Set(
-    (inProgressRows ?? [])
-      .filter((row: { status?: string }) => row.status === 'in_progress')
-      .map(
-        (row: { tax_deadline_type: string | null; tax_period: string | null }) =>
-          `${row.tax_deadline_type}:${row.tax_period}`,
-      ),
-  )
+  const supersededByKey = new Map<string, SupersededDeadlineRow>()
+  for (const row of (supersededRows ?? []) as SupersededDeadlineRow[]) {
+    supersededByKey.set(`${row.tax_deadline_type}:${row.tax_period}`, row)
+  }
 
-  // Generate new deadlines
+  // Generate new deadlines. Every row carries the identical key set: a
+  // PostgREST bulk insert rejects objects whose keys differ (PGRST102), so
+  // inherited columns are always present, null when there is nothing to
+  // inherit.
+  const nowIso = new Date().toISOString()
   const deadlines: Array<{
     company_id: string
     title: string
     due_date: string
+    due_time: string | null
     deadline_type: 'tax'
     priority: 'critical' | 'important' | 'normal'
     is_completed: boolean
     source: 'system'
     status: DeadlineStatus
+    status_changed_at: string
+    notes: string | null
+    customer_id: string | null
     tax_deadline_type: TaxDeadlineType
     tax_period: string
     linked_report_type: string | null
@@ -393,11 +460,17 @@ export async function generateTaxDeadlinesForUser(
           continue
         }
 
+        // The row this one replaces, if any: its user-owned columns and its
+        // manually reported progress carry across (see SUPERSEDED_ROW_SELECT).
+        const superseded = supersededByKey.get(deadlineKey)
+
         // Determine initial status based on days until deadline, keeping a
-        // manually set in_progress from the row being replaced.
+        // manually reported status from the row being replaced.
         const daysUntil = Math.ceil((adjustedDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-        const status: DeadlineStatus = inProgressKeys.has(deadlineKey)
-          ? 'in_progress'
+        const keepsManualStatus =
+          superseded?.status != null && MANUAL_STATUSES.has(superseded.status)
+        const status: DeadlineStatus = keepsManualStatus
+          ? superseded!.status!
           : daysUntil <= 14 ? 'action_needed' : 'upcoming'
 
         // Generate title from template
@@ -410,11 +483,17 @@ export async function generateTaxDeadlinesForUser(
           company_id: companyId,
           title,
           due_date: dueDate,
+          due_time: superseded?.due_time ?? null,
           deadline_type: 'tax',
-          priority: config.priority,
+          priority: superseded?.priority ?? config.priority,
           is_completed: false,
           source: 'system',
           status,
+          // Only meaningful alongside a carried status; a recomputed status
+          // changed just now.
+          status_changed_at: (keepsManualStatus ? superseded!.status_changed_at : null) ?? nowIso,
+          notes: superseded?.notes ?? null,
+          customer_id: superseded?.customer_id ?? null,
           tax_deadline_type: config.type,
           tax_period: instance.period,
           linked_report_type: config.linkedReportType,
@@ -463,6 +542,16 @@ export async function generateTaxDeadlinesForUser(
   // excluding the rows just inserted. Dismissed rows survive: deleting one
   // would erase the opt-out and let the next regeneration recreate the
   // obligation as a fresh pending row.
+  //
+  // An obligation the settings no longer produce is deleted even when the
+  // user had edited it. Its notes go with it, and that is the right trade:
+  // the settings change is the user's own explicit statement that the
+  // obligation does not apply, and a deadlines page that keeps showing a
+  // momsdeklaration to a company that deregistered from moms is worse than a
+  // lost note. Notes on obligations that still apply survive, which is the
+  // case this preservation is about; anything worth keeping past a settings
+  // change belongs in a manual (source='user') deadline, which the generator
+  // never touches.
   let deleteQuery = supabase
     .from('deadlines')
     .delete()

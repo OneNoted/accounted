@@ -189,10 +189,16 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_article:                  'articles:write',
   // Invoices
   gnubok_list_invoices:                   'invoices:read',
+  gnubok_get_invoice_deliveries:          'invoices:read',
   gnubok_create_invoice:                  'invoices:write',
+  gnubok_update_invoice:                  'invoices:write',
   gnubok_send_invoice:                    'invoices:write',
   gnubok_mark_invoice_as_paid:            'invoices:write',
   gnubok_mark_invoice_as_sent:            'invoices:write',
+  // Recurring invoice schedules (staged template writes; no send/book at commit)
+  gnubok_list_recurring_schedules:        'invoices:read',
+  gnubok_create_recurring_schedule:       'invoices:write',
+  gnubok_update_recurring_schedule:       'invoices:write',
   // Suppliers
   gnubok_list_suppliers:                  'suppliers:read',
   gnubok_list_supplier_invoices:          'suppliers:read',

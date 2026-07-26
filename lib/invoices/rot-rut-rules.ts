@@ -28,13 +28,68 @@ export const ROT_PERCENT = 0.30
 /** Percentage of eligible amount deducted for RUT (household services). 2026 rule. */
 export const RUT_PERCENT = 0.50
 
-/** Maximum yearly ROT deduction per person, in kr. 2026 rule. */
+/**
+ * Maximum yearly ROT deduction per person. 2026 rule.
+ *
+ * SEK. The statutory ceiling is a kronor amount, so it may only ever be
+ * compared against a SEK figure: an invoice-currency total must go through
+ * `deductionToSek()` first.
+ */
 export const ROT_MAX = 50000
 
-/** Maximum yearly RUT deduction per person, in kr. 2026 rule. */
+/** Maximum yearly RUT deduction per person. SEK, same caveat as ROT_MAX. 2026 rule. */
 export const RUT_MAX = 75000
 
 export type DeductionType = 'rot' | 'rut'
+
+/**
+ * The invoice's money context: what currency its amounts are denominated in
+ * and the booking rate that turns them into kronor.
+ */
+export interface DeductionCurrencyContext {
+  /** ISO 4217 code of the invoice. Missing/null is treated as SEK. */
+  currency?: string | null
+  /** SEK per unit of `currency`. Required as soon as `currency` isn't SEK. */
+  exchangeRate?: number | null
+}
+
+/**
+ * Build the invoice-currency → SEK converter for a deduction context, or
+ * null when the invoice is in a foreign currency and carries no usable
+ * booking rate.
+ *
+ * The conversion is the SAME one the ledger leg applies before it debits BAS
+ * 1513 (`generateRotRutLines` in lib/bookkeeping/invoice-entries.ts): per
+ * amount, `Math.round(amount * rate * 100) / 100`. Sharing it is what keeps
+ * the begäran om utbetalning and the 1513 receivable from disagreeing about
+ * what the Skatteverket claim is worth.
+ *
+ * A null return means "cannot be expressed in kronor". Callers must then
+ * refuse to compare or emit: substituting the raw foreign number for a kronor
+ * amount is how a 625 EUR deduction ends up being asked for as "625 kr"
+ * against a 7 125 kr receivable that can never clear.
+ */
+export function deductionSekConverter(
+  money?: DeductionCurrencyContext,
+): ((amount: number) => number) | null {
+  const currency = (money?.currency ?? 'SEK').toUpperCase()
+  if (currency === 'SEK') return (amount) => amount
+  const rate = money?.exchangeRate
+  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null
+  return (amount) => Math.round(amount * rate * 100) / 100
+}
+
+/**
+ * One-shot form of `deductionSekConverter`: null on the same "foreign
+ * currency, no usable booking rate" condition.
+ */
+export function deductionToSek(
+  amount: number,
+  money?: DeductionCurrencyContext,
+): number | null {
+  const toSek = deductionSekConverter(money)
+  return toSek ? toSek(amount) : null
+}
 
 /** Skatteverket work codes used by Husavdragstjänsten. Maps a free-text */
 /** "what the worker did" label to the official code. The code drives which */
@@ -156,11 +211,17 @@ export interface ValidationResult {
  * The function takes invoice-level metadata as separate arguments rather
  * than reading them off the items array so callers can compose it from
  * either a HTTP request body or the form state without restructuring.
+ *
+ * `money` carries the invoice's currency (and, when known, its booking rate).
+ * ROT_MAX / RUT_MAX are kronor ceilings, so the comparison is only meaningful
+ * against a SEK figure. Omitting the argument means "SEK", which is what
+ * every pre-existing caller was implicitly asserting.
  */
 export function validateInvoice(
   items: ValidateInvoiceItem[],
   personnummerProvided: boolean,
   housingDesignationProvided: boolean,
+  money?: DeductionCurrencyContext,
 ): ValidationResult {
   const errors: string[] = []
   const warnings: string[] = []
@@ -180,18 +241,44 @@ export function validateInvoice(
 
   const { rot, rut } = computeDeductionTotalsByKind(items)
 
-  if (rot > ROT_MAX) {
+  // computeDeductionTotalsByKind works in invoice currency; the ceilings are
+  // kronor. Convert before comparing, and never label a foreign figure "kr".
+  const currencyLabel = (money?.currency ?? 'SEK').toUpperCase()
+  const toSek = deductionSekConverter(money)
+  const advice = 'Kunden behöver kontrollera sitt återstående utrymme själv.'
+
+  const pushCapWarning = (kind: 'ROT' | 'RUT', amount: number, max: number): void => {
+    if (amount <= 0) return
+    const maxText = `${max.toLocaleString('sv-SE')} kr`
+
+    if (currencyLabel === 'SEK') {
+      if (amount <= max) return
+      warnings.push(
+        `${kind}-avdraget på denna faktura (${amount.toFixed(2)} kr) överstiger årsmaximum ${maxText}. ` + advice,
+      )
+      return
+    }
+
+    if (!toSek) {
+      // No booking rate: we cannot know whether the ceiling is breached.
+      // Saying so beats both silence and a fabricated kronor comparison.
+      warnings.push(
+        `${kind}-avdraget på denna faktura (${amount.toFixed(2)} ${currencyLabel}) kan inte stämmas av mot ` +
+          `årsmaximum ${maxText}: fakturan saknar växelkurs. ` + advice,
+      )
+      return
+    }
+
+    const amountSek = toSek(amount)
+    if (amountSek <= max) return
     warnings.push(
-      `ROT-avdraget på denna faktura (${rot.toFixed(2)} kr) överstiger årsmaximum ${ROT_MAX.toLocaleString('sv-SE')} kr. ` +
-        'Kunden behöver kontrollera sitt återstående utrymme själv.',
+      `${kind}-avdraget på denna faktura (${amount.toFixed(2)} ${currencyLabel} = ${amountSek.toFixed(2)} kr) ` +
+        `överstiger årsmaximum ${maxText}. ` + advice,
     )
   }
-  if (rut > RUT_MAX) {
-    warnings.push(
-      `RUT-avdraget på denna faktura (${rut.toFixed(2)} kr) överstiger årsmaximum ${RUT_MAX.toLocaleString('sv-SE')} kr. ` +
-        'Kunden behöver kontrollera sitt återstående utrymme själv.',
-    )
-  }
+
+  pushCapWarning('ROT', rot, ROT_MAX)
+  pushCapWarning('RUT', rut, RUT_MAX)
 
   return { errors, warnings }
 }

@@ -45,10 +45,6 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   const [createdCreditNote, setCreatedCreditNote] = useState<InvoiceWithRelations | null>(null)
   const [showSendPrompt, setShowSendPrompt] = useState(false)
 
-  useEffect(() => {
-    fetchInvoice()
-  }, [id])
-
   async function fetchInvoice() {
     setIsLoading(true)
 
@@ -103,6 +99,10 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
     setIsLoading(false)
   }
 
+  useEffect(() => {
+    fetchInvoice()
+  }, [id])
+
   async function handleSubmit() {
     if (!invoice) return
 
@@ -119,8 +119,19 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       })
 
       if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || t('create_failed_fallback'))
+        // Map the parsed body plus the status, never `new Error(data.error)`:
+        // the route answers thrown errors with the canonical envelope
+        // `{ error: { code, message } }`, and the Error constructor would
+        // stringify that object to "[object Object]", discarding the route's
+        // own Swedish reason.
+        const body = await response.json().catch(() => null)
+        toast({
+          title: t('create_failed_title'),
+          description: getUserErrorMessage(body, { statusCode: response.status }),
+          variant: 'destructive',
+        })
+        setIsSubmitting(false)
+        return
       }
 
       const { data: creditNote } = await response.json() as { data: InvoiceWithRelations }

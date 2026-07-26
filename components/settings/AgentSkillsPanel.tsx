@@ -1,9 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useLocale } from 'next-intl'
 import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -11,6 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRowNote } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 type Tier = 'horizontal' | 'vertical' | 'modifier'
 
@@ -54,37 +57,57 @@ const PROSE =
   '[&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] ' +
   '[&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
-// The API returns errors either as a plain string (legacy/validation) or as
-// the canonical { code, message } envelope; extract something renderable.
-function apiErrorText(error: unknown): string | undefined {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && 'message' in error) {
-    const m = (error as { message?: unknown }).message
-    return typeof m === 'string' ? m : undefined
-  }
-  return undefined
-}
-
 export function AgentSkillsPanel() {
   const { toast } = useToast()
+  const errorLocale = useLocale() as ErrorLocale
 
+  // null = the atom list is not known: still loading, or the read failed
+  // (loadError). A failed read must never render the "Inga kunskapsområden
+  // ännu" EmptyState: that is a claim about the assistant's composition, and
+  // it is only true after a confirmed empty read.
   const [atoms, setAtoms] = useState<AtomMeta[] | null>(null)
+  // detail === null: transient, so the line carries a retry. A detail sentence
+  // means the user has to act (an expired session) and a retry cannot help.
+  const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [bodies, setBodies] = useState<Record<string, string>>({})
   const [loadingBody, setLoadingBody] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/agent/skills')
-    const json = await res.json()
-    if (!res.ok) {
-      toast({ title: 'Kunde inte hämta kunskap', description: apiErrorText(json.error), variant: 'destructive' })
-      setAtoms([])
-      return
+    setLoadError(null)
+    try {
+      const res = await fetch('/api/agent/skills')
+      if (!res.ok) {
+        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+        // getErrorMessage falls back to the status map.
+        const json = await res.json().catch(() => null)
+        const sessionGone = res.status === 401 || res.status === 403
+        setAtoms(null)
+        setLoadError({
+          detail: sessionGone
+            ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale })
+            : null,
+        })
+        return
+      }
+      // A 200 whose body will not parse throws into the catch below; a 200
+      // without the list is a failed read too. Neither may become a
+      // fabricated "Inga kunskapsområden ännu".
+      const json = await res.json()
+      if (!Array.isArray(json?.data)) {
+        setAtoms(null)
+        setLoadError({ detail: null })
+        return
+      }
+      setAtoms(json.data as AtomMeta[])
+    } catch {
+      setAtoms(null)
+      setLoadError({ detail: null })
     }
-    setAtoms(json.data as AtomMeta[])
-  }, [toast])
+  }, [errorLocale])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load() }, [load, reloadKey])
 
   const grouped = useMemo(() => {
     const map: Record<Tier, AtomMeta[]> = { horizontal: [], vertical: [], modifier: [] }
@@ -108,12 +131,30 @@ export function AgentSkillsPanel() {
     setLoadingBody(atom.id)
     try {
       const res = await fetch(`/api/agent/skills?slug=${encodeURIComponent(atom.id)}`)
-      const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Kunde inte läsa kunskapen', description: apiErrorText(json.error), variant: 'destructive' })
+        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+        // getErrorMessage falls back to the status map.
+        const json = await res.json().catch(() => null)
+        toast({
+          title: 'Kunde inte läsa kunskapen',
+          description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
+          variant: 'destructive',
+        })
         return
       }
+      const json = await res.json()
       setBodies((prev) => ({ ...prev, [atom.id]: (json.data?.body as string) ?? '' }))
+    } catch (err) {
+      // A rejected fetch or a 200 whose body will not parse never reaches the
+      // !res.ok arm above: without this toast the expanded row just sits
+      // empty with zero feedback. One toast per outcome, never two:
+      // TOAST_LIMIT is 1 (components/ui/use-toast.tsx) and a second would
+      // evict the first.
+      toast({
+        title: 'Kunde inte läsa kunskapen',
+        description: getErrorMessage(err, { locale: errorLocale }),
+        variant: 'destructive',
+      })
     } finally {
       setLoadingBody(null)
     }
@@ -137,7 +178,25 @@ export function AgentSkillsPanel() {
         </div>
       )}
 
-      {atoms === null && (
+      {/* Live region always mounted so the failure is announced when it
+          appears, not merely inserted. */}
+      <div role="status" aria-live="polite" className="min-w-0 px-1">
+        {loadError && (
+          <AttnLine
+            action={
+              loadError.detail
+                ? undefined
+                : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }
+            }
+          >
+            {loadError.detail
+              ? `Kunskapsområdena kunde inte läsas in just nu. ${loadError.detail}`
+              : 'Kunskapsområdena kunde inte läsas in just nu.'}
+          </AttnLine>
+        )}
+      </div>
+
+      {atoms === null && !loadError && (
         <div className="space-y-3">
           {[0, 1, 2, 3].map((i) => (
             <Skeleton key={i} className="h-12 w-full" />

@@ -63,12 +63,21 @@ export interface SkipReasons {
   noMatch?: number
 }
 
+/**
+ * Foreign-currency invoices that were imported but whose SEK value could not
+ * be established (currency outside Riksbanken's series, or no observation for
+ * the invoice's own date). They are counted in `imported`: the record itself is
+ * räkenskapsinformation and dropping it would lose data. But they carry
+ * exchange_rate = null, so every booking path refuses them until a rate is
+ * set, and the migration reports them here instead of passing them off as
+ * ordinary imports. Per-invoice detail goes to the server log.
+ */
 export interface MigrationResults {
   companyInfo?: { imported: boolean }
   customers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
-  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
-  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
+  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number }
+  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number }
   /**
    * Auto-reconciliation of imported supplier invoices to the GL payment
    * vouchers that the separate SIE import already posted. `autoLinked` invoices

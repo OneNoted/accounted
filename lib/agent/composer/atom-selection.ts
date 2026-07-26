@@ -1,6 +1,7 @@
 import { getAnthropic, OPUS_MODEL } from './client'
 import { AtomSelectionSchema, ATOM_SELECTION_TOOL_SCHEMA, type AtomSelection } from './schemas'
-import type { ComposerInputs } from './inputs'
+import { isSekOnlyMagnitude, type ComposerInputs, type CurrencyMagnitude } from './inputs'
+import { employeeKnownFact, knowsEmployeeFact } from './employee-facts'
 
 const SYSTEM_PROMPT = `Du komponerar en specialiserad svensk bokföringsassistent åt ett företag.
 
@@ -16,10 +17,18 @@ Du får:
 - KÄNDA FAKTA från företagets inställningar: saker användaren redan har angett (momsperiod, räkenskapsår, F-skatt-status, anställda, bokföringsmetod)
 - Eventuell sammanfattning från importerad SIE-fil (topp-konton, topp-motparter, antal år)
 - Eventuell sammanfattning från bankhistorik. Varje topp-motpart har:
-  - belopp i kr (abs)
+  - belopp med sin valutaenhet utskriven (abs)
   - riktning: 'in' (intäkt/inbetalning), 'ut' (kostnad/utbetalning), eller 'in+ut'
   - bokföringsstatus: 'OBOKFÖRD' (minst en transaktion ej bokförd) eller 'bokförd'
   KRITISKT: ställ INTE en verifieringsfråga om en motpart där riktningen är entydig OCH alla transaktioner är bokförda. T.ex. en motpart märkt "(ut, bokförd)" är redan klassad som kostnad och redan kategoriserad. Att fråga "är detta en intäkt eller kostnad?" är fel. Fokusera frågorna på OBOKFÖRD-motparter där det finns en bokningsbeslutning kvar att fatta.
+
+BELOPP OCH VALUTA (hård regel):
+  - Ett belopp gäller ALLTID den enhet som står skriven. "412 000 kr" är svenska kronor. "30 000 EUR" är euro, inte kronor.
+  - Addera ALDRIG belopp i olika valutor till en summa, och räkna aldrig om dem själv: du har ingen växelkurs.
+  - Står det "motsvarar N kr" är N en lagrad SEK-motsvarighet och får användas som storleksordning.
+  - Står det "SEK-motsvarighet OKÄND" eller "saknar växelkurs" finns INGEN känd kronsumma för de raderna. Behandla storleken som okänd, gissa aldrig fram ett kr-belopp, och nämn luckan i uncertainty_notes.
+  - Ett block märkt "Motparter utan känd SEK-motsvarighet" listar motparter vars storlek vi inte kan uttrycka i kronor. De är inte små: de är omätta.
+  - Om "Snittvolym per månad" saknas eller är märkt som ett golv: dra inga slutsatser om omsättningsstorlek av den.
 - Ett register över tillgängliga atomer (horizontal/vertical/modifier) med beskrivning, SNI-prefix och utlösare
 
 Din uppgift:
@@ -43,7 +52,7 @@ Din uppgift:
 
    Fokusera istället på frågor vars svar du inte kan se: specifika balansposter (t.ex. "Vad gäller ALMI-beloppet, lån eller bidrag?"), arbetssätt (faktureringscadens, kund-geografi), planerade förändringar (kommande löneutbetalning, expansion, fastighetsförvärv).
 
-6. Skriv 1-3 svenska uncertainty_notes till utvecklaren som granskar valet senare. Inkludera explicit notering om statuses[] visar isCeased eller red-status.
+6. Skriv 1-3 svenska uncertainty_notes till utvecklaren som granskar valet senare. Inkludera explicit notering om statuses[] visar isCeased eller red-status, och om något belopp saknar känd SEK-motsvarighet.
 
 Stil i all text du skriver (verifieringsfrågor och notes): använd ALDRIG tankstreck (— eller –). Använd kommatecken, punkt, eller "till" för intervall ("2,5 till 5 miljoner"). Hård regel.
 
@@ -110,7 +119,99 @@ export async function selectAtoms(inputs: ComposerInputs): Promise<AtomSelection
     parsed.data.modifier_atoms,
   )
 
+  // Currency caveats are appended deterministically, not left to the model.
+  // This selection becomes the company's standing agent profile, so a
+  // magnitude the underlying data cannot support has to be flagged even when
+  // the model failed to notice it: an explicit "unknown" is always better
+  // than a confident wrong number baked into durable instructions.
+  parsed.data.uncertainty_notes = [
+    ...parsed.data.uncertainty_notes,
+    ...buildCurrencyUncertaintyNotes(inputs),
+  ]
+
   return parsed.data
+}
+
+// Deterministic notes about what the amount signals cannot tell us. Exported
+// so the stream endpoint can apply the same caveats to fallback selections,
+// which never see the model at all.
+export function buildCurrencyUncertaintyNotes(inputs: ComposerInputs): string[] {
+  const notes: string[] = []
+
+  const bank = inputs.bankingSummary
+  if (bank) {
+    const foreign = bank.currencies.filter((c) => c !== 'SEK')
+    if (foreign.length > 0) {
+      notes.push(
+        `Banksammanfattningen spänner över flera valutor (${bank.currencies.join(', ')}). Beloppen är inte en enda kr-summa: kontrollera valutan innan en storleksordning används.`,
+      )
+    }
+    if (bank.volume_rows_without_sek > 0) {
+      const total = bank.volume_rows_with_sek + bank.volume_rows_without_sek
+      notes.push(
+        bank.monthly_volume == null
+          ? `Ingen månadsvolym i kr kan anges: samtliga ${total} banktransaktioner saknar lagrad SEK-motsvarighet.`
+          : `${bank.volume_rows_without_sek} av ${total} banktransaktioner saknar lagrad SEK-motsvarighet och ingår inte i snittvolymen. Volymen i kr är ett golv, inte ett facit.`,
+      )
+    }
+    if (bank.unconvertible_counterparties.length > 0) {
+      notes.push(
+        `${bank.unconvertible_counterparties.length} motpart(er) kunde inte rankas i kr eftersom växelkurs saknas: ${bank.unconvertible_counterparties.map((c) => c.name).join(', ')}.`,
+      )
+    }
+  }
+
+  const sie = inputs.sieSummary
+  if (sie) {
+    const unknownRows = [...sie.top_counterparties, ...sie.unconvertible_counterparties].reduce(
+      (n, c) => n + c.rows_without_sek,
+      0,
+    )
+    if (unknownRows > 0) {
+      notes.push(
+        `SIE-motpartsbeloppen innehåller ${unknownRows} rad(er) i utländsk valuta utan känd SEK-motsvarighet.`,
+      )
+    }
+  }
+
+  return notes
+}
+
+// Renders a magnitude so the number always carries its real unit.
+//
+// Plain SEK data renders exactly as before ("412 000 kr"). Anything else keeps
+// each currency in its own unit and states, in words, how much of it has a
+// known SEK equivalent. There is deliberately no path that turns a mixed or
+// rate-less magnitude into a single "kr" figure.
+export function formatMagnitude(m: CurrencyMagnitude): string {
+  if (isSekOnlyMagnitude(m)) {
+    return `${formatAmount(m.abs_amount)} kr`
+  }
+
+  const native = m.by_currency
+    .map((c) => `${formatAmount(c.abs_amount)} ${c.currency}`)
+    .join(' + ')
+
+  if (m.rows_without_sek === 0) {
+    return `${native} (motsvarar ${formatAmount(m.abs_amount)} kr)`
+  }
+  const missing = `${m.rows_without_sek} ${m.rows_without_sek === 1 ? 'transaktion' : 'transaktioner'} saknar växelkurs`
+  if (m.abs_amount === 0) {
+    return `${native} (SEK-motsvarighet OKÄND: ${missing}, ingen kr-summa kan anges)`
+  }
+  return `${native} (varav ${formatAmount(m.abs_amount)} kr har känd SEK-motsvarighet, ${missing} och ingår inte)`
+}
+
+function formatAmount(value: number): string {
+  return Math.round(value).toLocaleString('sv-SE')
+}
+
+function counterpartyLabels(c: {
+  direction: 'in' | 'out' | 'mixed'
+  has_unbooked: boolean
+}): string {
+  const dirLabel = c.direction === 'in' ? 'in' : c.direction === 'out' ? 'ut' : 'in+ut'
+  return `${dirLabel}, ${c.has_unbooked ? 'OBOKFÖRD' : 'bokförd'}`
 }
 
 // Drops questions whose answer is already settled in company_settings or
@@ -139,7 +240,12 @@ export function filterRedundantQuestions(
     | null
 
   const knowsMomsPeriod = !!s?.moms_period
-  const knowsEmployees = s?.has_employees != null || s?.employee_count != null || !!tic?.employeeRange
+  const knowsEmployees = knowsEmployeeFact({
+    activeEmployees: inputs.activeEmployees,
+    ticEmployeeRange: tic?.employeeRange ?? null,
+    employerRegistered: s?.employer_registered ?? null,
+    paysSalaries: s?.pays_salaries ?? null,
+  })
   const knowsFiscalYear = s?.fiscal_year_start_month != null
   const knowsFSkatt = s?.f_skatt != null || tic?.registration?.fTax != null
   const knowsVatRegistered = s?.vat_registered != null || tic?.registration?.vat != null
@@ -241,7 +347,9 @@ function buildUserPrompt(inputs: ComposerInputs): string {
     lines.push(`# SIE-sammanfattning`)
     lines.push(`Antal år: ${inputs.sieSummary.year_count}`)
     if (inputs.sieSummary.top_accounts.length > 0) {
-      lines.push('Topp-konton (abs-belopp):')
+      // Ledger balances: journal_entry_lines are booked in SEK by definition,
+      // so a bare kr figure is correct here.
+      lines.push('Topp-konton (abs-belopp, bokförda i SEK):')
       for (const a of inputs.sieSummary.top_accounts.slice(0, 20)) {
         lines.push(`  ${a.account.padEnd(8)} ${Math.round(a.abs_amount).toLocaleString('sv-SE')} kr`)
       }
@@ -249,35 +357,64 @@ function buildUserPrompt(inputs: ComposerInputs): string {
     if (inputs.sieSummary.top_counterparties.length > 0) {
       lines.push('Topp-motparter (från transaktionsbeskrivningar):')
       for (const c of inputs.sieSummary.top_counterparties.slice(0, 10)) {
-        lines.push(`  ${c.name}: ${Math.round(c.abs_amount).toLocaleString('sv-SE')} kr`)
+        lines.push(`  ${c.name}: ${formatMagnitude(c)}`)
+      }
+    }
+    if (inputs.sieSummary.unconvertible_counterparties.length > 0) {
+      lines.push('Motparter utan känd SEK-motsvarighet (växelkurs saknas, därför inte rankade ovan):')
+      for (const c of inputs.sieSummary.unconvertible_counterparties) {
+        lines.push(`  ${c.name}: ${formatMagnitude(c)}`)
       }
     }
     lines.push('')
   }
 
   if (inputs.bankingSummary) {
+    const bank = inputs.bankingSummary
     lines.push(`# Banktransaktioner (12 mån)`)
-    if (inputs.bankingSummary.monthly_volume != null) {
+
+    const volumeTotal = bank.volume_rows_with_sek + bank.volume_rows_without_sek
+    if (bank.monthly_volume != null) {
+      // Only the rows with a known SEK value are in this figure. When some
+      // rows are missing a rate the number is a floor, and saying so beats
+      // printing a confident total the data cannot back.
+      const caveat =
+        bank.volume_rows_without_sek > 0
+          ? ` (GOLV: ${bank.volume_rows_without_sek} av ${volumeTotal} transaktioner saknar växelkurs och ingår inte, den verkliga volymen är högre)`
+          : ''
       lines.push(
-        `Snittvolym per månad: ${Math.round(inputs.bankingSummary.monthly_volume).toLocaleString('sv-SE')} kr`,
+        `Snittvolym per månad: ${Math.round(bank.monthly_volume).toLocaleString('sv-SE')} kr${caveat}`,
+      )
+    } else if (bank.volume_rows_without_sek > 0) {
+      lines.push(
+        `Snittvolym per månad: OKÄND. Samtliga ${volumeTotal} transaktioner är i utländsk valuta utan lagrad växelkurs, så ingen kr-volym kan beräknas.`,
       )
     }
-    lines.push(
-      `Antal obokförda transaktioner: ${inputs.bankingSummary.unbooked_count}`,
-    )
-    if (inputs.bankingSummary.top_counterparties.length > 0) {
+    lines.push(`Antal obokförda transaktioner: ${bank.unbooked_count}`)
+    if (bank.currencies.length > 1) {
+      lines.push(
+        `Valutor i underlaget: ${bank.currencies.join(', ')}. Beloppen nedan står i sin egen valuta, addera dem inte.`,
+      )
+    }
+    if (bank.top_counterparties.length > 0) {
       lines.push('Topp-motparter (riktning + bokföringsstatus):')
-      for (const c of inputs.bankingSummary.top_counterparties.slice(0, 20)) {
+      for (const c of bank.top_counterparties.slice(0, 20)) {
         // direction tells Opus whether this counterparty is a source of
         // income, a cost, or both. has_unbooked says whether there's still
         // a transaction waiting for the user to book: only those are
         // legitimate verification-question fodder.
-        const dirLabel =
-          c.direction === 'in' ? 'in' : c.direction === 'out' ? 'ut' : 'in+ut'
-        const bookedLabel = c.has_unbooked ? 'OBOKFÖRD' : 'bokförd'
-        lines.push(
-          `  ${c.name}: ${Math.round(c.abs_amount).toLocaleString('sv-SE')} kr (${dirLabel}, ${bookedLabel})`,
-        )
+        lines.push(`  ${c.name}: ${formatMagnitude(c)} (${counterpartyLabels(c)})`)
+      }
+    }
+    if (bank.unconvertible_counterparties.length > 0) {
+      // These rank as 0 kr and would otherwise disappear at the slice above.
+      // They are unmeasured, not small: listing them separately keeps that
+      // distinction visible to the model.
+      lines.push(
+        'Motparter utan känd SEK-motsvarighet (växelkurs saknas, därför inte rankade ovan, storleken är omätt och inte liten):',
+      )
+      for (const c of bank.unconvertible_counterparties) {
+        lines.push(`  ${c.name}: ${formatMagnitude(c)} (${counterpartyLabels(c)})`)
       }
     }
     lines.push('')
@@ -319,7 +456,7 @@ function buildUserPrompt(inputs: ComposerInputs): string {
 // Surfaces user-settled facts in a tight bullet list the composer can scan
 // before generating questions. Anything in here is OFF-LIMITS for the
 // verification_questions list: the user already said it.
-function buildKnownFacts(inputs: ComposerInputs): string[] {
+export function buildKnownFacts(inputs: ComposerInputs): string[] {
   const out: string[] = []
   const s = inputs.companySettings
   if (s) {
@@ -343,16 +480,11 @@ function buildKnownFacts(inputs: ComposerInputs): string[] {
     if (s.vat_registered != null) {
       out.push(`Momsregistrerad: ${s.vat_registered ? 'ja' : 'nej'}`)
     }
-    if (s.has_employees != null || s.employee_count != null) {
-      const ec = s.employee_count
-      if (typeof ec === 'number') {
-        out.push(`Anställda: ${ec}`)
-      } else if (s.has_employees != null) {
-        out.push(`Anställda: ${s.has_employees ? 'ja' : 'nej'}`)
-      }
-    }
     if (s.pays_salaries != null) {
       out.push(`Betalar ut lön: ${s.pays_salaries ? 'ja' : 'nej'}`)
+    }
+    if (s.employer_registered != null) {
+      out.push(`Arbetsgivarregistrerad: ${s.employer_registered ? 'ja' : 'nej'}`)
     }
     if (s.accounting_method) {
       out.push(`Bokföringsmetod: ${s.accounting_method}`)
@@ -361,6 +493,15 @@ function buildKnownFacts(inputs: ComposerInputs): string[] {
       out.push(`Säte: ${s.city}`)
     }
   }
+  // Outside the settings block on purpose: a live employee count is a fact even
+  // for a company with no company_settings row yet.
+  const employeeFact = employeeKnownFact({
+    activeEmployees: inputs.activeEmployees,
+    ticEmployeeRange: null,
+    employerRegistered: s?.employer_registered ?? null,
+    paysSalaries: s?.pays_salaries ?? null,
+  })
+  if (employeeFact) out.push(employeeFact)
   const tic = inputs.ticSnapshot as
     | {
         registration?: { fTax?: boolean; vat?: boolean; payroll?: boolean }

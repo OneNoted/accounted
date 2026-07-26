@@ -116,7 +116,37 @@ export const POST = withRouteContext(
     const paymentAmount = customLines
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
       : remainingAmount
-    const paidRounded = Math.round(paymentAmount * 100) / 100
+
+    // Unit contract: total / paid_amount / remaining_amount are stored in the
+    // INVOICE currency (total_sek carries the SEK view of total); custom lines
+    // are journal lines, so they are always SEK. The SEK amount therefore has
+    // to be converted before it is compared against, or subtracted from, the
+    // invoice-currency remaining. The default path (no lines) already pays the
+    // remaining in invoice currency and needs no rate at all.
+    const isForeignCurrency = !!invoice.currency && invoice.currency !== 'SEK'
+    const needsFxConversion = isForeignCurrency && customLines !== undefined
+    const fxRate =
+      invoice.exchange_rate && invoice.exchange_rate > 0 ? invoice.exchange_rate : null
+    if (needsFxConversion && fxRate === null) {
+      // Never fall back to rate 1: that reads an 11 496,70 kr payment against a
+      // 1 000 EUR invoice as 11 496,70 EUR and corrupts the AR sub-ledger.
+      // Same code as buildInvoicePaymentClearingLines' refusal
+      // (MATCH_INVOICE_BOOKING_RATE_MISSING, lib/bookkeeping/invoice-payment-lines.ts):
+      // one condition, one code across every invoice-settlement surface.
+      opLog.warn('mark-paid rejected: foreign-currency invoice without exchange rate', {
+        invoiceId: id,
+        currency: invoice.currency,
+      })
+      return errorResponseFromCode('MATCH_INVOICE_BOOKING_RATE_MISSING', opLog, {
+        requestId,
+        details: { invoice_id: id, currency: invoice.currency },
+      })
+    }
+    const paymentAmountInInvoiceCurrency = needsFxConversion
+      ? roundOre(paymentAmount / fxRate!)
+      : paymentAmount
+
+    const paidRounded = Math.round(paymentAmountInInvoiceCurrency * 100) / 100
     const remainingRounded = Math.round(remainingAmount * 100) / 100
     if (!force && paidRounded >= remainingRounded) {
       const customerName = (invoice as Invoice & { customer?: { name?: string } }).customer?.name
@@ -126,10 +156,23 @@ export const POST = withRouteContext(
           invoiceId: id,
         })
       } else {
+        // Invoice currency on purpose. The lookup scans transactions.amount,
+        // which is denominated in the BANK ROW's currency, not necessarily
+        // kronor; it therefore takes the payment in invoice currency plus the
+        // invoice's stored conversion and bands each currency separately.
+        // Handing it the raw SEK custom-line total would band a kronor figure
+        // against a EUR column (and vice versa).
         const candidates = await findDuplicatePaymentCandidatesForInvoice(supabase, {
           companyId: companyId!,
-          invoice: { invoice_number: invoice.invoice_number, customer_name: customerName },
-          paymentAmount,
+          invoice: {
+            invoice_number: invoice.invoice_number,
+            customer_name: customerName,
+            currency: invoice.currency ?? null,
+            total: invoice.total ?? null,
+            total_sek: invoice.total_sek ?? null,
+            exchange_rate: invoice.exchange_rate ?? null,
+          },
+          paymentAmount: paymentAmountInInvoiceCurrency,
           paymentDate,
         })
         if (candidates.length > 0) {
@@ -157,18 +200,9 @@ export const POST = withRouteContext(
     const accountingMethod = settings?.accounting_method || 'accrual'
     const entityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
-    // paymentAmount and the duplicate-payment guard above operate in the
-    // booking currency (SEK for custom lines); convert to invoice currency for
-    // the ledger comparison so a foreign-currency invoice isn't falsely
-    // rejected as overpaid.
-    const fxRate =
-      invoice.currency && invoice.currency !== 'SEK' && invoice.exchange_rate
-        ? invoice.exchange_rate
-        : 1
-    const paymentAmountInInvoiceCurrency = customLines
-      ? roundOre(paymentAmount / fxRate)
-      : paymentAmount
-
+    // paymentAmountInInvoiceCurrency was resolved above, before the
+    // duplicate-payment guard, so the guard comparison and the ledger math run
+    // in the same unit as remaining_amount.
     const result = await settleInvoicePayment(supabase, companyId!, user.id, {
       invoice: invoice as Invoice & { customer?: { name?: string | null } | null },
       paymentAmountInInvoiceCurrency,

@@ -86,10 +86,24 @@ describe('GET /api/salary/employees', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     // Both rows masked birthdate-visible, last-4 hidden.
-    expect(body.data[0].personnummer).toBe('19000101-XXXX')
-    expect(body.data[1].personnummer).toBe('19020304-XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
+    expect(body.data[1].personnummer_masked).toBe('19020304-XXXX')
     // Neither the plaintext nor the stored ciphertext may leak.
     expect(JSON.stringify(body)).not.toContain(PLAINTEXT_PNR)
     expect(JSON.stringify(body)).not.toContain(ENCRYPTED_PNR)
+  })
+
+  it('never returns the mask under the writable `personnummer` key', async () => {
+    // The roster feeds edit forms. If the mask came back as `personnummer`, a
+    // client that reads a row and writes it back would post 'ÅÅÅÅMMDD-XXXX'
+    // into the encrypt path. The masked value lives under `personnummer_masked`
+    // so the read key and the write key can never be confused.
+    authed(supabaseWithRows([{ id: 'e1', last_name: 'A', personnummer: ENCRYPTED_PNR }]))
+
+    const res = await GET(req(), params)
+    const body = await res.json()
+    expect(body.data[0].personnummer).toBeUndefined()
+    expect('personnummer' in body.data[0]).toBe(false)
+    expect(body.data[0].personnummer_masked).toBe('19020304-XXXX')
   })
 })

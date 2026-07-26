@@ -26,7 +26,7 @@ import {
   lookupBankByClearing,
   checkEmployeeAccountChecksum,
 } from '@/lib/salary/payment/bank-account'
-import type { Employee } from '@/types'
+import type { EmployeeMasked } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
@@ -49,7 +49,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
-  const [employee, setEmployee] = useState<Employee | null>(null)
+  const [employee, setEmployee] = useState<EmployeeMasked | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [deactivating, setDeactivating] = useState(false)
@@ -241,7 +241,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               {employee.first_name} {employee.last_name}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              {employee.personnummer} · {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
+              {employee.personnummer_masked} · {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
             </p>
           </div>
         </div>
@@ -416,9 +416,10 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           </Card>
         )}
 
-        {/* Tax */}
+        {/* Tax. The masked personnummer is enough input here: EmployeeTaxCard
+            only reads the leading birthdate digits to suggest a tax column. */}
         <EmployeeTaxCard
-          personnummer={employee.personnummer || ''}
+          personnummer={employee.personnummer_masked || ''}
           disabled={!canWrite}
           onChange={setTax}
           initial={{

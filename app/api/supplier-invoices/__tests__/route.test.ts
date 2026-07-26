@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -43,6 +43,16 @@ const mockLinkToJournalEntry = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
   linkToJournalEntry: (...args: unknown[]) => mockLinkToJournalEntry(...args),
 }))
+
+// Riksbanken is the only external dependency of the new server-side rate
+// lookup. Spread the real module so anything else importing from it (e.g.
+// convertToSEK) keeps working.
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
+  return { ...actual, fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args) }
+})
 
 import { eventBus } from '@/lib/events'
 
@@ -902,5 +912,233 @@ describe('POST /api/supplier-invoices', () => {
     // Make sure we never touched the engine paths.
     expect(mockCreateSupplierInvoicePrivatelyPaidEntry).not.toHaveBeenCalled()
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+})
+
+// ── Exchange rate + SEK amounts ─────────────────────────────────────────────
+// The queued Supabase mock is a bare Proxy, so the only way to assert what was
+// actually written is to record the argument handed to `.insert()`. The route
+// echoes back the enqueued fixture row, not its own payload.
+
+type InsertRecord = { table: string; payload: Record<string, unknown> }
+
+function wrapCapturing(chain: unknown, table: string, sink: InsertRecord[]): unknown {
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        const inner = (chain as Record<string | symbol, unknown>)[prop as string]
+        if (prop === 'then') return inner
+        return (...args: unknown[]) => {
+          if (
+            prop === 'insert' &&
+            args[0] &&
+            typeof args[0] === 'object' &&
+            !Array.isArray(args[0])
+          ) {
+            sink.push({ table, payload: args[0] as Record<string, unknown> })
+          }
+          return wrapCapturing((inner as (...a: unknown[]) => unknown)(...args), table, sink)
+        }
+      },
+    },
+  )
+}
+
+describe('POST /api/supplier-invoices: exchange rate + SEK amounts', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const captured: InsertRecord[] = []
+  let baseFrom: (...args: unknown[]) => unknown
+
+  const supplierInvoiceInsert = () =>
+    captured.find((c) => c.table === 'supplier_invoices')?.payload
+
+  function enqueueHappyPath() {
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null }) // supplier lookup
+    enqueue({ data: 7 }) // get_next_arrival_number
+    enqueue({ data: makeSupplierInvoice({ id: 'si-fx' }), error: null }) // insert invoice
+    enqueue({ data: [], error: null }) // insert items
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings
+  }
+
+  function body(overrides: Record<string, unknown> = {}) {
+    return {
+      supplier_id: VALID_UUID,
+      supplier_invoice_number: 'LF-FX',
+      invoice_date: '2024-06-01',
+      due_date: '2024-07-01',
+      items: [
+        { description: 'Molntjänst', amount: 10000, account_number: '6540', vat_rate: 0.25 },
+      ],
+      ...overrides,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    captured.length = 0
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    mockFetchExchangeRate.mockReset()
+    baseFrom = mockSupabase.from.getMockImplementation() as (...args: unknown[]) => unknown
+    mockSupabase.from.mockImplementation((table: string) =>
+      wrapCapturing(baseFrom(table), table, captured),
+    )
+  })
+
+  afterEach(() => {
+    mockSupabase.from.mockImplementation(baseFrom)
+  })
+
+  it('populates total_sek for an ordinary SEK invoice and never asks for a rate', async () => {
+    enqueueHappyPath()
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', { method: 'POST', body: body() }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const payload = supplierInvoiceInsert()
+    expect(payload).toBeDefined()
+    // total_sek used to be NULL for every SEK invoice because the writer gated
+    // it on an exchange rate existing. A SEK invoice has none by definition.
+    expect(payload!.subtotal_sek).toBe(10000)
+    expect(payload!.vat_amount_sek).toBe(2500)
+    expect(payload!.total_sek).toBe(12500)
+    expect(payload!.total_sek).toBe(payload!.total)
+    expect(payload!.exchange_rate).toBeNull()
+    expect(payload!.exchange_rate_date).toBeNull()
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('uses a caller-supplied rate for a foreign invoice without fetching', async () => {
+    enqueueHappyPath()
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: body({ currency: 'EUR', exchange_rate: 11.5 }),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const payload = supplierInvoiceInsert()
+    expect(payload!.currency).toBe('EUR')
+    expect(payload!.exchange_rate).toBe(11.5)
+    expect(payload!.subtotal_sek).toBe(115000)
+    expect(payload!.vat_amount_sek).toBe(28750)
+    expect(payload!.total_sek).toBe(143750)
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('fetches the invoice-date rate server-side when the caller omits one', async () => {
+    enqueueHappyPath()
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.2, date: '2024-05-31' })
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: body({ currency: 'EUR' }),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockFetchExchangeRate).toHaveBeenCalledTimes(1)
+    const [currencyArg, dateArg, clientArg] = mockFetchExchangeRate.mock.calls[0]
+    expect(currencyArg).toBe('EUR')
+    expect((dateArg as Date).toISOString().slice(0, 10)).toBe('2024-06-01')
+    // The supabase client must be passed through: that is what makes the
+    // shared exchange_rates cache a read-through cache instead of dead weight.
+    expect(clientArg).toBe(mockSupabase)
+
+    const payload = supplierInvoiceInsert()
+    expect(payload!.exchange_rate).toBe(11.2)
+    // Observation date, not the requested date: Riksbanken publishes no rate
+    // on weekends and the lookback picks the previous banking day.
+    expect(payload!.exchange_rate_date).toBe('2024-05-31')
+    expect(payload!.total_sek).toBe(140000)
+  })
+
+  it('refuses the create with SI_FX_RATE_MISSING when no rate can be resolved', async () => {
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
+    mockFetchExchangeRate.mockResolvedValue(null)
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: body({ currency: 'USD' }),
+      }),
+    )
+    const { status, body: responseBody } = await parseJsonResponse<{
+      error: { code: string; details?: { currency?: string; invoice_date?: string } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(responseBody.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(responseBody.error.details?.currency).toBe('USD')
+    // Nothing may be persisted, no ankomstnummer burned, no verifikat posted:
+    // an unconverted row would only fail again inside the booking path.
+    expect(supplierInvoiceInsert()).toBeUndefined()
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  // supplier_invoices_exchange_rate_check is `> 0 AND < 100000`. The schema
+  // used to have no ceiling, so 250000 sailed past validation, reached the
+  // constraint and came back to the user as an unexplained 500.
+  it('rejects an out-of-range exchange rate as a 400, not a constraint-violation 500', async () => {
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: body({ currency: 'EUR', exchange_rate: 250000 }),
+      }),
+    )
+    const { status, body: responseBody } = await parseJsonResponse<{
+      error: string
+      type: string
+      errors: Array<{ field: string; message: string }>
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(responseBody.type).toBe('validation_error')
+    const issue = responseBody.errors.find((e) => e.field === 'exchange_rate')
+    // Actionable, and Swedish: getErrorMessage passes a 'Valideringsfel:'
+    // summary through verbatim, so this is what the user actually reads.
+    expect(issue?.message).toContain('100 000')
+    expect(responseBody.error).toContain('Valideringsfel')
+    expect(supplierInvoiceInsert()).toBeUndefined()
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects exactly 100000: the CHECK bound is exclusive, so the mirror is too', async () => {
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: body({ currency: 'EUR', exchange_rate: 100000 }),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(supplierInvoiceInsert()).toBeUndefined()
+  })
+
+  it('accepts 99999.99, the largest rate the CHECK allows', async () => {
+    enqueueHappyPath()
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: body({ currency: 'EUR', exchange_rate: 99999.99 }),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(supplierInvoiceInsert()!.exchange_rate).toBe(99999.99)
   })
 })

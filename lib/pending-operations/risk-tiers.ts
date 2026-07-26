@@ -60,6 +60,19 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // entry is created or modified.
   link_supplier_invoice_voucher: 'medium',
   create_invoice: 'medium', // creates as draft; sending is a separate op
+  // Rewrites a DRAFT in place (header + full item replace). Same tier as
+  // create_invoice: the target has no verifikat yet (isEditableInvoiceDraft
+  // is re-checked at commit), so the edit is fully reversible by editing again.
+  update_invoice: 'medium',
+  // Recurring invoice schedules: the commit only creates/edits the monthly
+  // template (nothing is booked or sent at commit time), and the schedule is
+  // pausable/deletable before the next cron run. Not 'low' because an
+  // approved schedule keeps generating numbered invoices, and with
+  // auto_send=true keeps emailing the customer, without any further
+  // approval: the staged preview surfaces auto_send explicitly so the human
+  // reviews exactly that.
+  create_recurring_schedule: 'medium',
+  update_recurring_schedule: 'medium',
   create_transaction: 'medium', // ingests an uncategorized row; reversible by delete
   // Supplier master data carries payment-routing fields (IBAN, BIC, bankgiro,
   // bank_account) that drive outgoing payment files and supplier invoice

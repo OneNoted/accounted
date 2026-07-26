@@ -24,6 +24,12 @@ import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { PageHeader } from '@/components/ui/page-header'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
+import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
+import {
+  isFilingBlocked,
+  withRcBasisGapFindings,
+  type RcBasisGapScan,
+} from '@/lib/reports/vat-filing-gate'
 import { Table, TableBody } from '@/components/ui/table'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import dynamic from 'next/dynamic'
@@ -1483,6 +1489,13 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // to automatic so stale step choices never survive a context change.
   const [chosenStep, setChosenStep] = useState<number | null>(null)
   const [bookingStatus, setBookingStatus] = useState<'booked' | 'draft' | 'none' | null>(null)
+  // Per-verifikat RC-basis scan, fetched here (not only inside VatChecksCard)
+  // because the filing gate lives here and the worklist unmounts as soon as
+  // the user leaves steg 1. Tagged with the PERIOD it was requested for (see
+  // gapScanPeriodKey), so a korrigering refetches without the gate falling
+  // open in between; count === null means "not known" (scan failed), which is
+  // deliberately NOT the same as zero.
+  const [gapScan, setGapScan] = useState<{ key: string; count: number | null } | null>(null)
 
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
@@ -1542,6 +1555,23 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
       ? null
       : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
 
+  // Period identity WITHOUT the retry counter, used to decide whether the gap
+  // scan below still speaks for what is on screen. The scan re-runs on every
+  // retryKey bump (each korrigering), but the last settled count stays in
+  // force until the new one lands: falling back to `pending` mid-korrigering
+  // would drop the gap finding out of `checks` for one round trip, and with
+  // the aggregate check silent (the tolerance case this gate exists for) the
+  // green "Inga fel hittades i underlaget för perioden" would render right
+  // above the vouchers still left in the worklist, with Skicka enabled. That
+  // is the exact regression being fixed, and steg 1 stays mounted across a
+  // korrigering, so the user would be looking straight at it. Stale-but-closed
+  // is the safe direction, and it matches the declaration itself, which stays
+  // on screen (dimmed) while the next one loads.
+  const gapScanPeriodKey =
+    periodType === null
+      ? null
+      : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}`
+
   useEffect(() => {
     setChosenStep(null)
     setBookingStatus(null)
@@ -1578,6 +1608,37 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     }
   }, [fetchKey, periodType, year, period, fiscalPeriodId])
 
+  // The per-verifikat gap scan runs on the same key as the declaration, so a
+  // korrigering (which bumps retryKey via onCorrected) re-verifies the gate
+  // instead of leaving it stuck on the pre-correction count.
+  useEffect(() => {
+    if (!fetchKey || periodType === null || !gapScanPeriodKey) return
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (periodType === 'yearly') params.set('fiscal_period_id', fiscalPeriodId)
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration/rc-basis-gaps?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        // count === null is a settled FAILURE, and unknown is not "inga
+        // brister": it becomes a visible warning row (so the banner cannot
+        // claim all-clear on a check that never ran) but does not block, or a
+        // network hiccup would lock the user out of a statutory deadline.
+        if (!res.ok || json?.error) setGapScan({ key: gapScanPeriodKey, count: null })
+        else setGapScan({ key: gapScanPeriodKey, count: (json?.data?.gaps ?? []).length })
+      })
+      .catch(() => {
+        if (!cancelled) setGapScan({ key: gapScanPeriodKey, count: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchKey, gapScanPeriodKey, periodType, year, period, fiscalPeriodId])
+
   // Derived fetch state: the previous declaration stays visible (dimmed)
   // while the next period loads.
   const upToDate = result !== null && result.key === fetchKey
@@ -1588,8 +1649,35 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // Local pre-flight checks on the calculated declaration. Computed here (not
   // in SkatteverketPanel) so every user sees them: they gate direct submission
   // but concern manual filers just as much.
-  const checks = data ? runVatDeclarationChecks(data.rutor) : []
-  const checksBlocked = checks.some((c) => c.status === 'ERROR')
+  //
+  // The per-verifikat gap scan is folded in BEFORE anything derives from the
+  // list. The aggregate checks compare period totals with a tolerance that
+  // scales with period size, so they can stay silent while individual
+  // verifikat still miss their basbelopp: reading them alone let the green
+  // "Inga fel hittades i underlaget för perioden" render directly above the
+  // worklist of those verifikat, with Skicka enabled. Banner, stegen and the
+  // send gate now all read this ONE array. The three scan states are kept
+  // apart: only a settled count of zero is allowed to mean "inga brister".
+  const gapScanSettled = gapScan !== null && gapScan.key === gapScanPeriodKey
+  const rcBasisScan: RcBasisGapScan = !gapScanSettled
+    ? { status: 'pending' }
+    : gapScan.count === null
+      ? { status: 'unavailable' }
+      : { status: 'scanned', gapCount: gapScan.count }
+  // The declaration carries the 2645/2647 totals (rcInputAccountTotals), so
+  // RC_INPUT_VAT_MISMATCH compares rutor 30-32 against the reverse-charge INPUT
+  // accounts instead of the ruta 48 aggregate. Without them, 50 000 kr of
+  // fiktiv utgående moms with nothing on 2645 sits silently behind 60 000 kr of
+  // ordinary 2641 and the user pays in moms they were entitled to deduct.
+  // rcInputTotalsFromDeclaration returns undefined (not an empty map) when a
+  // response predates the field, which keeps the fallback honest.
+  const checks = data
+    ? withRcBasisGapFindings(
+        runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data)),
+        rcBasisScan,
+      )
+    : []
+  const checksBlocked = isFilingBlocked(checks)
   const errorCount = checks.filter((c) => c.status === 'ERROR').length
   const warningCount = checks.filter((c) => c.status === 'WARNING').length
   // Latch the automatic landing step once per period, as a render-phase
@@ -1598,8 +1686,10 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // korrigering can clear the aggregate error while the Kontrollera worklist
   // still holds broken vouchers, and the view would jump to Granska under
   // their feet. The period-change effect below resets chosenStep to null,
-  // which re-arms this latch for the next period.
-  if (chosenStep === null && upToDate && data && !error) {
+  // which re-arms this latch for the next period. It also waits for the gap
+  // scan: latching on the aggregate alone landed the user on Granska while
+  // steg 1 still held a blocking worklist.
+  if (chosenStep === null && upToDate && data && !error && gapScanSettled) {
     setChosenStep(checksBlocked ? 1 : 2)
   }
   const activeStep = chosenStep ?? (checksBlocked ? 1 : 2)

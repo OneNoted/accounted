@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,7 @@ import { Loader2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { summarizeUnderlagTotals } from './bulk-book-inbox-totals'
 
 // Minimal shape the dialog needs from the workspace's inbox items.
 interface BulkBookInboxItem {
@@ -84,6 +86,7 @@ function isBookable(it: BulkBookInboxItem): boolean {
 
 export default function BulkBookInboxDialog({ open, onOpenChange, items, onSuccess }: Props) {
   const { toast } = useToast()
+  const t = useTranslations('inbox_bulk_book')
   const [category, setCategory] = useState<string>('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -109,10 +112,23 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     if (open) setVatTreatment('standard_25')
   }, [open])
 
-  const totalSek = useMemo(
-    () => bookable.reduce((s, it) => s + (it.extracted_data?.totals?.total ?? 0), 0),
-    [bookable],
-  )
+  // Underlag subtotals, split per currency. This used to be a single scalar
+  // named `totalSek` that summed `totals.total` across the selection and was
+  // rendered with formatCurrency()'s SEK default, so a mixed batch added 100
+  // EUR to 100 SEK and stamped "kr" on the result: a figure the user approved
+  // against that matched no belopp at all (BFL 5 kap 7 §). The split is honest
+  // in both directions: a homogeneous EUR batch now reads in EUR too.
+  //
+  // Deliberately NOT a submit gate, unlike the mixed-currency dead end in
+  // components/transactions/BulkBookDialog.tsx. That dialog builds ONE
+  // samlingsverifikation, which must sit in a single redovisningsvaluta (BFL 4
+  // kap 6 §). This route books one verifikat PER underlag off its matched bank
+  // transaction's own settled amount (see lib/transactions/categorize-core.ts),
+  // so a EUR invoice paid by a SEK bank line is booked correctly and a mixed
+  // selection yields a set of individually correct verifikat. Blocking it would
+  // refuse a legal everyday batch. See bulk-book-inbox-totals.ts.
+  const underlagTotals = useMemo(() => summarizeUnderlagTotals(bookable), [bookable])
+  const isMixedCurrency = underlagTotals.length > 1
 
   const submit = async () => {
     if (!category || bookable.length === 0) return
@@ -226,10 +242,27 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
             )}
           </div>
 
-          {totalSek > 0 && (
+          {!isMixedCurrency && underlagTotals.length === 1 && (
             <p className="text-xs text-muted-foreground tabular-nums">
-              Underlagens summa: {formatCurrency(totalSek)}
+              {t('total_label', {
+                amount: formatCurrency(underlagTotals[0]!.total, underlagTotals[0]!.currency),
+              })}
             </p>
+          )}
+
+          {isMixedCurrency && (
+            <div className="rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">{t('mixed_currency_totals_label')}</p>
+              <ul className="mt-2 space-y-1">
+                {underlagTotals.map(({ currency, total }) => (
+                  <li key={currency} className="flex items-center justify-between tabular-nums">
+                    <span className="font-mono">{currency}</span>
+                    <span className="text-foreground">{formatCurrency(total, currency)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2">{t('mixed_currency_note')}</p>
+            </div>
           )}
 
           {skippedNote && (

@@ -13,7 +13,14 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 vi.mock('@/lib/bookkeeping/currency-utils', () => ({
-  resolveSekAmount: vi.fn((amount: number) => amount),
+  resolveSekAmount: vi.fn(
+    (
+      amount: number,
+      _amountSek: number | null,
+      currency: string | null,
+      rate: number | null
+    ) => (currency && currency !== 'SEK' && rate ? amount * rate : amount)
+  ),
 }))
 
 import { GET } from '../route'
@@ -148,5 +155,139 @@ describe('GET /api/reports/supplier-ledger/supplier/[supplierId]/invoices', () =
     expect(body.data.lines[0].journal_entry_id).toBe('je-3')
     expect(body.data.lines[0].voucher_number).toBe(33)
     expect(body.data.lines[0].credit).toBe(2500)
+  })
+
+  it('never reports a foreign amount as SEK when the exchange rate is missing', async () => {
+    // 1 000 EUR with no rate: there is no SEK figure for the 2440 balance, so
+    // the Kredit column (always SEK) must not be handed the EUR number.
+    const invoices = [
+      {
+        id: 'si-fx',
+        supplier_invoice_number: 'EUR-1',
+        invoice_date: '2026-05-10',
+        due_date: '2026-06-10',
+        total: 1000,
+        paid_amount: 0,
+        remaining_amount: 1000,
+        currency: 'EUR',
+        exchange_rate: null,
+        registration_journal_entry_id: null,
+      },
+    ]
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'user-1' },
+      supabase: buildSupabase(
+        { id: 'sup-1', name: 'Euro Supply GmbH' },
+        { data: invoices, error: null },
+        { data: [], error: null }
+      ),
+      error: null,
+    })
+    const req = createMockRequest(
+      '/api/reports/supplier-ledger/supplier/sup-1/invoices'
+    )
+    const res = await GET(req, createMockRouteParams({ supplierId: 'sup-1' }))
+    expect(res.status).toBe(200)
+
+    const body = (await res.json()) as {
+      data: {
+        unconverted_fx_count: number
+        lines: Array<{
+          credit: number
+          remaining: number
+          remaining_sek: number | null
+          currency: string
+        }>
+      }
+    }
+
+    const line = body.data.lines[0]
+    // The EUR amount must not leak into the SEK column.
+    expect(line.credit).not.toBe(1000)
+    expect(line.credit).toBe(0)
+    // ... but the invoice stays visible, with its own-currency amount intact.
+    expect(line.remaining).toBe(1000)
+    expect(line.currency).toBe('EUR')
+    // Explicit null marker + count, same contract as the ledger report.
+    expect(line.remaining_sek).toBeNull()
+    expect(body.data.unconverted_fx_count).toBe(1)
+  })
+
+  it('lets the consumer tell an unconverted row from a settled one', async () => {
+    const invoices = [
+      // Unconvertible: SEK value unknown.
+      {
+        id: 'si-fx',
+        supplier_invoice_number: 'EUR-1',
+        invoice_date: '2026-05-10',
+        due_date: '2026-06-10',
+        total: 1000,
+        paid_amount: 0,
+        remaining_amount: 1000,
+        currency: 'EUR',
+        exchange_rate: null,
+        registration_journal_entry_id: null,
+      },
+      // Convertible: 100 EUR at 11.50.
+      {
+        id: 'si-fx-rate',
+        supplier_invoice_number: 'EUR-2',
+        invoice_date: '2026-05-11',
+        due_date: '2026-06-11',
+        total: 100,
+        paid_amount: 0,
+        remaining_amount: 100,
+        currency: 'EUR',
+        exchange_rate: 11.5,
+        registration_journal_entry_id: null,
+      },
+      // Genuinely settled: nothing left on 2440.
+      {
+        id: 'si-settled',
+        supplier_invoice_number: 'SEK-1',
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-12',
+        total: 500,
+        paid_amount: 500,
+        remaining_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        registration_journal_entry_id: null,
+      },
+    ]
+    requireAuthMock.mockResolvedValue({
+      user: { id: 'user-1' },
+      supabase: buildSupabase(
+        { id: 'sup-1', name: 'Euro Supply GmbH' },
+        { data: invoices, error: null },
+        { data: [], error: null }
+      ),
+      error: null,
+    })
+    const req = createMockRequest(
+      '/api/reports/supplier-ledger/supplier/sup-1/invoices'
+    )
+    const res = await GET(req, createMockRouteParams({ supplierId: 'sup-1' }))
+
+    const body = (await res.json()) as {
+      data: {
+        unconverted_fx_count: number
+        lines: Array<{
+          supplier_invoice_id: string
+          credit: number
+          remaining_sek: number | null
+        }>
+      }
+    }
+
+    const byId = new Map(body.data.lines.map((l) => [l.supplier_invoice_id, l]))
+    // Unknown SEK value: null, not 0.
+    expect(byId.get('si-fx')!.remaining_sek).toBeNull()
+    // Settled: 0, not null.
+    expect(byId.get('si-settled')!.remaining_sek).toBe(0)
+    // Converted rows are unaffected: still the SEK amount in the Kredit column.
+    expect(byId.get('si-fx-rate')!.remaining_sek).toBe(1150)
+    expect(byId.get('si-fx-rate')!.credit).toBe(1150)
+    expect(body.data.unconverted_fx_count).toBe(1)
   })
 })

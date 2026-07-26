@@ -94,6 +94,27 @@ const PERIOD_2023 = {
   opening_balance_entry_id: null,
 }
 
+/**
+ * Queue one mock response per query writeMasterData issues, in order.
+ *
+ * Direct tables issue a single query; via-tables issue a parent-id query and,
+ * only when parents exist, one chunked child query. Tables not named in
+ * `opts` come back empty.
+ */
+function buildMasterDataQueue(opts: {
+  direct?: Record<string, unknown[]>
+  via?: Record<string, { parents: unknown[]; children: unknown[] }>
+}): { data: unknown }[] {
+  return MASTER_DATA_DUMP_TABLES.flatMap((t): { data: unknown }[] => {
+    if (t.via) {
+      const spec = opts.via?.[t.name]
+      if (!spec || spec.parents.length === 0) return [{ data: [] }]
+      return [{ data: spec.parents }, { data: spec.children }]
+    }
+    return [{ data: opts.direct?.[t.name] ?? [] }]
+  })
+}
+
 describe('generateFullArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
@@ -538,19 +559,17 @@ describe('generateFullArchive', () => {
       // Master-data dump runs sequentially over MASTER_DATA_DUMP_TABLES.
       // Direct tables issue one query; via-tables issue a parent-id query and,
       // when parents exist, one chunked child query.
-      const masterDataQueue = MASTER_DATA_DUMP_TABLES.flatMap((t): { data: unknown }[] => {
-        if (t.name === 'customers') {
-          return [{ data: [{ id: 'cust-1', name: 'Acme AB' }] }]
-        }
-        if (t.name === 'invoice_items') {
-          return [
-            { data: [{ id: 'inv-1' }] }, // parent ids (invoices)
-            { data: [{ id: 'item-1', invoice_id: 'inv-1', description: 'Konsulttid' }] },
-          ]
-        }
-        if (t.via) return [{ data: [] }] // no parents -> no child query
-        if (t.name === 'company_settings') return [{ data: [COMPANY_ROW] }]
-        return [{ data: [] }]
+      const masterDataQueue = buildMasterDataQueue({
+        direct: {
+          customers: [{ id: 'cust-1', name: 'Acme AB' }],
+          company_settings: [COMPANY_ROW],
+        },
+        via: {
+          invoice_items: {
+            parents: [{ id: 'inv-1', currency: 'SEK', exchange_rate: null }],
+            children: [{ id: 'item-1', invoice_id: 'inv-1', description: 'Konsulttid' }],
+          },
+        },
       })
 
       enqueueMany([
@@ -589,14 +608,174 @@ describe('generateFullArchive', () => {
       expect(customers).toEqual([{ id: 'cust-1', name: 'Acme AB' }])
 
       // Child table fetched via parent ids (invoice_items has no company_id).
+      // A SEK company's rows are unchanged apart from the appended unit.
       const items = JSON.parse(await zip.file('data/invoice_items.json')!.async('text'))
       expect(items).toEqual([
-        { id: 'item-1', invoice_id: 'inv-1', description: 'Konsulttid' },
+        {
+          id: 'item-1',
+          invoice_id: 'inv-1',
+          description: 'Konsulttid',
+          invoice_currency: 'SEK',
+          invoice_exchange_rate: null,
+        },
       ])
       expect(supabase.rpc).toHaveBeenCalledWith(
         'export_invoice_delivery_evidence',
         { p_company_id: 'company-1' },
       )
+    })
+
+    it('makes a foreign-currency invoice line readable without joining the parent', async () => {
+      // A revisor opening data/invoice_items.json must be able to tell that
+      // line_total 1000 is EUR, not SEK. The row's own `unit` column says
+      // "st" (the quantity unit), so nothing in the file used to state the
+      // money unit: it was only recoverable by joining data/invoices.json.
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] }, // document_attachments
+        { data: [] }, // sie_imports
+        { data: [] }, // sie_account_mappings
+        ...buildMasterDataQueue({
+          via: {
+            invoice_items: {
+              parents: [
+                { id: 'inv-eur', currency: 'EUR', exchange_rate: 11.23 },
+                { id: 'inv-sek', currency: 'SEK', exchange_rate: null },
+              ],
+              children: [
+                {
+                  id: 'item-eur',
+                  invoice_id: 'inv-eur',
+                  description: 'Konsulttid',
+                  quantity: 10,
+                  unit: 'st',
+                  unit_price: 100,
+                  line_total: 1000,
+                  vat_amount: 250,
+                },
+                {
+                  id: 'item-sek',
+                  invoice_id: 'inv-sek',
+                  description: 'Support',
+                  line_total: 500,
+                  vat_amount: 125,
+                },
+              ],
+            },
+          },
+        }),
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'all',
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const items = JSON.parse(
+        await zip.file('data/invoice_items.json')!.async('text')
+      ) as Array<Record<string, unknown>>
+
+      const byId = Object.fromEntries(items.map((i) => [i.id as string, i]))
+      expect(byId['item-eur'].invoice_currency).toBe('EUR')
+      expect(byId['item-eur'].invoice_exchange_rate).toBe(11.23)
+      // The SEK line says SEK explicitly rather than leaving it implied.
+      expect(byId['item-sek'].invoice_currency).toBe('SEK')
+      expect(byId['item-sek'].invoice_exchange_rate).toBeNull()
+
+      // Every money-bearing row states its unit: no row is ambiguous.
+      for (const item of items) {
+        expect(item, `row ${item.id} has no unit`).toHaveProperty('invoice_currency')
+        expect(item.invoice_currency).not.toBeNull()
+      }
+
+      // Additive: the row keeps every column it shipped with before, and the
+      // unit is appended rather than replacing anything.
+      expect(byId['item-eur']).toMatchObject({
+        id: 'item-eur',
+        invoice_id: 'inv-eur',
+        description: 'Konsulttid',
+        quantity: 10,
+        unit: 'st',
+        unit_price: 100,
+        line_total: 1000,
+        vat_amount: 250,
+      })
+    })
+
+    it('carries the unit on supplier invoice lines and receipt lines too', async () => {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] }, // document_attachments
+        { data: [] }, // sie_imports
+        { data: [] }, // sie_account_mappings
+        ...buildMasterDataQueue({
+          via: {
+            supplier_invoice_items: {
+              parents: [{ id: 'sinv-1', currency: 'USD', exchange_rate: 9.87 }],
+              children: [
+                { id: 'sitem-1', supplier_invoice_id: 'sinv-1', line_total: 200 },
+              ],
+            },
+            // receipts has no exchange_rate column: currency alone.
+            receipt_line_items: {
+              parents: [{ id: 'rec-1', currency: 'NOK' }],
+              children: [{ id: 'rline-1', receipt_id: 'rec-1', line_total: 49 }],
+            },
+          },
+        }),
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'all',
+      })
+      const zip = await JSZip.loadAsync(buffer)
+
+      const supplierItems = JSON.parse(
+        await zip.file('data/supplier_invoice_items.json')!.async('text')
+      )
+      expect(supplierItems[0].supplier_invoice_currency).toBe('USD')
+      expect(supplierItems[0].supplier_invoice_exchange_rate).toBe(9.87)
+
+      const receiptLines = JSON.parse(
+        await zip.file('data/receipt_line_items.json')!.async('text')
+      )
+      expect(receiptLines[0].receipt_currency).toBe('NOK')
+      expect(receiptLines[0]).not.toHaveProperty('receipt_exchange_rate')
+    })
+
+    it('does not invent a unit for rot/rut payout items (parent has no currency)', async () => {
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] }, // document_attachments
+        { data: [] }, // sie_imports
+        { data: [] }, // sie_account_mappings
+        ...buildMasterDataQueue({
+          via: {
+            rot_rut_payout_request_items: {
+              parents: [{ id: 'req-1' }],
+              children: [
+                { id: 'ritem-1', request_id: 'req-1', requested_amount: 5000 },
+              ],
+            },
+          },
+        }),
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'all',
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const rows = JSON.parse(
+        await zip.file('data/rot_rut_payout_request_items.json')!.async('text')
+      )
+
+      // HUS-avdrag is SEK by statute and the parent carries no currency
+      // column, so there is nothing to copy: the row stays as the DB has it.
+      expect(rows).toEqual([
+        { id: 'ritem-1', request_id: 'req-1', requested_amount: 5000 },
+      ])
     })
 
     it('skips raw SIE blobs when include_documents is false but keeps metadata', async () => {
@@ -647,10 +826,8 @@ describe('generateBaseDataArchive', () => {
   })
 
   it('bundles unlinked documents, master data, SIE sources and the audit trail', async () => {
-    const masterDataQueue = MASTER_DATA_DUMP_TABLES.flatMap((t): { data: unknown }[] => {
-      if (t.name === 'customers') return [{ data: [{ id: 'cust-1', name: 'Acme AB' }] }]
-      if (t.via) return [{ data: [] }]
-      return [{ data: [] }]
+    const masterDataQueue = buildMasterDataQueue({
+      direct: { customers: [{ id: 'cust-1', name: 'Acme AB' }] },
     })
 
     enqueueMany([

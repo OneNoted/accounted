@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import {
   createQueuedMockSupabase,
@@ -13,6 +13,15 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoiceRegistrationEntry: vi.fn().mockResolvedValue({ id: 'je-1' }),
 }))
+
+// Riksbanken backs the server-side rate lookup the convert route now performs.
+// Spread the real module so nothing else importing from it breaks.
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
+  return { ...actual, fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args) }
+})
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -256,6 +265,161 @@ describe('POST /items/:id/convert', () => {
     expect(status).toBe(200)
     expect(body.data.registration_journal_entry_id).toBe('je-1')
     expect(createSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
+  })
+})
+
+// ── Exchange rate + SEK amounts on convert ───────────────────
+// The queued Supabase mock is a bare Proxy, so the insert payload has to be
+// recorded to be asserted: the route echoes back the enqueued fixture row.
+
+type InsertRecord = { table: string; payload: Record<string, unknown> }
+
+function wrapCapturing(chain: unknown, table: string, sink: InsertRecord[]): unknown {
+  return new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        const inner = (chain as Record<string | symbol, unknown>)[prop as string]
+        if (prop === 'then') return inner
+        return (...args: unknown[]) => {
+          if (
+            prop === 'insert' &&
+            args[0] &&
+            typeof args[0] === 'object' &&
+            !Array.isArray(args[0])
+          ) {
+            sink.push({ table, payload: args[0] as Record<string, unknown> })
+          }
+          return wrapCapturing((inner as (...a: unknown[]) => unknown)(...args), table, sink)
+        }
+      },
+    },
+  )
+}
+
+describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
+  const route = findRoute('POST', '/items/:id/convert')
+
+  beforeEach(() => {
+    mockFetchExchangeRate.mockReset()
+  })
+
+  /**
+   * Queued mock with insert capture, wired for the convert happy path:
+   * inbox item → supplier → arrival number → invoice insert → items insert →
+   * company_settings → inbox-item update.
+   */
+  function setup() {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const captured: InsertRecord[] = []
+    const baseFrom = supabase.from.getMockImplementation() as (...a: unknown[]) => unknown
+    supabase.from.mockImplementation((table: string) =>
+      wrapCapturing(baseFrom(table), table, captured),
+    )
+    return { supabase, enqueue, captured }
+  }
+
+  function enqueueHappyPath(enqueue: (r: { data?: unknown; error?: unknown }) => void) {
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-fx', status: 'registered' } })
+    enqueue({ data: [], error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
+    enqueue({ data: null, error: null })
+  }
+
+  function request(overrides: Record<string, unknown> = {}) {
+    return createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: { ...VALID_CONVERT_BODY, ...overrides },
+      searchParams: { _id: 'item-1' },
+    })
+  }
+
+  const siInsert = (captured: InsertRecord[]) =>
+    captured.find((c) => c.table === 'supplier_invoices')?.payload
+
+  it('populates total_sek for a SEK invoice and never asks for a rate', async () => {
+    const { supabase, enqueue, captured } = setup()
+    enqueueHappyPath(enqueue)
+
+    const res = await route.handler(request(), buildCtx(supabase))
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const payload = siInsert(captured)
+    expect(payload).toBeDefined()
+    // 10 000 + 25 % = 12 500. total_sek used to stay NULL because the writer
+    // gated it on an exchange rate, which a SEK invoice never has.
+    expect(payload!.subtotal_sek).toBe(10000)
+    expect(payload!.vat_amount_sek).toBe(2500)
+    expect(payload!.total_sek).toBe(12500)
+    expect(payload!.total_sek).toBe(payload!.total)
+    expect(payload!.exchange_rate).toBeNull()
+    expect(payload!.exchange_rate_date).toBeNull()
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('honours a caller-supplied rate on a foreign invoice', async () => {
+    const { supabase, enqueue, captured } = setup()
+    enqueueHappyPath(enqueue)
+
+    const res = await route.handler(
+      request({ currency: 'EUR', exchange_rate: 11.5 }),
+      buildCtx(supabase),
+    )
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const payload = siInsert(captured)
+    expect(payload!.currency).toBe('EUR')
+    expect(payload!.exchange_rate).toBe(11.5)
+    expect(payload!.total_sek).toBe(143750)
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('fetches the invoice-date rate when the extracted invoice carries none', async () => {
+    const { supabase, enqueue, captured } = setup()
+    enqueueHappyPath(enqueue)
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.2, date: '2024-06-14' })
+
+    const res = await route.handler(request({ currency: 'EUR' }), buildCtx(supabase))
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(mockFetchExchangeRate).toHaveBeenCalledTimes(1)
+    const [currencyArg, dateArg, clientArg] = mockFetchExchangeRate.mock.calls[0]
+    expect(currencyArg).toBe('EUR')
+    expect((dateArg as Date).toISOString().slice(0, 10)).toBe('2024-06-15')
+    // The supabase client must reach fetchExchangeRate or the shared
+    // exchange_rates cache is never consulted.
+    expect(clientArg).toBe(supabase)
+
+    const payload = siInsert(captured)
+    expect(payload!.exchange_rate).toBe(11.2)
+    expect(payload!.exchange_rate_date).toBe('2024-06-14')
+    expect(payload!.total_sek).toBe(140000)
+  })
+
+  it('refuses the conversion with SI_FX_RATE_MISSING when no rate can be resolved', async () => {
+    const { supabase, enqueue, captured } = setup()
+    enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
+    enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    mockFetchExchangeRate.mockResolvedValue(null)
+
+    const res = await route.handler(request({ currency: 'USD' }), buildCtx(supabase))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { currency?: string } }
+    }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(body.error.details?.currency).toBe('USD')
+    // Nothing written, no ankomstnummer burned: the inbox item stays
+    // convertible once a rate is available or typed in.
+    expect(siInsert(captured)).toBeUndefined()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 })
 

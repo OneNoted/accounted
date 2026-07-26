@@ -7,6 +7,7 @@ import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useTranslations } from 'next-intl'
 import { formatCurrency } from '@/lib/utils'
 import type { DeepEntity, DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
+import { entityMagnitude, selectAccountRing, type RingBasis } from './ledger-graph-magnitude'
 
 /**
  * "Reconciliation Aurora" - the cinematic hero of the "Vad din agent vet" page.
@@ -18,7 +19,7 @@ import type { DeepEntity, DeepLedgerContext } from '@/lib/agent-context/ledger-d
  * never cross between accounts (the anti-hairball guarantee).
  *
  * Four orthogonal channels, so no two compete:
- *   - node AREA   = total spend (radius = k·√kr)
+ *   - node AREA   = magnitude (radius = k·√x), see ledger-graph-magnitude.ts
  *   - node COLOUR = booking cadence (weekly / monthly / irregular) - the one
  *                   semantic axis; everything else stays achromatic
  *   - node SHAPE  = kind (supplier = filled, counterparty = open ring)
@@ -45,8 +46,6 @@ const R_HUB = 34
 const R_ACCOUNT = 178
 const R_PAYEE_MIN = 258
 const R_PAYEE_MAX = 432
-const MAX_ACCOUNTS = 9
-const MAX_PER_ACCOUNT = 6
 const WEDGE_GAP = 0.07 // radians of padding between account wedges
 
 // This panel is its own dark world regardless of the app theme, so the depth of
@@ -95,6 +94,8 @@ interface Model {
   accounts: Account[]
   payees: Payee[]
   truncated: boolean
+  /** What the wedge widths and node areas actually measure. See the legend. */
+  basis: RingBasis
   totals: { tx: number; payees: number; accounts: number }
 }
 
@@ -154,41 +155,14 @@ function buildModel(deep: DeepLedgerContext): Model {
 
   const totalTx = all.reduce((s, e) => s + e.occurrences, 0)
 
-  const byAccount = new Map<string, DeepEntity[]>()
-  for (const e of all) {
-    const acc = e.dominant_account_number as string
-    const arr = byAccount.get(acc) ?? []
-    arr.push(e)
-    byAccount.set(acc, arr)
-  }
-
-  // Weight a wedge by the money that flows through it (fall back to volume).
-  const activity = (items: DeepEntity[]) => {
-    const spend = items.reduce((s, i) => s + Math.max(i.total_amount, 0), 0)
-    return spend > 0 ? spend : items.reduce((s, i) => s + i.occurrences, 0)
-  }
-
-  let groups = [...byAccount.entries()].map(([number, items]) => ({
-    number,
-    items: items.slice().sort((a, b) => b.total_amount - a.total_amount),
-    weight: activity(items),
-  }))
-  // Rank by weight to pick what to show, then lay out in a fixed order (account
-  // number) so wedges never swap places between loads.
-  groups.sort((a, b) => b.weight - a.weight)
-  const totalAccounts = groups.length
-  groups = groups.slice(0, MAX_ACCOUNTS)
-  let truncated = totalAccounts > groups.length
-  for (const g of groups) {
-    if (g.items.length > MAX_PER_ACCOUNT) {
-      truncated = true
-      g.items = g.items.slice(0, MAX_PER_ACCOUNT)
-    }
-  }
-  groups.sort((a, b) => a.number.localeCompare(b.number))
-
-  const shownWeight = groups.reduce((s, g) => s + g.weight, 0) || 1
-  const maxSpend = Math.max(...groups.flatMap((g) => g.items.map((i) => i.total_amount)), 1)
+  // Grouping, weighting, ranking and truncation of the account ring live in
+  // ledger-graph-magnitude.ts so they can be unit tested. The one rule that
+  // matters here: every wedge weight below is expressed in the SAME unit
+  // (`ring.basis`), so the shared denominator never adds kronor to booking
+  // counts and no account is squeezed to an invisible sliver, or truncated
+  // away entirely, just for being measured differently.
+  const ring = selectAccountRing(all)
+  const { basis, groups, truncated } = ring
 
   // The most name-merged payees earn the on-mount "descriptors collapse" moment.
   const mergeIds = new Set(
@@ -205,7 +179,7 @@ function buildModel(deep: DeepLedgerContext): Model {
   const spans = 2 * Math.PI - WEDGE_GAP * groups.length
   let angle = -Math.PI / 2 + WEDGE_GAP / 2
   groups.forEach((g, gi) => {
-    const width = spans * (g.weight / shownWeight)
+    const width = spans * (g.weight / ring.totalWeight)
     const mid = angle + width / 2
     const anchor = polar(CX, CY, R_ACCOUNT, mid)
 
@@ -226,8 +200,10 @@ function buildModel(deep: DeepLedgerContext): Model {
       const slot = order[rank]
       const t = n === 1 ? 0.5 : slot / (n - 1)
       const pa = angle + inner + t * (width - 2 * inner)
-      const spendFrac = Math.sqrt(Math.max(e.total_amount, 0) / maxSpend)
-      const radius = lerp(R_PAYEE_MIN, R_PAYEE_MAX, rand01(e.key)) + spendFrac * 14
+      // Same unit as the wedge it sits in, so a node is never sized against a
+      // maximum measured in something else.
+      const sizeFrac = Math.sqrt(entityMagnitude(e, basis) / ring.maxMagnitude)
+      const radius = lerp(R_PAYEE_MIN, R_PAYEE_MAX, rand01(e.key)) + sizeFrac * 14
       const pos = polar(CX, CY, Math.min(radius, R_PAYEE_MAX + 10), pa)
       const id = `${g.number}:${e.key}`
       payees.push({
@@ -236,7 +212,7 @@ function buildModel(deep: DeepLedgerContext): Model {
         accountNumber: g.number,
         x: pos.x,
         y: pos.y,
-        r: 7 + 19 * spendFrac,
+        r: 7 + 19 * sizeFrac,
         cadence: cadenceOf(e),
         bucket: bucketOf(e.dominant_account_share),
         thread: `M ${CX} ${CY} Q ${anchor.x.toFixed(2)} ${anchor.y.toFixed(2)} ${pos.x.toFixed(2)} ${pos.y.toFixed(2)}`,
@@ -254,6 +230,7 @@ function buildModel(deep: DeepLedgerContext): Model {
     accounts,
     payees,
     truncated,
+    basis,
     totals: { tx: totalTx, payees: payees.length, accounts: accounts.length },
   }
 }
@@ -509,7 +486,12 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
         <span className="inline-flex items-center gap-2">
           <Dot fill={CAD.irregular} /> {t('cadence_irregular')}
         </span>
-        <span className="opacity-70">{t('legend_size')}</span>
+        {/* Says what the sizes actually measure. The ring drops to booking
+            volume whenever any account lacks a usable amount, and claiming
+            "Storlek = belopp" there would describe a unit nothing is drawn in. */}
+        <span className="opacity-70">
+          {model.basis === 'amount' ? t('legend_size') : t('legend_size_volume')}
+        </span>
         <span className="opacity-70">{t('legend_focus')}</span>
         {model.truncated && <span className="italic opacity-70">{t('graph_truncated')}</span>}
       </div>
@@ -755,8 +737,10 @@ function DetailCard({ p, t }: { p: Payee; t: ReturnType<typeof useTranslations> 
             <span style={{ color: PAPER }}>×{e.variant_count}</span>
           </div>
         )}
+        {/* Its own label: `legend_size` now describes whichever unit the ring
+            settled on, which is not always the amount. */}
         <div className="flex justify-between gap-3">
-          <span>{t('legend_size')}</span>
+          <span>{t('card_amount')}</span>
           <span className="tabular-nums" style={{ color: PAPER }}>{formatCurrency(e.total_amount)}</span>
         </div>
         <div className="mt-2 border-t pt-2" style={{ borderColor: HAIR }}>

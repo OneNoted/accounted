@@ -126,7 +126,9 @@ describe('POST /api/transactions/[id]/book', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toBe('Validation failed')
+    // Inverted from `toBe('Validation failed')`: the constant was the bug.
+    expect(body.error).toMatch(/^Valideringsfel: /)
+    expect(body.error).toContain('entry_date')
   })
 
   it('returns 404 when transaction not found', async () => {

@@ -76,10 +76,13 @@ const customer = makeCustomer({ id: 'cust-1', customer_type: 'swedish_business' 
 /** Queue for the dispatcher + executor call sequence (SEK, no overrides):
  *  CAS claim → customers → company_settings → invoices insert →
  *  invoice_items insert → complete-invoice select → dispatcher update. */
-function queueFor(settings: { vat_registered: boolean } | null) {
+function queueFor(
+  settings: { vat_registered: boolean } | null,
+  forCustomer: typeof customer = customer,
+) {
   return [
     { data: { id: 'op-1' } },
-    { data: customer },
+    { data: forCustomer },
     { data: settings },
     { data: { id: 'inv-1', invoice_number: null } },
     { data: null },
@@ -87,6 +90,14 @@ function queueFor(settings: { vat_registered: boolean } | null) {
     { data: null },
   ]
 }
+
+// A validated EU business: the picker default is a single locked 0%
+// (huvudregeln, ML 6 kap. 34 §), but the gate reads the wider permitted set.
+const euCustomer = makeCustomer({
+  id: 'cust-1',
+  customer_type: 'eu_business',
+  vat_number_validated: true,
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -180,6 +191,77 @@ describe('commitPendingOperation: create_invoice', () => {
       vat_rate: 0,
       vat_amount: 0,
     })
+  })
+})
+
+describe('commitPendingOperation: create_invoice: VAT rates for a foreign business', () => {
+  it('accepts an explicit 12% line to a validated EU business (taxed where performed)', async () => {
+    // A Stockholm hotel night sold to a German company carries 12% Swedish VAT
+    // (ML 6 kap., taxed where the supply is performed). The picker default for
+    // that customer is 0%, so refusing 12% made the invoice impossible to issue.
+    const { supabase, inserts } = createCapturingSupabase(
+      queueFor({ vat_registered: true }, euCustomer),
+    )
+
+    const op = makePendingOp({
+      params: {
+        customer_id: 'cust-1',
+        items: [{ description: 'Hotellnatt Stockholm', quantity: 2, unit: 'st', unit_price: 1000, vat_rate: 12 }],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(inserts['invoices'][0]).toMatchObject({
+      subtotal: 2000,
+      vat_amount: 240,
+      total: 2240,
+      vat_rate: 12,
+    })
+  })
+
+  it('still defaults to 0% when a line omits vat_rate', async () => {
+    // Widening the accepted set must not move the default: an omitted rate
+    // falls back to getVatRules().rate, which is 0% (reverse charge).
+    const { supabase, inserts } = createCapturingSupabase(
+      queueFor({ vat_registered: true }, euCustomer),
+    )
+
+    const op = makePendingOp({
+      params: {
+        customer_id: 'cust-1',
+        items: [{ description: 'Konsulttimmar', quantity: 1, unit: 'tim', unit_price: 1000 }],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(inserts['invoices'][0]).toMatchObject({
+      subtotal: 1000,
+      vat_amount: 0,
+      total: 1000,
+      vat_rate: 0,
+      vat_treatment: 'reverse_charge',
+    })
+  })
+
+  it('still rejects a rate that is not a Swedish VAT rate', async () => {
+    // The permitted set widened to 0/25/12/6, not to anything: 10% stays out.
+    const { supabase } = createCapturingSupabase(queueFor({ vat_registered: true }, euCustomer))
+
+    const op = makePendingOp({
+      params: {
+        customer_id: 'cust-1',
+        items: [{ description: 'X', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 10 }],
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.error).toMatch(/10%/)
   })
 })
 

@@ -1,3 +1,20 @@
+/**
+ * Persistence for the årsredovisning narrative overrides.
+ *
+ * Error contract: Supabase errors are rethrown untouched, exactly as
+ * `lib/articles/validate-revenue-account.ts` does. Re-wrapping them in a plain
+ * `new Error(...)` kept only `.message` and dropped `.code`, so `errorResponse()`
+ * could no longer see the SQLSTATE and mapped every constraint failure on this
+ * table to INTERNAL_ERROR / 500. The reachable one is a real caller mistake:
+ * 23514 from `arsredovisning_narratives_agm_decision_consistency`, which the
+ * route's Zod superRefine only catches when both fields arrive in the same
+ * payload. A partial save (the upsert writes only the columns present in the
+ * payload) can still leave the stored row with
+ * `agm_disposition_outcome = 'alternative_decision'` and a blank decision, and
+ * the DB is the last line of defence. With the code intact that becomes a 400
+ * with a Swedish message; SQLSTATEs that are genuine infrastructure trouble are
+ * not in `postgresCodeToStructured()` and still fall through to 500.
+ */
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface NarrativeOverrides {
@@ -86,7 +103,7 @@ export async function getNarrative(
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .maybeSingle()
-  if (error) throw new Error(`Failed to load narrative: ${error.message}`)
+  if (error) throw error
   return (data as NarrativeRow | null) ?? null
 }
 
@@ -117,8 +134,10 @@ export async function upsertNarrative(
     .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
     .select(NARRATIVE_API_COLUMNS)
     .single()
-  if (error || !data) {
-    throw new Error(`Failed to save narrative: ${error?.message ?? 'unknown'}`)
-  }
+  if (error) throw error
+  // `.single()` always reports a missing row as an error, so this is a
+  // belt-and-braces guard rather than a reachable branch: keep it a plain
+  // Error (no SQLSTATE to preserve) so it maps to 500.
+  if (!data) throw new Error('Failed to save narrative: no row returned')
   return data as NarrativeRow
 }

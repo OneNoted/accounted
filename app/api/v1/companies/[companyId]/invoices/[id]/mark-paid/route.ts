@@ -81,6 +81,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory. Retried marks with the same key replay the cached response.',
     'Custom `lines` must balance (sum of debits = sum of credits, both > 0). Otherwise returns 400 INVOICE_PAID_LINES_UNBALANCED.',
     'For foreign-currency invoices, supply `exchange_rate_difference` (SEK delta vs the invoice\'s booked rate) to book the FX adjustment correctly. Omitting it on a non-SEK invoice will mis-book the FX gain/loss.',
+    'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. The route converts the line total via `invoice.exchange_rate`; a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
     'Cash basis (kontantmetoden) recognizes revenue HERE, not at :mark-sent. The dashboard tracks this via company_settings.accounting_method.',
     'Duplicate-payment guard: if an unlinked inbound bank transaction looks like this payment, returns 409 INVOICE_PAID_LIKELY_DUPLICATE with candidate transactions. Retry with `force: true` to bypass, but the retry MUST use a fresh Idempotency-Key (the original is body-hash bound; reusing it returns 400 IDEMPOTENCY_KEY_REUSE). The guard is also evaluated under dry-run, so a successful dry-run does not guarantee a successful commit.',
   ],
@@ -272,19 +273,41 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ? customLines.reduce((s, l) => s + l.debit_amount, 0)
       : (typed.remaining_amount ?? typed.total - (typed.paid_amount ?? 0))
 
+    // Unit contract: total / paid_amount / remaining_amount are stored in the
+    // INVOICE currency (total_sek carries the SEK view of total, and there is
+    // no remaining_amount_sek twin); custom lines are journal lines, so they
+    // are always SEK. The SEK amount therefore has to be converted before it is
+    // compared against, or subtracted from, the invoice-currency remaining. The
+    // default path (no lines) already pays the remaining in invoice currency
+    // and needs no rate at all.
+    const isForeignCurrency = !!typed.currency && typed.currency !== 'SEK'
+    const needsFxConversion = isForeignCurrency && customLines !== undefined
+    const fxRate: number | null =
+      typed.exchange_rate && typed.exchange_rate > 0 ? typed.exchange_rate : null
+    if (needsFxConversion && fxRate === null) {
+      // Never fall back to rate 1: that reads an 11 496,70 kr payment against a
+      // 1 000 EUR invoice as 11 496,70 EUR and corrupts the AR sub-ledger.
+      // Same code as buildInvoicePaymentClearingLines' refusal
+      // (MATCH_INVOICE_BOOKING_RATE_MISSING, lib/bookkeeping/invoice-payment-lines.ts):
+      // one condition, one code across every invoice-settlement surface.
+      ctx.log.warn('mark-paid rejected: foreign-currency invoice without exchange rate', {
+        invoiceId,
+        currency: typed.currency,
+      })
+      return v1ErrorResponseFromCode('MATCH_INVOICE_BOOKING_RATE_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { invoice_id: invoiceId, currency: typed.currency },
+      })
+    }
+    const paymentAmountInInvoiceCurrency = needsFxConversion
+      ? roundOre(paymentAmount / fxRate!)
+      : paymentAmount
+
     // Ledger math + overpayment guard via the shared planInvoicePayment helper:
     // the single source of truth across all three mark-paid surfaces (this route,
     // the dashboard route, and the agent commit path), so the paid/remaining/
-    // status math can never drift again. Custom lines are SEK; convert to invoice
-    // currency for the comparison so a foreign-currency invoice isn't falsely
-    // rejected as overpaid (the default path is already in invoice currency).
-    const fxRate =
-      typed.currency && typed.currency !== 'SEK' && typed.exchange_rate
-        ? typed.exchange_rate
-        : 1
-    const paymentAmountInInvoiceCurrency = customLines
-      ? roundOre(paymentAmount / fxRate)
-      : paymentAmount
+    // status math can never drift again. It is FX-agnostic by contract, so it
+    // gets the converted amount.
     // Custom-line SEK settlements absorb a sub-krona öresavrundning residual
     // (rounded "Att betala" vs the stored öre total), but ONLY when the lines
     // actually carry the residual on 3740: otherwise the strict plan applies
@@ -311,8 +334,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // successful dry-run can't mask the warning). Skipped on partial
     // payments (paymentAmount < remaining is an explicit, deliberate action),
     // on force=true, and on invoices without a resolved customer name.
+    // Both sides in invoice currency: remaining_amount is stored that way, so
+    // the SEK custom-line total must be the converted one, never the raw SEK.
+    // The candidate lookup below takes the same converted figure: it scans
+    // transactions.amount, which is denominated in the BANK ROW's currency
+    // (not necessarily kronor), and bands each currency separately from the
+    // invoice's stored conversion.
     const remainingForGuard = typed.remaining_amount ?? typed.total
-    const paidRoundedGuard = Math.round(paymentAmount * 100) / 100
+    const paidRoundedGuard = Math.round(paymentAmountInInvoiceCurrency * 100) / 100
     const remainingRoundedGuard = Math.round(remainingForGuard * 100) / 100
     if (!force && paidRoundedGuard >= remainingRoundedGuard) {
       const customerName = typed.customer?.name
@@ -324,8 +353,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       } else {
         const candidates = await findDuplicatePaymentCandidatesForInvoice(ctx.supabase, {
           companyId: ctx.companyId!,
-          invoice: { invoice_number: typed.invoice_number, customer_name: customerName },
-          paymentAmount,
+          invoice: {
+            invoice_number: typed.invoice_number,
+            customer_name: customerName,
+            currency: typed.currency ?? null,
+            total: typed.total ?? null,
+            total_sek: typed.total_sek ?? null,
+            exchange_rate: typed.exchange_rate ?? null,
+          },
+          paymentAmount: paymentAmountInInvoiceCurrency,
           paymentDate,
         })
         if (candidates.length > 0) {

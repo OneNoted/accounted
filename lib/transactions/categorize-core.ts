@@ -31,7 +31,6 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { detectBookingDuplicate, type BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
-import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
 
@@ -195,17 +194,38 @@ export async function categorizeMatchedTransaction(
         id: txId,
         date: transaction.date,
         amount: transaction.amount,
+        // `amount` is denominated in `currency`; the ledger legs the guard
+        // compares it against are always SEK. Selected above via select('*').
+        currency: transaction.currency ?? null,
+        amount_sek: transaction.amount_sek ?? null,
+        exchange_rate: transaction.exchange_rate ?? null,
         cash_account_id: transaction.cash_account_id ?? null,
       }, exclude)
     } catch (err) {
       log.warn('booking-time duplicate detection failed (continuing)', err)
     }
     if (dup) {
-      const amountAbs = roundOre(Math.abs(Number(transaction.amount)))
       const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
+      // dup.amount is always a SEK figure or null, never the raw foreign
+      // number, so "kr" is correct wherever it prints. Printing the
+      // transaction's own amount instead would label a foreign number as
+      // kronor.
+      // Magnitudes, like the pre-FX message: direction is the bank line's own
+      // and a minus sign in running Swedish prose reads as a typo.
+      const claim =
+        dup.amount == null
+          ? // Foreign sibling that matched EXACTLY in its own currency but
+            // carries no stored rate: state the match in that currency rather
+            // than fabricating kronor (the match itself is undiminished).
+            `bokför redan samma belopp (${Math.abs(dup.amount_in_currency ?? 0)} ${dup.currency}) på bankkontot, ` +
+            `men värdet i kronor kan inte fastställas eftersom växelkurs saknas`
+          : dup.amount_verified
+            ? `bokför redan ${Math.abs(dup.amount)} kr på bankkontot`
+            : `bokför ${Math.abs(dup.amount)} kr på bankkontot, och beloppen kunde inte jämföras: ` +
+              `transaktionen är i ${transaction.currency} utan växelkurs, så vi kan inte avgöra om det är samma affärshändelse`
       return {
         error:
-          `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) bokför redan ${amountAbs} kr på bankkontot. ` +
+          `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) ${claim}. ` +
           `Den här affärshändelsen ser redan ut att vara bokförd: länka transaktionen till den befintliga ` +
           `verifikationen i stället för att bokföra den igen. Om banktransaktionen verkligen är en separat ` +
           `affärshändelse, kör om med allow_duplicate=true.`,
@@ -223,6 +243,9 @@ export async function categorizeMatchedTransaction(
         id: txId,
         date: transaction.date,
         amount: transaction.amount,
+        currency: transaction.currency ?? null,
+        amount_sek: transaction.amount_sek ?? null,
+        exchange_rate: transaction.exchange_rate ?? null,
         cash_account_id: transaction.cash_account_id ?? null,
       }, exclude)
       if (dismissed) {
@@ -236,8 +259,19 @@ export async function categorizeMatchedTransaction(
             transaction_id: txId,
             dismissed_transaction_id: dismissed.transaction_id,
             dismissed_journal_entry_id: dismissed.journal_entry_id,
-            amount_ore: Math.round(dismissed.amount * 100),
+            // Null when the candidate's SEK value could not be established (a
+            // rateless foreign sibling); the foreign figures below then carry
+            // the durable record instead of a fabricated kr amount.
+            amount_ore: dismissed.amount != null ? Math.round(dismissed.amount * 100) : null,
+            dismissed_currency: dismissed.currency,
+            dismissed_amount_in_currency: dismissed.amount_in_currency,
             entry_date: dismissed.entry_date,
+            // Dismissing a candidate whose amounts were never comparable is a
+            // materially different decision from dismissing a confirmed
+            // same-amount twin; behandlingshistorik has to record which one
+            // the user actually made (BFNAR 2013:2 kap 8).
+            amount_verified: dismissed.amount_verified,
+            unverified_reason: dismissed.unverified_reason,
             via: 'allow_duplicate',
           },
           actor: { type: 'user', id: userId },

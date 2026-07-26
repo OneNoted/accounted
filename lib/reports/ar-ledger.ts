@@ -193,7 +193,6 @@ export async function generateARLedger(
   }
 
   // Round all amounts and sort invoices within each customer.
-  // Drop customers whose credit notes fully offset their open invoices (net 0).
   const entries = Array.from(byCustomer.values())
     .map((entry) => ({
       ...entry,
@@ -205,7 +204,19 @@ export async function generateARLedger(
       days_90_plus: Math.round(entry.days_90_plus * 100) / 100,
       total_outstanding: Math.round(entry.total_outstanding * 100) / 100,
     }))
-    .filter((entry) => entry.total_outstanding !== 0)
+    // Drop customers whose credit notes fully offset their open invoices
+    // (net 0): a settled customer is noise in the reskontra. A total of 0
+    // means two different things, though, and only one of them is "settled":
+    // a customer whose open invoices were all unconvertible never accumulated
+    // into the buckets at all, so its 0 is "unknown", not "nothing". Those
+    // rows are the ones `unconverted_fx_count` promises the user can find, so
+    // they must stay listed (with outstanding_sek = null) even though they
+    // add nothing to the SEK totals.
+    .filter(
+      (entry) =>
+        entry.total_outstanding !== 0 ||
+        entry.invoices.some((inv) => inv.outstanding_sek === null)
+    )
 
   // Sort by total outstanding descending
   entries.sort((a, b) => b.total_outstanding - a.total_outstanding)

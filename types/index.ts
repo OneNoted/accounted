@@ -2128,6 +2128,13 @@ export type PendingOperationType =
   // Stream 1 Phase 1: invoice operations beyond simple create/send
   | 'credit_invoice'
   | 'convert_invoice'
+  // Draft-only invoice edit (items full-replace); sent/booked stays immutable,
+  // correction is a kreditfaktura.
+  | 'update_invoice'
+  // Recurring invoice schedules (monthly templates; invoices spawn from the
+  // hourly cron, never at commit time). Update covers pause/resume via status.
+  | 'create_recurring_schedule'
+  | 'update_recurring_schedule'
   // Phase 4: arbitrary-line bookkeeping primitives
   | 'create_voucher'
   | 'correct_entry'
@@ -2445,6 +2452,7 @@ export interface NotificationSettings {
   invoice_sent_enabled: boolean
   receipt_extracted_enabled: boolean
   receipt_matched_enabled: boolean
+  missing_underlag_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -2906,6 +2914,26 @@ export interface VatDeclaration {
     end: string     // YYYY-MM-DD
   }
   rutor: VatDeclarationRutor
+  /**
+   * Period debit/credit totals for the two reverse-charge INPUT VAT accounts,
+   * keyed by account number: 2645 (beräknad ingående moms på förvärv från
+   * utlandet) and 2647 (ingående moms, omvänd betalningsskyldighet i Sverige).
+   *
+   * Carried so a caller that reads the declaration over HTTP can hand
+   * `runVatDeclarationChecks` its optional per-account totals and get the sharp
+   * RC_INPUT_VAT_MISMATCH comparison (rutor 30-32 against 2645/2647) instead of
+   * the ruta 48 fallback, which ordinary debiterad ingående moms on 2641 masks.
+   * Only this pair travels, not the whole totals map: the check reads nothing
+   * else, and the response stays small rather than publishing every VAT account
+   * balance in the period.
+   *
+   * Optional because it crosses a JSON boundary. A client parsing a response
+   * from an older deploy must fall back to the ruta 48 form instead of reading
+   * absent accounts as zero, which would invert the check into a false alarm.
+   * Rebuild the map with `rcInputTotalsFromDeclaration()`
+   * (lib/reports/vat-declaration.ts), never by hand.
+   */
+  rcInputAccountTotals?: Record<string, { debit: number; credit: number }>
   // Supporting data
   invoiceCount: number
   transactionCount: number
@@ -3597,6 +3625,13 @@ export interface KPIReport {
   /** Top expense accounts (BAS classes 4-7) for the period, largest first. */
   topExpenseAccounts: { account_number: string; account_name: string; total: number }[]
   topSuppliers: { supplier_id: string; supplier_name: string; total: number }[]
+  /**
+   * Foreign-currency supplier invoices excluded from `topSuppliers` because
+   * they had neither a SEK total nor an exchange rate. Same contract as
+   * `unconverted_fx_count` on the supplier ledger: excluded rows are counted,
+   * not silently dropped.
+   */
+  topSuppliersUnconvertedFxCount: number
 }
 
 export interface KPIPreferences {
@@ -3713,6 +3748,22 @@ export interface Employee {
   is_active: boolean
   created_at: string
   updated_at: string
+}
+
+/**
+ * An employee as returned by the read surfaces (`/api/salary/employees`,
+ * `/api/salary/employees/{id}`, `/api/salary/runs/{id}`,
+ * `/api/salary/runs/{id}/employees/{employeeId}`) and by the v1 REST write
+ * responses.
+ *
+ * `personnummer` is deliberately ABSENT: the column holds AES-256-GCM
+ * ciphertext, and the display form is carried under the separate, read-only
+ * `personnummer_masked` key. Returning the mask under the writable key name
+ * would let a client that reads an object and writes it back post the mask
+ * into the encrypt path, so the two names never collide by construction.
+ */
+export type EmployeeMasked = Omit<Employee, 'personnummer'> & {
+  personnummer_masked: string
 }
 
 export interface SalaryRun {

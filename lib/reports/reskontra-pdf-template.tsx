@@ -149,6 +149,29 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     color: '#666',
   },
+  // SEK bridge column: wider than colInvAmount so a 7-figure amount plus the
+  // "UTEST. SEK" header both fit on one line at these font sizes.
+  colInvSek: {
+    width: 68,
+    textAlign: 'right',
+    fontFamily: 'Courier',
+    color: '#1a1a1a',
+  },
+  // An FX invoice with no exchange_rate has no SEK amount. It is listed but
+  // excluded from the aging totals, so the cell says so instead of showing a
+  // number that would read as zero.
+  colInvSekMissing: {
+    width: 68,
+    textAlign: 'right',
+    color: '#92400e',
+  },
+  // Unit disclosure under a section heading: which currency the table below is
+  // denominated in, and how it relates to the other table on the page.
+  tableCaption: {
+    fontSize: 8,
+    color: '#666',
+    marginBottom: 5,
+  },
   fxNote: {
     marginTop: 8,
     fontSize: 8,
@@ -212,7 +235,14 @@ export interface ReskontraInvoiceRow {
   invoice_number: string
   invoice_date: string
   due_date: string
+  /** Outstanding in the invoice's own currency (see `currency`). */
   outstanding: number
+  /**
+   * `outstanding` converted to SEK at the invoice-date rate: the amount that
+   * actually feeds the aging table. `null` for an FX invoice with no rate,
+   * which is therefore missing from the aging totals.
+   */
+  outstanding_sek: number | null
   currency: string
   days_overdue: number
 }
@@ -256,6 +286,17 @@ export function ReskontraPDF({
 }: ReskontraPDFProps) {
   const companyDisplayName = company.company_name || ''
 
+  // The aging table is always SEK (it has to reconcile against the 1510/2440
+  // control account) while the invoice table below it is in each invoice's own
+  // currency. Both sit on the same page, so the unit of each is stated and the
+  // SEK bridge column is rendered whenever the two can actually differ.
+  const invoiceRows = invoices ?? []
+  const hasForeignCurrency = invoiceRows.some((inv) => inv.currency !== 'SEK')
+  const invoiceSekTotal =
+    Math.round(
+      invoiceRows.reduce((sum, inv) => sum + (inv.outstanding_sek ?? 0), 0) * 100
+    ) / 100
+
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -295,7 +336,12 @@ export function ReskontraPDF({
           </View>
         </View>
 
-        <Text style={styles.sectionHeading}>Åldersfördelning per {counterpartyLabel.toLowerCase()}</Text>
+        <Text style={styles.sectionHeading}>
+          Åldersfördelning per {counterpartyLabel.toLowerCase()} (SEK)
+        </Text>
+        <Text style={styles.tableCaption}>
+          Alla belopp i SEK. Fakturor i utländsk valuta är omräknade till kursen på fakturadagen.
+        </Text>
 
         {aging.length === 0 ? (
           <Text style={styles.emptyNote}>Inga utestående fakturor per detta datum.</Text>
@@ -330,40 +376,73 @@ export function ReskontraPDF({
           </View>
         )}
 
-        {invoices && invoices.length > 0 && (
+        {invoiceRows.length > 0 && (
           <View>
             {/* NOTE: no `break` here: react-pdf 4.x deadlocks in layout when a
                 break element's section spills across pages (verified against
                 this template with 40+ rows). The table flows inline instead. */}
             <Text style={styles.sectionHeading}>
-              Fakturor
+              Fakturor {hasForeignCurrency ? '(fakturans valuta)' : '(SEK)'}
             </Text>
+            <Text style={styles.tableCaption}>
+              {hasForeignCurrency
+                ? 'Utestående visas i fakturans egen valuta (kolumnen Val.). Utest. SEK är samma belopp omräknat till SEK och är det som ingår i åldersfördelningen ovan. Kolumnen Utestående kan inte summeras: den blandar valutor.'
+                : 'Alla belopp i SEK, samma enhet som åldersfördelningen ovan.'}
+            </Text>
+            {/* Column order is unchanged from the SEK-only layout; the SEK
+                bridge column is inserted next to the invoice-currency amount
+                only when the two can actually differ. */}
             <View style={styles.tableHeader}>
               <Text style={[styles.colInvName, styles.headerCell]}>{counterpartyLabel}</Text>
               <Text style={[styles.colInvNumber, styles.headerCell]}>Fakturanr</Text>
               <Text style={[styles.colInvDate, styles.headerCell]}>Fakturadatum</Text>
               <Text style={[styles.colInvDate, styles.headerCell]}>Förfaller</Text>
               <Text style={[styles.colInvAmount, styles.headerCell]}>Utestående</Text>
+              {hasForeignCurrency && (
+                <Text style={[styles.colInvSek, styles.headerCell]}>Utest. SEK</Text>
+              )}
               <Text style={[styles.colInvDays, styles.headerCell]}>Dgr</Text>
               <Text style={[styles.colInvCurrency, styles.headerCell]}>Val.</Text>
             </View>
-            {invoices.map((inv, i) => (
+            {invoiceRows.map((inv, i) => (
               <View key={i} style={styles.row} wrap={false}>
                 <Text style={styles.colInvName}>{inv.counterparty}</Text>
                 <Text style={styles.colInvNumber}>{inv.invoice_number}</Text>
                 <Text style={styles.colInvDate}>{inv.invoice_date}</Text>
                 <Text style={styles.colInvDate}>{inv.due_date}</Text>
                 <Text style={styles.colInvAmount}>{formatAmount(inv.outstanding)}</Text>
+                {hasForeignCurrency &&
+                  (inv.outstanding_sek === null ? (
+                    <Text style={styles.colInvSekMissing}>saknas</Text>
+                  ) : (
+                    <Text style={styles.colInvSek}>{formatAmount(inv.outstanding_sek)}</Text>
+                  ))}
                 <Text style={styles.colInvDays}>{inv.days_overdue > 0 ? inv.days_overdue : ''}</Text>
                 <Text style={styles.colInvCurrency}>{inv.currency}</Text>
               </View>
             ))}
+            {hasForeignCurrency && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.colInvName, styles.bold]}>Summa</Text>
+                <Text style={styles.colInvNumber} />
+                <Text style={styles.colInvDate} />
+                <Text style={styles.colInvDate} />
+                {/* Deliberately blank: mixed currencies do not add up. */}
+                <Text style={styles.colInvAmount} />
+                <Text style={[styles.colInvSek, styles.bold]}>{formatAmount(invoiceSekTotal)}</Text>
+                <Text style={styles.colInvDays} />
+                <Text style={styles.colInvCurrency}>SEK</Text>
+              </View>
+            )}
           </View>
         )}
 
         {unconvertedFxCount > 0 && (
           <Text style={styles.fxNote}>
-            {unconvertedFxCount} faktura i utländsk valuta utan växelkurs ingår inte i beloppen ovan.
+            {unconvertedFxCount}{' '}
+            {unconvertedFxCount === 1 ? 'faktura' : 'fakturor'} i utländsk valuta saknar växelkurs och
+            ingår därför inte i åldersfördelningen i SEK ovan.
+            {hasForeignCurrency ? ' Raderna är markerade med "saknas" i kolumnen Utest. SEK.' : ''}
           </Text>
         )}
 

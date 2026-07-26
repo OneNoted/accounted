@@ -15,6 +15,24 @@ export function cn(...inputs: ClassValue[]) {
  */
 const INVALID_DATE_PLACEHOLDER = '-'
 
+/**
+ * Money with a currency symbol, sv-SE grouping: `1234.5` -> `1 234,50 kr`.
+ *
+ * `currency` defaults to SEK and stays sv-SE in both locales: that is a Swedish
+ * accounting convention, not a UI string (.claude/rules/i18n.md), and the
+ * single-argument form is the correct call on the hundreds of values that ARE
+ * kronor (ledger amounts, KPI aggregates, salary, tax).
+ *
+ * What the default cannot know is that the number came off a record carrying
+ * its own currency. `formatCurrency(invoice.total)` on a 1 000 EUR invoice
+ * prints "1 000,00 kr", and nothing downstream can tell that apart from a real
+ * SEK total. So: pass `record.currency` whenever the record has one, or format
+ * the kronor twin (`total_sek` / `amount_sek`). Journal entry line amounts are
+ * always SEK already (lib/bookkeeping/ledger-line-amount.ts).
+ *
+ * scripts/checks/format-currency-sek-label.mjs fails CI on a new single-argument
+ * call whose value is read off a record the same file reads `.currency` from.
+ */
 export function formatCurrency(
   amount: number,
   currency: string = 'SEK',

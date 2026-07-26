@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { loadExtensions } from '@/lib/extensions/loader'
+import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   sendTaxDeadlineNotifications,
   sendInvoiceNotifications,
@@ -12,10 +13,28 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 /**
  * GET /api/extensions/push-notifications/cron: daily 09:00 UTC.
  * Sends due tax, invoice and missing-underlag push notifications.
+ *
+ * NOT scheduled: this path is absent from vercel.json's crons (and therefore
+ * from the Docker crontabs generated from it). Adding it there is a product
+ * decision, not a code change.
  */
 export const GET = withCronContext('cron.push_notifications', async (_request, ctx) => {
-  // Ensure extensions are loaded so event handlers are registered.
+  // Load the registry so it reflects extensions.config.json.
   loadExtensions()
+
+  // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
+  // including the core-with-zero-extensions one: the registry (generated from
+  // extensions.config.json) is what actually switches an extension on. Mirror
+  // the ext/[...path] dispatcher: a disabled extension must not expose a live
+  // send/query surface, and a scheduled-but-disabled cron must fail visibly
+  // (503) instead of quietly doing the work anyway.
+  if (!extensionRegistry.get('push-notifications')) {
+    ctx.log.warn('push-notifications extension is not enabled; cron refused')
+    return NextResponse.json(
+      { error: 'Push notifications extension is not enabled', code: 'EXTENSION_DISABLED' },
+      { status: 503 }
+    )
+  }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY

@@ -1,5 +1,5 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
-import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
+import { resolveSekAmount, resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
   coerceDimensionsBag,
@@ -24,6 +24,61 @@ import type {
 } from '@/types'
 
 const log = createLogger('invoice-entries')
+
+/**
+ * Stable code for the "foreign-currency customer invoice without a rate"
+ * refusal. Registered in lib/errors/structured-errors.ts so REST routes, the
+ * MCP server and getErrorMessage() all translate it the same way.
+ *
+ * Sales-side twin of SI_FX_RATE_MISSING (supplier-invoice-entries.ts).
+ */
+export const INVOICE_FX_RATE_MISSING = 'INVOICE_FX_RATE_MISSING' as const
+
+/**
+ * Raised when an invoice booking path is asked to translate a foreign-currency
+ * amount that has no usable exchange rate.
+ *
+ * The generators below derive every FX leg from the per-item amounts, and items
+ * carry no `*_sek` column: `exchange_rate` is the only SEK source they have. The
+ * old per-file fallback returned the RAW foreign amount, and because the 1510
+ * debit is derived from the sum of the credits on the FX branch, every leg was
+ * scaled by the same wrong factor: the verifikation still balanced, no DB
+ * trigger fired and nothing errored. A 1 000 EUR sale posted 1 000 kr to 3001
+ * and 250 kr to 2611 instead of 11 500 kr and 2 875 kr at 11,50 SEK/EUR,
+ * understating ruta 05 and ruta 10 of the momsdeklaration by the same amount:
+ * an oriktig uppgift exposed to skattetillägg under SFL 49 kap 4 §.
+ *
+ * Refusing instead of guessing follows the `match_batch_allocate` RPC
+ * (BATCH_FX_RATE_MISSING) and `toSekOrThrow()` in supplier-invoice-entries.ts.
+ */
+export class InvoiceFxRateMissingError extends Error {
+  readonly code = INVOICE_FX_RATE_MISSING
+  constructor(public readonly currency: string) {
+    super(
+      `Invoice is in ${currency} but has no exchange rate on file; refusing to post it as if 1 ${currency} = 1 SEK.`
+    )
+    this.name = 'InvoiceFxRateMissingError'
+  }
+}
+
+/**
+ * Convert an invoice-currency item amount to SEK for a journal entry line.
+ *
+ * SEK invoices short-circuit exactly as before, and so does any invoice with a
+ * legitimately supplied positive rate: the only new behaviour is the refusal
+ * above when a foreign invoice reaches a booking path with no rate at all.
+ * `amountSek` is deliberately null: an InvoiceItem has no per-item SEK column,
+ * so the rate is the only honest source at item granularity.
+ */
+function itemToSekOrThrow(
+  amount: number,
+  currency: string | null | undefined,
+  exchangeRate: number | null | undefined
+): number {
+  const sek = resolveSekAmountOrNull(amount, null, currency, exchangeRate)
+  if (sek === null) throw new InvoiceFxRateMissingError(currency || 'okänd valuta')
+  return sek
+}
 
 /**
  * Build the invoice identifier used in line_description. Prefers the assigned
@@ -86,14 +141,11 @@ function generatePerRateLines(
   // grouping so they can't produce a zero-amount revenue line.
   items = items.filter((item) => item.line_type !== 'text')
 
-  // Helper: convert item amount to SEK when dealing with foreign currency
-  const toSek = (amount: number): number => {
-    if (!isForeign) return amount
-    if (exchangeRate != null && exchangeRate > 0) {
-      return Math.round(amount * exchangeRate * 100) / 100
-    }
-    return amount // fallback for legacy data
-  }
+  // Helper: convert item amount to SEK when dealing with foreign currency.
+  // Refuses (InvoiceFxRateMissingError) rather than relabelling the foreign
+  // number as kronor: see itemToSekOrThrow above.
+  const toSek = (amount: number): number =>
+    itemToSekOrThrow(amount, currency, exchangeRate)
 
   // Check if items have per-line vat_rate set (new invoices)
   const hasPerLineVat = items.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
@@ -250,8 +302,8 @@ function generatePerRateLines(
  *
  * Foreign-currency invoices: ROT/RUT-avdrag is a Sweden-only rule, so
  * receivables on 1513 are always recorded in SEK. We use the same SEK
- * conversion as the rest of the entry (toSek closure logic on the caller
- * side reproduced here for parity with generatePerRateLines).
+ * conversion as the rest of the entry (the shared itemToSekOrThrow helper, so
+ * this function and generatePerRateLines cannot drift).
  */
 function generateRotRutLines(
   items: InvoiceItem[],
@@ -262,15 +314,11 @@ function generateRotRutLines(
   side: 'debit' | 'credit' = 'debit',
 ): { lines: CreateJournalEntryLineInput[]; totalSek: number } {
   const lines: CreateJournalEntryLineInput[] = []
-  const isForeign = currency != null && currency !== 'SEK'
 
-  const toSek = (amount: number): number => {
-    if (!isForeign) return amount
-    if (exchangeRate != null && exchangeRate > 0) {
-      return Math.round(amount * exchangeRate * 100) / 100
-    }
-    return amount
-  }
+  // Same refusal as generatePerRateLines: 1513 is a kronor receivable on
+  // Skatteverket, so an unconvertible foreign amount must not land there.
+  const toSek = (amount: number): number =>
+    itemToSekOrThrow(amount, currency, exchangeRate)
 
   let totalSek = 0
 

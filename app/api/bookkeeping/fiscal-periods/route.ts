@@ -3,11 +3,19 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { validateBody } from '@/lib/api/validate'
 import { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-// Response shapes are legacy `{ error: string }` (plus one envelope code for
-// the blocked-by-open-periods dialog) — kept for the räkenskapsår UI.
+// Response shapes are legacy `{ error: string }` — kept for the räkenskapsår UI.
+// Success may carry a non-blocking `warnings` array (same shape as the invoice
+// booking routes: `{ code, message }`).
+
+/** A prior räkenskapsår that is still fully open when the next one is created. */
+interface OpenPriorPeriod {
+  id: string
+  name: string
+  period_start: string
+  period_end: string
+}
 
 export const GET = withRouteContext('period.list', async (_request, ctx) => {
   const { supabase, companyId } = ctx
@@ -57,6 +65,11 @@ export const POST = withRouteContext(
   const sortedPeriods = allPeriods ?? []
   const predecessor = [...sortedPeriods].reverse().find((p) => p.period_end < body.period_start) ?? null
   const successor = sortedPeriods.find((p) => p.period_start > body.period_end) ?? null
+
+  // Prior räkenskapsår that are still fully open at the moment the next one is
+  // appended. Advisory only (see the isAppend block below), attached to the
+  // success response so the UI can nudge without gating.
+  let openPriorPeriods: OpenPriorPeriod[] = []
 
   if (sortedPeriods.length > 0) {
     const earliest = sortedPeriods[0]
@@ -118,17 +131,38 @@ export const POST = withRouteContext(
         }
       }
 
-      // The "prior year must be locked" guard applies only when appending a new
-      // latest räkenskapsår, not when backfilling a gap between existing years.
-      // A gap fill is a backfill (like prepend) and must not be blocked by an
-      // open neighbouring year.
+      // An open prior räkenskapsår is INFORMATION, never a gate.
       //
+      // This used to hard-refuse (409) a new latest räkenskapsår while any
+      // prior period was still fully open, on the theory that the prior year
+      // "must at least be locked so nothing is back-posted into a year you've
+      // moved on from". That theory has no support in BFL and inverts two rules
+      // that bind simultaneously:
+      //   - BFL 5 kap 2 §: kontanta in-/utbetalningar bokförs senast påföljande
+      //     arbetsdag, övriga affärshändelser "så snart det kan ske" (per BFNAR
+      //     2013:2 senast månaden efter). Booking January REQUIRES a
+      //     räkenskapsår covering January, within weeks.
+      //   - BFL 6 kap: årsbokslut/årsredovisning ska upprättas inom 6 månader
+      //     efter räkenskapsårets utgång (AB filing 7 månader). The prior year
+      //     is therefore legitimately unfinished, and must stay unlocked so
+      //     bokslutsposter (periodiseringar, avskrivningar, skatt) can be
+      //     posted into it, for months into the new year.
+      // Running the two years in parallel is not a tolerated edge case, it is
+      // the normal and legally required state during that window. The old guard
+      // made one unbooked December bank transaction (which blocks lockPeriod,
+      // correctly, per BFL 5 kap 2 §) freeze ALL bookkeeping in the new year.
+      //
+      // What genuinely protects the prior year is unchanged and lives
+      // elsewhere: period locked_at (enforce_period_lock) and
+      // company_settings.bookkeeping_locked_through (enforce_company_lock_date),
+      // both set deliberately by the user. Creating the next räkenskapsår does
+      // not write a single row into the prior one.
+      //
+      // What IS kept from the old check is its detection, downgraded to an
+      // advisory on the success response: an open prior year means its UB is
+      // not final, so the new year's ingående balanser are not posted yet.
       // A period counts as "effectively locked" if its own locked_at is set, OR
-      // company_settings.bookkeeping_locked_through covers its end date (the
-      // enforce_company_lock_date trigger blocks any entry on/before that date).
-      // BFL 6 kap allows löpande bokföring of the new year in parallel with
-      // bokslut work on the prior year, so locked-but-not-closed prior periods
-      // must not block creating the next räkenskapsår.
+      // company_settings.bookkeeping_locked_through covers its end date.
       if (isAppend) {
         const { data: openPeriods } = await supabase
           .from('fiscal_periods')
@@ -149,20 +183,12 @@ export const POST = withRouteContext(
           (p) => !(lockThrough && p.period_end <= lockThrough)
         )
 
-        if (trulyOpen.length > 0) {
-          // Hand the blocking periods (id + name + dates) to the client so the
-          // "Skapa räkenskapsår" dialog can offer to lock them inline and retry,
-          // instead of dead-ending the user on a message they can't act on.
-          const blockingPeriods = trulyOpen.map((p) => ({
-            id: p.id,
-            name: p.name,
-            period_start: p.period_start,
-            period_end: p.period_end,
-          }))
-          return errorResponseFromCode('PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS', log, {
-            details: { blockingPeriods },
-          })
-        }
+        openPriorPeriods = trulyOpen.map((p) => ({
+          id: p.id,
+          name: p.name,
+          period_start: p.period_start,
+          period_end: p.period_end,
+        }))
       }
     }
   }
@@ -231,7 +257,25 @@ export const POST = withRouteContext(
     }
   }
 
-  return NextResponse.json({ data })
+  // Non-blocking advisory: the new year exists and is bookable right now, but
+  // its ingående balanser are still pending because the prior year's bokslut
+  // has not run. Every action named here is reachable, so this never dead-ends:
+  // the user can book in the new year immediately and the IB lands by itself
+  // when the bokslut for the prior year is executed (executeYearEndClosing
+  // reuses an already-created next period and posts the IB verifikat into it).
+  const warnings: Array<{ code: string; message: string }> = []
+  if (openPriorPeriods.length > 0) {
+    const names = openPriorPeriods.map((p) => p.name).join(', ')
+    warnings.push({
+      code: 'PRIOR_FISCAL_YEAR_STILL_OPEN',
+      message:
+        `Räkenskapsåret är skapat och du kan bokföra i det direkt. ${names} är fortfarande öppet, ` +
+        'vilket är normalt medan bokslutet pågår: du får bokföra i båda åren samtidigt. ' +
+        'Ingående balanser bokförs automatiskt när bokslutet för föregående år körs.',
+    })
+  }
+
+  return NextResponse.json(warnings.length > 0 ? { data, warnings } : { data })
   },
   { requireWrite: true },
 )

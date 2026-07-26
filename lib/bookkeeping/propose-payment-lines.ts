@@ -4,8 +4,12 @@
  *
  * No DB or Supabase dependency: all inputs are plain data.
  */
-import { resolveSekAmount } from './currency-utils'
-import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
+import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
+import {
+  getRevenueAccount,
+  getOutputVatAccount,
+  InvoiceFxRateMissingError,
+} from './invoice-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -199,12 +203,16 @@ function proposeCashLines(
   const lines: FormLine[] = []
   const isForeign = invoice.currency !== 'SEK'
 
+  // The cash-method preview IS the entry: PaymentBookingDialog submits these
+  // lines verbatim. A foreign invoice with no rate therefore must not be
+  // pre-filled with the raw foreign numbers relabelled as kronor: refuse with
+  // the same error the server generator raises (createInvoiceCashEntry). The
+  // dialog resolves the proposal inside a try/catch and surfaces the refusal as
+  // a translated toast, so throwing here is a visible dead-end, not a crash.
   const toSek = (amount: number): number => {
-    if (!isForeign) return amount
-    if (invoice.exchange_rate != null && invoice.exchange_rate > 0) {
-      return Math.round(amount * invoice.exchange_rate * 100) / 100
-    }
-    return amount
+    const sek = resolveSekAmountOrNull(amount, null, invoice.currency, invoice.exchange_rate)
+    if (sek === null) throw new InvoiceFxRateMissingError(invoice.currency)
+    return sek
   }
 
   // Build credit lines per VAT rate group. Free-text / blank rows carry no

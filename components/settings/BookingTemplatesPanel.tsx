@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,11 +18,14 @@ import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy } fr
 import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { TemplateForm } from '@/components/settings/TemplateForm'
+import { downloadFile } from '@/lib/browser/download-file'
+import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
@@ -37,6 +40,7 @@ export function BookingTemplatesPanel() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
   // Shared dialog for editing a company/team template or customizing (duplicating)
   // a read-only system template. Mode is derived from is_system.
   const [activeTemplate, setActiveTemplate] = useState<BookingTemplateLibrary | null>(null)
@@ -76,17 +80,30 @@ export function BookingTemplatesPanel() {
   }
 
   async function handleExport() {
+    // The button is disabled while a run is in flight; this also covers the
+    // keyboard/double-click race before React has re-rendered it.
+    if (isExporting) return
+    setIsExporting(true)
     try {
-      const res = await fetch('/api/settings/booking-templates/export')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'bokforingsmallar.json'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch {
-      toast({ title: t('toast_export_failed'), variant: 'destructive' })
+      const result = await downloadFile({
+        url: '/api/settings/booking-templates/export',
+        filename: 'bokforingsmallar.json',
+        locale,
+      })
+      // Success is silent on purpose: the saved file is the feedback. On
+      // failure nothing was written to disk, so exactly one toast tells the
+      // user why. Never two: TOAST_LIMIT is 1, so a second toast in the same
+      // tick evicts the first and only the last one is ever rendered.
+      if (!result.ok) {
+        toast({
+          title: t('toast_export_failed'),
+          description:
+            result.reason === 'timeout' ? t('toast_export_timeout') : result.message,
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setIsExporting(false)
     }
   }
 
@@ -142,9 +159,14 @@ export function BookingTemplatesPanel() {
               variant="ghost"
               size="sm"
               onClick={handleExport}
+              disabled={isExporting}
               className="text-muted-foreground hover:text-foreground"
             >
-              <Download className="mr-1.5 h-3.5 w-3.5" />
+              {isExporting ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+              )}
               {t('export')}
             </Button>
             <Button

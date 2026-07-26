@@ -55,7 +55,7 @@ vi.mock('@/lib/events/bus', () => ({
 
 vi.mock('@/lib/invoices/vat-rules', () => ({
   getVatRules: vi.fn(),
-  getAvailableVatRates: vi.fn(),
+  getPermittedVatRates: vi.fn(),
 }))
 
 vi.mock('@/lib/currency/riksbanken', () => ({
@@ -142,7 +142,11 @@ vi.mock('@/lib/email/service', () => ({
   getEmailService: vi.fn().mockReturnValue({ sendInvoice: vi.fn() }),
 }))
 
-vi.mock('@/lib/email/invoice-templates', () => ({
+// Partial mock: server.ts also pulls INVOICE_EMAIL_PLACEHOLDER_KEYS through
+// the company-settings staging schema, so keep the real exports and stub only
+// the render functions.
+vi.mock('@/lib/email/invoice-templates', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/email/invoice-templates')>()),
   generateInvoiceEmailHtml: vi.fn(),
   generateInvoiceEmailText: vi.fn(),
   generateInvoiceEmailSubject: vi.fn(),

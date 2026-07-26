@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { buildInvoicePaymentClearingLines } from '../invoice-payment-lines'
+import {
+  buildInvoicePaymentClearingLines,
+  InvoiceBookingRateMissingError,
+  MATCH_INVOICE_BOOKING_RATE_MISSING,
+} from '../invoice-payment-lines'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 describe('buildInvoicePaymentClearingLines', () => {
   describe('same currency (SEK invoice + SEK tx)', () => {
@@ -259,6 +264,186 @@ describe('buildInvoicePaymentClearingLines', () => {
       expect(result.bankSek).toBe(1100)
       expect(result.arSek).toBe(1100)
       expect(result.fxDiffSek).toBe(0)
+    })
+  })
+
+  describe('missing invoice booking rate (foreign invoice, no exchange_rate)', () => {
+    // Reported case: a 1 000 EUR invoice settled by an 11 496,70 kr deposit
+    // while invoice.exchange_rate was never populated. The old `?? 1` valued
+    // the receivable at 1 000 (EUR read as SEK) and posted
+    // 11 496,70 − 1 000 = 10 496,70 kr to 3960 as a phantom kursvinst:
+    // revenue understated and FX gain overstated by the whole amount, with a
+    // verifikat that balanced so no trigger fired. Per ML 8 kap 21-23§ the
+    // receivable is valued at the rate on the taxable event and the FX
+    // difference is the movement between that rate and the settlement rate:
+    // with no booking rate there is no difference to compute, only a guess.
+    const EUR_INVOICE_NO_RATE = {
+      currency: 'EUR',
+      exchange_rate: null,
+      remaining_amount: 1000,
+      total: 1000,
+      paid_amount: 0,
+    }
+    const BANK_11496_70 = {
+      amount: 11496.7,
+      amount_sek: null,
+      currency: 'SEK',
+      exchange_rate: null,
+    }
+
+    it('fallback path (no paidInInvoiceCurrency): throws instead of booking a 10 496,70 phantom 3960 gain', () => {
+      expect(() =>
+        buildInvoicePaymentClearingLines(
+          BANK_11496_70,
+          EUR_INVOICE_NO_RATE,
+          'Inbetalning kundfaktura',
+        ),
+      ).toThrow(InvoiceBookingRateMissingError)
+    })
+
+    it('spot-rate path (with paidInInvoiceCurrency): throws too', () => {
+      // paidInInvoiceCurrency = 11496.70 / 11.4967 = 1000 EUR. Without the
+      // BOOKING rate the AR leg is still unknown, so this path must fail
+      // exactly like the fallback: it used the same `?? 1`.
+      expect(() =>
+        buildInvoicePaymentClearingLines(
+          BANK_11496_70,
+          EUR_INVOICE_NO_RATE,
+          'Inbetalning kundfaktura',
+          1000,
+        ),
+      ).toThrow(InvoiceBookingRateMissingError)
+    })
+
+    it('carries the structured code and the offending currency/rate', () => {
+      try {
+        buildInvoicePaymentClearingLines(BANK_11496_70, EUR_INVOICE_NO_RATE, 'desc')
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        const e = err as InvoiceBookingRateMissingError
+        expect(e.code).toBe(MATCH_INVOICE_BOOKING_RATE_MISSING)
+        expect(e.invoiceCurrency).toBe('EUR')
+        expect(e.exchangeRate).toBeNull()
+      }
+    })
+
+    it('resolves to the actionable Swedish message (registry wiring)', () => {
+      const err = new InvoiceBookingRateMissingError('EUR', null)
+      const message = getErrorMessage(err)
+      expect(message).toContain('växelkurs')
+      // Never the raw English engine text.
+      expect(message).not.toContain('exchange rate')
+    })
+
+    it('a zero or absurd rate is as unusable as null', () => {
+      for (const rate of [0, -9.3, 1e6]) {
+        expect(() =>
+          buildInvoicePaymentClearingLines(
+            BANK_11496_70,
+            { ...EUR_INVOICE_NO_RATE, exchange_rate: rate },
+            'desc',
+          ),
+        ).toThrow(InvoiceBookingRateMissingError)
+      }
+    })
+
+    it('WITH a booking rate the same settlement books a real kursvinst on 3960', () => {
+      // 1 000 EUR booked at 11,30 (11 300 kr on 1510); the bank credited
+      // 11 496,70 kr. Real gain = 196,70 kr, not 10 496,70.
+      const result = buildInvoicePaymentClearingLines(
+        BANK_11496_70,
+        { ...EUR_INVOICE_NO_RATE, exchange_rate: 11.3 },
+        'Inbetalning kundfaktura',
+      )
+      expect(result.bankSek).toBe(11496.7)
+      expect(result.arSek).toBe(11300)
+      expect(result.fxDiffSek).toBe(-196.7)
+      expect(result.lines).toHaveLength(3)
+      expect(result.lines[2]).toMatchObject({
+        account_number: '3960',
+        debit_amount: 0,
+        credit_amount: 196.7,
+        line_description: 'Valutakursvinst',
+      })
+      const debit = result.lines.reduce((s, l) => s + l.debit_amount, 0)
+      const credit = result.lines.reduce((s, l) => s + l.credit_amount, 0)
+      expect(Math.round((debit - credit) * 100)).toBe(0)
+    })
+
+    it('WITH a booking rate above the settlement rate it books a kursförlust on 7960', () => {
+      // Same 1 000 EUR settled for 11 496,70 kr, but booked at 11,60
+      // (11 600 kr on 1510): the 1 000 EUR fetched 103,30 kr less than booked.
+      const result = buildInvoicePaymentClearingLines(
+        BANK_11496_70,
+        { ...EUR_INVOICE_NO_RATE, exchange_rate: 11.6 },
+        'Inbetalning kundfaktura',
+        1000,
+      )
+      expect(result.bankSek).toBe(11496.7)
+      expect(result.arSek).toBe(11600)
+      expect(result.fxDiffSek).toBe(103.3)
+      expect(result.lines[2]).toMatchObject({
+        account_number: '7960',
+        debit_amount: 103.3,
+        credit_amount: 0,
+        line_description: 'Valutakursförlust',
+      })
+      const debit = result.lines.reduce((s, l) => s + l.debit_amount, 0)
+      const credit = result.lines.reduce((s, l) => s + l.credit_amount, 0)
+      expect(Math.round((debit - credit) * 100)).toBe(0)
+    })
+
+    it('a SEK invoice with no exchange_rate is completely unaffected', () => {
+      // "Currency is SEK" and "rate is missing" are different conditions: a
+      // SEK receivable already carries its SEK value, so no rate is consulted
+      // and nothing may throw. exchange_rate is null on every SEK invoice.
+      const result = buildInvoicePaymentClearingLines(
+        { amount: 11496.7, amount_sek: null, currency: 'SEK', exchange_rate: null },
+        {
+          currency: 'SEK',
+          exchange_rate: null,
+          remaining_amount: 11496.7,
+          total: 11496.7,
+          paid_amount: 0,
+        },
+        'Inbetalning kundfaktura',
+      )
+      expect(result.arSek).toBe(11496.7)
+      expect(result.fxDiffSek).toBe(0)
+      expect(result.lines).toHaveLength(2)
+    })
+
+    it('a SEK invoice paid from a foreign-currency bank account still needs no invoice rate', () => {
+      // !invoiceIsForeign branch: the tx side carries its own rate/amount_sek.
+      const result = buildInvoicePaymentClearingLines(
+        { amount: 1000, amount_sek: 11496.7, currency: 'EUR', exchange_rate: 11.4967 },
+        {
+          currency: 'SEK',
+          exchange_rate: null,
+          remaining_amount: 11496.7,
+          total: 11496.7,
+          paid_amount: 0,
+        },
+        'Inbetalning kundfaktura',
+      )
+      expect(result.bankSek).toBe(11496.7)
+      expect(result.arSek).toBe(11496.7)
+      expect(result.fxDiffSek).toBe(0)
+      expect(result.lines).toHaveLength(2)
+    })
+
+    it('a same-currency foreign settlement (EUR invoice, EUR tx) needs no invoice rate', () => {
+      // sameCurrency branch: the bank leg already resolves via the tx's own
+      // amount_sek, and AR moves in step. No FX diff arises here.
+      const result = buildInvoicePaymentClearingLines(
+        { amount: 1000, amount_sek: 11496.7, currency: 'EUR', exchange_rate: 11.4967 },
+        { ...EUR_INVOICE_NO_RATE },
+        'Inbetalning kundfaktura',
+      )
+      expect(result.bankSek).toBe(11496.7)
+      expect(result.arSek).toBe(11496.7)
+      expect(result.fxDiffSek).toBe(0)
+      expect(result.lines).toHaveLength(2)
     })
   })
 

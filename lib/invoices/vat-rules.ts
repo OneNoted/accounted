@@ -7,10 +7,17 @@ export interface VatRateOption {
 }
 
 /**
- * Get available VAT rates for invoice line items based on customer type.
+ * Get the DEFAULT VAT rates offered for invoice line items, per customer type.
  *
  * Swedish/EU-unvalidated customers can choose between 25%, 12%, 6%, and 0% (exempt).
- * Reverse charge and export customers are locked to 0%.
+ * Reverse charge and export customers default to a single 0% option, because
+ * huvudregeln (ML 6 kap. 34 §, Article 44 VAT Directive) taxes a B2B service
+ * where the buyer is established.
+ *
+ * This is the DEFAULT, not the full set of lawful rates: see
+ * getPermittedVatRates() for the taxed-where-performed exceptions that carry
+ * Swedish VAT even to a foreign business customer. Validation must gate on
+ * getPermittedVatRates(); only the picker default should come from here.
  *
  * This helper does NOT gate on the seller's VAT registration status: it only
  * knows the customer side. The seller-side gate lives one level up: the invoice
@@ -38,6 +45,62 @@ export function getAvailableVatRates(
     { rate: 12, label: '12%', treatment: 'reduced_12' },
     { rate: 6, label: '6%', treatment: 'reduced_6' },
     { rate: 0, label: '0% (momsfritt)', treatment: 'exempt' },
+  ]
+}
+
+/**
+ * Get the VAT rates that may LEGALLY appear on an invoice line for this
+ * customer type. This is the set validation must gate on.
+ *
+ * Distinct from getAvailableVatRates(), which is only the DEFAULT offered in
+ * the picker. Under huvudregeln (ML 6 kap. 34 §, Article 44 VAT Directive)
+ * "B2B services taxed where buyer established", so 0% (reverse charge for a
+ * VAT-validated EU business, export outside the EU) is the right DEFAULT for a
+ * foreign business customer. It is not the only lawful rate.
+ *
+ * ML 6 kap. (plats för transaktioner) carries exceptions that are taxed where
+ * the supply is performed, and therefore carry Swedish VAT even when the buyer
+ * is a foreign business. Per the swedish-vat reference, the exceptions "(taxed
+ * where performed)" are:
+ *
+ *   - Fastighetstjänster (property location)                        25%
+ *   - Persontransporter (where transport occurs)                     6%
+ *   - Korttidsuthyrning transport vehicles (pickup location)        25%
+ *   - Restaurang/catering (where performed)                         12%
+ *   - Admission to cultural/sports events (event location)           6%
+ *
+ * A Stockholm hotel night or a conference ticket sold to a German or a US
+ * company is such a supply. Refusing every non-zero rate for these customers
+ * makes those invoices impossible to issue at all. Because the exceptions span
+ * 25%, 12% and 6%, no single non-zero rate can be whitelisted instead.
+ *
+ * Nothing on an invoice line distinguishes "consulting for a German company"
+ * (0%, reverse charge) from "hotel night in Stockholm sold to a German company"
+ * (12% Swedish VAT), so this set only widens what is ACCEPTED. The default stays
+ * 0% via getAvailableVatRates() and getVatRules().rate, which is also the
+ * fallback when a line omits vat_rate. A Swedish rate therefore lands on such an
+ * invoice only when it was set explicitly on that line.
+ */
+export function getPermittedVatRates(
+  customerType: CustomerType,
+  vatNumberValidated: boolean = false,
+): VatRateOption[] {
+  const offered = getAvailableVatRates(customerType, vatNumberValidated)
+
+  const isForeignBusiness =
+    customerType === 'non_eu_business' ||
+    (customerType === 'eu_business' && vatNumberValidated)
+  if (!isForeignBusiness) {
+    return offered
+  }
+
+  // The 0% reverse-charge / export option stays FIRST so any consumer that
+  // treats element 0 as the default keeps defaulting to 0%.
+  return [
+    ...offered,
+    { rate: 25, label: '25%', treatment: 'standard_25' },
+    { rate: 12, label: '12%', treatment: 'reduced_12' },
+    { rate: 6, label: '6%', treatment: 'reduced_6' },
   ]
 }
 

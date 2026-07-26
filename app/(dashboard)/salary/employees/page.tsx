@@ -13,7 +13,7 @@ import { Plus, UserCircle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency } from '@/lib/utils'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import type { Employee } from '@/types'
+import type { EmployeeMasked } from '@/types'
 
 const NewEmployeeDialog = dynamic(
   () => import('@/components/salary/NewEmployeeDialog'),
@@ -33,7 +33,7 @@ const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
  */
 export default function EmployeesPage() {
   const t = useTranslations('employees')
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<EmployeeMasked[]>([])
   const [loading, setLoading] = useState(true)
   const { canWrite } = useCanWrite()
   const router = useRouter()
@@ -120,7 +120,7 @@ export default function EmployeesPage() {
                       </Link>
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground md:table-cell')}>
-                      {emp.personnummer}
+                      {emp.personnummer_masked}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                       {EMPLOYMENT_LABEL_KEYS[emp.employment_type]

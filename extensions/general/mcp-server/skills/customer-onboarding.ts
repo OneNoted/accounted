@@ -57,7 +57,7 @@ VAT and Skatteverket charges interest + penalty later.
 
 Accounted's \`gnubok_create_customer\` runs VIES automatically when \`vat_number\`
 is provided. The result is stored in \`vat_number_validated\` on the customer.
-Subsequent invoices read this field via \`getAvailableVatRates\` to determine
+Subsequent invoices read this field via \`getPermittedVatRates\` to determine
 which VAT rates are legal.
 
 If VIES is temporarily down (intermittent), Accounted marks the customer as
@@ -84,15 +84,15 @@ appears in \`gnubok_list_customers\` and can be invoiced via \`gnubok_create_inv
 Read \`vat_number_validated\` (for EU); if false, double-check the VAT number.
 
 When you eventually call \`gnubok_create_invoice\`, Accounted uses the
-\`getAvailableVatRates\` helper to constrain the dropdown of legal rates per
-customer type. If you see "VAT rate X% is not allowed for customer type Y",
-the customer_type is wrong: re-onboard correctly via the agent flow, do NOT
-hand-pick a different rate.
+\`getPermittedVatRates\` helper to constrain the legal rates per customer type.
+The accepted set is 0/25/12/6 % for every customer type, so "VAT rate X% is not
+allowed for customer type Y" means X is not a Swedish VAT rate at all: fix the
+rate, and check the customer_type while you are there.
 
 ## Common errors
 
-- *"VAT rate 25% is not allowed for customer type eu_business"*: the customer's VAT number is validated → reverse charge required. Use 0 % on line items, and Accounted will add the "Omvänd betalningsskyldighet" notation automatically.
-- *"VAT rate 0% is not allowed for customer type swedish_business"*: domestic customers always get 25/12/6 %. Pick the right rate.
+- *A validated \`eu_business\` invoiced at 25 %*: not refused, but almost always wrong. Reverse charge is the DEFAULT for a validated EU VAT number: leave \`vat_rate\` off (or 0) and Accounted adds the "Omvänd betalningsskyldighet" notation automatically. A Swedish rate is lawful here only for a supply taxed where it is performed (hotel/restaurang 12 %, persontransport and event admission 6 %, fastighetstjänst and korttidsuthyrning 25 %); read the \`Accounted://settings/vat-treatments\` resource before using one.
+- *A \`swedish_business\` invoiced at 0 %*: also accepted (momsfritt supplies exist), but the normal domestic rate is 25/12/6 %. Do not use 0 % to avoid picking a rate.
 - *"Customer not found"* on \`gnubok_create_invoice\`: the customer wasn't created (or its pending_operation wasn't approved). Run \`gnubok_list_customers\` to confirm.
 
 ## ROT/RUT-eligible customers (Swedish individuals)
@@ -112,7 +112,7 @@ for the booking details (BAS accounts 1513 + 3740).
 - \`gnubok_list_customers\`: check for existing customers
 - \`gnubok_create_customer\`: stage the new customer
 - \`gnubok_create_invoice\`: uses the customer_type for VAT-rate validation
-- (Helper, not a tool but referenced) \`getAvailableVatRates(customer_type, vat_number_validated)\`: drives the legal-rates check
+- (Helper, not a tool but referenced) \`getPermittedVatRates(customer_type, vat_number_validated)\`: drives the legal-rates check
 `
 
 export const customerOnboardingSkill: Skill = {

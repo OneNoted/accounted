@@ -29,6 +29,38 @@ describe('company settings MCP tools: registration', () => {
     expect(updateTool().inputSchema.additionalProperties).toBe(false)
   })
 
+  it('exposes the same field set on the read and write tools', () => {
+    const readFields = (
+      (getTool().outputSchema as { required: string[] }).required
+    )
+      .filter((field) => field !== 'company_id')
+      .sort()
+    const writeFields = Object.keys(
+      (updateTool().inputSchema as { properties: Record<string, unknown> }).properties,
+    )
+      .filter((field) => field !== 'dry_run' && field !== 'idempotency_key')
+      .sort()
+
+    expect(writeFields).toEqual(readFields)
+    expect(readFields).toEqual(
+      [
+        'account_number',
+        'bank_name',
+        'bankgiro',
+        'bic',
+        'clearing_number',
+        'contact_person',
+        'email',
+        'iban',
+        'invoice_email_texts',
+        'phone',
+        'plusgiro',
+        'swish',
+        'website',
+      ],
+    )
+  })
+
   it('keeps both settings schemas discoverable through tool search', async () => {
     const search = tools.find((tool) => tool.name === 'gnubok_search_tools')!
     const readResult = (await search.execute(
@@ -167,6 +199,79 @@ describe('gnubok_update_company_settings', () => {
       contact_person: 'New Contact',
     })
     expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects an unknown invoice email placeholder before querying the database', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      updateTool().execute(
+        {
+          invoice_email_texts: { sv: { body: 'Betala med OCR {ocr}.' } },
+          dry_run: true,
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/placeholder/i)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('stages contact details and invoice email texts with a mapped preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        bank_name: null,
+        clearing_number: null,
+        account_number: null,
+        bankgiro: null,
+        plusgiro: null,
+        swish: null,
+        iban: null,
+        bic: null,
+        default_our_reference: null,
+        email: null,
+        phone: null,
+        website: null,
+        invoice_email_texts: null,
+      },
+    })
+    enqueue({ data: { id: 'op-settings-2' } })
+
+    const result = (await updateTool().execute(
+      {
+        email: 'faktura@example.se',
+        phone: '08-123 456 78',
+        website: 'https://example.se',
+        invoice_email_texts: { sv: { subject: 'Faktura {fakturanummer}' } },
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      operation_id?: string
+      preview: {
+        changes?: Record<string, unknown>
+        proposed?: Record<string, unknown>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.operation_id).toBe('op-settings-2')
+    expect(result.preview.changes).toMatchObject({
+      email: 'faktura@example.se',
+      phone: '08-123 456 78',
+      website: 'https://example.se',
+      invoice_email_texts: { sv: { subject: 'Faktura {fakturanummer}' } },
+    })
+    expect(result.preview.changes).not.toHaveProperty('default_our_reference')
+    expect(result.preview.proposed).toMatchObject({
+      email: 'faktura@example.se',
+      website: 'https://example.se',
+    })
+    expect(supabase.from).toHaveBeenNthCalledWith(2, 'pending_operations')
   })
 
   it('stages a validated update for approval', async () => {

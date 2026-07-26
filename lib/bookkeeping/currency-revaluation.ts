@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchMultipleRates } from '@/lib/currency/riksbanken'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import {
   BookkeepingDatabaseError,
@@ -16,10 +16,76 @@ import type {
   CreateJournalEntryLineInput,
 } from '@/types'
 
+export const FX_CLOSING_RATE_UNAVAILABLE = 'FX_CLOSING_RATE_UNAVAILABLE' as const
+
+/** A currency whose balansdagen rate could not be established. */
+export interface MissingClosingRate {
+  currency: Currency
+  date: string
+}
+
+/**
+ * Raised when the revaluation would have to invent a closing rate.
+ *
+ * The balansdagen valuation of monetary items (ÅRL 4 kap. 13 §) posts a real
+ * verifikat to 3960/7960, so the rate behind it must be a real Riksbanken
+ * observation. `code` is in the structured-error registry, so REST routes and
+ * MCP tools translate it without any per-caller handling.
+ */
+export class ClosingRateUnavailableError extends Error {
+  readonly code = FX_CLOSING_RATE_UNAVAILABLE
+  constructor(public readonly missingRates: MissingClosingRate[]) {
+    super(
+      `No Riksbanken exchange rate available for ${missingRates
+        .map((m) => `${m.currency} on ${m.date}`)
+        .join(', ')}: currency revaluation refused rather than posted from an estimated rate.`
+    )
+    this.name = 'ClosingRateUnavailableError'
+  }
+}
+
+/** An open foreign-currency row that carries no exchange rate at all. */
+export interface UnconvertedFxItem {
+  type: 'receivable' | 'payable'
+  source_id: string
+  reference: string
+  currency: Currency
+  amount_in_currency: number
+}
+
+/**
+ * Preview plus the two exclusion channels a caller must be able to show:
+ * rows that carry no original rate, and currencies with no closing rate.
+ * Same shape of contract as `unconverted_fx_count` on the reskontra reports.
+ */
+export interface CurrencyRevaluationPreviewWithExclusions extends CurrencyRevaluationPreview {
+  /**
+   * Open foreign-currency rows excluded because they have no `exchange_rate`
+   * on file. They cannot be revalued (there is no original SEK value to
+   * compare against) and they are usually the largest unmeasured exposure, so
+   * they are counted and returned instead of silently dropped.
+   */
+  unconvertedFx: UnconvertedFxItem[]
+  unconvertedFxCount: number
+  /** Currencies with no Riksbanken observation for the closing date. */
+  missingClosingRates: MissingClosingRate[]
+}
+
+export interface CurrencyRevaluationResultWithExclusions extends CurrencyRevaluationResult {
+  preview: CurrencyRevaluationPreviewWithExclusions
+}
+
+/** A stored rate is usable only when present and strictly positive. */
+function hasUsableRate(rate: number | null | undefined): boolean {
+  return rate != null && Number(rate) > 0
+}
+
 /**
  * Fetch open foreign-currency receivables (invoices).
- * Returns invoices with status 'sent' or 'overdue', non-SEK currency,
- * and a known exchange rate.
+ * Returns invoices with status 'sent' or 'overdue' and non-SEK currency,
+ * INCLUDING ones with no `exchange_rate`: filtering those out in SQL hid the
+ * largest unmeasured FX exposure from the caller. The caller partitions them
+ * and reports the excluded rows.
  */
 export async function getOpenForeignCurrencyReceivables(
   supabase: SupabaseClient,
@@ -35,7 +101,6 @@ export async function getOpenForeignCurrencyReceivables(
         .eq('company_id', companyId)
         .in('status', ['sent', 'overdue'])
         .neq('currency', 'SEK')
-        .not('exchange_rate', 'is', null)
         .order('id', { ascending: true })
         .range(from, to)
     , { dedupeBy: (i) => i.id })
@@ -49,8 +114,9 @@ export async function getOpenForeignCurrencyReceivables(
 
 /**
  * Fetch open foreign-currency payables (supplier invoices).
- * Returns supplier invoices with open statuses, non-SEK currency,
- * and a known exchange rate. Uses remaining_amount for partial payments.
+ * Returns supplier invoices with open statuses and non-SEK currency,
+ * INCLUDING ones with no `exchange_rate` (see the receivables note above).
+ * Uses remaining_amount for partial payments.
  */
 export async function getOpenForeignCurrencyPayables(
   supabase: SupabaseClient,
@@ -66,7 +132,6 @@ export async function getOpenForeignCurrencyPayables(
         .eq('company_id', companyId)
         .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
         .neq('currency', 'SEK')
-        .not('exchange_rate', 'is', null)
         .order('id', { ascending: true })
         .range(from, to)
     , { dedupeBy: (i) => i.id })
@@ -89,24 +154,59 @@ export async function getOpenForeignCurrencyPayables(
  * Payables (2440):
  *   closing > original → loss (liability grew): Debit 7960, Credit 2440
  *   closing < original → gain (liability shrank): Debit 2440, Credit 3960
+ *
+ * Never throws on a missing rate: this is the read-only surface, and the
+ * year-end preview must still render. Both exclusion channels come back on
+ * the result (`unconvertedFx*`, `missingClosingRates`) so the caller can show
+ * them. `executeCurrencyRevaluation` is what refuses to post.
  */
 export async function previewCurrencyRevaluation(
   supabase: SupabaseClient,
   companyId: string,
   closingDate: string
-): Promise<CurrencyRevaluationPreview> {
+): Promise<CurrencyRevaluationPreviewWithExclusions> {
   const [receivables, payables] = await Promise.all([
     getOpenForeignCurrencyReceivables(supabase, companyId),
     getOpenForeignCurrencyPayables(supabase, companyId),
   ])
 
-  // Collect distinct currencies
+  // Partition into rows we can revalue and rows with no original rate, and
+  // collect the distinct currencies of the revaluable rows.
   const currencies = new Set<Currency>()
+  const unconvertedFx: UnconvertedFxItem[] = []
+  const revaluableReceivables: Invoice[] = []
+  const revaluablePayables: SupplierInvoice[] = []
+
   for (const inv of receivables) {
+    if (!hasUsableRate(inv.exchange_rate)) {
+      unconvertedFx.push({
+        type: 'receivable',
+        source_id: inv.id,
+        reference: inv.invoice_number ?? '',
+        currency: inv.currency,
+        amount_in_currency: inv.total,
+      })
+      continue
+    }
     currencies.add(inv.currency)
+    revaluableReceivables.push(inv)
   }
+
   for (const si of payables) {
+    // Nothing outstanding: nothing to revalue, and no exposure to report.
+    if (Number(si.remaining_amount) <= 0) continue
+    if (!hasUsableRate(si.exchange_rate)) {
+      unconvertedFx.push({
+        type: 'payable',
+        source_id: si.id,
+        reference: si.supplier_invoice_number,
+        currency: si.currency as Currency,
+        amount_in_currency: si.remaining_amount,
+      })
+      continue
+    }
     currencies.add(si.currency as Currency)
+    revaluablePayables.push(si)
   }
 
   if (currencies.size === 0) {
@@ -117,25 +217,45 @@ export async function previewCurrencyRevaluation(
       totalGain: 0,
       totalLoss: 0,
       netEffect: 0,
+      unconvertedFx,
+      unconvertedFxCount: unconvertedFx.length,
+      missingClosingRates: [],
     }
   }
 
-  // Fetch closing rates
-  const rateMap = await fetchMultipleRates(
-    Array.from(currencies),
-    new Date(closingDate)
+  // Fetch closing rates one currency at a time through fetchExchangeRate: it
+  // is the documented booking path and returns null rather than one of the
+  // hardcoded display-only constants in getFallbackRate(). fetchMultipleRates
+  // pads its Map with those constants to keep a fully-populated-Map contract,
+  // which is fine for a rate widget and unacceptable for a verifikat: this
+  // function's output is posted to 3960/7960. Passing `supabase` uses the
+  // shared exchange_rates cache, so a balansdagen rate stays reproducible.
+  const currencyList = Array.from(currencies)
+  const fetched = await Promise.all(
+    currencyList.map((currency) => fetchExchangeRate(currency, new Date(closingDate), supabase))
   )
+
+  const rateMap = new Map<Currency, number>()
+  const missingClosingRates: MissingClosingRate[] = []
+  for (let i = 0; i < currencyList.length; i++) {
+    const observed = fetched[i]
+    if (observed && Number.isFinite(observed.rate) && observed.rate > 0) {
+      rateMap.set(currencyList[i], observed.rate)
+    } else {
+      missingClosingRates.push({ currency: currencyList[i], date: closingDate })
+    }
+  }
 
   const closingRates: Record<string, number> = {}
   for (const [currency, rate] of rateMap) {
-    closingRates[currency] = rate.rate
+    closingRates[currency] = rate
   }
 
   const items: RevaluationItem[] = []
 
   // Process receivables
-  for (const inv of receivables) {
-    const closingRate = rateMap.get(inv.currency)?.rate
+  for (const inv of revaluableReceivables) {
+    const closingRate = rateMap.get(inv.currency)
     if (!closingRate || !inv.exchange_rate) continue
 
     const amountInCurrency = inv.total
@@ -160,12 +280,11 @@ export async function previewCurrencyRevaluation(
   }
 
   // Process payables (use remaining_amount for partial payments)
-  for (const si of payables) {
-    const closingRate = rateMap.get(si.currency as Currency)?.rate
+  for (const si of revaluablePayables) {
+    const closingRate = rateMap.get(si.currency as Currency)
     if (!closingRate || !si.exchange_rate) continue
 
     const amountInCurrency = si.remaining_amount
-    if (amountInCurrency <= 0) continue
 
     const originalSek = Math.round(amountInCurrency * si.exchange_rate * 100) / 100
     const closingSek = Math.round(amountInCurrency * closingRate * 100) / 100
@@ -282,6 +401,9 @@ export async function previewCurrencyRevaluation(
     totalGain,
     totalLoss,
     netEffect,
+    unconvertedFx,
+    unconvertedFxCount: unconvertedFx.length,
+    missingClosingRates,
   }
 }
 
@@ -291,6 +413,8 @@ export async function previewCurrencyRevaluation(
  *
  * Returns null if no foreign-currency items exist.
  * Throws if a revaluation entry already exists for this period (idempotency).
+ * Throws ClosingRateUnavailableError if any required balansdagen rate is
+ * missing: this entry must never be computed from an estimated rate.
  */
 export async function executeCurrencyRevaluation(
   supabase: SupabaseClient,
@@ -298,7 +422,7 @@ export async function executeCurrencyRevaluation(
   closingDate: string,
   fiscalPeriodId: string,
   userId?: string
-): Promise<CurrencyRevaluationResult | null> {
+): Promise<CurrencyRevaluationResultWithExclusions | null> {
   // Idempotency check: prevent double revaluation
   const { count, error: checkError } = await supabase
     .from('journal_entries')
@@ -317,6 +441,16 @@ export async function executeCurrencyRevaluation(
   }
 
   const preview = await previewCurrencyRevaluation(supabase, companyId, closingDate)
+
+  // Refuse before anything is posted. Checked ahead of the empty-preview
+  // shortcut on purpose: when every currency lacks a closing rate the item
+  // list is also empty, and returning null there would report "nothing to
+  // revalue" for what is really "we could not value it". A partial post is
+  // refused too: it would understate the FX result on 3960/7960 while looking
+  // like a complete balansdagen valuation (ÅRL 4 kap. 13 §).
+  if (preview.missingClosingRates.length > 0) {
+    throw new ClosingRateUnavailableError(preview.missingClosingRates)
+  }
 
   if (preview.items.length === 0 || preview.lines.length === 0) {
     return null

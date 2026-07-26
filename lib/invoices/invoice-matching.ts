@@ -1,3 +1,25 @@
+/**
+ * Invoice Matching: auto-match income transactions to unpaid customer invoices.
+ *
+ * Amounts are only ever compared inside one currency: same currency → raw
+ * magnitudes, different currencies → the invoice's STORED SEK conversion
+ * against a SEK bank row. An invoice with no usable SEK value is not offered
+ * at all, because comparing a raw EUR total against a kronor bank row is what
+ * makes a 1 000 EUR invoice "exactly match" a 1 000 kr receipt. OCR/reference
+ * matching is deliberately exempt: the reference identifies the invoice on its
+ * own and no amount is involved.
+ *
+ * That guard is silent by design, which is its own problem: the user never
+ * learns why the EUR invoice that obviously matches is missing from the
+ * suggestions. `findInvoiceMatchCandidates()` therefore returns the dropped
+ * invoices alongside the matches (same shape as `unconverted_fx_count` in
+ * lib/reports/supplier-ledger.ts), so a caller can name them and point at the
+ * repair: POST /api/invoices/{id}/refresh-exchange-rate.
+ *
+ * The supplier-side twin is lib/invoices/supplier-invoice-matching.ts. Keep the
+ * two guards in step.
+ */
+
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Invoice, Transaction, Customer } from '@/types'
@@ -6,6 +28,39 @@ export interface InvoiceMatch {
   invoice: Invoice & { customer?: Customer }
   confidence: number
   matchReason: string
+}
+
+/**
+ * An invoice dropped before scoring, with the reason, so callers can tell the
+ * user why an obvious invoice is not among the suggestions.
+ */
+export interface InvoiceMatchExclusion {
+  invoiceId: string
+  invoiceNumber: string | null
+  /** The invoice's own currency, e.g. 'EUR'. */
+  currency: string
+  /**
+   * `unconverted_fx`: foreign-currency invoice with no stored SEK conversion
+   * (`total_sek`), compared against a SEK bank row. Remedy:
+   * POST /api/invoices/{id}/refresh-exchange-rate, which fetches the
+   * taxable-event rate from Riksbanken and fills in `total_sek`. It refuses
+   * once the invoice is booked (INVOICE_FX_REFRESH_BOOKED); from there the
+   * correction is a storno or an inline rättelse.
+   */
+  reason: 'unconverted_fx'
+}
+
+export interface InvoiceMatchResult {
+  matches: InvoiceMatch[]
+  /**
+   * Number of foreign-currency invoices excluded from candidacy because they
+   * had no usable SEK value. Offering them would mean comparing currencies;
+   * surfacing the count lets the caller tell the user a candidate was withheld
+   * and what to do about it, instead of the invoice just never showing up.
+   */
+  unconvertedFxCount: number
+  /** The excluded invoices themselves, so a caller can name the repair target. */
+  unconvertedFxInvoices: InvoiceMatchExclusion[]
 }
 
 /**
@@ -115,19 +170,85 @@ export function calculateMatchScore(
 }
 
 /**
+ * The invoice's outstanding amount expressed in the transaction's currency, or
+ * null when no such value can be established from STORED data.
+ *
+ * Never falls back to the raw foreign amount. That fallback would hand the
+ * matcher a EUR total dressed up as kronor, which is the exact false match this
+ * function exists to prevent. A missing conversion means "not comparable",
+ * never "assume SEK".
+ */
+function comparableAmount(
+  invoice: Invoice,
+  transaction: Transaction,
+  invoiceAmount: number
+): number | null {
+  // Same currency: raw magnitudes, no rate needed. The only path a SEK-only
+  // company ever takes.
+  if (invoice.currency === transaction.currency) return invoiceAmount
+
+  // Cross-currency: only a SEK bank row is comparable, and only against the
+  // invoice's stored SEK conversion.
+  if (transaction.currency !== 'SEK') return null
+
+  // Pro-rate total_sek down to the part that is still unpaid: total_sek covers
+  // the whole invoice at the rate booked on registration, while
+  // remaining_amount is denominated in the invoice currency.
+  if (!invoice.total_sek || !invoice.total) return null
+  return Math.round((invoiceAmount / invoice.total) * invoice.total_sek * 100) / 100
+}
+
+/**
+ * True when the only thing standing between this invoice and candidacy is its
+ * own missing SEK conversion, i.e. the case POST
+ * /api/invoices/{id}/refresh-exchange-rate repairs. A SEK invoice against a
+ * foreign bank row, or two different foreign currencies, is a different
+ * (rate-independent) exclusion and is not reported as one of these.
+ */
+function isUnconvertedForeignInvoice(invoice: Invoice, transaction: Transaction): boolean {
+  return (
+    transaction.currency === 'SEK' &&
+    !!invoice.currency &&
+    invoice.currency !== 'SEK' &&
+    !invoice.total_sek
+  )
+}
+
+function emptyResult(): InvoiceMatchResult {
+  return { matches: [], unconvertedFxCount: 0, unconvertedFxInvoices: [] }
+}
+
+/**
  * Find invoices that potentially match a bank transaction
  *
  * Only matches income transactions (amount > 0) against unpaid invoices
  * Returns matches sorted by confidence, filtered to >= 50% confidence
+ *
+ * Thin wrapper over `findInvoiceMatchCandidates()` that drops the exclusion
+ * diagnostics. Use the candidates function when the caller can tell the user
+ * why an invoice was withheld.
  */
 export async function findMatchingInvoices(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction
 ): Promise<InvoiceMatch[]> {
+  const { matches } = await findInvoiceMatchCandidates(supabase, companyId, transaction)
+  return matches
+}
+
+/**
+ * `findMatchingInvoices()` plus the invoices that were dropped before scoring
+ * because they carried no comparable amount.
+ */
+export async function findInvoiceMatchCandidates(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction
+): Promise<InvoiceMatchResult> {
   // Only match income transactions
   if (transaction.amount <= 0) {
-    return []
+    return emptyResult()
   }
 
   // Query unpaid invoices (sent or overdue) with customer info
@@ -145,7 +266,7 @@ export async function findMatchingInvoices(
     )
   } catch {
     // Failed to fetch invoices: return empty matches
-    return []
+    return emptyResult()
   }
 
   // Defensive filter: exclude invoices that already have a payment voucher
@@ -183,10 +304,11 @@ export async function findMatchingInvoices(
   }
   const filteredInvoices = payableInvoices.filter((inv) => !paidIds.has(inv.id as string))
   if (filteredInvoices.length === 0) {
-    return []
+    return emptyResult()
   }
 
   const matches: InvoiceMatch[] = []
+  const unconvertedFxInvoices: InvoiceMatchExclusion[] = []
 
   // OCR/Bankgiro reference matching: highest confidence
   // Swedish standard: match transaction reference to invoice OCR number
@@ -207,31 +329,32 @@ export async function findMatchingInvoices(
 
     // If we found an OCR match, return immediately (highest possible confidence)
     if (matches.length > 0) {
-      return matches
+      return { matches, unconvertedFxCount: 0, unconvertedFxInvoices: [] }
     }
   }
 
   for (const invoice of filteredInvoices) {
-    // Currency filter - must match or be SEK equivalent
-    const currencyMatch =
-      invoice.currency === transaction.currency ||
-      (transaction.currency === 'SEK' && invoice.total_sek != null)
-
-    if (!currencyMatch) continue
-
     // Use remaining_amount for partially paid invoices, otherwise total
     const invoiceAmount = invoice.remaining_amount ?? invoice.total
 
-    // Use SEK amount for comparison if currencies differ
-    const compareAmount =
-      invoice.currency === transaction.currency
-        ? invoiceAmount
-        : (() => {
-            if (invoice.total_sek && invoice.total) {
-              return Math.round((invoiceAmount / invoice.total) * invoice.total_sek * 100) / 100
-            }
-            return invoiceAmount
-          })()
+    // Every pass below compares amounts, so they need one shared unit. No
+    // shared unit means this invoice is not a candidate at all: it must never
+    // be offered on the strength of a raw foreign number that happens to line
+    // up with a kronor bank row.
+    const compareAmount = comparableAmount(invoice, transaction, invoiceAmount)
+    if (compareAmount === null) {
+      // Record the ones a missing exchange rate is holding back, so the caller
+      // can say so instead of leaving the user to wonder.
+      if (isUnconvertedForeignInvoice(invoice, transaction)) {
+        unconvertedFxInvoices.push({
+          invoiceId: invoice.id as string,
+          invoiceNumber: invoice.invoice_number ?? null,
+          currency: invoice.currency as string,
+          reason: 'unconverted_fx',
+        })
+      }
+      continue
+    }
 
     const transactionAmount = transaction.amount
 
@@ -265,12 +388,22 @@ export async function findMatchingInvoices(
   // Sort by confidence descending
   matches.sort((a, b) => b.confidence - a.confidence)
 
-  return matches
+  return {
+    matches,
+    unconvertedFxCount: unconvertedFxInvoices.length,
+    unconvertedFxInvoices,
+  }
 }
 
 /**
  * Get the best matching invoice for a transaction
  * Returns the highest confidence match if it meets the threshold
+ *
+ * `InvoiceMatch | null` has nowhere to carry a reason, so an invoice withheld
+ * for a missing exchange rate is invisible on this path. Callers that can show
+ * the user something should use `findInvoiceMatchCandidates()` and read
+ * `unconvertedFxInvoices`; widening this signature is left to whoever has a
+ * surface to render it on.
  */
 export async function getBestInvoiceMatch(
   supabase: SupabaseClient,

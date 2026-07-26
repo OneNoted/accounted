@@ -138,6 +138,57 @@ describe('full-archive coverage contract', () => {
     }
   })
 
+  it('denormalizes only parent columns that exist', () => {
+    const broken: string[] = []
+    for (const t of MASTER_DATA_DUMP_TABLES) {
+      if (!t.denormalize || !t.via) continue
+      const parentCols = columnsByTable.get(t.via.parent)
+      for (const column of t.denormalize.columns) {
+        if (!parentCols?.has(column)) broken.push(`${t.via.parent}.${column}`)
+      }
+    }
+    expect(
+      broken,
+      `denormalize columns missing from the parent schema: ${broken.join(', ')}`
+    ).toEqual([])
+  })
+
+  it('never denormalizes over a real child column', () => {
+    const collisions: string[] = []
+    for (const t of MASTER_DATA_DUMP_TABLES) {
+      if (!t.denormalize) continue
+      const childCols = columnsByTable.get(t.name)
+      for (const column of t.denormalize.columns) {
+        const key = `${t.denormalize.prefix}${column}`
+        if (childCols?.has(key)) collisions.push(`${t.name}.${key}`)
+      }
+    }
+    expect(
+      collisions,
+      `denormalized keys collide with real child columns (the export keeps the ` +
+        `DB column and silently drops the parent value): ${collisions.join(', ')}`
+    ).toEqual([])
+  })
+
+  it('gives every child of a multi-currency parent its own unit', () => {
+    // A child line row carries money but no currency of its own, so the unit
+    // is unrecoverable from its JSON file alone. Whenever the parent has a
+    // currency column, the child dump must copy it down.
+    const missing: string[] = []
+    for (const t of MASTER_DATA_DUMP_TABLES) {
+      if (!t.via) continue
+      if (!columnsByTable.get(t.via.parent)?.has('currency')) continue
+      if (!t.denormalize?.columns.includes('currency')) missing.push(t.name)
+    }
+    expect(
+      missing,
+      `child tables whose parent has a currency column but which do not ` +
+        `denormalize it: ${missing.join(', ')}. Add ` +
+        `denormalize: { prefix, columns: ['currency', ...] } in ` +
+        `lib/reports/full-archive-export.ts so the archived line states its unit.`
+    ).toEqual([])
+  })
+
   it('orders every dump query by columns that exist', () => {
     const broken = MASTER_DATA_DUMP_TABLES.filter(
       (t) => t.orderBy && !columnsByTable.get(t.name)?.has(t.orderBy)

@@ -7,6 +7,24 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 ensureInitialized()
 
+/**
+ * Strip the encrypted `personnummer` off an embedded employee row and expose the
+ * display form under `personnummer_masked` instead.
+ *
+ * The mask never goes out under the writable key name: a client that reads an
+ * employee object here and posts it back to an employee write endpoint would
+ * otherwise send 'ÅÅÅÅMMDD-XXXX' into the encrypt path. v1, the MCP tools and
+ * lib/salary/employee-commands.ts all use the `_masked` suffix for the same
+ * reason.
+ */
+function maskEmbeddedEmployee(employee: Record<string, unknown>): Record<string, unknown> {
+  const { personnummer, ...rest } = employee
+  return {
+    ...rest,
+    personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer as string)),
+  }
+}
+
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.runs.get',
   async (_request, { supabase, companyId }, { params }) => {
@@ -158,10 +176,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         payslip_deliveries_summary: deliveriesSummary,
         employees: (employees || []).map(emp => ({
           ...emp,
-          employee: emp.employee ? {
-            ...emp.employee,
-            personnummer: maskPersonnummer(decryptPersonnummer(emp.employee.personnummer)),
-          } : null,
+          employee: emp.employee ? maskEmbeddedEmployee(emp.employee) : null,
         })),
       },
     })

@@ -400,3 +400,94 @@ describe('proposePaymentLines: dimensions propagation (PR7)', () => {
     }
   })
 })
+
+/**
+ * The cash-method proposal IS the entry: PaymentBookingDialog pre-fills its
+ * editable grid from these lines and submits them. A foreign invoice with no
+ * exchange rate has no SEK value at item granularity, so pre-filling the raw
+ * foreign numbers would post 1 000 kr of revenue and 250 kr of moms where 11 500
+ * kr and 2 875 kr belong: balanced, undetectable, and an understated ruta 05/10.
+ * The dialog resolves the proposal inside a try/catch, so throwing surfaces as a
+ * translated toast (INVOICE_FX_RATE_MISSING) rather than a crash.
+ */
+describe('proposePaymentLines: foreign currency without an exchange rate', () => {
+  it('cash method refuses with INVOICE_FX_RATE_MISSING', () => {
+    expect(() =>
+      proposePaymentLines({
+        invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: null }),
+        accountingMethod: 'cash',
+        entityType: 'enskild_firma',
+      })
+    ).toThrowError(expect.objectContaining({ code: 'INVOICE_FX_RATE_MISSING', currency: 'EUR' }))
+  })
+
+  it('cash method refuses a zero rate the same way', () => {
+    expect(() =>
+      proposePaymentLines({
+        invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: 0 }),
+        accountingMethod: 'cash',
+        entityType: 'enskild_firma',
+      })
+    ).toThrowError(expect.objectContaining({ code: 'INVOICE_FX_RATE_MISSING' }))
+  })
+
+  it('cash method with a rate proposes converted, balanced lines', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.5,
+        subtotal: 1000,
+        vat_amount: 250,
+        total: 1250,
+        items: [makeItem({ line_total: 1000, unit_price: 1000, vat_rate: 25, vat_amount: 250 })],
+      }),
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('11500')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2875')
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('14375')
+
+    const debit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+  })
+
+  it('SEK cash method without a rate is unaffected', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({ currency: 'SEK', exchange_rate: null }),
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('12500')
+    const debit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+  })
+
+  // The invoice-level fallback (no items) reads subtotal_sek / vat_amount_sek and
+  // is deliberately left lenient: those rows CAN be expressed in kronor.
+  it('cash method still proposes from invoice-level *_sek when there are no items', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: null,
+        items: [],
+        subtotal: 1000,
+        subtotal_sek: 11500,
+        vat_amount: 250,
+        vat_amount_sek: 2875,
+        total: 1250,
+        total_sek: 14375,
+      }),
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('11500')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2875')
+    expect(lines.find((l) => l.account_number === '1930')?.debit_amount).toBe('14375')
+  })
+})

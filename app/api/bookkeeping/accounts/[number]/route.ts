@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { UpdateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -89,7 +90,14 @@ export const PUT = withRouteContext(
     const { number } = await params
     const { supabase, companyId, log } = ctx
 
-    const validation = await validateBody(request, UpdateAccountSchema, {
+    // The body is spread straight into .update(), so only the fields the
+    // caller actually named may reach it. UpdateAccountSchema carries no
+    // .default() today, so sparsePatchBody is a no-op here: it is the
+    // structural guarantee that adding one later cannot make a PUT that
+    // renames an account also rewrite its VAT code or SRU mapping. An
+    // explicit null (clearing sru_code, default_vat_code, default_vat_rate)
+    // still survives.
+    const validation = await validateBody(request, sparsePatchBody(UpdateAccountSchema), {
       log,
       operation: 'bookkeeping.accounts.update',
     })

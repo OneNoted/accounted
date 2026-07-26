@@ -5,6 +5,17 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import {
+  ledgerLineAmountIn,
+  type LedgerLineAmount,
+} from '@/lib/bookkeeping/ledger-line-amount'
+
+// `ledgerLineAmountIn` moved to lib/bookkeeping/ledger-line-amount.ts verbatim
+// so the invoice / supplier-invoice voucher matchers share the one rule instead
+// of re-implementing it. Re-exported here unchanged: this module stayed its
+// public home for bank reconciliation and its importers.
+export { ledgerLineAmountIn }
+export type { LedgerLineAmount }
 
 // ============================================================
 // Types
@@ -26,6 +37,13 @@ export interface UnlinkedGLLine {
    *  rows from get_account_gl_lines_for_matching (the N:1 candidate fetch);
    *  undefined on the unmatched-only path, where it is always implicitly 0. */
   linked_transaction_count?: number
+  /** FX metadata, see {@link ledgerLineAmountIn}. Optional because the two
+   *  candidate RPCs (get_unlinked_gl_lines, get_account_gl_lines_for_matching)
+   *  do not project these columns; callers that read journal_entry_lines
+   *  directly do supply them. Absent means "no foreign amount on this row",
+   *  which is treated as not-comparable, never as SEK. */
+  currency?: string | null
+  amount_in_currency?: number | string | null
 }
 
 export interface ReconciliationMatch {
@@ -58,13 +76,24 @@ export interface ReconciliationRunResult {
 export const DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD = 0.9
 
 export interface ReconciliationStatus {
+  /**
+   * The currency EVERY monetary field in this object is expressed in: the
+   * reconciled cash account's own currency. A EUR account is reconciled in EUR,
+   * against the EUR amounts recorded on its ledger lines: amounts in different
+   * currencies are never summed into one scalar. 'SEK' for the 95% case, where
+   * this is a no-op and every figure below is exactly what it always was.
+   */
+  currency: string
   bank_transaction_total: number
   /**
    * The real ledger balance on the bank account, incl. IB: computed from the
-   * SAME `['posted','reversed']` lines the trial balance and balance sheet sum,
-   * so this value is identical to what the balansräkning reports for this
-   * account. (Use `gl_1930_period_movement` for the reconciliation diff, since
-   * this figure still includes the opening balance.)
+   * SAME `['posted','reversed']` lines the trial balance and balance sheet sum.
+   * On a SEK account this value is therefore identical to what the balansräkning
+   * reports for this account. On a foreign account it is the balance in THAT
+   * currency; the SEK carrying amount on the balance sheet differs by the
+   * unrealised kursdifferens and is revalued separately. (Use
+   * `gl_1930_period_movement` for the reconciliation diff, since this figure
+   * still includes the opening balance.)
    */
   gl_1930_balance: number
   /** Ledger movement on the bank account excluding only opening_balance: i.e.
@@ -80,12 +109,37 @@ export interface ReconciliationStatus {
    *  in gl_1930_period_movement, not subtracted from it. Surfaced so the UI can
    *  show how much of the period's movement came from corrections. */
   gl_1930_correction_adjustment: number
-  /** bankTotal − gl_1930_period_movement. Zero when every period transaction is matched. */
+  /** bankTotal − gl_1930_period_movement, both in `currency`. Zero when every
+   *  period transaction is matched. Meaningless while
+   *  `not_reconcilable_reason` is set: it is then computed over the subset of
+   *  ledger lines that could be expressed in `currency` at all. */
   difference: number
+  /**
+   * The account is avstämt: the ledger movement equals the bank movement AND
+   * every bank transaction in the window is accounted for by a verifikation.
+   *
+   * BOTH conditions are required. A net-zero difference on its own is not a
+   * reconciliation: two unmatched transactions that happen to offset each other
+   * net to zero while both remain unbooked affärshändelser (BFL 5 kap 1-2 §,
+   * each requiring its own verifikation identifying belopp and motpart), and
+   * ÅRL 2 kap's individuell värdering and bruttoredovisning say exactly that
+   * offsetting two unknowns is not the same as knowing either one.
+   */
   is_reconciled: boolean
   matched_count: number
   unmatched_transaction_count: number
   unmatched_gl_line_count: number
+  /** Counted ledger lines on the account that carry no amount in `currency`
+   *  (see {@link ledgerLineAmountIn}). Always 0 on a SEK account. */
+  unconvertible_gl_line_count: number
+  /**
+   * Machine-readable reason the window cannot be reconciled at all, or null
+   * when it can. Currently the single code `gl_lines_missing_currency_amount`:
+   * a foreign-currency account whose ledger lines hold only SEK figures with no
+   * per-row rate. There is nothing to convert with, so no difference is
+   * reported as if it meant something and `is_reconciled` is forced false.
+   */
+  not_reconcilable_reason: string | null
 }
 
 export interface ReconciliationOptions {
@@ -206,6 +260,14 @@ export function scopeTransactionsToAccount<Q extends {
  *
  * `expectedCurrency` filters which transactions can match: defaults to 'SEK'
  * so existing callers behave identically.
+ *
+ * The currency check gates BOTH sides. Filtering only the transaction leaves
+ * `transaction.amount` (in expectedCurrency) being compared against a ledger
+ * amount that is always SEK, so a 100 EUR bank row happily "matched" an
+ * unrelated 100 SEK ledger leg on the same date at 0.95 confidence. The ledger
+ * side is resolved through ledgerLineAmountIn: a line with no amount in
+ * expectedCurrency yields no match at all, rather than a same-magnitude
+ * coincidence in the wrong unit.
  */
 export function tryReconcileTransaction(
   transaction: Transaction,
@@ -222,7 +284,8 @@ export function tryReconcileTransaction(
   let bestMatch: ReconciliationMatch | null = null
 
   for (const line of glLines) {
-    const lineAmount = getDirectionalAmount(line)
+    const lineAmount = ledgerLineAmountIn(line, expectedCurrency)
+    if (lineAmount === null) continue
     if (!isDirectionCompatible(txAmount, line)) continue
 
     const amountMatches = Math.abs(Math.abs(txAmount) - Math.abs(lineAmount)) < 0.005
@@ -465,9 +528,7 @@ export async function getReconciliationStatus(
     source_type?: string | null
     entry_date?: string | null
   }
-  type GlLineRow = {
-    debit_amount: number | string | null
-    credit_amount: number | string | null
+  type GlLineRow = LedgerLineAmount & {
     journal_entries: GlEntry | GlEntry[] | null
   }
   // Supabase typings sometimes widen embedded relations to arrays even when the
@@ -477,8 +538,17 @@ export async function getReconciliationStatus(
     if (!je) return null
     return Array.isArray(je) ? je[0] ?? null : je
   }
+  // Every ledger figure below is resolved in the ACCOUNT's own currency, the
+  // same unit the bank side is already in (transactions are scoped by
+  // `.eq('currency', currency)`, so tx.amount is always in `currency`). On SEK
+  // this is debit - credit, exactly as before. On a foreign account it is the
+  // line's amount_in_currency: summing SEK ledger legs against a EUR bank
+  // statement produced a difference roughly the size of the exchange rate, so a
+  // foreign cash account could never show is_reconciled.
+  // Lines with no amount in `currency` resolve to null; they are counted (and
+  // block reconciliation) rather than silently contributing zero.
   function lineAmount(line: GlLineRow): number {
-    return (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+    return ledgerLineAmountIn(line, currency) ?? 0
   }
 
   // posted + reversed = the ledger balance, exactly as the trial balance counts
@@ -489,7 +559,10 @@ export async function getReconciliationStatus(
   const fetchedLines = await fetchEntryLines<GlLineRow>({
     supabase,
     entryColumns: 'id, company_id, entry_date, status, source_type',
-    lineColumns: 'debit_amount, credit_amount',
+    // currency + amount_in_currency: the foreign amount lives on the very lines
+    // being summed, so a foreign account is reconciled in its own currency
+    // instead of against an unconvertible SEK figure. See ledgerLineAmountIn.
+    lineColumns: 'debit_amount, credit_amount, currency, amount_in_currency',
     filterEntries: (q: EntryLinesQuery) => {
       let glQuery = q.eq('company_id', companyId).in('status', ['posted', 'reversed'])
       if (dateFrom) glQuery = glQuery.gte('entry_date', dateFrom)
@@ -542,7 +615,18 @@ export async function getReconciliationStatus(
   // to its true amount on both sides and reconciles on its own: whether
   // correctEntry re-pointed the transaction to the live corrected entry or a
   // legacy row still points at the reversed original, the result is identical.
+  // transactions.amount is denominated in transactions.currency, and
+  // scopeTransactionsToAccount pinned that to `currency`, so this total is
+  // already in the account's own currency: the unit lineAmount() resolves to.
   const bankTotal = countedTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
+
+  // Ledger lines the account's currency cannot express: a foreign account whose
+  // lines hold only SEK figures with no per-row rate (SIE imports, pre-FX
+  // bookings, an opening balance set in SEK). There is nothing honest to
+  // convert with, so the window is reported as not-reconcilable-yet with a
+  // reason instead of inventing a rate or pretending the SEK figure is EUR.
+  // Always empty on a SEK account: ledgerLineAmountIn never returns null there.
+  const unconvertibleLines = countedLines.filter((l) => ledgerLineAmountIn(l, currency) === null)
 
   // gl_1930_balance: the real ledger balance on this account incl. IB,
   // byte-for-byte the figure the balansräkning / saldobalans report.
@@ -583,17 +667,35 @@ export async function getReconciliationStatus(
 
   const difference = Math.round((bankTotal - glPeriodMovement) * 100) / 100
 
+  const notReconcilableReason =
+    unconvertibleLines.length > 0 ? 'gl_lines_missing_currency_amount' : null
+
   return {
+    currency,
     bank_transaction_total: Math.round(bankTotal * 100) / 100,
     gl_1930_balance: Math.round(glBalance * 100) / 100,
     gl_1930_period_movement: Math.round(glPeriodMovement * 100) / 100,
     gl_1930_opening_balance: Math.round(glOpeningBalance * 100) / 100,
     gl_1930_correction_adjustment: Math.round(glCorrectionAdjustment * 100) / 100,
     difference,
-    is_reconciled: Math.abs(difference) < 0.01,
+    // Avstämt requires BOTH sides to hold: the totals agree AND nothing is left
+    // unidentified. A zero net difference alone is not a reconciliation, two
+    // unmatched transactions that offset each other produce exactly that while
+    // both remain unbooked affärshändelser owing a verifikation (BFL 5 kap
+    // 1-2 §), and ÅRL 2 kap's individuell värdering / bruttoredovisning
+    // forbid treating offset unknowns as knowledge. Unmatched GL lines are
+    // deliberately NOT in this condition: unmatched_gl_line_count is scoped and
+    // windowed differently (it counts vouchers not settled ON THIS account, so
+    // the far leg of an own-account transfer shows up there by design).
+    is_reconciled:
+      notReconcilableReason === null &&
+      Math.abs(difference) < 0.01 &&
+      unmatchedTransactionCount === 0,
     matched_count: matchedCount,
     unmatched_transaction_count: unmatchedTransactionCount,
     unmatched_gl_line_count: unlinkedLines.length,
+    unconvertible_gl_line_count: unconvertibleLines.length,
+    not_reconcilable_reason: notReconcilableReason,
   }
 }
 
@@ -871,9 +973,14 @@ export async function autoReconcileTransactionForLinkedVoucher(
     .maybeSingle()
   if (!entry || entry.status !== 'posted' || !entry.entry_date) return null
 
+  // currency + amount_in_currency: this path PERSISTS a reconciliation link, so
+  // the bank movement it compares against must be in the cash account's own
+  // currency. Without them a 100 EUR voucher leg was compared as its 1150 SEK
+  // debit figure, and any unbooked 1150 EUR row on the account looked like the
+  // settlement. See ledgerLineAmountIn.
   const { data: lines } = await supabase
     .from('journal_entry_lines')
-    .select('account_number, debit_amount, credit_amount')
+    .select('account_number, debit_amount, credit_amount, currency, amount_in_currency')
     .eq('journal_entry_id', journalEntryId)
   if (!lines || lines.length === 0) return null
 
@@ -903,11 +1010,9 @@ export async function autoReconcileTransactionForLinkedVoucher(
     cashByAccount.set('1930', { id: null, currency: 'SEK', isPrimary: true })
   }
 
-  const cashLines = (lines as Array<{
-    account_number: string
-    debit_amount: number | null
-    credit_amount: number | null
-  }>).filter((l) => cashByAccount.has(l.account_number))
+  const cashLines = (lines as Array<LedgerLineAmount & { account_number: string }>).filter((l) =>
+    cashByAccount.has(l.account_number),
+  )
 
   // Exactly one bank movement → exactly one bank transaction to attach.
   if (cashLines.length !== 1) return null
@@ -915,9 +1020,13 @@ export async function autoReconcileTransactionForLinkedVoucher(
   const cashLine = cashLines[0]
   const accountNumber = cashLine.account_number
   const cashAccount = cashByAccount.get(accountNumber)!
-  const debit = Number(cashLine.debit_amount ?? 0)
-  const credit = Number(cashLine.credit_amount ?? 0)
-  const movement = debit > 0 ? debit : -credit // + money in, − money out
+  // + money in, − money out, in the cash account's OWN currency: the same unit
+  // as the candidate transactions' `amount` below, which scopeTransactionsToAccount
+  // pins to cashAccount.currency. null means the voucher's bank leg carries no
+  // amount in that currency, so there is nothing safe to compare: leave it for
+  // the user to match by hand rather than persist a guess.
+  const movement = ledgerLineAmountIn(cashLine, cashAccount.currency)
+  if (movement === null) return null
   if (Math.abs(movement) <= VOUCHER_LINK_AMOUNT_TOLERANCE) return null
 
   // 4. Unbooked, non-ignored candidate transactions on that account, scoped the
@@ -1093,13 +1202,6 @@ export async function fetchGLLinesForMatching(
     ...line,
     linked_transaction_count: Number(line.linked_transaction_count) || 0,
   }))
-}
-
-/** Get the net amount from a GL line (positive for debit, negative for credit) */
-function getDirectionalAmount(line: UnlinkedGLLine): number {
-  if (line.debit_amount > 0) return line.debit_amount
-  if (line.credit_amount > 0) return -line.credit_amount
-  return 0
 }
 
 /**

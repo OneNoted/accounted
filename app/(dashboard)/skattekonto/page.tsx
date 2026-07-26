@@ -188,7 +188,15 @@ export default function SkattekontoPage() {
           }
           return
         }
-        throw new Error(json.error || 'Synk misslyckades')
+        // Map the parsed body plus the status, never `new Error(json.error)`:
+        // the Error constructor stringifies a non-string body field, and the
+        // mapper would discard the route's own Swedish reason.
+        toast({
+          title: 'Synk misslyckades',
+          description: getUserErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
       }
       setReconnectMessage(null)
       toast({
@@ -216,7 +224,12 @@ export default function SkattekontoPage() {
       )
       const json = await res.json()
       if (!res.ok) {
-        throw new Error(json.error || 'Bokföring misslyckades')
+        toast({
+          title: 'Kunde inte bokföra',
+          description: getUserErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
       }
       toast({
         title: 'Utkast skapat',
@@ -245,7 +258,13 @@ export default function SkattekontoPage() {
       )
       const json = await res.json()
       if (!res.ok) {
-        throw new Error(json.error || 'Kunde inte söka kandidater')
+        toast({
+          title: 'Kunde inte hämta kandidater',
+          description: getUserErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        setMatchOpenFor(null)
+        return
       }
       setMatchCandidates(json.data.candidates as MatchCandidate[])
     } catch (err) {
@@ -274,7 +293,12 @@ export default function SkattekontoPage() {
       )
       const json = await res.json()
       if (!res.ok) {
-        throw new Error(json.error || 'Matchning misslyckades')
+        toast({
+          title: 'Kunde inte koppla transaktionen',
+          description: getUserErrorMessage(json, { statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
       }
       toast({ title: 'Transaktion kopplad till verifikat' })
       setMatchOpenFor(null)

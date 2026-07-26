@@ -4,6 +4,7 @@ import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -123,18 +124,27 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith('/auth') ||
     pathname.startsWith('/sandbox')
   ) {
-    // If user is logged in and trying to access auth pages, redirect to dashboard
+    // If user is logged in and trying to access auth pages, redirect to the
+    // destination the auth page would have sent them to, dashboard otherwise.
+    // /login?next=… is set by callers like the MCP OAuth authorize endpoint
+    // and by the bounce below; discarding the whole query string here
+    // stranded an already-signed-in user on the dashboard instead of the
+    // deep link they clicked. Only /login and /register carry `next`;
+    // /auth (the PKCE callback) and /sandbox bounce to '/' exactly as before.
     if (user) {
-      return NextResponse.redirect(new URL('/', request.url))
+      const carriesDestination =
+        pathname.startsWith('/login') || pathname.startsWith('/register')
+      const destination = carriesDestination
+        ? safeReturnTo(request.nextUrl.searchParams.get('next'), '/')
+        : '/'
+      return NextResponse.redirect(new URL(destination, request.url))
     }
     return supabaseResponse
   }
 
   // Protected routes - require authentication
   if (!user) {
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
+    return bounceToAuth(request, '/login')
   }
 
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
@@ -188,7 +198,7 @@ export async function updateSession(request: NextRequest) {
 
     // User has MFA enrolled but hasn't verified this session → redirect to verify
     if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-      return NextResponse.redirect(new URL('/mfa/verify', request.url))
+      return bounceToAuth(request, '/mfa/verify')
     }
 
     // MFA required but user has no factor enrolled yet → force enrollment
@@ -199,7 +209,7 @@ export async function updateSession(request: NextRequest) {
       const hasVerifiedFactor = factors?.totp?.some(f => f.status === 'verified')
 
       if (!hasVerifiedFactor) {
-        return NextResponse.redirect(new URL('/mfa/enroll', request.url))
+        return bounceToAuth(request, '/mfa/enroll')
       }
     }
   }
@@ -288,6 +298,59 @@ export async function updateSession(request: NextRequest) {
   }
 
   return supabaseResponse
+}
+
+/**
+ * Which query parameter each auth page reads its post-auth destination from.
+ * /login reads `next` (app/(auth)/login/page.tsx), the MFA pages read
+ * `returnTo` (app/(auth)/mfa/verify/page.tsx, app/(auth)/mfa/enroll/page.tsx).
+ * Sending the wrong name is a silent no-op, so the mapping is explicit
+ * rather than guessed per call site.
+ */
+const AUTH_DESTINATION_PARAM = {
+  '/login': 'next',
+  '/mfa/verify': 'returnTo',
+  '/mfa/enroll': 'returnTo',
+} as const
+
+/**
+ * Bounce to an auth page, remembering where the user was heading.
+ *
+ * Fixes two things the hand-rolled redirects did wrong. (1) Cloning
+ * `request.nextUrl` and overwriting only `pathname` carried the ORIGINAL
+ * query string onto the auth page: /settings/billing?success=1 arrived as
+ * /login?success=1, a stray parameter the login page never asked for. The
+ * URL here is built fresh from the request origin, so it holds nothing but
+ * the one parameter we set. (2) The destination itself was dropped, so
+ * emailed deep links and payment returns landed on the dashboard after
+ * sign-in instead of where the user was going.
+ *
+ * Open-redirect guard: the destination is the CURRENT request's path plus
+ * query, run through `safeReturnTo`, which admits same-origin relative paths
+ * only. Absolute URLs, protocol-relative `//evil.com`, and the encoded forms
+ * that normalise into one are rejected, and a rejected (or absent, or
+ * root) destination degrades to a bare bounce with no parameter at all.
+ * Nothing attacker-supplied is reflected unvalidated.
+ *
+ * MFA semantics are untouched: this only decorates the URL of a redirect
+ * that was going to happen anyway, on exactly the same conditions. The auth
+ * pages navigate to the destination only after the step-up succeeds, and the
+ * next request re-runs this same gate regardless.
+ */
+function bounceToAuth(
+  request: NextRequest,
+  target: keyof typeof AUTH_DESTINATION_PARAM,
+) {
+  // Absolute-path reference: replaces path AND clears query/fragment.
+  const url = new URL(target, request.url)
+  const destination = safeReturnTo(
+    request.nextUrl.pathname + request.nextUrl.search,
+    '/',
+  )
+  if (destination !== '/') {
+    url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
+  }
+  return NextResponse.redirect(url)
 }
 
 /**

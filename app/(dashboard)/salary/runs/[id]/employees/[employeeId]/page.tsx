@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { formatCurrency } from '@/lib/utils'
-import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, Employee } from '@/types'
+import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, EmployeeMasked } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /** Translation keys in the `salary_run_employee` namespace. */
@@ -55,7 +55,7 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
 
 interface DetailResponse {
   run: SalaryRun
-  runEmployee: SalaryRunEmployee & { employee: Employee; line_items: SalaryLineItem[] }
+  runEmployee: SalaryRunEmployee & { employee: EmployeeMasked; line_items: SalaryLineItem[] }
 }
 
 export default function SalaryRunEmployeeDetailPage({
@@ -81,10 +81,21 @@ export default function SalaryRunEmployeeDetailPage({
         fetch(`/api/salary/runs/${runId}`),
         fetch(`/api/salary/runs/${runId}/employees/${employeeId}`),
       ])
-      const runJson = await runRes.json()
-      const sreJson = await sreRes.json()
-      if (!runRes.ok) throw new Error(runJson.error || t('error_load_run'))
-      if (!sreRes.ok) throw new Error(sreJson.error || t('error_load_employee'))
+      const runJson = await runRes.json().catch(() => null)
+      const sreJson = await sreRes.json().catch(() => null)
+      // Map the parsed body plus the status, never `new Error(json.error)`:
+      // the routes answer thrown errors with the canonical envelope
+      // `{ error: { code, message } }`, and the Error constructor stringifies
+      // that object to "[object Object]", which falls through to the generic
+      // "Något gick fel" and discards the route's own Swedish reason.
+      if (!runRes.ok) {
+        setError(getUserErrorMessage(runJson, { statusCode: runRes.status }))
+        return
+      }
+      if (!sreRes.ok) {
+        setError(getUserErrorMessage(sreJson, { statusCode: sreRes.status }))
+        return
+      }
       setData({ run: runJson.data, runEmployee: sreJson.data })
     } catch (e) {
       setError(e instanceof Error ? getUserErrorMessage(e) : t('unknown_error'))
@@ -103,9 +114,12 @@ export default function SalaryRunEmployeeDetailPage({
     setError(null)
     try {
       const res = await fetch(`/api/salary/runs/${runId}/calculate`, { method: 'POST' })
-      const json = await res.json().catch(() => ({}))
+      const json = await res.json().catch(() => null)
       if (!res.ok) {
-        throw new Error(json.error || t('error_calculate'))
+        // Same reason as in load(): the calculate route builds its refusals
+        // with errorResponse(), so `json.error` is the envelope object.
+        setError(getUserErrorMessage(json, { statusCode: res.status }))
+        return
       }
       await load()
     } catch (e) {
@@ -176,7 +190,7 @@ export default function SalaryRunEmployeeDetailPage({
               {employee.first_name} {employee.last_name}
             </h1>
             <p className="text-sm text-muted-foreground tabular-nums">
-              {employee.personnummer} · {t('payslip_period', { period: periodLabel })}
+              {employee.personnummer_masked} · {t('payslip_period', { period: periodLabel })}
             </p>
           </div>
           {run.status === 'draft' && (

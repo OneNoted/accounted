@@ -40,7 +40,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
-import { getAvailableVatRates, getVatRules } from '@/lib/invoices/vat-rules'
+import { getPermittedVatRates, getVatRules } from '@/lib/invoices/vat-rules'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
@@ -182,11 +182,17 @@ async function createOneInvoice(
     customer.customer_type as Parameters<typeof getVatRules>[0],
     customer.vat_number_validated,
   )
-  const availableRates = getAvailableVatRates(
-    customer.customer_type as Parameters<typeof getAvailableVatRates>[0],
+  // Gate on the PERMITTED set, not the picker default, exactly like
+  // buildInvoiceWriteData: the ML 6 kap. supplies taxed where they are performed
+  // (hotel/restaurang 12%, persontransport and event admission 6%,
+  // fastighetstjänst and korttidsuthyrning 25%) carry Swedish VAT even to a
+  // foreign business customer. The default is still 0% (vatRules.rate is the
+  // fallback below), so a Swedish rate only lands here when sent explicitly.
+  const permittedRates = getPermittedVatRates(
+    customer.customer_type as Parameters<typeof getPermittedVatRates>[0],
     customer.vat_number_validated,
   )
-  const allowedRates = new Set(availableRates.map((r) => r.rate))
+  const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   const subtotal = input.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
   let vatAmount = 0

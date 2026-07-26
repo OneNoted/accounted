@@ -1,6 +1,7 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
+import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 
 // verifikation.draft: "Fråga om denna verifikation" on the journal entry
 // creation/draft surfaces (Bokföring → "Skapa med assistent", the Ny
@@ -34,9 +35,14 @@ interface CapturedVerifikationDraft {
     credit_amount: number | null
     description: string | null
   }[]
+  // Lock state for the entry's date, resolved through the canonical
+  // resolvePeriodStatusForDate (company-wide bookkeeping_locked_through +
+  // the covering fiscal_period's is_closed/locked_at): the same two layers the
+  // DB triggers enforce. `'unknown'` means the lookup failed and the agent must
+  // fail closed rather than treat the period as open.
   period_status: {
     period_id: string | null
-    status: string | null
+    status: 'open' | 'locked' | 'closed' | 'unknown' | null
     lock_date: string | null
   } | null
   description_hint: string | null
@@ -118,27 +124,38 @@ export const verifikationDraft = defineAgentIntent<
           description: ((e as { description?: string | null }).description) ?? null,
           status: ((e as { status?: string | null }).status) ?? null,
         }
+        // The per-line free text lives in `line_description`; there is no
+        // `description` column on journal_entry_lines. Asking for one made
+        // PostgREST reject the whole select, so every entry looked like it had
+        // zero rader and the agent reasoned about the verifikation from nothing.
         const { data: rows } = await supabase
           .from('journal_entry_lines')
-          .select('account_number, debit_amount, credit_amount, description')
+          .select('account_number, debit_amount, credit_amount, line_description')
           .eq('journal_entry_id', journal_entry_id)
           .order('id', { ascending: true })
-        lines = (rows ?? []) as CapturedVerifikationDraft['current_lines']
+        lines = ((rows ?? []) as {
+          account_number: string | null
+          debit_amount: number | null
+          credit_amount: number | null
+          line_description: string | null
+        }[]).map((r) => ({
+          account_number: r.account_number ?? null,
+          debit_amount: r.debit_amount ?? null,
+          credit_amount: r.credit_amount ?? null,
+          description: r.line_description ?? null,
+        }))
         const entryDate = entry?.entry_date ?? null
         if (entryDate) {
-          const { data: period } = await supabase
-            .from('fiscal_periods')
-            .select('id, status, locked_through')
-            .eq('company_id', companyId)
-            .lte('period_start', entryDate)
-            .gte('period_end', entryDate)
-            .maybeSingle()
-          if (period) {
-            periodStatus = {
-              period_id: (period as { id: string }).id,
-              status: ((period as { status?: string | null }).status) ?? null,
-              lock_date: ((period as { locked_through?: string | null }).locked_through) ?? null,
-            }
+          // fiscal_periods has no `status`/`locked_through` columns: lock state
+          // is company_settings.bookkeeping_locked_through plus the period's
+          // is_closed/locked_at. Go through resolvePeriodStatusForDate so this
+          // surface reads the exact same source of truth as the DB triggers,
+          // the MCP server and the v1 REST period gate.
+          try {
+            periodStatus = await resolvePeriodStatusForDate(supabase, companyId, entryDate)
+          } catch {
+            // Fail closed: an unreadable period must never be presented as open.
+            periodStatus = { period_id: null, status: 'unknown', lock_date: null }
           }
         }
 
@@ -246,14 +263,32 @@ export const verifikationDraft = defineAgentIntent<
     }
 
     if (captured.period_status) {
+      const periodState = captured.period_status.status
       lines.push('')
       lines.push(
-        `Period: ${captured.period_status.period_id ?? '?'} (status ${captured.period_status.status ?? '?'}${
-          captured.period_status.lock_date ? `, låst t.o.m. ${captured.period_status.lock_date}` : ''
+        `Period: ${captured.period_status.period_id ?? '?'} (status ${periodState ?? '?'}${
+          captured.period_status.lock_date ? `, lås: ${captured.period_status.lock_date}` : ''
         })`,
       )
-      if (captured.period_status.status === 'locked' || captured.period_status.status === 'closed') {
+      if (periodState === 'closed') {
+        lines.push('PERIODEN ÄR STÄNGD: ingenting får bokföras på detta datum, och en stängd period kan inte låsas upp. Vägled användaren att flytta verifikationsdatumet till en öppen period.')
+      } else if (periodState === 'locked') {
         lines.push('PERIODEN ÄR LÅST: ett utkast kan inte bokföras här. Vägled användaren att ändra verifikationsdatumet till en öppen period (utkast redigeras fritt), eller att låsa upp perioden under Bokföring → Räkenskapsår om datumet måste stå kvar.')
+      } else if (periodState === 'unknown') {
+        // Fail closed: the lock lookup failed, so we cannot claim the period is
+        // open. Posting into a locked period is blocked by DB triggers anyway;
+        // the agent must not promise the user that it will go through.
+        lines.push('PERIODLÅSET KUNDE INTE LÄSAS: utgå INTE från att perioden är öppen. Be användaren kontrollera periodlåset under Bokföring → Räkenskapsår innan något bokförs på detta datum.')
+      } else if (periodState === 'open' && captured.period_status.period_id === null) {
+        lines.push('INGET RÄKENSKAPSÅR TÄCKER DATUMET: periodlåset gick inte att avgöra. Kontrollera att verifikationsdatumet ligger inom ett upplagt räkenskapsår innan du föreslår bokföring.')
+      }
+      if (
+        captured.entry?.status === 'posted' &&
+        (periodState === 'locked' || periodState === 'closed' || periodState === 'unknown')
+      ) {
+        // BFL 5 kap 5 §: inline rättelse is only legal in an open, unlocked
+        // period. Past a lock/close, storno is the only sanctioned path.
+        lines.push('Verifikationen är dessutom redan BOKFÖRD och perioden är inte bevisligen öppen: enligt BFL 5 kap 5 § är storno (omföring i en öppen period) då enda tillåtna rättelsevägen. Föreslå aldrig att rader, belopp eller datum skrivs om i det bokförda verifikatet.')
       }
     }
     lines.push('')

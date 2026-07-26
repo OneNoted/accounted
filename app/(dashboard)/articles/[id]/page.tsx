@@ -410,6 +410,7 @@ export default function ArticleDetailPage({
           <ArticleForm
             onSubmit={handleUpdate}
             isLoading={isUpdating}
+            onCancel={() => setIsEditOpen(false)}
             initialData={{
               article_number: article.article_number || undefined,
               name: article.name,

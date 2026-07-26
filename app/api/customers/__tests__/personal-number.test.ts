@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
-import { decryptPersonnummer } from '@/lib/salary/personnummer'
+import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 
 const captured: { insert: unknown[]; update: unknown[] } = { insert: [], update: [] }
 let queryResult: { data: unknown; error: unknown } = { data: null, error: null }
@@ -50,6 +50,23 @@ import { POST } from '../route'
 import { PATCH } from '../[id]/route'
 
 type CustomerWrite = { personal_number?: string | null }
+
+// Synthetic personnummer, never a real one.
+const PERSONAL_NUMBER = '19900101-1234'
+const MASKED = '********-1234'
+
+/**
+ * The shape customers_personal_number_check accepts as of 20260726110000:
+ * lowercase hex, 76 to 255 chars (24 iv + 32 auth tag + >= 20 ciphertext).
+ * Asserting against it is the point of these tests. The routes encrypt before
+ * writing, and until 20260726110000 the column still demanded the plaintext
+ * personnummer format below, so every write was rejected by Postgres while
+ * this mocked suite passed. Pinning both directions is what makes the unit
+ * test able to catch that mismatch; tests/pg/customers-personal-number-
+ * ciphertext.pg.test.ts proves the constraint itself.
+ */
+const CIPHERTEXT_SHAPE = /^[0-9a-f]{76,255}$/
+const OLD_PLAINTEXT_CHECK = /^(\d{6}|\d{8})[-+]?\d{4}$/
 
 describe('personal_number on customer routes', () => {
   const routeParams = { params: Promise.resolve({ id: 'customer-1' }) }
@@ -99,12 +116,14 @@ describe('personal_number on customer routes', () => {
   })
 
   it('stores the personal number when creating a private customer', async () => {
+    // What the insert returns is what the DB would hold: ciphertext.
+    const stored = encryptPersonnummer(PERSONAL_NUMBER)
     queryResult = {
       data: {
         id: 'customer-1',
         name: 'Anna Andersson',
         customer_type: 'individual',
-        personal_number: '19900101-1234',
+        personal_number: stored,
       },
       error: null,
     }
@@ -115,7 +134,7 @@ describe('personal_number on customer routes', () => {
         body: {
           name: 'Anna Andersson',
           customer_type: 'individual',
-          personal_number: '19900101-1234',
+          personal_number: PERSONAL_NUMBER,
         },
       }),
       { params: Promise.resolve({}) },
@@ -123,18 +142,25 @@ describe('personal_number on customer routes', () => {
 
     const { status, body } = await parseJsonResponse<{ data: { personal_number: string } }>(response)
     expect(status).toBe(200)
-    const encrypted = (captured.insert[0] as CustomerWrite).personal_number as string
-    expect(encrypted).not.toBe('19900101-1234')
-    expect(decryptPersonnummer(encrypted)).toBe('19900101-1234')
-    expect(body.data.personal_number).toBe('********-1234')
+
+    const written = (captured.insert[0] as CustomerWrite).personal_number as string
+    // The value must be storable: Postgres accepts ciphertext shape only.
+    expect(written).toMatch(CIPHERTEXT_SHAPE)
+    expect(written).not.toMatch(OLD_PLAINTEXT_CHECK)
+    // ...and it must still be the customer's personnummer.
+    expect(written).not.toBe(PERSONAL_NUMBER)
+    expect(decryptPersonnummer(written)).toBe(PERSONAL_NUMBER)
+    // Read back masked: no read path returns the personnummer itself.
+    expect(body.data.personal_number).toBe(MASKED)
   })
 
   it('updates the personal number for an existing private customer', async () => {
+    const stored = encryptPersonnummer('900101-1234')
     queryResult = {
       data: {
         id: 'customer-1',
         customer_type: 'individual',
-        personal_number: '900101-1234',
+        personal_number: stored,
       },
       error: null,
     }
@@ -147,10 +173,79 @@ describe('personal_number on customer routes', () => {
       routeParams,
     )
 
+    const { status, body } = await parseJsonResponse<{ data: { personal_number: string } }>(response)
+    expect(status).toBe(200)
+
+    const written = (captured.update[0] as CustomerWrite).personal_number as string
+    expect(written).toMatch(CIPHERTEXT_SHAPE)
+    expect(written).not.toMatch(OLD_PLAINTEXT_CHECK)
+    expect(written).not.toBe('900101-1234')
+    expect(decryptPersonnummer(written)).toBe('900101-1234')
+    expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('keeps the stored personal number when the masked value is sent back', async () => {
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        customer_type: 'individual',
+        name: 'Anna A',
+        personal_number: encryptPersonnummer(PERSONAL_NUMBER),
+      },
+      error: null,
+    }
+
+    // A client that PATCHes back the customer it just read submits the mask.
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { name: 'Anna A', personal_number: MASKED },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<{ data: { personal_number: string } }>(response)
+    expect(status).toBe(200)
+    // Neither stored literally nor cleared: the column is left untouched.
+    expect(captured.update[0]).not.toHaveProperty('personal_number')
+    expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('does not treat a masked value as a personal number on a corporate customer', async () => {
+    queryResult = {
+      data: { id: 'customer-1', customer_type: 'individual', name: 'Anna A' },
+      error: null,
+    }
+
+    // Switching type away from individual while echoing the mask clears the
+    // column, and must not trip the "not allowed for businesses" guard.
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { customer_type: 'swedish_business', personal_number: MASKED },
+      }),
+      routeParams,
+    )
+
     expect(response.status).toBe(200)
-    const encrypted = (captured.update[0] as CustomerWrite).personal_number as string
-    expect(encrypted).not.toBe('900101-1234')
-    expect(decryptPersonnummer(encrypted)).toBe('900101-1234')
+    expect((captured.update[0] as CustomerWrite).personal_number).toBeNull()
+  })
+
+  it('rejects the masked value on create, where there is nothing to preserve', async () => {
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: {
+          name: 'Anna Andersson',
+          customer_type: 'individual',
+          personal_number: MASKED,
+        },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(400)
+    expect(captured.insert).toHaveLength(0)
   })
 
   it('clears the personal number when null is sent', async () => {

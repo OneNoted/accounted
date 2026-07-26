@@ -1,5 +1,7 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
+import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 
 /**
  * Calculate gross margin from income statement.
@@ -90,6 +92,101 @@ export function calculateExpenseRatio(incomeStatement: IncomeStatementReport): n
   const { total_revenue, total_expenses } = incomeStatement
   if (total_revenue === 0) return null
   return Math.round((total_expenses / total_revenue) * 10000) / 100
+}
+
+/** Supplier-invoice shape the KPI top-suppliers panel reads. */
+export interface KpiSupplierInvoiceRow {
+  supplier_id: string | null
+  total: number | null
+  total_sek: number | null
+  currency: string | null
+  exchange_rate: number | null
+  supplier: { id: string; name: string } | { id: string; name: string }[] | null
+}
+
+export interface TopSuppliersAggregate {
+  suppliers: { supplier_id: string; supplier_name: string; total: number }[]
+  /**
+   * Foreign-currency invoices left out of the SEK totals because they carry
+   * neither a stored SEK total nor an exchange rate. Mirrors
+   * `unconverted_fx_count` in lib/reports/supplier-ledger.ts: an excluded row
+   * is reported, never silently dropped.
+   */
+  unconvertedFxCount: number
+}
+
+/** Default size of the "Största leverantörer" list. */
+export const TOP_SUPPLIERS_LIMIT = 7
+
+/**
+ * The supplier-invoice query behind "Största leverantörer", shared by the KPI
+ * JSON route and the KPI xlsx export so the two can never select different
+ * columns or filter different rows for the same company and period.
+ */
+export function topSupplierInvoicesQuery(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+  periodEnd: string
+) {
+  return supabase
+    .from('supplier_invoices')
+    .select('supplier_id, total, total_sek, currency, exchange_rate, supplier:suppliers(id, name)')
+    .eq('company_id', companyId)
+    .gte('invoice_date', periodStart)
+    .lte('invoice_date', periodEnd)
+    .neq('status', 'credited')
+}
+
+/**
+ * Aggregate supplier spend per supplier, in SEK, largest first.
+ *
+ * `total_sek` is only populated for invoices that went through a currency
+ * conversion, so it is NULL on essentially every ordinary Swedish supplier
+ * invoice. Reading it alone therefore emptied the panel for normal companies.
+ * The SEK amount is resolved per row instead:
+ *   - SEK invoice: `total` is the SEK total, exactly (no approximation).
+ *   - Foreign invoice with a stored `total_sek` or an `exchange_rate`: convert.
+ *   - Foreign invoice with neither: not expressible in SEK, so it is counted in
+ *     `unconvertedFxCount` rather than added at its raw foreign amount (which
+ *     would understate or inflate the supplier) or dropped without a trace.
+ */
+export function aggregateTopSuppliers(
+  rows: KpiSupplierInvoiceRow[],
+  limit: number = TOP_SUPPLIERS_LIMIT
+): TopSuppliersAggregate {
+  const totals = new Map<string, { name: string; total: number }>()
+  let unconvertedFxCount = 0
+
+  for (const row of rows) {
+    if (!row.supplier_id) continue
+    const supplier = Array.isArray(row.supplier) ? row.supplier[0] : row.supplier
+    if (!supplier?.name) continue
+
+    const rate = row.exchange_rate != null ? Number(row.exchange_rate) : null
+    const isFx = !!row.currency && row.currency !== 'SEK'
+    if (isFx && row.total_sek == null && !(rate != null && rate > 0)) {
+      unconvertedFxCount += 1
+      continue
+    }
+
+    const amount = resolveSekAmount(Number(row.total ?? 0), row.total_sek, row.currency, rate)
+
+    const existing = totals.get(row.supplier_id)
+    if (existing) existing.total += amount
+    else totals.set(row.supplier_id, { name: supplier.name, total: amount })
+  }
+
+  const suppliers = Array.from(totals.entries())
+    .map(([supplier_id, v]) => ({
+      supplier_id,
+      supplier_name: v.name,
+      total: Math.round(v.total * 100) / 100,
+    }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limit)
+
+  return { suppliers, unconvertedFxCount }
 }
 
 /**

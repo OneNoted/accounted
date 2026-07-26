@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -12,9 +13,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Lock } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { computeSuggestedPeriod } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { fiscalPeriodAdvisoryText } from '@/lib/bookkeeping/fiscal-period-warnings'
 import type { FiscalPeriod } from '@/types'
 
 interface Props {
@@ -25,12 +28,13 @@ interface Props {
   onCreated: () => void
 }
 
-/** A prior period that must be locked before a new fiscal year can be created. */
-interface BlockingPeriod {
-  id: string
+/** A räkenskapsår that was just created, together with the non-blocking
+ *  advisory the route attached to the 200. Only set when there is one. */
+interface CreatedWithAdvisory {
   name: string
-  period_start: string
-  period_end: string
+  periodStart: string
+  periodEnd: string
+  advisory: string
 }
 
 /** Read a user-facing message from either a legacy string error or the
@@ -45,16 +49,23 @@ function errorMessage(err: unknown, fallback = 'Ett oväntat fel uppstod.'): str
 
 export default function CreatePeriodDialog({ open, onOpenChange, entryDate, periods, onCreated }: Props) {
   const { toast } = useToast()
+  // The form copy below is pre-existing hardcoded Swedish and is left as it
+  // stands (out of scope here). Every string added for the created-state is
+  // keyed in both messages/sv.json and messages/en.json. The advisory itself is
+  // not keyed: the route emits one Swedish sentence and no English twin, and
+  // bokslut/räkenskapsår domain copy stays Swedish in both locales anyway
+  // (.claude/rules/i18n.md).
+  const t = useTranslations('bookkeeping')
+  const tCommon = useTranslations('common')
   const suggested = useMemo(() => computeSuggestedPeriod(entryDate, periods), [entryDate, periods])
 
   const [name, setName] = useState(suggested.name)
   const [periodStart, setPeriodStart] = useState(suggested.period_start)
   const [periodEnd, setPeriodEnd] = useState(suggested.period_end)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isLocking, setIsLocking] = useState(false)
-  // Set when creation is blocked because a prior räkenskapsår is still open.
-  // The user can lock these inline and retry without leaving the dialog.
-  const [blockingPeriods, setBlockingPeriods] = useState<BlockingPeriod[]>([])
+  // Set when the period was created AND the route attached an advisory. The
+  // dialog then holds on a done-state so the sentence is actually read.
+  const [created, setCreated] = useState<CreatedWithAdvisory | null>(null)
 
   // Reset form when suggested values change (dialog reopened with new date)
   const [lastSuggested, setLastSuggested] = useState(suggested)
@@ -63,7 +74,18 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
     setPeriodStart(suggested.period_start)
     setPeriodEnd(suggested.period_end)
     setLastSuggested(suggested)
-    setBlockingPeriods([])
+    setCreated(null)
+  }
+
+  // Close, and refetch in the parent if this session created a period. The
+  // refetch is deferred to here on the advisory path on purpose: it swaps the
+  // `periods` prop, which resets the form above, and that would pull the
+  // advisory off screen before it was read.
+  const handleClose = () => {
+    const didCreate = created !== null
+    setCreated(null)
+    onOpenChange(false)
+    if (didCreate) onCreated()
   }
 
   const handleCreate = async () => {
@@ -78,28 +100,25 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
       const result = await res.json()
 
       if (!res.ok) {
-        const err = result?.error
-        // Blocked by an open prior year: surface an inline "lås och försök
-        // igen" path instead of a dead-end toast.
-        if (
-          err &&
-          typeof err === 'object' &&
-          err.code === 'PERIOD_CREATE_BLOCKED_BY_OPEN_PERIODS'
-        ) {
-          const blocking = (err.details?.blockingPeriods ?? []) as BlockingPeriod[]
-          setBlockingPeriods(blocking)
-          return
-        }
         toast({
           title: 'Kunde inte skapa räkenskapsår',
-          description: errorMessage(err),
+          description: errorMessage(result?.error),
           variant: 'destructive',
         })
         return
       }
 
+      // The 200 may carry non-blocking advisories (today: a prior räkenskapsår
+      // still open, which is the normal state while the bokslut runs). The
+      // period WAS created, so this is information, never a failure: show the
+      // done-state with one ochre sentence rather than flashing a toast past.
+      const advisory = fiscalPeriodAdvisoryText(result)
+      if (advisory) {
+        setCreated({ name, periodStart, periodEnd, advisory })
+        return
+      }
+
       toast({ title: 'Räkenskapsår skapat', description: `${name} har skapats.` })
-      setBlockingPeriods([])
       onOpenChange(false)
       onCreated()
     } catch {
@@ -113,108 +132,68 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
     }
   }
 
-  // Lock each blocking prior year (reversible locked_at), then retry creation.
-  const handleLockAndRetry = async () => {
-    setIsLocking(true)
-    try {
-      for (const p of blockingPeriods) {
-        const res = await fetch(`/api/bookkeeping/fiscal-periods/${p.id}/lock`, {
-          method: 'POST',
-        })
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          // An already-locked period is fine: keep going.
-          if (body?.error?.code === 'PERIOD_LOCK_ALREADY_LOCKED') continue
-          toast({
-            title: `Kunde inte låsa ${p.name}`,
-            description: errorMessage(body?.error),
-            variant: 'destructive',
-          })
-          return
-        }
-      }
-      setBlockingPeriods([])
-      await handleCreate()
-    } catch {
-      toast({
-        title: 'Kunde inte låsa räkenskapsåret',
-        description: 'Ett nätverksfel uppstod. Försök igen.',
-        variant: 'destructive',
-      })
-    } finally {
-      setIsLocking(false)
-    }
-  }
-
-  const isBlocked = blockingPeriods.length > 0
-  const busy = isSubmitting || isLocking
-
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : handleClose())}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Skapa räkenskapsår</DialogTitle>
-          <DialogDescription>
-            Det finns inget räkenskapsår som täcker datumet {entryDate}. Skapa ett nytt nedan.
-          </DialogDescription>
-        </DialogHeader>
+        {created ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('period_created_title')}</DialogTitle>
+              <DialogDescription className="tabular-nums">
+                {t('period_created_range', {
+                  name: created.name,
+                  start: created.periodStart,
+                  end: created.periodEnd,
+                })}
+              </DialogDescription>
+            </DialogHeader>
 
-        <div className="space-y-3">
-          <div>
-            <Label>Namn</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label>Startdatum</Label>
-              <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} className="mt-1" />
-            </div>
-            <div>
-              <Label>Slutdatum</Label>
-              <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} className="mt-1" />
-            </div>
-          </div>
+            {/* Attention is one ochre sentence, not a banner (UI-migration
+                convention 6). The text is the route's own Swedish domain copy,
+                which stays Swedish in both locales. */}
+            <AttnLine>{created.advisory}</AttnLine>
 
-          {isBlocked && (
-            <div className="rounded-lg border border-warning/20 bg-warning/5 p-3 text-sm flex gap-2">
-              <Lock className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
-              <div className="space-y-2">
-                <div className="space-y-1">
-                  <p className="font-medium">Föregående räkenskapsår är öppet</p>
-                  <p className="text-muted-foreground">
-                    Du måste låsa föregående räkenskapsår innan du kan skapa ett nytt.
-                    Låsningen är vändbar: du kan låsa upp året igen för att bokföra
-                    bokslutsposter.
-                  </p>
+            <DialogFooter>
+              <Button onClick={handleClose}>{tCommon('close')}</Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Skapa räkenskapsår</DialogTitle>
+              <DialogDescription>
+                Det finns inget räkenskapsår som täcker datumet {entryDate}. Skapa ett nytt nedan.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              <div>
+                <Label>Namn</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Startdatum</Label>
+                  <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} className="mt-1" />
                 </div>
-                <ul className="space-y-0.5 text-muted-foreground">
-                  {blockingPeriods.map((p) => (
-                    <li key={p.id} className="tabular-nums">
-                      {p.name} ({p.period_start} till {p.period_end})
-                    </li>
-                  ))}
-                </ul>
+                <div>
+                  <Label>Slutdatum</Label>
+                  <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} className="mt-1" />
+                </div>
               </div>
             </div>
-          )}
-        </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-            Avbryt
-          </Button>
-          {isBlocked ? (
-            <Button onClick={handleLockAndRetry} disabled={busy}>
-              {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {blockingPeriods.length > 1 ? 'Lås åren och skapa' : 'Lås året och skapa'}
-            </Button>
-          ) : (
-            <Button onClick={handleCreate} disabled={busy || !name || !periodStart || !periodEnd}>
-              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Skapa
-            </Button>
-          )}
-        </DialogFooter>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+                Avbryt
+              </Button>
+              <Button onClick={handleCreate} disabled={isSubmitting || !name || !periodStart || !periodEnd}>
+                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Skapa
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   )

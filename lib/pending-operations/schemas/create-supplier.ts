@@ -10,9 +10,19 @@
  *
  * Financial identifiers (IBAN, BIC, bankgiro, plusgiro, org_number,
  * vat_number, default_expense_account) are format-validated so adversarial
- * or malformed payment-routing data cannot be persisted. Bankgiro additionally
- * passes the Luhn check (SE-R-008/009). VAT number format is checked against
- * the VIES per-country pattern (SE-R-001, ML 17 kap 24§ p.4).
+ * or malformed payment-routing data cannot be persisted. Bankgiro is
+ * length-checked (7-8 digits, Peppol SE-R-008/009) and additionally passes
+ * Bankgirot's modulus-10 (Luhn) check digit. VAT numbers are matched against
+ * the VIES per-country patterns in lib/vat/vies-client.ts; the SE pattern
+ * (SE + 12 digits) is the same 14-character form Peppol SE-R-001 requires.
+ *
+ * These are FORMAT checks only. No field here is legally mandatory for a
+ * supplier record: ML 17 kap 24 § lists what a seller must put on an invoice
+ * it issues, not what a buyer's supplier register must hold, so it cannot make
+ * any register field required. Every field except `name` is therefore optional,
+ * matching components/suppliers/SupplierForm.tsx and CreateSupplierSchema
+ * (lib/api/schemas.ts): the staged/agent path accepts exactly what the
+ * dashboard accepts.
  */
 import { z } from 'zod'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -141,14 +151,22 @@ export const CreateSupplierParamsSchema = z
     notes: optString(z.string().max(2000)),
   })
   .strict()
-  .superRefine((val, ctx) => {
-    if (val.supplier_type === 'eu_business' && !val.vat_number) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['vat_number'],
-        message: 'EU business suppliers must have an EU VAT number (ML 17 kap 24§)',
-      })
-    }
-  })
+
+// Deliberately NO "eu_business requires vat_number" rule.
+//
+// Applying omvänd betalningsskyldighet to an EU purchase does not depend on the
+// buyer holding the supplier's VAT number. The buyer reports the purchase and
+// self-assesses output VAT, then deducts the same amount as input VAT, because
+// it is a taxable person established in Sweden (ML 16 kap 6 § + 6 kap 34 §).
+// A VIES-validated counterparty VAT number is a condition for zero-rating an
+// intra-community SUPPLY, i.e. the SELLER's side, which is why only `customers`
+// carries vat_number_validated / vat_number_validated_at and `suppliers` never
+// has. Nothing downstream reads supplier.vat_number to decide reverse charge:
+// lib/bookkeeping/supplier-invoice-entries.ts and generateReverseChargeBasisLines()
+// key off supplier_type + invoice.reverse_charge alone.
+//
+// An EU supplier below its national registration threshold has no VAT number at
+// all, so requiring one refused legitimate suppliers on the staged/agent path
+// while the dashboard form created the very same company without complaint.
 
 export type CreateSupplierParams = z.infer<typeof CreateSupplierParamsSchema>

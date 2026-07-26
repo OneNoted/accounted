@@ -518,6 +518,150 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
+  // 2c-currency. The content bucket keys on (date, öre) with NO currency, so a
+  //     250,00 EUR row and a 250,00 SEK row on the same date share a bucket.
+  //     Every match path (text bridge, cross-channel mirror, hand mirror) must
+  //     refuse to consume across currencies: the swallowed row is a real
+  //     affärshändelse that would never be bokförd, and only the aggregate
+  //     duplicate count would hint that anything vanished.
+  // -----------------------------------------------------------------------
+  it('does not text-bridge-dedupe across currencies (250 EUR vs stored 250 SEK, identical titles)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // Same feed on both sides, so the cross-channel mirror cannot fire: this
+    // isolates the description-bridge path, where the titles match EXACTLY.
+    const raw = makeRaw({
+      date: '2026-07-13',
+      amount: -250.0,
+      currency: 'EUR',
+      description: 'STRIPE PAYMENT',
+      external_id: 'eb_EU00_2026-07-13_-25000_0',
+      import_source: 'enable_banking',
+    })
+    const inserted = makeTransaction({ id: 'tx-eur', external_id: raw.external_id, amount: -250.0 })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({
+      data: [{
+        date: '2026-07-13', amount: -250.0,
+        original_description: 'STRIPE PAYMENT', description: 'STRIPE PAYMENT',
+        import_source: 'enable_banking', currency: 'SEK',
+      }],
+      error: null,
+    }) // unbooked map: same title, same date, same öre, DIFFERENT currency
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert: kept
+    mockFetchExchangeRate.mockResolvedValue(null)
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    expect(result.duplicates).toBe(0)
+    expect(result.transaction_ids).toEqual(['tx-eur'])
+  })
+
+  it('does not cross-channel-mirror-dedupe across currencies (CSV EUR vs stored PSD2 SEK)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // Non-bridging titles + a count-symmetric bucket = the mirror WOULD fire on
+    // (date, öre) alone. The currency mismatch must keep it off.
+    const raw = makeRaw({
+      date: '2026-07-13',
+      amount: -941,
+      currency: 'EUR',
+      description: 'Fortnox Finans AB',
+      external_id: 'nordea_business_eur1',
+      import_source: 'csv_nordea_business',
+    })
+    const inserted = makeTransaction({ id: 'tx-eur-mirror', external_id: raw.external_id, amount: -941 })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({
+      data: [{
+        date: '2026-07-13', amount: -941,
+        original_description: '506401841738056', description: '506401841738056',
+        import_source: 'enable_banking', currency: 'SEK',
+      }],
+      error: null,
+    }) // unbooked map: cross-feed twin by (date, öre), but in SEK
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert: kept
+    mockFetchExchangeRate.mockResolvedValue(null)
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    expect(result.duplicates).toBe(0)
+  })
+
+  it('still dedupes a genuine same-currency re-import (control for the currency guard)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // Byte-identical to the text-bridge test above except the incoming currency
+    // matches the stored one: the guard must change nothing here.
+    const raw = makeRaw({
+      date: '2026-07-13',
+      amount: -250.0,
+      currency: 'SEK',
+      description: 'STRIPE PAYMENT',
+      external_id: 'eb_SE00_2026-07-13_-25000_0',
+      import_source: 'enable_banking',
+    })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({
+      data: [{
+        date: '2026-07-13', amount: -250.0,
+        original_description: 'STRIPE PAYMENT', description: 'STRIPE PAYMENT',
+        import_source: 'enable_banking', currency: 'SEK',
+      }],
+      error: null,
+    }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    // No insert: deduped by the text bridge, exactly as before the guard.
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(0)
+  })
+
+  it('still dedupes against a stored row that carries no currency (legacy rows unchanged)', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    // A null currency on either side carries no contradiction, so it must stay
+    // bridge-allowed: rows predating the currency column dedup as they always
+    // did, even against a foreign-currency import.
+    const raw = makeRaw({
+      date: '2026-07-13',
+      amount: -250.0,
+      currency: 'EUR',
+      description: 'STRIPE PAYMENT',
+      external_id: 'eb_EU00_2026-07-13_-25000_9',
+      import_source: 'enable_banking',
+    })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({
+      data: [{
+        date: '2026-07-13', amount: -250.0,
+        original_description: 'STRIPE PAYMENT', description: 'STRIPE PAYMENT',
+        import_source: 'enable_banking', currency: null,
+      }],
+      error: null,
+    }) // unbooked map: legacy row, currency unknown
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    mockFetchExchangeRate.mockResolvedValue(null)
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(0)
+  })
+
+  // -----------------------------------------------------------------------
   // 2c-hand. Booked-hand-entered mirror: the user bookkeeps by chat/MCP FIRST
   //     (free-form Swedish title, booked), then connects the bank; the feed
   //     delivers the bank's copy of the same movement with a raw provider

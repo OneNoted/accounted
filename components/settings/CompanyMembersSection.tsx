@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -11,6 +12,8 @@ import {
   SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { parseCompanyMembersPayload } from '@/components/settings/members-payload'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatDateLong } from '@/lib/utils'
 import { Loader2, Plus, Trash2, Mail } from 'lucide-react'
 
@@ -35,6 +38,7 @@ interface CompanyInvitation {
 
 export function CompanyMembersSection() {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { company } = useCompany()
 
@@ -44,9 +48,17 @@ export function CompanyMembersSection() {
     member: t('members_role_member'),
     viewer: t('members_role_viewer'),
   }
-  const [isLoading, setIsLoading] = useState(true)
-  const [members, setMembers] = useState<CompanyMemberItem[]>([])
-  const [invitations, setInvitations] = useState<CompanyInvitation[]>([])
+  // null = the roster is not known: still loading, or the read failed
+  // (loadError). A failed read must never render an apparently member-less
+  // company: a consultant looking at an empty list re-invites people who are
+  // already members. EmptyState-like rendering is reserved for a confirmed
+  // empty read.
+  const [members, setMembers] = useState<CompanyMemberItem[] | null>(null)
+  const [invitations, setInvitations] = useState<CompanyInvitation[] | null>(null)
+  // detail === null: transient, so the line carries a retry. A detail sentence
+  // means the user has to act (an expired session) and a retry cannot help.
+  const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<string>('viewer')
   const [isSending, setIsSending] = useState(false)
@@ -55,24 +67,51 @@ export function CompanyMembersSection() {
   const [canInvite, setCanInvite] = useState(false)
 
   const fetchMembers = useCallback(async () => {
+    setLoadError(null)
     try {
       const res = await fetch('/api/company/members')
-      const data = await res.json()
-      if (res.ok) {
-        setMembers(data.data.members)
-        setInvitations(data.data.invitations)
-        setCanInvite(data.data.canInvite)
+      if (!res.ok) {
+        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+        // getErrorMessage falls back to the status map.
+        const body = await res.json().catch(() => null)
+        const sessionGone = res.status === 401 || res.status === 403
+        setMembers(null)
+        setInvitations(null)
+        setCanInvite(false)
+        setLoadError({
+          detail: sessionGone
+            ? getErrorMessage(body, { statusCode: res.status, locale: errorLocale })
+            : null,
+        })
+        return
       }
+      // A 200 whose body will not parse throws into the catch below; a 200
+      // without the roster lists is a failed read too. Neither may become a
+      // fabricated empty member list.
+      const parsed = parseCompanyMembersPayload<CompanyMemberItem, CompanyInvitation>(
+        await res.json(),
+      )
+      if (parsed === null) {
+        setMembers(null)
+        setInvitations(null)
+        setCanInvite(false)
+        setLoadError({ detail: null })
+        return
+      }
+      setMembers(parsed.members)
+      setInvitations(parsed.invitations)
+      setCanInvite(parsed.canInvite)
     } catch {
-      // Silently fail
-    } finally {
-      setIsLoading(false)
+      setMembers(null)
+      setInvitations(null)
+      setCanInvite(false)
+      setLoadError({ detail: null })
     }
-  }, [])
+  }, [errorLocale])
 
   useEffect(() => {
-    fetchMembers()
-  }, [fetchMembers])
+    void fetchMembers()
+  }, [fetchMembers, reloadKey])
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -152,10 +191,31 @@ export function CompanyMembersSection() {
     }
   }
 
-  if (isLoading) {
+  if (members === null || invitations === null) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <div>
+        {/* Live region always mounted while the roster is unknown, so the
+            failure is announced when it appears, not merely inserted. */}
+        <div role="status" aria-live="polite" className="min-w-0 px-1">
+          {loadError && (
+            <AttnLine
+              action={
+                loadError.detail
+                  ? undefined
+                  : { label: t('members_load_retry'), onClick: () => setReloadKey((k) => k + 1) }
+              }
+            >
+              {loadError.detail
+                ? `${t('members_load_failed')} ${loadError.detail}`
+                : t('members_load_failed')}
+            </AttnLine>
+          )}
+        </div>
+        {!loadError && (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
       </div>
     )
   }

@@ -1,12 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Download, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { downloadFile } from '@/lib/browser/download-file'
+import { postAction } from '@/lib/browser/post-action'
+import { failureDescription } from '@/lib/browser/action-failure'
+import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
 
 interface TaxPaymentPanelProps {
@@ -35,6 +38,7 @@ export function TaxPaymentPanel({
   onChange,
 }: TaxPaymentPanelProps) {
   const t = useTranslations('salary_payments')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [downloading, setDownloading] = useState(false)
   const [marking, setMarking] = useState(false)
@@ -53,45 +57,56 @@ export function TaxPaymentPanel({
   const totalAmount = Math.round((totalTax + totalAvgifter) * 100) / 100
 
   const handleDownload = useCallback(async () => {
+    // Both buttons are disabled while either is in flight; this guard closes the
+    // double-click race before React has re-rendered them. A second file for the
+    // same period is a second payable instruction to Skattekontot.
+    if (downloading || marking) return
     setDownloading(true)
     try {
-      const res = await fetch(`/api/skatteverket/tax-payments/${period}/payment-file`)
-      if (!res.ok) {
-        const result = await res.json().catch(() => ({ error: t('tax_download_failed_fallback') }))
+      // Bounded, and no file is written unless the server answered 2xx with a
+      // complete body: an error envelope saved as bg_lb_skatt_2026-04.txt is a
+      // file the user would upload to the bank before discovering it pays no tax.
+      const result = await downloadFile({
+        url: `/api/skatteverket/tax-payments/${period}/payment-file`,
+        filename: `bg_lb_skatt_${period}.txt`,
+        locale,
+      })
+      // Exactly one toast per outcome: TOAST_LIMIT is 1.
+      if (!result.ok) {
         toast({
           title: t('tax_download_failed_title'),
-          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          description: failureDescription(result, {
+            timeout: t('download_timeout'),
+            network: t('download_network'),
+          }),
           variant: 'destructive',
         })
         return
       }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `bg_lb_skatt_${period}.txt`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
       toast({ title: t('tax_downloaded') })
       onChange?.()
     } finally {
       setDownloading(false)
     }
-  }, [period, toast, onChange, t])
+  }, [period, toast, onChange, t, locale, downloading, marking])
 
   const handleMarkPaid = useCallback(async () => {
+    if (downloading || marking) return
     setMarking(true)
     try {
-      const res = await fetch(`/api/skatteverket/tax-payments/${period}/mark-paid`, {
-        method: 'POST',
+      const result = await postAction({
+        url: `/api/skatteverket/tax-payments/${period}/mark-paid`,
+        locale,
       })
-      if (!res.ok) {
-        const result = await res.json().catch(() => ({ error: t('tax_mark_paid_failed_fallback') }))
+      if (!result.ok) {
         toast({
           title: t('tax_mark_paid_failed_title'),
-          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          description: failureDescription(result, {
+            // A timeout on a write is genuinely ambiguous: the update may have
+            // landed. Say that instead of claiming it failed.
+            timeout: t('tax_mark_paid_timeout'),
+            network: t('tax_mark_paid_network'),
+          }),
           variant: 'destructive',
         })
         return
@@ -101,7 +116,7 @@ export function TaxPaymentPanel({
     } finally {
       setMarking(false)
     }
-  }, [period, toast, onChange, t])
+  }, [period, toast, onChange, t, locale, downloading, marking])
 
   if (totalAmount <= 0) return null
 

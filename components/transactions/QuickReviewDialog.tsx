@@ -1,12 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
@@ -63,6 +66,7 @@ export default function QuickReviewDialog({
   const t = useTranslations('tx_quick_review')
   const tCat = useTranslations('tx_categories')
   const { toast } = useToast()
+  const router = useRouter()
   const [accountOverride, setAccountOverride] = useState(defaultAccount)
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>(defaultVat)
   const [accounts, setAccounts] = useState<BASAccount[]>([])
@@ -201,27 +205,37 @@ export default function QuickReviewDialog({
 
       const journalEntryId = await onConfirm(transaction.id, category, resolvedVat, override, templateId)
 
-      // Link uploaded documents to the journal entry
+      // Attach the uploaded underlag to the verifikat the booking just created.
+      // BFL 5 kap 7 § requires the verifikation to reference its underlag and
+      // BFL 7 kap requires that underlag to be archived with it; the verifikat
+      // is already committed here, so a failed link can only be reported, not
+      // undone. The parent's "Bokförd" toast must not be the last word when a
+      // receipt never made it onto the books.
       if (journalEntryId && uploadedFiles.length > 0) {
-        const filesToLink = uploadedFiles.filter((f) => f.status === 'uploaded' && f.id)
-        let linkFailCount = 0
-        for (const file of filesToLink) {
-          try {
-            await fetch(`/api/documents/${file.id}/link`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ journal_entry_id: journalEntryId }),
-            })
-          } catch {
-            linkFailCount++
-          }
-        }
-        if (linkFailCount > 0) {
+        const targets = uploadedFiles
+          .filter((f) => f.status === 'uploaded' && f.id)
+          .map((f) => ({ documentId: f.id as string, fileName: f.fileName }))
+        const { failed } = await linkDocuments(targets, journalEntryId)
+        if (failed.length > 0) {
           toast({
-            title: t('doc_link_failed_title'),
-            description: t('doc_link_failed_description', { count: linkFailCount }),
+            title: t('doc_link_failed_booked_title'),
+            description: t('doc_link_failed_booked_description', {
+              count: failed.length,
+              files: formatFailedDocumentNames(failed),
+            }),
             variant: 'destructive',
+            action: (
+              <ToastAction
+                altText={t('doc_link_open_entry')}
+                onClick={() => router.push(`/bookkeeping/${journalEntryId}`)}
+              >
+                {t('doc_link_open_entry')}
+              </ToastAction>
+            ),
           })
+          // Keep the files that did not attach: clearing them would erase the
+          // user's only pointer to the underlag they believed was filed.
+          return
         }
       }
 

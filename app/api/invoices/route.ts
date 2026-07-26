@@ -275,6 +275,22 @@ async function createCreditNote(
     return errorResponseFromCode('INVOICE_CREDIT_ALREADY_CREDITED', log, { requestId })
   }
 
+  // 'partially_paid' is missing from this list and that is a real gap, not a
+  // rule: an aendringsfaktura per ML (2023:200) 17 kap 22-23 SS references the
+  // original's loepnummer, and whether the customer has paid nothing, part or
+  // all of it has no bearing on the right to issue one. It is NOT added here
+  // alone, because this door is not where the flow ends: issueCreditNote()
+  // (lib/invoices/issue-credit-note.ts) flips the original to 'credited' with
+  // the same three-status compare-and-set, and it runs AFTER the reversing
+  // verifikat is posted. Widening only this check would post an immutable
+  // voucher and then fail on the status flip, leaving a fully credited invoice
+  // sitting at 'partially_paid': open in the AR ledger and still chased by
+  // reminders. Widening it is a coordinated change across the six sites listed
+  // in DECISIONS.md, with issue-credit-note.ts first.
+  //
+  // Genuinely refused either way: 'draft' (never issued, so there is no
+  // loepnummer for ML 17 kap 22 to reference) and 'cancelled'. 'credited' is
+  // refused above.
   if (!['sent', 'paid', 'overdue'].includes(originalInvoice.status)) {
     return errorResponseFromCode('INVOICE_CREDIT_NOT_SENT', log, {
       requestId,

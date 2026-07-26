@@ -27,9 +27,15 @@ export const GET = withRouteContext(
     // narrow (id, date, amount, journal_entry_id) so this endpoint cannot
     // leak description / counterparty fields that aren't required to
     // surface a duplicate-payment candidate. GDPR Art.5(1)(c)/(f).
+    //
+    // currency / amount_sek / exchange_rate are part of that minimum, not an
+    // expansion of it: they carry no personal data, and without them the
+    // detector cannot state a non-SEK bank line in SEK and would compare a
+    // foreign amount against an always-SEK ledger leg. A narrow column list is
+    // exactly how this guard would go dead on FX rows.
     const { data: transaction, error } = await supabase
       .from('transactions')
-      .select('id, date, amount, journal_entry_id')
+      .select('id, date, amount, currency, amount_sek, exchange_rate, journal_entry_id')
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -49,6 +55,9 @@ export const GET = withRouteContext(
         transactionId,
         transactionDate: transaction.date,
         transactionAmount: transaction.amount,
+        transactionCurrency: transaction.currency ?? null,
+        transactionAmountSek: transaction.amount_sek ?? null,
+        transactionExchangeRate: transaction.exchange_rate ?? null,
       })
       return NextResponse.json({ candidate })
     } catch (err) {

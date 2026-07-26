@@ -91,7 +91,8 @@ describe('PUT /api/kpi/preferences', () => {
   })
 
   it('upserts and returns the stored value on the happy path', async () => {
-    enqueue({ data: { value: { accountOverrides: { some_kpi: ['3001'] } } } })
+    enqueue({ data: { value: {} } }) // existing row lookup
+    enqueue({ data: { value: { accountOverrides: { some_kpi: ['3001'] } } } }) // upsert
     const req = createMockRequest('/api/kpi/preferences', {
       method: 'PUT',
       body: { accountOverrides: { some_kpi: ['3001'] } },
@@ -100,5 +101,100 @@ describe('PUT /api/kpi/preferences', () => {
     const { status, body } = await parseJsonResponse<{ data: { accountOverrides: Record<string, string[]> } }>(res)
     expect(status).toBe(200)
     expect(body.data.accountOverrides.some_kpi).toEqual(['3001'])
+  })
+
+  it('rejects an accountOverrides value that is not an array of strings', async () => {
+    const req = createMockRequest('/api/kpi/preferences', {
+      method: 'PUT',
+      body: { accountOverrides: { some_kpi: 'not-an-array' } },
+    })
+    const res = await PUT(req, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(400)
+  })
+
+})
+
+/**
+ * A partial save used to reset every unmentioned setting: mergeWithDefaults()
+ * fills absent keys with FACTORY defaults, and the merged document was what got
+ * stored, so saving an account override wiped the user's visible-KPI selection
+ * and ordering. The merge base is now the STORED row. Asserted on the payload
+ * handed to upsert(); the shared queued mock proxies every chain method, so the
+ * payload is captured with a purpose-built recorder.
+ */
+describe('PUT /api/kpi/preferences merge semantics', () => {
+  function createCapturingSupabase(results: { data?: unknown; error?: unknown }[]) {
+    const upsertPayloads: Record<string, unknown>[] = []
+    let idx = 0
+    const makeBuilder = () => {
+      const result = results[idx++] ?? { data: null, error: null }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const b: any = {}
+      for (const m of ['select', 'eq', 'maybeSingle', 'single']) {
+        b[m] = () => b
+      }
+      b.upsert = (payload: Record<string, unknown>) => {
+        upsertPayloads.push(payload)
+        return b
+      }
+      b.then = (resolve: (v: unknown) => void) =>
+        resolve({ data: result.data ?? null, error: result.error ?? null })
+      return b
+    }
+    return { supabase: { from: () => makeBuilder() }, upsertPayloads }
+  }
+
+  const stored = {
+    visibleKpis: ['kpi_a'],
+    kpiOrder: ['kpi_a', 'kpi_b'],
+    accountOverrides: { kpi_a: ['3001'] },
+  }
+
+  async function put(body: unknown, existing: unknown) {
+    const { supabase, upsertPayloads } = createCapturingSupabase([
+      { data: existing === undefined ? null : { value: existing } },
+      { data: { value: 'ok' } },
+    ])
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase, error: null })
+    const res = await PUT(
+      createMockRequest('/api/kpi/preferences', { method: 'PUT', body }),
+      { params: Promise.resolve({}) },
+    )
+    return { res, value: upsertPayloads[0]?.value as Record<string, unknown> | undefined }
+  }
+
+  it('keeps the stored visibleKpis and kpiOrder when only accountOverrides is sent', async () => {
+    const { res, value } = await put({ accountOverrides: { kpi_b: ['4010'] } }, stored)
+    expect(res.status).toBe(200)
+    expect(value).toEqual({
+      visibleKpis: ['kpi_a'],
+      kpiOrder: ['kpi_a', 'kpi_b'],
+      accountOverrides: { kpi_b: ['4010'] },
+    })
+  })
+
+  it('replaces every key when the dialog sends the complete object', async () => {
+    const full = {
+      visibleKpis: ['kpi_z'],
+      kpiOrder: ['kpi_z'],
+      accountOverrides: { kpi_z: ['3010'] },
+    }
+    const { value } = await put(full, stored)
+    expect(value).toEqual(full)
+  })
+
+  it('falls back to defaults for a row that has never been written', async () => {
+    const { res, value } = await put({ visibleKpis: ['kpi_new'] }, undefined)
+    expect(res.status).toBe(200)
+    expect(value?.visibleKpis).toEqual(['kpi_new'])
+    // The other two keys come from the defaults, not from undefined.
+    expect(value?.kpiOrder).toBeDefined()
+    expect(value?.accountOverrides).toBeDefined()
+  })
+
+  it('an empty body stores the stored value unchanged', async () => {
+    const { value } = await put({}, stored)
+    expect(value).toEqual(stored)
   })
 })

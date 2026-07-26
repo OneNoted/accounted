@@ -5,6 +5,7 @@ import {
   customerNameMatches,
   calculateMatchScore,
   findMatchingInvoices,
+  findInvoiceMatchCandidates,
   getBestInvoiceMatch,
 } from '../invoice-matching'
 import type { Transaction, Invoice, Customer } from '@/types'
@@ -455,5 +456,156 @@ describe('findMatchingInvoices: status-leak guard', () => {
     const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
     expect(result).toHaveLength(1)
     expect(result[0].invoice.id).toBe('inv-clean')
+  })
+})
+
+// ============================================================
+// findInvoiceMatchCandidates: unconverted foreign-currency invoices
+// ============================================================
+//
+// A foreign-currency invoice with no stored SEK conversion is not comparable
+// to a kronor bank row, so it is excluded from candidacy. That is correct (the
+// alternative is "matching" 1 000 EUR against 1 000 kr) but it used to be
+// silent: the user saw no suggestion and no explanation. The exclusion is now
+// reported so a caller can point at the repair,
+// POST /api/invoices/{id}/refresh-exchange-rate.
+
+describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
+  function enqueueSingleInvoice(inv: unknown) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [inv], error: null })
+    // Status-leak guard's invoice_payments lookup.
+    enqueue({ data: [], error: null })
+    return supabase
+  }
+
+  it('reports no exclusions for an ordinary SEK match', async () => {
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({ total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].confidence).toBe(0.80)
+    expect(result.unconvertedFxCount).toBe(0)
+    expect(result.unconvertedFxInvoices).toEqual([])
+  })
+
+  it('still matches a EUR invoice that has a stored SEK conversion', async () => {
+    // 1 000 EUR booked at 12.50 → total_sek 12 500 vs a 12 500 kr receipt.
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({
+        total: 1000,
+        remaining_amount: 1000,
+        status: 'sent',
+        currency: 'EUR',
+        total_sek: 12500,
+        exchange_rate: 12.5,
+      }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toHaveLength(1)
+    expect(result.matches[0].confidence).toBe(0.80)
+    expect(result.unconvertedFxCount).toBe(0)
+  })
+
+  it('excludes a EUR invoice with no SEK conversion AND reports it', async () => {
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({
+        id: 'inv-eur-no-rate',
+        invoice_number: 'F-2024099',
+        total: 1000,
+        remaining_amount: 1000,
+        status: 'sent',
+        currency: 'EUR',
+        total_sek: null,
+        exchange_rate: null,
+      }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toEqual([])
+    expect(result.unconvertedFxCount).toBe(1)
+    expect(result.unconvertedFxInvoices).toEqual([
+      {
+        invoiceId: 'inv-eur-no-rate',
+        invoiceNumber: 'F-2024099',
+        currency: 'EUR',
+        reason: 'unconverted_fx',
+      },
+    ])
+  })
+
+  it('does not report a SEK invoice against a foreign bank row as an FX exclusion', async () => {
+    // Nothing a rate refresh on the invoice would fix: the bank row is the
+    // foreign side. Still excluded, just not as an unconverted-FX invoice.
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({ total: 12500, remaining_amount: 12500, status: 'sent', currency: 'SEK' }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, currency: 'EUR', description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+
+    expect(result.matches).toEqual([])
+    expect(result.unconvertedFxCount).toBe(0)
+  })
+
+  // total_sek = 0 passes the `total_sek != null` currency guard and then hits
+  // the conversion's old `return invoiceAmount` fallback, comparing 1 000 EUR
+  // against a 1 000 kr receipt and scoring it an exact match at 0.80. The
+  // fallback now returns null, so the invoice is not comparable at all.
+  const zeroConversionInvoice = () => ({
+    ...makeInvoice({
+      id: 'inv-eur-zero-sek',
+      total: 1000,
+      remaining_amount: 1000,
+      status: 'sent',
+      currency: 'EUR',
+      total_sek: 0,
+    }),
+    customer: makeCustomer({ name: 'Different' }),
+  })
+  const zeroConversionTx = () =>
+    makeTransaction({ amount: 1000, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
+
+  it('never matches the raw foreign total when the stored conversion is zero', async () => {
+    const supabase = enqueueSingleInvoice(zeroConversionInvoice())
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', zeroConversionTx())
+
+    expect(result).toEqual([])
+  })
+
+  it('reports the zero-conversion invoice as an unconverted FX exclusion', async () => {
+    const supabase = enqueueSingleInvoice(zeroConversionInvoice())
+
+    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', zeroConversionTx())
+
+    expect(result.unconvertedFxCount).toBe(1)
+    expect(result.unconvertedFxInvoices[0].invoiceId).toBe('inv-eur-zero-sek')
+  })
+
+  it('keeps the array-returning wrapper working for existing callers', async () => {
+    const supabase = enqueueSingleInvoice({
+      ...makeInvoice({ total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }),
+      customer: makeCustomer({ name: 'Different' }),
+    })
+
+    const tx = makeTransaction({ amount: 12500, description: 'Unrelated', merchant_name: null, reference: null })
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+
+    expect(Array.isArray(result)).toBe(true)
+    expect(result).toHaveLength(1)
   })
 })

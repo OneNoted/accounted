@@ -54,6 +54,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         id,
         date: transaction.date,
         amount: transaction.amount,
+        // The FX trio must ride along: `amount` is in `currency`, the ledger
+        // legs it is compared against are always SEK. Selected above via
+        // select('*').
+        currency: transaction.currency ?? null,
+        amount_sek: transaction.amount_sek ?? null,
+        exchange_rate: transaction.exchange_rate ?? null,
         cash_account_id: transaction.cash_account_id ?? null,
       })
       if (!force) {
@@ -104,8 +110,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
               transaction_id: id,
               dismissed_transaction_id: candidate.transaction_id,
               dismissed_journal_entry_id: candidate.journal_entry_id,
-              amount_ore: Math.round(candidate.amount * 100),
+              // Null when the candidate's SEK value could not be established
+              // (a rateless foreign sibling); the foreign figures below then
+              // carry the durable record instead of a fabricated kr amount.
+              amount_ore: candidate.amount != null ? Math.round(candidate.amount * 100) : null,
+              dismissed_currency: candidate.currency,
+              dismissed_amount_in_currency: candidate.amount_in_currency,
               entry_date: candidate.entry_date,
+              // Whether the user dismissed a confirmed same-amount twin or a
+              // candidate whose amounts could never be compared (BFNAR 2013:2
+              // kap 8: the behandlingshistorik has to say which).
+              amount_verified: candidate.amount_verified,
+              unverified_reason: candidate.unverified_reason,
             },
             actor: { type: 'user', id: user.id },
             occurredAt: new Date(),

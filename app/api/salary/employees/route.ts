@@ -29,10 +29,13 @@ export const GET = withRouteContext('salary.employees.list', async (request, { s
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
-  // Mask personnummer: show birthdate, hide the 4-digit suffix
-  const masked = (data || []).map(emp => ({
+  // Mask personnummer: show birthdate, hide the 4-digit suffix. The mask goes
+  // out under `personnummer_masked`, never under the writable `personnummer`
+  // key: the roster feeds edit forms, and a mask returned under the write key
+  // can be posted straight back into the encrypt path.
+  const masked = (data || []).map(({ personnummer, ...emp }) => ({
     ...emp,
-    personnummer: maskPersonnummer(decryptPersonnummer(emp.personnummer)),
+    personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer)),
   }))
 
   return NextResponse.json({ data: masked })
@@ -114,10 +117,14 @@ export const POST = withRouteContext('salary.employees.create', async (request, 
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
   }
 
+  // Same rule as the read surfaces: the create response carries the mask under
+  // `personnummer_masked` only. Spreading the inserted row would otherwise echo
+  // the stored ciphertext under `personnummer`.
+  const { personnummer: _storedPnr, ...created } = employee
   return NextResponse.json({
     data: {
-      ...employee,
-      personnummer: maskPersonnummer(body.personnummer),
+      ...created,
+      personnummer_masked: maskPersonnummer(body.personnummer),
     },
   }, { status: 201 })
 }, { requireWrite: true })

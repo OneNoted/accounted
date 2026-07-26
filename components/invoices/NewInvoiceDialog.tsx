@@ -76,12 +76,17 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
       let items: Record<string, unknown>[] = []
       if (!error && data) {
         try {
+          // invoice_items has NO company_id column: it is scoped through its
+          // parent invoice. Filtering on it made PostgREST answer 42703, which
+          // fetchAllRows rethrows, so the copy flow hit the "kunde inte
+          // laddas" panel for EVERY company. Tenancy is unaffected: the
+          // invoices lookup above already pins copyFromId to this company, and
+          // the invoice_items RLS policy joins back to the parent invoice.
           items = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
             supabase
               .from('invoice_items')
               .select('*')
               .eq('invoice_id', copyFromId)
-              .eq('company_id', company.id)
               .order('id', { ascending: true })
               .range(from, to),
           )

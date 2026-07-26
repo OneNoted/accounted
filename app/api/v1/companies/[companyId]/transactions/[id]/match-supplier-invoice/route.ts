@@ -186,6 +186,53 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
+    // Amount resolution runs BEFORE the storno below for the same reason the
+    // chart guard does: it is pure arithmetic that can reject the request, and
+    // a rejected request must leave no trace (reversing the transaction's
+    // existing categorization verifikat is irreversible).
+    const txAmountAbs = Math.abs(transaction.amount)
+    const paymentAmountInvoiceCurrency =
+      transaction.currency === invoice.currency ? txAmountAbs : invoice.remaining_amount
+    // SEK that actually left the bank, when known. A foreign transaction with
+    // no stored amount_sek is `null` here: the raw foreign amount must never
+    // stand in (treating 19 USD as 19 SEK books "19 kr" on a ~175 kr payment).
+    const bankSekStored =
+      transaction.currency === 'SEK'
+        ? txAmountAbs
+        : transaction.amount_sek != null
+          ? Math.abs(transaction.amount_sek)
+          : null
+    const invoiceFxRate = invoice.exchange_rate ?? null
+    // SEK the invoice was booked at for this payment portion (null if the
+    // invoice is foreign and carries no exchange_rate).
+    const bookedSek =
+      invoice.currency === 'SEK'
+        ? paymentAmountInvoiceCurrency
+        : invoiceFxRate && invoiceFxRate > 0
+          ? Math.round(paymentAmountInvoiceCurrency * invoiceFxRate * 100) / 100
+          : null
+    // Prefer the stored bank SEK; fall back to the invoice's booked SEK (right
+    // magnitude, FX diff 0). With NEITHER on file the SEK value is unknown and
+    // the old last resort (the raw foreign amount) violated the rule stated
+    // above, so refuse: same policy as the match_batch_allocate RPC
+    // (BATCH_FX_RATE_MISSING) and toSekOrThrow() in the entry generators.
+    // Byte-identical to the dashboard route so both surfaces agree.
+    const actualBankSek = bankSekStored ?? bookedSek
+    if (actualBankSek == null) {
+      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', txLog, {
+        requestId: ctx.requestId,
+        details: {
+          transaction_currency: transaction.currency,
+          invoice_currency: invoice.currency,
+        },
+      })
+    }
+    const originalBookedSek = bookedSek ?? actualBankSek
+    const exchangeRateDifference =
+      Math.round((originalBookedSek - actualBankSek) * 100) / 100
+    const paymentAmountSek =
+      exchangeRateDifference !== 0 ? originalBookedSek : actualBankSek
+
     // Storno any conflicting auto-categorization JE before booking the
     // payment. Mirrors the match-invoice path. Without this, an earlier
     // :categorize of the same transaction (e.g. as expense_office with a
@@ -216,36 +263,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
     }
-
-    const txAmountAbs = Math.abs(transaction.amount)
-    const paymentAmountInvoiceCurrency =
-      transaction.currency === invoice.currency ? txAmountAbs : invoice.remaining_amount
-    // SEK that actually left the bank, when known. A foreign transaction with
-    // no stored amount_sek is `null` here: the raw foreign amount must never
-    // stand in (treating 19 USD as 19 SEK books "19 kr" on a ~175 kr payment).
-    const bankSekStored =
-      transaction.currency === 'SEK'
-        ? txAmountAbs
-        : transaction.amount_sek != null
-          ? Math.abs(transaction.amount_sek)
-          : null
-    const invoiceFxRate = invoice.exchange_rate ?? null
-    // SEK the invoice was booked at for this payment portion (null if the
-    // invoice is foreign and carries no exchange_rate).
-    const bookedSek =
-      invoice.currency === 'SEK'
-        ? paymentAmountInvoiceCurrency
-        : invoiceFxRate && invoiceFxRate > 0
-          ? Math.round(paymentAmountInvoiceCurrency * invoiceFxRate * 100) / 100
-          : null
-    // Prefer the stored bank SEK; fall back to the invoice's booked SEK (right
-    // magnitude, FX diff 0); last resort the raw amount.
-    const actualBankSek = bankSekStored ?? bookedSek ?? txAmountAbs
-    const originalBookedSek = bookedSek ?? actualBankSek
-    const exchangeRateDifference =
-      Math.round((originalBookedSek - actualBankSek) * 100) / 100
-    const paymentAmountSek =
-      exchangeRateDifference !== 0 ? originalBookedSek : actualBankSek
 
     const now = new Date().toISOString()
 
@@ -363,6 +380,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // structured error rather than falling through to the generic
       // MATCH_SI_RECORD_PAYMENT_FAILED, mirroring the categorize routes.
       if (err instanceof AccountsNotInChartError) {
+        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
+      }
+      // The cash-method builder converts every leg through toSekOrThrow, so a
+      // foreign invoice with no usable rate surfaces here as
+      // SupplierInvoiceFxRateMissingError. Dispatch on its `code` (not
+      // instanceof: the class is routinely vi.mock'ed away) so the envelope
+      // carries the registered 400 rather than a generic 500. Mirrors the
+      // dashboard route and the preview for the same row.
+      if ((err as { code?: unknown })?.code === 'SI_FX_RATE_MISSING') {
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
       return v1ErrorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, {

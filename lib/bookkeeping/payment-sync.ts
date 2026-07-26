@@ -47,12 +47,38 @@ export async function syncInvoiceStatusFromPaymentEntry(
       .eq('company_id', companyId)
       .single()
 
-    const { data: supplierInvoice } = await supabase
+    // Column is `total`, not `total_amount` (supplier_invoices has never had a
+    // total_amount column). Selecting the wrong name made PostgREST reject the
+    // whole query, so `supplierInvoice` was always null: the restore below was
+    // silently skipped while the payment-row delete and the bank-line release
+    // still ran. The invoice then stayed 'paid' with a stale paid_amount and
+    // nothing behind it, so the AP ledger (leverantörsreskontra) showed money
+    // as paid that was never paid.
+    const { data: supplierInvoice, error: supplierInvoiceError } = await supabase
       .from('supplier_invoices')
-      .select('paid_amount, total_amount, due_date')
+      .select('paid_amount, total, due_date')
       .eq('id', entry.source_id)
       .eq('company_id', companyId)
       .single()
+
+    // PGRST116 = no row: the invoice itself is gone, so there is nothing to
+    // restore and the cleanup below is still the right thing to do. Any OTHER
+    // error means we could not read the state we are about to overwrite.
+    // Deleting the payment row and releasing the bank line at that point would
+    // destroy the only evidence of the payment while the invoice stays 'paid':
+    // exactly the wrong-AP-ledger outcome above. Abort instead, at ERROR level
+    // so the failure is observable: the storno is already committed and both
+    // callers (reverseEntry, the DELETE voucher route) treat this sync as
+    // best-effort, so bailing out leaves invoice + payment row + bank line
+    // mutually consistent and the operation safely re-runnable.
+    if (supplierInvoiceError && supplierInvoiceError.code !== 'PGRST116') {
+      log.error(
+        'Failed to read supplier invoice for payment reversal: aborting status sync',
+        supplierInvoiceError,
+        { companyId, journalEntryId: entryId, supplierInvoiceId: entry.source_id }
+      )
+      return
+    }
 
     if (supplierInvoice) {
       // Same fallback semantics as the customer branch below: a cash payment
@@ -62,7 +88,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
       // reversals, leaving the supplier invoice deadlocked on 'paid'.
       const paymentAmount = payment?.amount ?? supplierInvoice.paid_amount
       const newPaidAmount = roundOre(supplierInvoice.paid_amount - paymentAmount)
-      const newRemaining = roundOre(supplierInvoice.total_amount - Math.max(0, newPaidAmount))
+      const newRemaining = roundOre(supplierInvoice.total - Math.max(0, newPaidAmount))
       let newStatus: string
       if (newPaidAmount > 0) {
         newStatus = 'partially_paid'

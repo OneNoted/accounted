@@ -24,18 +24,19 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
-const { createTxJE, findMissingAccountsMock } = vi.hoisted(() => ({
+const { createTxJE, findMissingAccountsMock, reverseEntryMock } = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
   // Default: every mapped account resolves (active, or seedable standard
   // BAS). Per-test overrides simulate the bug surface (inactive/unknown).
   findMissingAccountsMock: vi.fn().mockResolvedValue([]),
+  reverseEntryMock: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: createTxJE,
 }))
 vi.mock('@/lib/bookkeeping/engine', () => ({
-  reverseEntry: vi.fn().mockResolvedValue(undefined),
+  reverseEntry: reverseEntryMock,
 }))
 vi.mock('@/lib/bookkeeping/account-validation', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/account-validation')>(
@@ -60,6 +61,9 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
+  // Insert payloads are recorded verbatim: the proxy would happily accept a
+  // phantom column, so assertions have to inspect the object itself.
+  const inserts: Record<string, unknown[]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -70,12 +74,15 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          if (prop === 'insert') (inserts[table] ??= []).push(args[0])
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -100,6 +107,8 @@ function batchParams() {
 beforeEach(() => {
   vi.clearAllMocks()
   findMissingAccountsMock.mockResolvedValue([])
+  reverseEntryMock.mockResolvedValue(undefined)
+  createTxJE.mockResolvedValue({ id: 'je-fresh' })
   mockValidate.mockResolvedValue({
     userId: 'user-1',
     companyId: COMPANY_ID,
@@ -130,7 +139,7 @@ describe('POST batch-categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-      }),
+      }).supabase,
     )
 
     // First item: mapping references an inactive account. Second item: clean.
@@ -183,7 +192,7 @@ describe('POST batch-categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-      }),
+      }).supabase,
     )
     // Pre-validation passes: race where an account got deactivated between
     // our chart_of_accounts read and the engine's resolveAccountIds read.
@@ -210,5 +219,67 @@ describe('POST batch-categorize', () => {
     expect(body.data.results[0].error.code).toBe('ACCOUNTS_NOT_IN_CHART')
     expect(body.data.results[0].error.details.account_numbers).toEqual(['5410'])
     expect(body.data.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+  })
+
+  it('documents the stranded voucher with the real voucher_gap_explanations columns when the CAS-race storno fails', async () => {
+    const { supabase, inserts } = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        // 1: item fetch. 2: the CAS update, which matches no row because a
+        // concurrent request already stamped journal_entry_id.
+        {
+          data: {
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [], error: null },
+      ],
+      company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      journal_entries: {
+        data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 },
+        error: null,
+      },
+      voucher_gap_explanations: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    // Storno fails: the orphan keeps its number, so the break in the
+    // verifikationsnummerserie must be documented (BFNAR 2013:2).
+    reverseEntryMock.mockRejectedValueOnce(new Error('period locked'))
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_RACE')
+
+    const gaps = inserts['voucher_gap_explanations'] as Record<string, unknown>[]
+    expect(gaps).toHaveLength(1)
+    // Exhaustive: no gap_number, no created_by, and every NOT NULL column set.
+    expect(gaps[0]).toEqual({
+      company_id: COMPANY_ID,
+      user_id: 'user-1',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'B',
+      gap_start: 42,
+      gap_end: 42,
+      explanation: 'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
+    })
   })
 })

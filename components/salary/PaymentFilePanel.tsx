@@ -2,13 +2,15 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AlertTriangle, Download, Loader2, CheckCircle2, ChevronDown, Info } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { downloadFile } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
+import type { ErrorLocale } from '@/lib/errors/get-error-message'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
 
@@ -51,6 +53,7 @@ export function PaymentFilePanel({
   onDownloaded,
 }: PaymentFilePanelProps) {
   const t = useTranslations('salary_payments')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [format, setFormat] = useState<PaymentFormat>(defaultFormat)
   const [downloading, setDownloading] = useState(false)
@@ -73,28 +76,36 @@ export function PaymentFilePanel({
       : `/api/salary/runs/${salaryRunId}/payment/pain001`
 
   async function handleDownload() {
+    // The button is disabled while a file is in flight; this guard closes the
+    // double-click / Enter-repeat race before React has re-rendered it. Two
+    // payment files for one salary run is not a cosmetic problem: each one is
+    // payable on its own, so a user who uploads both to the bank pays the
+    // month's wages twice.
+    if (downloading) return
     setDownloading(true)
     try {
-      const res = await fetch(endpoint)
-      if (!res.ok) {
-        const result = await res.json().catch(() => ({ error: t('download_failed_fallback') }))
+      const ext = format === 'bg_lb' ? 'txt' : 'xml'
+      // Bounded, and no file is written unless the server answered 2xx with a
+      // complete body: an error envelope saved as lon_2026-04.xml is a file the
+      // user would carry to the bank before discovering it pays nobody.
+      const result = await downloadFile({
+        url: endpoint,
+        filename: `lon_${periodLabel}.${ext}`,
+        locale,
+      })
+      // Exactly one toast per outcome. TOAST_LIMIT is 1, so a failure toast
+      // followed by a success toast in the same tick would render only the last.
+      if (!result.ok) {
         toast({
           title: t('download_failed_title'),
-          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          description: failureDescription(result, {
+            timeout: t('download_timeout'),
+            network: t('download_network'),
+          }),
           variant: 'destructive',
         })
         return
       }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      const ext = format === 'bg_lb' ? 'txt' : 'xml'
-      a.download = `lon_${periodLabel}.${ext}`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
       toast({ title: t('downloaded') })
       onDownloaded?.()
     } finally {

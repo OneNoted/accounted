@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
+import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const BookingTemplateLineSchema = z.object({
@@ -35,7 +36,11 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const { supabase } = ctx
 
-    const result = await validateBody(request, UpdateBookingTemplateSchema)
+    // result.data is spread straight into .update(), so it must carry only the
+    // fields the caller named. UpdateBookingTemplateSchema has no .default()
+    // today; sparsePatchBody makes that a structural property rather than a
+    // thing a future edit to the schema can quietly undo.
+    const result = await validateBody(request, sparsePatchBody(UpdateBookingTemplateSchema))
     if (!result.success) return result.response
 
     // RLS prevents updating system templates

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Loader2, CircleSlash, Lock } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface Props {
   entryId: string
@@ -57,10 +58,14 @@ export default function NoDocRequiredToggle({
           })
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
+        // Resolve via the parsed body plus the status: the route answers
+        // thrown errors with the canonical envelope `{ error: { code,
+        // message } }`, and rendering that object as the toast description
+        // would crash React ("Objects are not valid as a React child").
+        const body = await res.json().catch(() => null)
         toast({
           title: t('no_doc_required_save_failed'),
-          description: body.error,
+          description: getErrorMessage(body, { statusCode: res.status }),
           variant: 'destructive',
         })
         // Roll back UI state on failure: both the toggle AND the reason so

@@ -32,6 +32,9 @@ const mockGetAvailableVatRates = vi.fn()
 vi.mock('@/lib/invoices/vat-rules', () => ({
   getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
   getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+  // The builder gates on the permitted set (taxed-where-performed exceptions);
+  // these route tests only care that the gate reads the stubbed rates.
+  getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
 }))
 
 vi.mock('@/lib/currency/riksbanken', () => ({

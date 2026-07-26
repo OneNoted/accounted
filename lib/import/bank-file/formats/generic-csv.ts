@@ -202,13 +202,53 @@ const SUGGEST_DATE_PATTERNS = [
   /^\d{8}$/,
 ]
 
-/** Pick the best date column by header label, preferring transaction date over value date. */
+/**
+ * Booking-date header labels: Bokföringsdag / Bokföringsdatum, tolerating an
+ * un-decoded 'o' for 'ö' and Swedbank's abbreviated 'Bokfdag'. Superset of the
+ * SEB and Länsförsäkringar parsers' detectors.
+ */
+const BOOKING_DATE_RE = /bokf((ö|o)rings)?da(g|tum)/
+
+/**
+ * Pick the best date column by header label, preferring the BOOKING date.
+ *
+ * Tier order is booking-date first, which is what every dedicated parser in
+ * this directory emits: Handelsbanken picks Reskontradatum over
+ * Transaktionsdatum, Länsförsäkringar picks Bokföringsdag over Datum, and
+ * Swedbank picks Bokfdag even though Transdag sits right next to it in the
+ * file. A Handelsbanken or Swedbank export routed through the manual
+ * "Annan CSV" mapping must pre-select the same column the dedicated parser
+ * would, otherwise the two upload paths date the same affärshändelse
+ * differently.
+ *
+ * The emitted date is not cosmetic: it feeds generateExternalId and the
+ * exact-date content-dedup bucket. The PSD2 / Enable Banking feed for the same
+ * account keys every row on the ASPSP's booking_date and cannot be moved off it
+ * (Berlin Group exposes no stable transaction date, and the value_date path
+ * caused the June 2026 fleet-wide re-import; see
+ * extensions/general/enable-banking/lib/sync.ts). Booking date is also what the
+ * Saldo column ties to: dating a row on the card-swipe date desynchronizes the
+ * 19xx balance from the bank statement. A user who wants the purchase dated the
+ * 14th books it from the kvitto, not from the bank feed.
+ *
+ * A bare 'datum' outranks 'transaktionsdatum' because in every single-date
+ * export here (Nordea, Skandia, Nordea Business format D) the bare Datum column
+ * IS the posting date the Saldo ties to, while transaktionsdatum is explicitly
+ * labelled the swipe date. Files carrying both plus a real booking column
+ * resolve at tier 1 or 2 before either is reached.
+ *
+ * transaktionsdatum / transdag stay as the LAST tier: a fallback, not a
+ * preference. A file that carries only a transaction date must still map.
+ *
+ * Every tier skips headers containing 'valuta', so Valutadag / Valutadatum (the
+ * value date) and a plain Valuta (currency) column are never picked.
+ */
 function pickDateHeader(headers: string[]): number {
   const tiers: Array<(h: string) => boolean> = [
-    (h) => h.includes('transaktionsdatum'),
+    (h) => BOOKING_DATE_RE.test(h),
     (h) => h.includes('reskontradatum'),
-    (h) => /bokf(ö|o)ringsda(g|tum)/.test(h),
     (h) => h === 'datum' || h === 'date',
+    (h) => h.includes('transaktionsdatum') || h.includes('transdag'),
   ]
   for (const match of tiers) {
     const idx = headers.findIndex((h) => match(h) && !h.includes('valuta'))

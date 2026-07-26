@@ -323,6 +323,55 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
     }
     expect(updateArg?.default_vat_rate).toBe(0)
   })
+
+  // The body is spread straight into .update(), so the write set must be
+  // exactly what the caller named. UpdateAccountSchema carries no .default()
+  // today; these two lock the property in so adding one cannot turn a rename
+  // into a silent rewrite of the VAT code and SRU mapping.
+  it('writes only the field the caller named', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '5010', account_name: 'Nytt namn' } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { account_name: 'Nytt namn' },
+    })
+    expect((await parseJsonResponse(await PUT(req, numberParams))).status).toBe(200)
+
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as Record<string, unknown>
+    expect(Object.keys(updateArg)).toEqual(['account_name'])
+  })
+
+  it('keeps an explicit null so sru_code can be cleared', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '5010', sru_code: null } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { sru_code: null },
+    })
+    expect((await parseJsonResponse(await PUT(req, numberParams))).status).toBe(200)
+
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as Record<string, unknown>
+    expect(updateArg).toEqual({ sru_code: null })
+  })
+
+  it('drops unknown keys instead of forwarding them to the update', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '5010' } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/5010', {
+      method: 'PUT',
+      body: { account_name: 'Nytt namn', is_system_account: true, company_id: 'other' },
+    })
+    expect((await parseJsonResponse(await PUT(req, numberParams))).status).toBe(200)
+
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as Record<string, unknown>
+    expect(Object.keys(updateArg)).toEqual(['account_name'])
+  })
 })
 
 describe('POST /api/bookkeeping/accounts/activate', () => {

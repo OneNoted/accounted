@@ -43,7 +43,11 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
 // tests exercise categorization, not the guard. The detection query is
 // unit-tested in lib/transactions/__tests__/booking-duplicate-detection.test.ts.
 const mockDetectDup = vi.fn()
-vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
+// Spread the real module so pure helpers the route also imports from here
+// (resolveTransactionAmountSek) keep their real behaviour; only the DB-backed
+// detector is stubbed. A bare factory would leave those exports undefined.
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
@@ -74,6 +78,15 @@ vi.mock('@/lib/bookkeeping/mapping-engine', () => ({
 
 vi.mock('@/lib/bookkeeping/counterparty-templates', () => ({
   upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
+}))
+
+// CAS-race compensation is centralized in lib/bookkeeping/cancel-orphaned-entry.
+// The route must delegate to it rather than hand-rolling the cancel + the
+// voucher_gap_explanations insert (BFNAR 2013:2). The exact insert payload is
+// asserted in that helper's own test.
+const mockCancelOrphanedPaymentEntry = vi.fn()
+vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
+  cancelOrphanedPaymentEntry: (...args: unknown[]) => mockCancelOrphanedPaymentEntry(...args),
 }))
 
 const mockFindMissingActiveAccounts = vi.fn()
@@ -115,6 +128,46 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Default: no booking-time duplicate. The dedicated guard test overrides this.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
+    mockCancelOrphanedPaymentEntry.mockResolvedValue(undefined)
+  })
+
+  it('delegates the CAS-race orphan to cancelOrphanedPaymentEntry (documented voucher gap)', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'GitHub',
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+
+    // Lost the CAS: another request stamped journal_entry_id first.
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: unknown }>(response)
+
+    expect(status).toBe(409)
+    expect((body.error as { code: string }).code).toBe('TX_CATEGORIZE_RACE')
+
+    // No hand-rolled insert: the helper owns the real column set.
+    expect(mockCancelOrphanedPaymentEntry).toHaveBeenCalledTimes(1)
+    expect(mockCancelOrphanedPaymentEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+    )
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -545,6 +598,276 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_created).toBe(true)
+  })
+
+  // ── Suggestion-guard currency. `transactions.amount` is denominated in
+  // `transactions.currency`; `remaining_amount` is denominated in the invoice's
+  // currency. A plus-minus 2 % band around a EUR bank row applied to a kronor
+  // `remaining_amount` column is off by the whole exchange rate.
+  const eurExpenseTx = (over: Record<string, unknown> = {}) =>
+    makeTransaction({
+      id: 'tx-1',
+      amount: -1000,
+      currency: 'EUR',
+      amount_sek: null,
+      exchange_rate: 11.5,
+      merchant_name: 'Leverantör AB',
+      journal_entry_id: null,
+      ...over,
+    })
+
+  const sekSupplierInvoice = (remaining: number) => ({
+    id: 'si-1',
+    supplier_invoice_number: 'INV-2026-0042',
+    invoice_date: '2026-05-01',
+    remaining_amount: remaining,
+    total: remaining,
+    currency: 'SEK',
+    total_sek: remaining,
+    exchange_rate: null,
+    supplier: { name: 'Leverantör AB' },
+  })
+
+  it('EUR transaction: a 1 000 SEK supplier invoice is not suggested for a 1 000 EUR payment', async () => {
+    enqueue({ data: eurExpenseTx(), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '2440',
+    })
+
+    enqueue({ data: [{ id: 'sup-1' }], error: null })
+    // First sweep returns the same-magnitude kronor invoice the old EUR band
+    // selected; the shared-unit re-check must drop it.
+    enqueue({ data: [sekSupplierInvoice(1000)], error: null })
+    enqueue({ data: [], error: null })
+    // ensureFiscalPeriod + transaction update
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_created: boolean
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.journal_entry_created).toBe(true)
+  })
+
+  it('EUR transaction with a rate: the 11 500 SEK supplier invoice IS suggested', async () => {
+    enqueue({ data: eurExpenseTx(), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '2440',
+    })
+
+    enqueue({ data: [{ id: 'sup-1' }], error: null })
+    // EUR sweep finds nothing; the kronor sweep finds the invoice at the
+    // converted magnitude.
+    enqueue({ data: [], error: null })
+    enqueue({ data: [sekSupplierInvoice(11500)], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidates: Array<{ supplier_invoice_id: string }> } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_SUGGEST_SI_MATCH')
+    expect(body.error.details.candidates.map((c) => c.supplier_invoice_id)).toEqual(['si-1'])
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('EUR transaction without a rate: kronor invoices are excluded, never compared raw', async () => {
+    enqueue({ data: eurExpenseTx({ exchange_rate: null }), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '2440',
+    })
+
+    enqueue({ data: [{ id: 'sup-1' }], error: null })
+    // Only the EUR sweep is planned; the kronor invoice it returns here has no
+    // shared unit with the bank row and must be dropped.
+    enqueue({ data: [sekSupplierInvoice(1000)], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+  })
+
+  it('EUR transaction: a 1 000 EUR supplier invoice still matches in its own currency', async () => {
+    enqueue({ data: eurExpenseTx(), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '2440',
+    })
+
+    enqueue({ data: [{ id: 'sup-1' }], error: null })
+    enqueue({
+      data: [
+        {
+          ...sekSupplierInvoice(1000),
+          currency: 'EUR',
+          total_sek: 11500,
+          exchange_rate: 11.5,
+        },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_SUGGEST_SI_MATCH')
+  })
+
+  it('EUR inbound transaction: a 1 000 SEK customer invoice is not suggested', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: 1000,
+      currency: 'EUR',
+      amount_sek: null,
+      exchange_rate: 11.5,
+      description: 'Inbetalning Acme AB',
+      merchant_name: 'Acme AB',
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '1930',
+      credit_account: '1510',
+    })
+
+    // Customer lookups (merchant_name, description)
+    enqueue({ data: [{ id: 'cust-1' }], error: null })
+    enqueue({ data: [{ id: 'cust-1' }], error: null })
+    // EUR sweep returns the same-magnitude kronor invoice; kronor sweep empty.
+    enqueue({
+      data: [
+        {
+          id: 'inv-1',
+          invoice_number: '2026-0042',
+          invoice_date: '2026-05-01',
+          due_date: '2026-05-31',
+          remaining_amount: 1000,
+          total: 1000,
+          currency: 'SEK',
+          total_sek: 1000,
+          exchange_rate: null,
+          customer: { name: 'Acme AB' },
+        },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+    // ensureFiscalPeriod + transaction update
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_services' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+  })
+
+  it('EUR inbound transaction with a rate: the 11 500 SEK customer invoice IS suggested', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: 1000,
+      currency: 'EUR',
+      amount_sek: 11500,
+      exchange_rate: null,
+      description: 'Inbetalning Acme AB',
+      merchant_name: 'Acme AB',
+      journal_entry_id: null,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '1930',
+      credit_account: '1510',
+    })
+
+    enqueue({ data: [{ id: 'cust-1' }], error: null })
+    enqueue({ data: [{ id: 'cust-1' }], error: null })
+    // EUR sweep empty; kronor sweep finds the invoice at the converted amount.
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [
+        {
+          id: 'inv-1',
+          invoice_number: '2026-0042',
+          invoice_date: '2026-05-01',
+          due_date: '2026-05-31',
+          remaining_amount: 11500,
+          total: 11500,
+          currency: 'SEK',
+          total_sek: 11500,
+          exchange_rate: null,
+          customer: { name: 'Acme AB' },
+        },
+      ],
+      error: null,
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_services' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { candidates: Array<{ invoice_id: string }> } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('TX_CATEGORIZE_SUGGEST_CI_MATCH')
+    expect(body.error.details.candidates.map((c) => c.invoice_id)).toEqual(['inv-1'])
   })
 
   it('returns 409 TX_CATEGORIZE_SUGGEST_CI_MATCH when 1930/1510 mapping matches an open customer invoice', async () => {

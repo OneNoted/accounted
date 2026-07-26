@@ -1,7 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useLocale } from 'next-intl'
 import { Brain, Loader2, Pin, PinOff, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -20,6 +22,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDateLong } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 type Kind = 'fact' | 'preference' | 'pattern' | 'correction'
 type Source = 'composer' | 'user_taught' | 'agent_learned' | 'derived'
@@ -60,22 +63,20 @@ const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
   { value: 'correction', label: 'Korrigeringar' },
 ]
 
-// The API returns errors either as a plain string (legacy/validation) or as
-// the canonical { code, message } envelope; extract something renderable.
-function apiErrorText(error: unknown): string | undefined {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && 'message' in error) {
-    const m = (error as { message?: unknown }).message
-    return typeof m === 'string' ? m : undefined
-  }
-  return undefined
-}
-
 export function AgentMemoryPanel() {
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const errorLocale = useLocale() as ErrorLocale
 
+  // null = the memory list is not known: still loading, or the read failed
+  // (loadError). A failed read must never render the "Inga minnen ännu"
+  // EmptyState: that is a claim about the assistant's memory, and it is only
+  // true after a confirmed empty read.
   const [rows, setRows] = useState<AgentMemoryRow[] | null>(null)
+  // detail === null: transient, so the line carries a retry. A detail sentence
+  // means the user has to act (an expired session) and a retry cannot help.
+  const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const [includeDismissed, setIncludeDismissed] = useState(false)
   const [kindFilter, setKindFilter] = useState<'all' | Kind>('all')
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -87,20 +88,42 @@ export function AgentMemoryPanel() {
   const [adding, setAdding] = useState(false)
 
   const load = useCallback(async () => {
+    setLoadError(null)
     const params = new URLSearchParams()
     if (includeDismissed) params.set('include_dismissed', 'true')
     if (kindFilter !== 'all') params.set('kind', kindFilter)
-    const res = await fetch(`/api/agent/memory?${params.toString()}`)
-    const json = await res.json()
-    if (!res.ok) {
-      toast({ title: 'Kunde inte hämta minne', description: apiErrorText(json.error), variant: 'destructive' })
-      setRows([])
-      return
+    try {
+      const res = await fetch(`/api/agent/memory?${params.toString()}`)
+      if (!res.ok) {
+        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+        // getErrorMessage falls back to the status map.
+        const json = await res.json().catch(() => null)
+        const sessionGone = res.status === 401 || res.status === 403
+        setRows(null)
+        setLoadError({
+          detail: sessionGone
+            ? getErrorMessage(json, { statusCode: res.status, locale: errorLocale })
+            : null,
+        })
+        return
+      }
+      // A 200 whose body will not parse throws into the catch below; a 200
+      // without the list is a failed read too. Neither may become a
+      // fabricated "Inga minnen ännu".
+      const json = await res.json()
+      if (!Array.isArray(json?.data)) {
+        setRows(null)
+        setLoadError({ detail: null })
+        return
+      }
+      setRows(json.data as AgentMemoryRow[])
+    } catch {
+      setRows(null)
+      setLoadError({ detail: null })
     }
-    setRows(json.data as AgentMemoryRow[])
-  }, [includeDismissed, kindFilter, toast])
+  }, [includeDismissed, kindFilter, errorLocale])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load() }, [load, reloadKey])
 
   const counts = useMemo(() => {
     const active = rows?.filter((r) => r.is_active).length ?? 0
@@ -117,12 +140,30 @@ export function AgentMemoryPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-      const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Kunde inte uppdatera', description: apiErrorText(json.error), variant: 'destructive' })
+        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+        // getErrorMessage falls back to the status map.
+        const json = await res.json().catch(() => null)
+        toast({
+          title: 'Kunde inte uppdatera',
+          description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
+          variant: 'destructive',
+        })
         return
       }
+      const json = await res.json()
       setRows((prev) => prev?.map((r) => (r.id === id ? (json.data as AgentMemoryRow) : r)) ?? null)
+    } catch (err) {
+      // A rejected fetch (offline, DNS failure) or a 200 whose body will not
+      // parse never reaches the !res.ok arm above: without this toast the
+      // click looks like a dead control rather than a save that did not land.
+      // One toast per failed click, never two: TOAST_LIMIT is 1
+      // (components/ui/use-toast.tsx) and a second would evict the first.
+      toast({
+        title: 'Kunde inte uppdatera',
+        description: getErrorMessage(err, { locale: errorLocale }),
+        variant: 'destructive',
+      })
     } finally {
       setBusyId(null)
     }
@@ -137,16 +178,33 @@ export function AgentMemoryPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: newContent.trim(), kind: newKind }),
       })
-      const json = await res.json()
       if (!res.ok) {
-        toast({ title: 'Kunde inte spara minne', description: apiErrorText(json.error), variant: 'destructive' })
+        // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+        // getErrorMessage falls back to the status map.
+        const json = await res.json().catch(() => null)
+        toast({
+          title: 'Kunde inte spara minne',
+          description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
+          variant: 'destructive',
+        })
         return
       }
+      const json = await res.json()
       setRows((prev) => [json.data as AgentMemoryRow, ...(prev ?? [])])
       setNewContent('')
       setNewKind('fact')
       setShowAdd(false)
       toast({ title: 'Minne sparat' })
+    } catch (err) {
+      // A rejected fetch or a 200 whose body will not parse never reaches the
+      // !res.ok arm above: the draft stays in the form and one toast says the
+      // save did not land. One toast per outcome, never two: TOAST_LIMIT is 1
+      // (components/ui/use-toast.tsx) and a second would evict the first.
+      toast({
+        title: 'Kunde inte spara minne',
+        description: getErrorMessage(err, { locale: errorLocale }),
+        variant: 'destructive',
+      })
     } finally {
       setAdding(false)
     }
@@ -262,7 +320,25 @@ export function AgentMemoryPanel() {
         </p>
       )}
 
-      {rows === null && (
+      {/* Live region always mounted so the failure is announced when it
+          appears, not merely inserted. */}
+      <div role="status" aria-live="polite" className="min-w-0 px-1 pt-3">
+        {loadError && (
+          <AttnLine
+            action={
+              loadError.detail
+                ? undefined
+                : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }
+            }
+          >
+            {loadError.detail
+              ? `Minnena kunde inte läsas in just nu. ${loadError.detail}`
+              : 'Minnena kunde inte läsas in just nu.'}
+          </AttnLine>
+        )}
+      </div>
+
+      {rows === null && !loadError && (
         <div className="space-y-3 pt-3">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-16 w-full" />

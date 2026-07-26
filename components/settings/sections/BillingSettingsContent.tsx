@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   SettingsGroup,
   SettingsRow,
@@ -72,37 +73,81 @@ function FeatureList({ heading, items }: { heading: string; items: string[] }) {
 export function BillingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tBilling = useTranslations('settings_billing')
+  const errorLocale = useLocale() as ErrorLocale
+  // null = the billing state is not known: still loading, or the read failed
+  // (loadError). A failed GET must never render a fabricated non-paying,
+  // unconfigured panel to a paying customer.
   const [view, setView] = useState<BillingView | null>(null)
+  // detail === null: transient, so the line carries a retry. A detail sentence
+  // means the user has to act (an expired session) and a retry cannot help.
+  const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let active = true
-    fetch('/api/billing/status')
-      .then((r) => r.json())
-      .then((d: { isPaying: boolean; configured: boolean; trialEndsAt: string | null; isDemo?: boolean }) => {
+
+    async function load() {
+      setLoadError(null)
+      try {
+        const res = await fetch('/api/billing/status')
+        if (!res.ok) {
+          // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+          // getErrorMessage falls back to the status map.
+          const body = await res.json().catch(() => null)
+          if (!active) return
+          const sessionGone = res.status === 401 || res.status === 403
+          setView(null)
+          setLoadError({
+            detail: sessionGone
+              ? getErrorMessage(body, { statusCode: res.status, locale: errorLocale })
+              : null,
+          })
+          return
+        }
+        // A 200 whose body will not parse throws into the catch below; a 200
+        // without the expected booleans is a failed read too. Neither may
+        // become a fabricated view.
+        const d = (await res.json()) as {
+          isPaying?: unknown
+          configured?: unknown
+          trialEndsAt?: unknown
+          isDemo?: unknown
+        }
         if (!active) return
+        if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
+          setView(null)
+          setLoadError({ detail: null })
+          return
+        }
+        const trialEndsAt = typeof d.trialEndsAt === 'string' ? d.trialEndsAt : null
         // Compute time-derived state here (effect), not during render, to keep render pure.
-        const msLeft = d.trialEndsAt ? new Date(d.trialEndsAt).getTime() - Date.now() : null
+        const msLeft = trialEndsAt ? new Date(trialEndsAt).getTime() - Date.now() : null
         const daysLeft = msLeft !== null ? Math.max(0, Math.ceil(msLeft / 86_400_000)) : null
         const chargeDeferred = msLeft !== null && msLeft > DEFER_THRESHOLD_MS
         // Set by the checkout success redirect. Provisioning happens via the
         // Stripe webhook, so isPaying can lag the redirect by a few seconds.
         const paidJustNow = new URLSearchParams(window.location.search).get('success') === '1'
-        setView({ ...d, daysLeft, chargeDeferred, paidJustNow, isDemo: d.isDemo ?? false })
-      })
-      .catch(() => {
-        if (active)
-          setView({
-            isPaying: false,
-            configured: false,
-            trialEndsAt: null,
-            daysLeft: null,
-            chargeDeferred: false,
-            paidJustNow: false,
-            isDemo: false,
-          })
-      })
+        setView({
+          isPaying: d.isPaying,
+          configured: d.configured,
+          trialEndsAt,
+          daysLeft,
+          chargeDeferred,
+          paidJustNow,
+          isDemo: d.isDemo === true,
+        })
+      } catch {
+        if (active) {
+          setView(null)
+          setLoadError({ detail: null })
+        }
+      }
+    }
+
+    void load()
     return () => { active = false }
-  }, [])
+  }, [reloadKey, errorLocale])
 
   const header = <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
 
@@ -110,10 +155,29 @@ export function BillingSettingsContent() {
     return (
       <div>
         {header}
-        <div className="mt-6 space-y-4">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-64 w-full" />
+        {/* Live region always mounted so the failure is announced when it
+            appears, not merely inserted. */}
+        <div role="status" aria-live="polite" className="mt-3">
+          {loadError && (
+            <AttnLine
+              action={
+                loadError.detail
+                  ? undefined
+                  : { label: tBilling('load_retry'), onClick: () => setReloadKey((k) => k + 1) }
+              }
+            >
+              {loadError.detail
+                ? `${tBilling('load_failed')} ${loadError.detail}`
+                : tBilling('load_failed')}
+            </AttnLine>
+          )}
         </div>
+        {!loadError && (
+          <div className="mt-6 space-y-4">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-64 w-full" />
+          </div>
+        )}
       </div>
     )
   }

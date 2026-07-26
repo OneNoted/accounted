@@ -463,3 +463,86 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(mockCreateJE).not.toHaveBeenCalled()
   })
 })
+
+describe('executeRecurringSchedule VAT rate gate', () => {
+  const { supabase, enqueue, reset } = createQueuedMockSupabase()
+  const client = supabase as unknown as SupabaseClient
+  const today = new Date('2026-07-06T06:30:00Z')
+
+  // Validated EU business: the picker default is a single locked 0%
+  // (huvudregeln, ML 6 kap. 34 §), while the ML 6 kap. supplies taxed where they
+  // are performed carry Swedish VAT to that same customer. The cron-time gate
+  // reads the wider permitted set, exactly like buildInvoiceWriteData.
+  const euCustomer = makeCustomer({
+    id: 'cust-1',
+    customer_type: 'eu_business',
+    vat_number_validated: true,
+  })
+
+  function makeScheduleWithRate(vatRate: number) {
+    return {
+      id: 'sched-1',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      customer_id: 'cust-1',
+      name: 'Monthly hotel retainer',
+      day_of_month: 6,
+      send_hour: 8,
+      payment_terms_days: 30,
+      currency: 'SEK',
+      your_reference: null,
+      our_reference: null,
+      notes: null,
+      auto_send: false,
+      status: 'active',
+      next_run_date: '2026-07-06',
+      last_run_at: null,
+      last_invoice_id: null,
+      last_run_warning: null,
+      generated_count: 0,
+      items: [
+        {
+          id: 'si-1',
+          schedule_id: 'sched-1',
+          sort_order: 0,
+          description: 'Hotellnatt Stockholm',
+          quantity: 10,
+          unit: 'st',
+          unit_price: 1000,
+          vat_rate: vatRate,
+        },
+      ],
+    } as unknown as Parameters<typeof executeRecurringSchedule>[1]
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockEnsureNumber.mockResolvedValue('F-1')
+  })
+
+  it('generates the invoice for a 12% schedule to a validated EU business', async () => {
+    enqueue({ data: euCustomer, error: null })                                    // customers select
+    enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // invoices insert
+    enqueue({ data: null, error: null })                                          // invoice_items insert
+    enqueue({
+      data: { id: 'inv-1', invoice_number: 'F-1', customer: euCustomer, items: [] },
+      error: null,
+    })                                                                            // re-fetch
+
+    const result = await executeRecurringSchedule(client, makeScheduleWithRate(12), today, {
+      suppressAutoSend: true,
+    })
+
+    expect(result.invoiceId).toBe('inv-1')
+  })
+
+  it('still throws for a rate that is not a Swedish VAT rate', async () => {
+    enqueue({ data: euCustomer, error: null }) // customers select; throws before any insert
+
+    await expect(
+      executeRecurringSchedule(client, makeScheduleWithRate(10), today, { suppressAutoSend: true }),
+    ).rejects.toThrow(/VAT rate 10% not allowed/)
+  })
+})

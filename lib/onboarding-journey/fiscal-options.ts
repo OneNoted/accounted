@@ -3,7 +3,14 @@
  * Step3TaxRegistration rules (BFL 3 kap.):
  * - EF always ends 31 December; the first year may run up to 18 months
  *   (a start after 30 June may roll into next year's December).
- * - AB may end any month; 6-18 months from the start date.
+ * - AB may end any month, up to 18 months from the start date.
+ *
+ * BFL 3 kap sets NO minimum length for a first räkenskapsår: it may be
+ * shorter than 12 months when bokföringsskyldigheten begins, with no floor
+ * (Bolagsverket: "hur kort som helst"). See DECISIONS.md 2026-07-25 / PR
+ * #1165, which removed the same invented 6-month floor from the validator.
+ * The `months >= 1` guard below is structural, not legal: it drops end
+ * months that fall before the start month.
  */
 
 export interface FirstYearEndOption {
@@ -48,7 +55,7 @@ export function abFirstYearEndOptions(
   const out: FirstYearEndOption[] = []
   for (const endYear of [startYear, startYear + 1, startYear + 2]) {
     const months = monthsSpan(startYear, startMonth, endYear, endMonth)
-    if (months >= 6 && months <= 18) {
+    if (months >= 1 && months <= 18) {
       const day = lastDayOf(endYear, endMonth)
       out.push({ date: iso(endYear, endMonth, day), months, year: endYear, month: endMonth, day })
     }

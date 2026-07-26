@@ -65,12 +65,23 @@ jobs:
           # OCI attestations, queryable via `docker buildx imagetools inspect`.
           provenance: mode=max
           sbom: true
-          # Per-branch cache scope so a PR branch can't poison main's cache
-          # layers. Fall back to main's cache on first build of a new branch.
-          cache-from: |
-            type=gha,scope=${{ github.ref_name }}
-            type=gha,scope=main
-          cache-to: type=gha,scope=${{ github.ref_name }},mode=max
+          # Layer cache lives in GHCR, not the GitHub Actions cache. Two
+          # platforms x mode=max is ~7 GB, which alone ate 70% of the repo's
+          # 10 GB Actions cache quota and, because buildx refreshes every blob's
+          # access time on each run, never aged out under LRU: it starved the
+          # other workflows' caches instead. GHCR storage is free for public
+          # repos and off that quota. mode=max is kept deliberately: mode=min
+          # would drop the deps/builder stages and make every push redo
+          # `npm ci` + `next build`.
+          #
+          # A single stable cache tag is safe here: this workflow only runs on
+          # main and v*.*.* tags, and tags are cut from main, so there is no
+          # untrusted ref that could poison the layers.
+          #
+          # image-manifest=true,oci-mediatypes=true is required by GHCR, which
+          # rejects buildkit's default cache manifest media type.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2

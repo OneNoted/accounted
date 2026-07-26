@@ -82,8 +82,21 @@ export function extractLast4(personnummer: string): string {
 }
 
 /**
- * Validate a Swedish personnummer (12-digit format: YYYYMMDDNNNN).
- * Checks format + Luhn checksum on last 10 digits.
+ * Validate a Swedish personnummer or samordningsnummer (12-digit format:
+ * YYYYMMDDNNNN). Checks format + Luhn checksum on last 10 digits.
+ *
+ * A samordningsnummer is the identity number Skatteverket assigns to a person
+ * who has no personnummer. It has the same shape, except the day field carries
+ * an added 60, so the printed day is 61-91 instead of 1-31. Skatteverket files
+ * these under FK215 in the arbetsgivardeklaration exactly like a personnummer,
+ * and our own AGI generator accepts them (see IDENTITET_PATTERN in
+ * lib/salary/agi/xml-generator.ts, which spells out "samordningsnummer where
+ * day = actual_day + 60"). Rejecting them here meant the system could file an
+ * AGI for someone it refused to register as an employee.
+ *
+ * The Luhn check digit is computed over the printed digits, the +60 day
+ * included: a samordningsnummer has no underlying non-offset form to compute it
+ * from. So the checksum below is deliberately untouched by the offset.
  */
 export function validatePersonnummer(personnummer: string): { valid: boolean; error?: string } {
   const digits = personnummer.replace(/\D/g, '')
@@ -102,7 +115,13 @@ export function validatePersonnummer(personnummer: string): { valid: boolean; er
   if (month < 1 || month > 12) {
     return { valid: false, error: 'Ogiltig månad' }
   }
-  if (day < 1 || day > 31) {
+  // Strip the samordningsnummer offset before range-checking the day, so both
+  // forms collapse to a real 1-31 calendar day. This accepts 1-31 (personnummer)
+  // and 61-91 (samordningsnummer) while still rejecting 32-60 and 92-99, which
+  // are neither: 32-60 is an out-of-range day that has not been offset, and
+  // 92-99 offsets back to day 32-39.
+  const birthDay = day > 60 ? day - 60 : day
+  if (birthDay < 1 || birthDay > 31) {
     return { valid: false, error: 'Ogiltig dag' }
   }
 

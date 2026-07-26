@@ -34,6 +34,10 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import {
+  resolveSupplierInvoiceExchangeRate,
+  supplierInvoiceSekAmounts,
+} from '@/lib/currency/supplier-invoice-rate'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -314,6 +318,8 @@ registerEndpoint({
     'Under faktureringsmetoden the registration JE is posted atomically with the SI row. JE failure aborts the whole call and no SI row is left behind (strict-mode).',
     'supplier_id must reference an existing, non-archived supplier in the same company: 404 SUPPLIER_NOT_FOUND otherwise.',
     'Duplicate (supplier_id, supplier_invoice_number) returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER. Use the credit flow on the original instead of re-registering with a tweaked number.',
+    'Foreign currency: omit exchange_rate and the server fetches Riksbanken\'s rate for invoice_date (ML 8 kap 21-23 §). If no rate can be resolved the create is refused with 400 SI_FX_RATE_MISSING rather than stored unconverted: pass exchange_rate explicitly to proceed. A SEK invoice needs no rate and gets total_sek = total.',
+    'exchange_rate is SEK per 1 unit of the invoice currency and must satisfy 0 < rate < 100000, the same bounds the supplier_invoices CHECK enforces. Out-of-range values return 400 VALIDATION_ERROR; passing an invoice total where a rate belongs is the usual cause.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
   ],
   example: {
@@ -500,10 +506,35 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
     const { items, subtotal, vatAmount, total } = totalsResult
-    const exchangeRate = body.exchange_rate ?? null
-    const subtotalSek = exchangeRate ? Math.round(subtotal * exchangeRate * 100) / 100 : null
-    const vatAmountSek = exchangeRate ? Math.round(vatAmount * exchangeRate * 100) / 100 : null
-    const totalSek = exchangeRate ? Math.round(total * exchangeRate * 100) / 100 : null
+
+    // Currency policy is shared with POST /api/supplier-invoices and the inbox
+    // convert route (lib/currency/supplier-invoice-rate.ts): a non-SEK invoice
+    // that arrives without a rate gets one fetched from Riksbanken for the
+    // invoice date, and if none can be had the create is refused rather than
+    // persisted with exchange_rate = NULL. Agents are the main caller here and
+    // the ones most likely to omit the field entirely; a NULL-rate row would
+    // only fail later, inside the booking path, with SI_FX_RATE_MISSING.
+    // Resolved before the arrival-number allocation and before the dry-run
+    // branch, so a dry run surfaces the same refusal a live commit would.
+    const fx = await resolveSupplierInvoiceExchangeRate(ctx.supabase, {
+      currency: body.currency,
+      invoiceDate: body.invoice_date,
+      suppliedRate: body.exchange_rate,
+    })
+    if (!fx.ok) {
+      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: fx.currency, invoice_date: fx.invoiceDate },
+      })
+    }
+    const exchangeRate = fx.rate.exchangeRate
+    const exchangeRateDate = fx.rate.exchangeRateDate
+    // SEK resolves to rate 1, so total_sek === total instead of NULL.
+    const {
+      subtotal_sek: subtotalSek,
+      vat_amount_sek: vatAmountSek,
+      total_sek: totalSek,
+    } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount, total })
 
     // Derive a sensible default for vat_treatment + reverse_charge from the
     // supplier_type. EU/non-EU suppliers default to reverse-charge unless the
@@ -559,8 +590,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           due_date: body.due_date,
           delivery_date: body.delivery_date ?? null,
           status: 'registered',
-          currency: body.currency ?? 'SEK',
+          currency: fx.rate.currency,
           exchange_rate: exchangeRate,
+          exchange_rate_date: exchangeRateDate,
           vat_treatment: vatTreatment,
           reverse_charge: reverseCharge,
           subtotal,
@@ -608,8 +640,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         due_date: body.due_date,
         delivery_date: body.delivery_date ?? null,
         status: 'registered',
-        currency: body.currency ?? 'SEK',
+        currency: fx.rate.currency,
         exchange_rate: exchangeRate,
+        exchange_rate_date: exchangeRateDate,
         vat_treatment: vatTreatment,
         reverse_charge: reverseCharge,
         payment_reference: body.payment_reference ?? null,

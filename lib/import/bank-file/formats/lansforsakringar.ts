@@ -10,6 +10,8 @@
  * - Fields are double-quoted
  * - Two adjacent date columns (Datum + Bokföringsdag) is unique to Länsförsäkringar
  * - No guaranteed header row: detect by structure
+ * - Of those two columns we emit Bokföringsdag, the booking date; see
+ *   BOOKING_DATE_FALLBACK_IDX below for why the transaction date is wrong here.
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
@@ -55,6 +57,35 @@ function isLFHeader(line: string): boolean {
   )
 }
 
+/**
+ * Positional index of Bokföringsdag in the header-less layout.
+ *
+ * We emit the BOOKING date (Bokföringsdag), not the transaction date (Datum).
+ * The two differ on card purchases (swiped the 14th, booked the 16th) and the
+ * emitted date is not cosmetic: it feeds generateExternalId and the exact-date
+ * content-dedup bucket (contentBucketKey). The PSD2 / Enable Banking feed for
+ * the same account keys every row on the ASPSP's booking_date and cannot be
+ * moved off it (Berlin Group exposes no stable transaction date, and the
+ * value_date path caused the June 2026 fleet-wide re-import; see
+ * extensions/general/enable-banking/lib/sync.ts). A CSV row dated on Datum
+ * therefore lands in a different bucket than the feed row for the same
+ * affärshändelse, the ±1-day drift bridge is measurement-only, and both rows
+ * insert as duplicates. Booking date is also what the Saldo column ties to.
+ *
+ * The header-less column order is pinned by isLFRow (two adjacent YYYY-MM-DD
+ * fields, comma number in field 4), i.e. Datum;Bokföringsdag;Typ;Text;Belopp;
+ * Saldo, so Bokföringsdag is field 1. Header-ful and header-less exports of the
+ * same account must resolve to the same date, otherwise the two upload paths
+ * duplicate each other.
+ */
+const BOOKING_DATE_FALLBACK_IDX = 1
+
+/**
+ * Booking-date header labels: Bokföringsdag / Bokföringsdatum, tolerating an
+ * un-decoded 'o' for 'ö'. Same shape as the SEB parser's detector.
+ */
+const BOOKING_DATE_RE = /bokf(ö|o)ringsda(g|tum)/
+
 export const lansforsakringarFormat: BankFileFormat = {
   id: 'lansforsakringar',
   name: 'Länsförsäkringar',
@@ -88,7 +119,7 @@ export const lansforsakringarFormat: BankFileFormat = {
 
     // Determine if first row is a header or data
     let startIdx = 0
-    let dateIdx = 0
+    let dateIdx = BOOKING_DATE_FALLBACK_IDX
     let descIdx = 3
     let amountIdx = 4
     let balanceIdx = 5
@@ -96,8 +127,11 @@ export const lansforsakringarFormat: BankFileFormat = {
     if (isLFHeader(lines[0])) {
       // Parse header to find column indices
       const headers = parseCSVLine(lines[0], ';').map((h) => h.trim().toLowerCase().replace(/"/g, ''))
-      dateIdx = headers.findIndex((h) => h === 'datum')
-      if (dateIdx === -1) dateIdx = 0
+      // Bokföringsdag (booking date) first; only fall back to Datum (the
+      // transaction date) when the export has no booking-date column at all.
+      dateIdx = headers.findIndex((h) => BOOKING_DATE_RE.test(h))
+      if (dateIdx === -1) dateIdx = headers.findIndex((h) => h === 'datum')
+      if (dateIdx === -1) dateIdx = BOOKING_DATE_FALLBACK_IDX
       descIdx = headers.findIndex((h) => h === 'text' || h === 'beskrivning')
       if (descIdx === -1) descIdx = 3
       amountIdx = headers.findIndex((h) => h === 'belopp')

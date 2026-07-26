@@ -62,7 +62,7 @@ registerEndpoint({
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
     '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, generic_csv, camt053.',
-    'Duplicate detection is by external_id (composed from date + amount + counterparty); a re-import of the same file with the same flag set typically deduplicates rather than creating doubles.',
+    'Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.',
     'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested: not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
   ],
@@ -228,16 +228,42 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // Convert parsed transactions to the RawTransaction shape that
       // ingestTransactions expects. external_id stays stable so re-imports
       // are deduplicated server-side.
-      const raw: RawTransaction[] = parseResult.transactions.map((t, idx) => ({
-        external_id: generateExternalId(t, format, idx),
-        date: t.date,
-        amount: t.amount,
-        currency: t.currency ?? 'SEK',
-        description: t.description ?? null,
-        counterparty: t.counterparty ?? null,
-        reference: t.reference ?? null,
-        source: 'bank_file',
-      }))
+      //
+      // The callback return type is annotated ON PURPOSE. Without it, the
+      // `RawTransaction[]` annotation on the const alone does NOT make an
+      // excess or misspelled property an error: `Array.prototype.map` infers
+      // its own element type from the literal, the object loses freshness, and
+      // only a plain assignability check runs. That is how this call site used
+      // to ship `source: 'bank_file'` (no such key: the real one is
+      // `import_source`) and `counterparty` (no such key at all) with a clean
+      // type-check, landing every v1-imported row with NULL provenance.
+      //
+      // `import_source` must match the dashboard path
+      // (app/api/import/bank-file/execute/route.ts): 'camt053' or
+      // `csv_<format>`. It is load-bearing, not cosmetic:
+      //   - isImportedTransaction() (lib/transactions/origin.ts) reads it to
+      //     keep imported rows ignore-only instead of user-deletable.
+      //   - ingestTransactions' cross-channel and hand-entered dedup mirrors
+      //     are gated on the batch being an import feed, so a NULL source
+      //     disables them and a later PSD2 / Enable Banking sync re-inserts the
+      //     whole batch as duplicate affärshändelser.
+      //
+      // ParsedBankTransaction.counterparty is deliberately NOT forwarded:
+      // RawTransaction has no such field and the ingest pipeline never reads
+      // one, so passing it only looked like provenance. The dashboard path
+      // drops it too. If counterparty ever needs persisting it belongs in the
+      // shared ingest contract, not in this route alone.
+      const raw: RawTransaction[] = parseResult.transactions.map(
+        (t, idx): RawTransaction => ({
+          external_id: generateExternalId(t, format, idx),
+          date: t.date,
+          amount: t.amount,
+          currency: t.currency || 'SEK',
+          description: t.description,
+          reference: t.reference ?? null,
+          import_source: format === 'camt053' ? 'camt053' : `csv_${format}`,
+        }),
+      )
 
       const ingestResult = await ingestTransactions(
         ctx.supabase,
@@ -250,16 +276,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // `(company_id, file_hash)` since 20260707130000; scoping the update by
       // user_id as well is defense in depth so a concurrent same-hash import
       // can never overwrite the wrong company's status row.
-      await ctx.supabase
+      //
+      // Completion is recorded exactly like the dashboard path: `status` plus
+      // the three outcome counters. There is no `imported_at` column on
+      // bank_file_imports (that column lives on sie_imports); writing it made
+      // PostgREST reject the whole statement with PGRST204, and because the
+      // result was never inspected the row stayed `status: 'processing'` with
+      // zeroed counters forever. `transaction_count` keeps the parsed row count
+      // set by the upsert above and is not overwritten with the imported count.
+      const { error: completionError } = await ctx.supabase
         .from('bank_file_imports')
         .update({
           status: 'completed',
-          imported_at: new Date().toISOString(),
-          transaction_count: ingestResult.imported,
+          imported_count: ingestResult.imported,
+          duplicate_count: ingestResult.duplicates,
+          matched_count: ingestResult.auto_matched_invoices,
         })
         .eq('file_hash', fileHash)
         .eq('user_id', ctx.userId)
         .eq('company_id', ctx.companyId!)
+
+      // Non-fatal: the transactions are already ingested, so a failed status
+      // write must not fail the request. It must not be silent either: an
+      // unchecked error here is what hid the phantom column.
+      if (completionError) {
+        ctx.log.warn('failed to mark bank_file_imports row completed', {
+          operationId: op.id,
+          companyId: ctx.companyId,
+          fileHash,
+          error: completionError.message,
+        })
+      }
 
       await completeOperation(
         ctx.supabase,

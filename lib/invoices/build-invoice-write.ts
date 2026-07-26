@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
-import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -170,8 +170,17 @@ export async function buildInvoiceWriteData(params: {
   const items = input.items
 
   const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated)
-  const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
-  const allowedRates = new Set(availableRates.map((r) => r.rate))
+  // Gate on the PERMITTED set, not the picker default. Under huvudregeln
+  // (ML 6 kap. 34 §) a service to a foreign business is taxed where the buyer
+  // is established, so 0% is the default; but the ML 6 kap. exceptions taxed
+  // where the supply is performed (fastighetstjänster, persontransporter,
+  // korttidsuthyrning of vehicles, restaurang/catering, admission to cultural
+  // and sports events) carry Swedish VAT even to a German or a US company.
+  // Refusing every non-zero rate made a Stockholm hotel night or a conference
+  // ticket impossible to invoice. The default is still 0% (vatRules.rate is
+  // the fallback below), so a Swedish rate only lands here when set explicitly.
+  const permittedRates = getPermittedVatRates(customer.customer_type, customer.vat_number_validated)
+  const allowedRates = new Set(permittedRates.map((r) => r.rate))
 
   // VAT registration gate (defense in depth: the invoice form already hides
   // the Moms column when vat_registered is false). A non-momsregistrerad
@@ -331,7 +340,14 @@ export async function buildInvoiceWriteData(params: {
     const keepStoredPersonnummer =
       personnummerRaw.length === 0 && hasDeductionItems && !!existingPersonnummer
     const personnummerProvided = personnummerRaw.length > 0 || keepStoredPersonnummer
-    const validation = validateRotRut(validateInput, personnummerProvided, housingProvided)
+    // The invoice currency decides whether the item amounts can be compared
+    // against the kronor ceilings at all. The booking rate is fetched further
+    // down (the write needs the invoice totals first), so a foreign-currency
+    // invoice reports "cap could not be checked" instead of measuring a
+    // foreign figure against 50 000 kr.
+    const validation = validateRotRut(validateInput, personnummerProvided, housingProvided, {
+      currency: input.currency,
+    })
     if (validation.errors.length > 0) {
       return {
         ok: false,
@@ -364,6 +380,28 @@ export async function buildInvoiceWriteData(params: {
   )
   const isMixedRate = uniqueRates.size > 1
 
+  // Reverse-charge / export notation must describe what the invoice actually
+  // does. With a taxed-where-performed line now permitted (see the gate above),
+  // an invoice to a foreign business can carry only Swedish VAT: that supply is
+  // neither reverse-charged nor exported, so the header must not claim it is.
+  // "Omvänd betalningsskyldighet" (ML 17 kap 24 § p.11) next to charged Swedish
+  // VAT is a false statement: it tells the buyer to self-assess tax the seller
+  // already collected, and the buyer then cannot deduct it either.
+  //
+  // A mixed invoice (0% consulting + 12% hotel) keeps the notation: its
+  // zero-rated lines genuinely ARE reverse-charged, and the notation is
+  // required whenever the buyer is liable for any part. The per-rate booking
+  // splits them correctly on its own (generatePerRateLines only applies the
+  // invoice-level treatment to rate-0 lines), so 3308 and 3002/2621 both land
+  // in the right ruta.
+  const isSpecialTreatment =
+    vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export'
+  // No priced lines at all (text-only document) charges nothing either way:
+  // keep the customer's treatment rather than restamping it as domestic.
+  const hasZeroRatedLine = uniqueRates.size === 0 || uniqueRates.has(0)
+  const headerRules =
+    !isSpecialTreatment || hasZeroRatedLine ? vatRules : getVatRules('swedish_business')
+
   let exchangeRate: number | null = null
   let exchangeRateDate: string | null = null
   let subtotalSek: number | null = null
@@ -371,7 +409,23 @@ export async function buildInvoiceWriteData(params: {
   let totalSek: number | null = null
 
   if (input.currency !== 'SEK') {
-    const rateData = await fetchExchangeRate(input.currency)
+    // Rate date = the taxable event, not "today". ML 8 kap 21-23 §: the rate
+    // to use is the one "at time of taxable event (delivery/supply date or
+    // advance payment date, not invoice date unless same)". delivery_date is
+    // exactly that date when it is set (ML 17 kap 24 § p.7 requires it on the
+    // invoice whenever it differs from the invoice date); otherwise the two
+    // coincide and invoice_date is the taxable event. Stamping today's rate on
+    // a back-dated invoice booked the receivable (1510) and the output VAT
+    // (2611) at the wrong SEK value.
+    //
+    // `supabase` is passed so the shared exchange_rates cache is consulted on
+    // BOTH legs: the read-through before calling Riksbanken, and the
+    // last-cached-observation fallback when Riksbanken 429s. Without it a
+    // single transient rate limit left the invoice with a permanently NULL
+    // exchange_rate, which resolveSekAmount() then books 1:1 as if the foreign
+    // amount were kronor. The transaction ingest path has always passed it.
+    const rateDate = input.delivery_date || input.invoice_date
+    const rateData = await fetchExchangeRate(input.currency, new Date(rateDate), supabase)
     if (rateData) {
       exchangeRate = rateData.rate
       exchangeRateDate = rateData.date
@@ -400,10 +454,10 @@ export async function buildInvoiceWriteData(params: {
     // Skatteverket portion is on 1513 and clears when the agency pays out.
     // Proformas / delivery notes have no payment obligation → keep 0.
     remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
-    vat_treatment: notVatRegistered ? 'exempt' : vatRules.treatment,
+    vat_treatment: notVatRegistered ? 'exempt' : headerRules.treatment,
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
-    moms_ruta: notVatRegistered ? null : vatRules.momsRuta,
-    reverse_charge_text: notVatRegistered ? null : (vatRules.reverseChargeText || null),
+    moms_ruta: notVatRegistered ? null : headerRules.momsRuta,
+    reverse_charge_text: notVatRegistered ? null : (headerRules.reverseChargeText || null),
     your_reference: input.your_reference,
     our_reference: input.our_reference,
     notes: input.notes,

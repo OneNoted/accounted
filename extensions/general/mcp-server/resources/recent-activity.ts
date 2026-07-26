@@ -17,7 +17,7 @@ export const recentActivityResource: McpResource = {
         .limit(limit),
       supabase
         .from('invoices')
-        .select('id, invoice_number, customer_id, invoice_date, due_date, total_amount, currency, status, created_at')
+        .select('id, invoice_number, customer_id, invoice_date, due_date, total, currency, status, created_at')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
         .limit(limit),
@@ -28,6 +28,18 @@ export const recentActivityResource: McpResource = {
         .order('date', { ascending: false })
         .limit(limit),
     ])
+
+    // Never report an empty list when the query failed: an agent that is told
+    // "zero invoices" reasons from false state, which is worse than an error.
+    if (journalEntries.error) {
+      throw new Error(`Failed to read recent journal entries: ${journalEntries.error.message}`)
+    }
+    if (invoices.error) {
+      throw new Error(`Failed to read recent invoices: ${invoices.error.message}`)
+    }
+    if (transactions.error) {
+      throw new Error(`Failed to read recent transactions: ${transactions.error.message}`)
+    }
 
     return {
       limit,

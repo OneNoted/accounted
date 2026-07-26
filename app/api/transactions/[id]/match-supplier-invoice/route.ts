@@ -178,10 +178,27 @@ export const POST = withRouteContext(
     // Actual SEK leaving the bank. Prefer the stored bank figure; if a foreign
     // transaction has no amount_sek, fall back to the invoice's booked SEK so
     // the magnitude is right (→ exchangeRateDifference 0, i.e. "no independent
-    // bank figure to reconcile against"). Last resort, with no invoice rate
-    // either, is the raw amount. The FX diff hits 7960/3960 so 2440 clears
-    // cleanly whenever bank-paid SEK genuinely differs from booked SEK.
-    const actualBankSek = bankSekStored ?? bookedSek ?? txAmountAbs
+    // bank figure to reconcile against"). The FX diff hits 7960/3960 so 2440
+    // clears cleanly whenever bank-paid SEK genuinely differs from booked SEK.
+    //
+    // When BOTH are unknown (foreign bank line without amount_sek paying a
+    // foreign invoice without exchange_rate) there is no SEK figure at all.
+    // The old last resort was the raw foreign amount, which is precisely what
+    // the comment above forbids: 19 USD posted as 19 kr on a ~175 kr payment,
+    // and the entry still balances so no trigger catches it. Refuse instead,
+    // same policy as the match_batch_allocate RPC (BATCH_FX_RATE_MISSING) and
+    // toSekOrThrow() in the entry generators. Rejecting here, before any JE or
+    // ledger write, leaves the match fully retryable once the rate is filled in.
+    const actualBankSek = bankSekStored ?? bookedSek
+    if (actualBankSek == null) {
+      return errorResponseFromCode('SI_FX_RATE_MISSING', txLog, {
+        requestId,
+        details: {
+          transaction_currency: transaction.currency,
+          invoice_currency: invoice.currency,
+        },
+      })
+    }
     const originalBookedSek = bookedSek ?? actualBankSek
 
     // Positive = gain (AP credited at more SEK than the bank actually paid).
@@ -316,6 +333,15 @@ export const POST = withRouteContext(
       // mark the invoice paid with NO voucher: an unrecoverable half-state:
       // mark-paid rejects 'paid' invoices and this route rejects linked
       // transactions, so no flow could ever complete the booking afterwards.
+      // The cash-method builder converts every leg through toSekOrThrow, so a
+      // foreign invoice with no usable rate surfaces here as
+      // SupplierInvoiceFxRateMissingError. Dispatch on its `code` (not
+      // instanceof: the class is routinely vi.mock'ed away) so errorResponse
+      // maps it to the registered 400 "ange fakturans växelkurs" entry instead
+      // of a generic 500. Same code the preview returns for the same row.
+      if ((err as { code?: unknown })?.code === 'SI_FX_RATE_MISSING') {
+        return errorResponse(err, txLog, { requestId })
+      }
       if (isBookkeepingError(err)) {
         return errorResponse(err, txLog, { requestId })
       }

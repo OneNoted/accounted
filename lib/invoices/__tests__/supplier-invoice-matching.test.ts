@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { findSupplierInvoiceMatch } from '../supplier-invoice-matching'
 import { makeTransaction, makeSupplierInvoice, makeSupplier } from '@/tests/helpers'
+import type { SupplierInvoice } from '@/types'
 
 describe('findSupplierInvoiceMatch', () => {
   const supplier = makeSupplier({
@@ -253,5 +254,171 @@ describe('findSupplierInvoiceMatch', () => {
       due_date: null,
     })
     expect(findSupplierInvoiceMatch(tx, [inv])!.matchMethod).toBe('amount_date')
+  })
+
+  // Currency: amounts are only ever compared inside one unit. A raw
+  // cross-currency compare let a 1000 EUR invoice "exact match" a -1000 SEK
+  // debit at 0.85 on every single bank import.
+  describe('currency', () => {
+    const eurInvoice = (overrides: Partial<SupplierInvoice> = {}) =>
+      makeSupplierInvoice({
+        status: 'registered',
+        currency: 'EUR',
+        subtotal: 800,
+        vat_amount: 200,
+        total: 1000,
+        total_sek: null,
+        exchange_rate: null,
+        remaining_amount: 1000,
+        invoice_date: '2026-06-05',
+        due_date: '2026-07-05',
+        supplier: { ...supplier, name: 'Kontorsbolaget AB' },
+        ...overrides,
+      })
+
+    it('does NOT match a 1000 EUR invoice to a -1000 SEK debit (no stored rate)', () => {
+      const tx = makeTransaction({
+        amount: -1000,
+        currency: 'SEK',
+        date: '2026-06-08',
+        description: 'Betalning Kontorsbolaget BG 1234567',
+      })
+
+      expect(findSupplierInvoiceMatch(tx, [eurInvoice()])).toBeNull()
+    })
+
+    it('does NOT match a 1000 EUR invoice to a -1000 SEK debit even WITH a stored rate', () => {
+      // 1000 EUR is 11 500 kr; a 1000 kr debit is a different payment entirely.
+      const tx = makeTransaction({
+        amount: -1000,
+        currency: 'SEK',
+        date: '2026-06-08',
+        description: 'Betalning Kontorsbolaget BG 1234567',
+      })
+
+      expect(
+        findSupplierInvoiceMatch(tx, [eurInvoice({ total_sek: 11500, exchange_rate: 11.5 })])
+      ).toBeNull()
+    })
+
+    it('matches a 1000 EUR invoice to an 11 500 SEK debit using the stored SEK total', () => {
+      const tx = makeTransaction({ amount: -11500, currency: 'SEK', date: '2026-06-08' })
+
+      const result = findSupplierInvoiceMatch(tx, [eurInvoice({ total_sek: 11500 })])
+
+      expect(result).not.toBeNull()
+      expect(result!.confidence).toBe(0.85)
+      expect(result!.matchMethod).toBe('amount_date')
+    })
+
+    it('matches a 1000 EUR invoice to an 11 500 SEK debit using the stored exchange_rate', () => {
+      // total_sek can be NULL on invoices registered before the SEK columns
+      // were populated; the booked rate is still a stored, real rate.
+      const tx = makeTransaction({ amount: -11500, currency: 'SEK', date: '2026-06-08' })
+
+      const result = findSupplierInvoiceMatch(tx, [eurInvoice({ exchange_rate: 11.5 })])
+
+      expect(result!.matchMethod).toBe('amount_date')
+    })
+
+    it('pro-rates the stored SEK total down to the unpaid remainder', () => {
+      // 1000 EUR invoice at 11.5, 400 EUR already paid → 600 EUR left = 6900 kr.
+      const tx = makeTransaction({ amount: -6900, currency: 'SEK', date: '2026-06-08' })
+
+      const result = findSupplierInvoiceMatch(tx, [
+        eurInvoice({ total_sek: 11500, paid_amount: 400, remaining_amount: 600 }),
+      ])
+
+      expect(result!.matchMethod).toBe('amount_date')
+      // The full-invoice SEK total must not match the remainder payment.
+      const full = makeTransaction({ amount: -11500, currency: 'SEK', date: '2026-06-08' })
+      expect(
+        findSupplierInvoiceMatch(full, [
+          eurInvoice({ total_sek: 11500, paid_amount: 400, remaining_amount: 600 }),
+        ])
+      ).toBeNull()
+    })
+
+    it('never offers a rate-less foreign invoice as a confident match', () => {
+      // Description carries the supplier name and the bankgiro, and the date is
+      // in-window: every amount-based pass would fire if the raw numbers were
+      // compared. Without a rate there is no comparable amount, so none may.
+      const tx = makeTransaction({
+        amount: -1000,
+        currency: 'SEK',
+        date: '2026-06-08',
+        description: 'Kontorsbolaget BG 1234567 faktura',
+      })
+
+      expect(findSupplierInvoiceMatch(tx, [eurInvoice()])).toBeNull()
+    })
+
+    it('matches EUR against EUR on raw amounts, no rate needed', () => {
+      const tx = makeTransaction({ amount: -1000, currency: 'EUR', date: '2026-06-08' })
+
+      const result = findSupplierInvoiceMatch(tx, [eurInvoice()])
+
+      expect(result!.confidence).toBe(0.85)
+      expect(result!.matchMethod).toBe('amount_date')
+    })
+
+    it('converts the transaction side too when the bank account is foreign', () => {
+      // 11 500 kr SEK invoice paid from a EUR account: 1000 EUR = 11 500 kr.
+      const tx = makeTransaction({
+        amount: -1000,
+        currency: 'EUR',
+        amount_sek: -11500,
+        exchange_rate: 11.5,
+        date: '2026-06-08',
+      })
+      const inv = makeSupplierInvoice({
+        status: 'registered',
+        currency: 'SEK',
+        total: 11500,
+        remaining_amount: 11500,
+        invoice_date: '2026-06-05',
+        due_date: '2026-07-05',
+      })
+
+      expect(findSupplierInvoiceMatch(tx, [inv])!.matchMethod).toBe('amount_date')
+    })
+
+    it('still matches a payment reference across currencies (Pass 1 is exempt)', () => {
+      // The OCR reference identifies the invoice on its own; no amount involved.
+      const tx = makeTransaction({ amount: -11500, currency: 'SEK', reference: '731001234567890' })
+
+      const result = findSupplierInvoiceMatch(tx, [
+        eurInvoice({ payment_reference: '731001234567890' }),
+      ])
+
+      expect(result!.matchMethod).toBe('payment_reference')
+    })
+
+    it('treats a legacy NULL transaction currency as SEK', () => {
+      // transactions.currency is nullable (DEFAULT 'SEK'); old rows must not
+      // stop matching a plain SEK supplier invoice.
+      const tx = makeTransaction({
+        amount: -10000,
+        currency: null as unknown as 'SEK',
+        date: '2024-07-03',
+      })
+      const inv = makeSupplierInvoice({
+        status: 'registered',
+        remaining_amount: 10000,
+        due_date: '2024-07-01',
+      })
+
+      expect(findSupplierInvoiceMatch(tx, [inv])!.matchMethod).toBe('amount_date')
+    })
+
+    it('is case-insensitive on currency codes', () => {
+      const tx = makeTransaction({
+        amount: -1000,
+        currency: 'eur' as unknown as 'EUR',
+        date: '2026-06-08',
+      })
+
+      expect(findSupplierInvoiceMatch(tx, [eurInvoice()])!.matchMethod).toBe('amount_date')
+    })
   })
 })

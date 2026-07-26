@@ -16,9 +16,16 @@
  * Mirrors `findDuplicatePaymentCandidatesForInvoice` (which scans for the
  * reverse direction: unlinked transactions that look like a manually-marked
  * invoice payment).
+ *
+ * Units: the comparison happens in SEK. `resolveTransactionAmountSek` (shared
+ * with the booking-side twin of this guard, deliberately one definition rather
+ * than two that can drift) carries the full explanation of why the ledger side
+ * is always SEK and why `journal_entry_lines.currency` must never be read as
+ * evidence that a debit/credit figure is foreign.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 
 /** ± days around the transaction date considered "the same payment". */
 const DATE_WINDOW_DAYS = 7
@@ -32,16 +39,45 @@ export interface DuplicateVoucherCandidate {
   voucher_label: string
   entry_date: string
   description: string | null
+  /** The voucher leg's SEK debit. Never the bank line's own (possibly foreign) amount. */
   amount: number
   bank_account_number: string
+  /** Date proximity only. Says nothing about whether the amounts were comparable. */
   reason: 'exact_amount_same_date' | 'exact_amount_within_window'
+  /**
+   * Whether the bank line's SEK value could be established and actually matched
+   * the leg. False means the amounts were never compared and the candidate rests
+   * on date + bank account alone: a "could not verify", not a confirmed
+   * duplicate. Surfaced rather than swallowed because a silent pass here is what
+   * mints a second verifikat for one affärshändelse (BFL 5 kap 1-2 §), and a
+   * hard block would refuse a booking the software cannot actually judge.
+   */
+  amount_verified: boolean
+  /**
+   * Why the amounts could not be compared. Null whenever `amount_verified`.
+   * `transaction_missing_sek_value`: a non-SEK bank line carrying neither
+   * `amount_sek` nor `exchange_rate`.
+   */
+  unverified_reason: 'transaction_missing_sek_value' | null
 }
 
 interface DetectArgs {
   companyId: string
   transactionId: string
   transactionDate: string
+  /** `transactions.amount`, denominated in `transactionCurrency`: NOT necessarily SEK. */
   transactionAmount: number
+  /**
+   * `transactions.currency`. Required, not optional, for the reason spelled out
+   * on `TransactionAmountFields.currency`: an optional field silently reads as
+   * SEK for any caller that projects a narrow column list, which switches this
+   * guard off for precisely the FX rows it exists to catch. Null means SEK.
+   */
+  transactionCurrency: string | null
+  /** `transactions.amount_sek`. */
+  transactionAmountSek?: number | null
+  /** `transactions.exchange_rate`. */
+  transactionExchangeRate?: number | null
 }
 
 /**
@@ -52,7 +88,11 @@ interface DetectArgs {
  *  - posted status (drafts cannot be a duplicate by definition)
  *  - entry date within ±DATE_WINDOW_DAYS of transaction.date
  *  - has a line that debits a BAS 19xx (kassa/bank) account for the same
- *    rounded amount (within 0.01 SEK)
+ *    rounded amount (within 0.01 SEK), the bank line's SEK value against the
+ *    leg's debit column, which is always SEK. When the bank line has no SEK
+ *    value (a foreign row with no stored rate) the amount test is skipped and
+ *    the candidate comes back with `amount_verified: false`: skipping is not a
+ *    pass, it is an explicit "could not verify" the caller must surface.
  *  - not already linked from `transactions.journal_entry_id` (for any row)
  *  - not already referenced by `invoice_payments.journal_entry_id`
  *  - not the storno/correction entry for any prior original (source_type
@@ -63,8 +103,17 @@ export async function detectDuplicatePaymentVoucher(
   args: DetectArgs,
 ): Promise<DuplicateVoucherCandidate | null> {
   const { companyId, transactionId, transactionDate, transactionAmount } = args
-  const targetAmount = Math.round(Math.abs(transactionAmount) * 100) / 100
-  if (targetAmount === 0) return null
+  if (Math.round(Math.abs(transactionAmount) * 100) === 0) return null
+
+  // The bank line stated in SEK, or null when it cannot be: a non-SEK row with
+  // neither amount_sek nor exchange_rate. Null disables the amount test below,
+  // it does not short-circuit to "no duplicate".
+  const targetSek = resolveTransactionAmountSek({
+    amount: transactionAmount,
+    currency: args.transactionCurrency,
+    amount_sek: args.transactionAmountSek,
+    exchange_rate: args.transactionExchangeRate,
+  })
 
   const dateMs = new Date(transactionDate).getTime()
   if (Number.isNaN(dateMs)) return null
@@ -123,18 +172,28 @@ export async function detectDuplicatePaymentVoucher(
   }
   if (lines.length === 0) return null
 
-  // Narrow to lines whose debit matches the transaction amount within 0.01 SEK.
-  const candidates = lines
-    .filter((l) => {
-      const debit = Math.round(Number(l.debit_amount) * 100) / 100
-      return Math.abs(debit - targetAmount) < 0.01
-    })
-    // System-generated payment vouchers (invoice_paid etc.) ARE valid
-    // duplicates to surface: those are exactly the case where the user
-    // already booked through a different flow. Only exclude reversals
-    // and corrections, which are bookkeeping noise rather than payment
-    // candidates the user would want to link to.
-    .filter((l) => l.journal_entry.source_type !== 'storno' && l.journal_entry.source_type !== 'correction')
+  // System-generated payment vouchers (invoice_paid etc.) ARE valid
+  // duplicates to surface: those are exactly the case where the user
+  // already booked through a different flow. Only exclude reversals
+  // and corrections, which are bookkeeping noise rather than payment
+  // candidates the user would want to link to.
+  const bankDebits = lines.filter(
+    (l) => l.journal_entry.source_type !== 'storno' && l.journal_entry.source_type !== 'correction',
+  )
+
+  // Narrow to lines whose SEK debit matches the bank line's SEK value within
+  // 0.01. With no SEK value on the bank side the test cannot run: keep the
+  // survivors and flag them unverified rather than returning null, which would
+  // read as "not a duplicate, go ahead". The existence half of the question is
+  // unit-free (posted, 19xx, in-window, unlinked), so an empty list here is
+  // still a genuine "no duplicate".
+  const candidates =
+    targetSek === null
+      ? bankDebits
+      : bankDebits.filter((l) => {
+          const debitSek = Math.round(Number(l.debit_amount) * 100) / 100
+          return Math.abs(debitSek - targetSek) < 0.01
+        })
 
   if (candidates.length === 0) return null
 
@@ -190,5 +249,7 @@ export async function detectDuplicatePaymentVoucher(
     amount: Math.round(Number(best.debit_amount) * 100) / 100,
     bank_account_number: best.account_number,
     reason: sameDate ? 'exact_amount_same_date' : 'exact_amount_within_window',
+    amount_verified: targetSek !== null,
+    unverified_reason: targetSek === null ? 'transaction_missing_sek_value' : null,
   }
 }

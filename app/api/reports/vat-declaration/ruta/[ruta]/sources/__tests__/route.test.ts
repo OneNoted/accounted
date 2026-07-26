@@ -13,14 +13,21 @@ vi.mock('@/lib/company/context', () => ({
 }))
 
 import { GET } from '../route'
+import { resolvePeriodDates } from '@/lib/reports/vat-declaration'
 
 interface SupabaseShape {
   from: ReturnType<typeof vi.fn>
   rpc: ReturnType<typeof vi.fn>
 }
 
+/**
+ * `fiscalPeriodResult` is what a `fiscal_periods` lookup resolves to: both the
+ * explicit-id lookup and the "räkenskapsår ending in `year`" lookup that
+ * `resolvePeriodDates` performs for helårsmoms.
+ */
 function buildSupabase(
-  linesResult: { data: unknown; error: unknown }
+  linesResult: { data: unknown; error: unknown },
+  fiscalPeriodResult: { data: unknown; error: unknown } = { data: null, error: null }
 ): SupabaseShape {
   return {
     rpc: vi.fn().mockResolvedValue(linesResult),
@@ -33,11 +40,17 @@ function buildSupabase(
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       or: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      maybeSingle: vi.fn().mockResolvedValue(fiscalPeriodResult),
       range: vi.fn().mockResolvedValue(linesResult),
       then: (resolve: (v: unknown) => void) => resolve(linesResult),
     })),
   }
+}
+
+/** The { p_start, p_end } the route handed to get_vat_ruta_source_lines. */
+function rpcPeriod(supabase: SupabaseShape): { start: string; end: string } {
+  const args = supabase.rpc.mock.calls[0][1] as { p_start: string; p_end: string }
+  return { start: args.p_start, end: args.p_end }
 }
 
 function authOk(supabase: SupabaseShape) {
@@ -191,5 +204,126 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
       'je-mid',
       'je-late',
     ])
+  })
+})
+
+describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: period resolution', () => {
+  // A first räkenskapsår may run up to 18 months (BFL 3 kap 3 §), and
+  // helårsmoms is filed per räkenskapsår, not per calendar year
+  // (SFL 26 kap 10-11 §§).
+  const EXTENDED_FIRST_YEAR = { period_start: '2025-07-03', period_end: '2026-12-31' }
+  const CALENDAR_YEAR = { period_start: '2026-01-01', period_end: '2026-12-31' }
+
+  const noLines = () => ({ data: [], error: null })
+
+  function get(searchParams: Record<string, string>, ruta = '05') {
+    const req = createMockRequest(
+      `/api/reports/vat-declaration/ruta/${ruta}/sources`,
+      { searchParams }
+    )
+    return GET(req, createMockRouteParams({ ruta }))
+  }
+
+  it('yearly: drills into the räkenskapsår, agreeing with the declaration resolver', async () => {
+    const supabase = buildSupabase(noLines(), { data: EXTENDED_FIRST_YEAR, error: null })
+    authOk(supabase)
+
+    const res = await get({ periodType: 'yearly', year: '2026', period: '1' })
+    expect(res.status).toBe(200)
+
+    // The old calendar-span behaviour would have started 2026-01-01 and hidden
+    // every verifikat from 2025-07-03 to 2025-12-31 that the declaration counts.
+    expect(rpcPeriod(supabase)).toEqual({ start: '2025-07-03', end: '2026-12-31' })
+
+    // And it is the exact span `calculateVatDeclaration` computes the figure
+    // from: both go through resolvePeriodDates with the same arguments.
+    const declarationPeriod = await resolvePeriodDates(
+      buildSupabase(noLines(), {
+        data: EXTENDED_FIRST_YEAR,
+        error: null,
+      }) as unknown as Parameters<typeof resolvePeriodDates>[0],
+      'company-1',
+      'yearly',
+      2026,
+      1
+    )
+    expect(rpcPeriod(supabase)).toEqual(declarationPeriod)
+  })
+
+  it('yearly: an explicit fiscal_period_id selects that räkenskapsår', async () => {
+    const supabase = buildSupabase(noLines(), { data: EXTENDED_FIRST_YEAR, error: null })
+    authOk(supabase)
+
+    const res = await get({
+      periodType: 'yearly',
+      year: '2026',
+      period: '1',
+      fiscal_period_id: '11111111-1111-4111-8111-111111111111',
+    })
+    expect(res.status).toBe(200)
+    expect(rpcPeriod(supabase)).toEqual({ start: '2025-07-03', end: '2026-12-31' })
+  })
+
+  it('yearly: calendar-year company is unchanged (Jan-Dec)', async () => {
+    const supabase = buildSupabase(noLines(), { data: CALENDAR_YEAR, error: null })
+    authOk(supabase)
+
+    const res = await get({ periodType: 'yearly', year: '2026', period: '1' })
+    expect(res.status).toBe(200)
+    expect(rpcPeriod(supabase)).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  it('yearly: falls back to the calendar span when no fiscal period is found', async () => {
+    const supabase = buildSupabase(noLines(), { data: null, error: null })
+    authOk(supabase)
+
+    const res = await get({ periodType: 'yearly', year: '2026', period: '1' })
+    expect(res.status).toBe(200)
+    expect(rpcPeriod(supabase)).toEqual({ start: '2026-01-01', end: '2026-12-31' })
+  })
+
+  it('monthly: stays a calendar month even for a broken fiscal year', async () => {
+    // kalendermånad per SFL 26 kap: fiscal_period_id must not widen the span.
+    const supabase = buildSupabase(noLines(), { data: EXTENDED_FIRST_YEAR, error: null })
+    authOk(supabase)
+
+    const res = await get({
+      periodType: 'monthly',
+      year: '2026',
+      period: '5',
+      fiscal_period_id: '11111111-1111-4111-8111-111111111111',
+    })
+    expect(res.status).toBe(200)
+    expect(rpcPeriod(supabase)).toEqual({ start: '2026-05-01', end: '2026-05-31' })
+  })
+
+  it('quarterly: stays a calendar quarter', async () => {
+    const supabase = buildSupabase(noLines(), { data: EXTENDED_FIRST_YEAR, error: null })
+    authOk(supabase)
+
+    const res = await get({ periodType: 'quarterly', year: '2026', period: '2' })
+    expect(res.status).toBe(200)
+    expect(rpcPeriod(supabase)).toEqual({ start: '2026-04-01', end: '2026-06-30' })
+  })
+
+  it('returns 400 for an unknown periodType', async () => {
+    authOk(buildSupabase(noLines()))
+    const res = await get({ periodType: 'weekly', year: '2026', period: '5' })
+    expect(res.status).toBe(400)
+  })
+
+  it('fiscal_period_id alone still selects the period by its own bounds', async () => {
+    const supabase = buildSupabase(noLines(), { data: EXTENDED_FIRST_YEAR, error: null })
+    authOk(supabase)
+
+    const res = await get({ fiscal_period_id: '11111111-1111-4111-8111-111111111111' })
+    expect(res.status).toBe(200)
+    expect(rpcPeriod(supabase)).toEqual({ start: '2025-07-03', end: '2026-12-31' })
+  })
+
+  it('returns 404 when fiscal_period_id alone matches no period', async () => {
+    authOk(buildSupabase(noLines(), { data: null, error: null }))
+    const res = await get({ fiscal_period_id: '11111111-1111-4111-8111-111111111111' })
+    expect(res.status).toBe(404)
   })
 })

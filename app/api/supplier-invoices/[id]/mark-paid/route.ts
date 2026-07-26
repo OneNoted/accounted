@@ -18,6 +18,14 @@ import {
   DUPLICATE_DATE_WINDOW_DAYS,
   escapeLikePattern,
 } from '@/lib/invoices/duplicate-payment-guard'
+import {
+  invoiceAmountSek,
+  magnitudesWithinTolerance,
+  normalizeCurrencyCode,
+  planAmountSweeps,
+  type ComparableAmount,
+} from '@/lib/invoices/duplicate-guard-currency'
+import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -86,30 +94,108 @@ export const POST = withRouteContext(
         })
       }
       if (supplierName) {
-        const windowLow = Math.round(paymentAmount * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
-        const windowHigh = Math.round(paymentAmount * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+        // Units: `paymentAmount` is denominated in the supplier invoice's
+        // currency (that is what `remaining_amount` and `body.amount` are),
+        // while `transactions.amount` is denominated in the bank row's own
+        // currency. The plus-minus tolerance band is therefore planned per
+        // currency and re-checked per row, so band and column always share a
+        // unit. A SEK invoice yields exactly one sweep with the band it had
+        // before, so a SEK-only company sees the identical single query.
+        const paymentCurrency = normalizeCurrencyCode(invoice.currency)
+        const reference: ComparableAmount = {
+          amount: paymentAmount,
+          currency: paymentCurrency,
+          sek: invoiceAmountSek({
+            amount: paymentAmount,
+            currency: paymentCurrency,
+            total: invoice.total,
+            totalSek: invoice.total_sek,
+            exchangeRate: invoice.exchange_rate,
+          }),
+        }
+        const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
+          reference,
+          DUPLICATE_AMOUNT_TOLERANCE_PCT,
+        )
+        if (crossCurrencyUnverifiable) {
+          // A foreign invoice with no stored rate cannot be stated in kronor,
+          // so kronor bank rows can only be excluded, never compared raw
+          // (a raw compare reads 1 000 EUR as 1 000 kr). Same-currency rows are
+          // still swept. Logged so the blind spot is visible in audit rather
+          // than passing as a clean "no duplicate".
+          opLog.warn('duplicate-payment guard: cross-currency candidates not evaluated', {
+            reason: 'invoice_missing_sek_value',
+            currency: paymentCurrency,
+            supplierInvoiceId: id,
+          })
+        }
+
         const dateMs = new Date(paymentDate).getTime()
         const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0]
         const dateHigh = new Date(dateMs + DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000).toISOString().split('T')[0]
         const escapedSupplierName = escapeLikePattern(supplierName)
 
-        const { data: candidates } = await supabase
-          .from('transactions')
-          .select('id, date, amount, description, merchant_name')
-          .eq('company_id', companyId!)
-          .eq('is_business', true)
-          .is('supplier_invoice_id', null)
-          .is('invoice_id', null)
-          .lt('amount', 0)
-          .gte('amount', -windowHigh)
-          .lte('amount', -windowLow)
-          .gte('date', dateLow)
-          .lte('date', dateHigh)
-          .ilike('merchant_name', `%${escapedSupplierName}%`)
-          .order('date', { ascending: false })
-          .limit(5)
+        type CandidateRow = {
+          id: string
+          date: string
+          amount: number
+          description: string | null
+          merchant_name: string | null
+          currency: string | null
+          amount_sek: number | null
+          exchange_rate: number | null
+        }
 
-        if (candidates && candidates.length > 0) {
+        const sweepResults = await Promise.all(
+          sweeps.map((sweep) =>
+            supabase
+              .from('transactions')
+              .select(
+                'id, date, amount, description, merchant_name, currency, amount_sek, exchange_rate',
+              )
+              .eq('company_id', companyId!)
+              .eq('is_business', true)
+              .is('supplier_invoice_id', null)
+              .is('invoice_id', null)
+              .lt('amount', 0)
+              .or(sweep.currencyFilter)
+              .gte('amount', -sweep.high)
+              .lte('amount', -sweep.low)
+              .gte('date', dateLow)
+              .lte('date', dateHigh)
+              .ilike('merchant_name', `%${escapedSupplierName}%`)
+              .order('date', { ascending: false })
+              .limit(5),
+          ),
+        )
+
+        const byId = new Map<string, CandidateRow>()
+        for (const res of sweepResults) {
+          for (const row of (res.data ?? []) as CandidateRow[]) {
+            if (!byId.has(row.id)) byId.set(row.id, row)
+          }
+        }
+        const candidates = Array.from(byId.values())
+          .filter((c) =>
+            magnitudesWithinTolerance(
+              reference,
+              {
+                amount: Number(c.amount),
+                currency: normalizeCurrencyCode(c.currency),
+                sek: resolveTransactionAmountSek({
+                  amount: c.amount,
+                  currency: c.currency,
+                  amount_sek: c.amount_sek,
+                  exchange_rate: c.exchange_rate,
+                }),
+              },
+              DUPLICATE_AMOUNT_TOLERANCE_PCT,
+            ),
+          )
+          .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+          .slice(0, 5)
+
+        if (candidates.length > 0) {
           return errorResponseFromCode('SI_PAID_LIKELY_DUPLICATE', opLog, {
             requestId,
             details: {

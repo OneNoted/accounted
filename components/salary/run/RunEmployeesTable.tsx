@@ -17,14 +17,16 @@ import {
 import { ChevronRight, FileDown, Loader2, Trash2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { Employee, SalaryRunEmployee } from '@/types'
+import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 import type { RunDetail } from './types'
 
 type SreWithEmployee = SalaryRunEmployee & {
   employee?: {
     first_name: string
     last_name: string
-    personnummer: string
+    // The run detail endpoint returns the masked display form under this key;
+    // the encrypted `personnummer` column never reaches the client.
+    personnummer_masked: string
     default_dimensions?: Record<string, string>
   }
 }
@@ -33,7 +35,7 @@ interface RunEmployeesTableProps {
   run: RunDetail
   runId: string
   employees: SalaryRunEmployee[]
-  availableEmployees: Employee[]
+  availableEmployees: EmployeeMasked[]
   canWrite: boolean
   actionLoading: string | null
   dimensionsEnabled: boolean

@@ -10,6 +10,15 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * Returns the supplier invoices behind a supplier's outstanding balance.
  * Each row's `journal_entry_id` points at the registration journal entry
  * (when posted) so the UI can link to `/bookkeeping/[id]`.
+ *
+ * Currency contract (mirrors `generateSupplierLedger`): `credit` is the open
+ * balance on 2440 and is therefore always SEK. A foreign-currency invoice with
+ * no `exchange_rate` has no known SEK amount, so it gets `remaining_sek: null`
+ * and `credit: 0` instead of its raw foreign amount, and is counted in
+ * `unconverted_fx_count`. A consumer tells the two apart on `remaining_sek`:
+ * `null` means "SEK value unknown, excluded from the ledger totals", `0` means
+ * "genuinely settled". `remaining` (+ `currency`) always carries the invoice's
+ * own-currency amount, so the row stays visible and readable either way.
  */
 const PAGE_LIMIT = 500
 
@@ -86,6 +95,9 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
   const lines: (ReportSourceLine & {
     supplier_invoice_id: string
     supplier_invoice_number: string
+    /** Open amount in the invoice's own currency. Display only: never summed. */
+    remaining: number
+    /** `remaining` in SEK, or `null` when the FX rate is missing. */
     remaining_sek: number | null
     currency: string
     paid_amount: number
@@ -112,10 +124,15 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
         entry?.description ??
         `Leverantörsfaktura ${inv.supplier_invoice_number || ''}`,
       debit: 0,
-      // For an unpaid AP entry, the open balance is a credit on 2440.
-      credit: remainingSek ?? remaining,
+      // For an unpaid AP entry, the open balance is a credit on 2440, which is
+      // posted in SEK. With no rate there is no SEK figure to show: fall back
+      // to 0 rather than to the foreign amount, which would render as kronor in
+      // the Kredit column. `remaining_sek: null` is what marks the difference
+      // between "unknown" and "settled".
+      credit: remainingSek ?? 0,
       supplier_invoice_id: inv.id,
       supplier_invoice_number: inv.supplier_invoice_number || '',
+      remaining,
       remaining_sek: remainingSek,
       currency: inv.currency || 'SEK',
       paid_amount: Number(inv.paid_amount) || 0,
@@ -128,6 +145,9 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
       supplier_id: supplier.id,
       supplier_name: supplier.name,
       lines,
+      // Same contract as the ledger report itself: the rows are listed, but
+      // their SEK value is unknown and missing from every SEK total.
+      unconverted_fx_count: lines.filter((l) => l.remaining_sek === null).length,
       next_cursor: null,
     },
   })

@@ -2,7 +2,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import {
   ACCOUNT_RUTA,
-  calculatePeriodDates,
+  resolvePeriodDates,
 } from '@/lib/reports/vat-declaration'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import type { VatDeclarationRutor, VatPeriodType } from '@/types'
@@ -15,10 +15,13 @@ import type { VatDeclarationRutor, VatPeriodType } from '@/types'
  * `ACCOUNT_RUTA` in `lib/reports/vat-declaration.ts`.
  *
  * Period can be specified either via:
- *   ?periodType=monthly|quarterly|yearly&year=2026&period=5
+ *   ?periodType=monthly|quarterly|yearly&year=2026&period=5[&fiscal_period_id=<uuid>]
  *   ?fiscal_period_id=<uuid>
  *
- * The periodType form mirrors the way the main VAT report is fetched.
+ * The periodType form mirrors the way the main VAT report is fetched, down to
+ * the period resolution itself: it goes through `resolvePeriodDates`, the same
+ * helper the declaration uses, so the drill-down can never answer a query
+ * string with a different span than the figure it drills into.
  */
 const PAGE_LIMIT = 500
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -48,11 +51,43 @@ export const GET = withRouteContext<{ params: Promise<{ ruta: string }> }>(
     )
   }
 
-  // Resolve the period: either by fiscal_period_id or periodType/year/period.
-  let start: string | null = null
-  let end: string | null = null
+  // Resolve the period. The periodType form is primary and resolves through
+  // `resolvePeriodDates`, the same helper the declaration itself uses, with
+  // fiscal_period_id threaded through exactly as the sibling vat-declaration
+  // routes do. Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§) and
+  // a räkenskapsår is not always a calendar year (a first/changed year runs up
+  // to 18 months, BFL 3 kap 3 §), so a plain Jan-Dec span would list a
+  // different set of verifikat than the declaration was computed from.
+  // Monthly/quarterly are calendar periods and resolve identically to before.
+  // The fiscal_period_id-only form (no periodType) still selects the span from
+  // the fiscal period's own bounds.
+  const periodType = searchParams.get('periodType') as VatPeriodType | null
+  const yearStr = searchParams.get('year')
+  const periodStr = searchParams.get('period')
   const fiscalPeriodId = searchParams.get('fiscal_period_id')
-  if (fiscalPeriodId) {
+
+  let start: string
+  let end: string
+  if (periodType && yearStr && periodStr) {
+    if (!['monthly', 'quarterly', 'yearly'].includes(periodType)) {
+      return NextResponse.json({ error: 'Invalid periodType' }, { status: 400 })
+    }
+    const year = parseInt(yearStr, 10)
+    const periodNum = parseInt(periodStr, 10)
+    if (isNaN(year) || isNaN(periodNum)) {
+      return NextResponse.json({ error: 'Invalid period' }, { status: 400 })
+    }
+    const dates = await resolvePeriodDates(
+      supabase,
+      companyId,
+      periodType,
+      year,
+      periodNum,
+      fiscalPeriodId ?? undefined
+    )
+    start = dates.start
+    end = dates.end
+  } else if (fiscalPeriodId) {
     const { data: period } = await supabase
       .from('fiscal_periods')
       .select('period_start, period_end')
@@ -65,23 +100,10 @@ export const GET = withRouteContext<{ params: Promise<{ ruta: string }> }>(
     start = period.period_start
     end = period.period_end
   } else {
-    const periodType = searchParams.get('periodType') as VatPeriodType | null
-    const yearStr = searchParams.get('year')
-    const periodStr = searchParams.get('period')
-    if (!periodType || !yearStr || !periodStr) {
-      return NextResponse.json(
-        { error: 'periodType/year/period or fiscal_period_id is required' },
-        { status: 400 }
-      )
-    }
-    const year = parseInt(yearStr, 10)
-    const periodNum = parseInt(periodStr, 10)
-    if (isNaN(year) || isNaN(periodNum)) {
-      return NextResponse.json({ error: 'Invalid period' }, { status: 400 })
-    }
-    const dates = calculatePeriodDates(periodType, year, periodNum)
-    start = dates.start
-    end = dates.end
+    return NextResponse.json(
+      { error: 'periodType/year/period or fiscal_period_id is required' },
+      { status: 400 }
+    )
   }
 
   // New cursors include entry and line IDs so multiple rows with the same

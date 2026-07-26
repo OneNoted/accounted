@@ -328,3 +328,132 @@ describe('getErrorMessage: existing patterns still work', () => {
     expect(msg).toBe('Något gick fel. Försök igen.')
   })
 })
+
+/**
+ * Client handlers must hand getErrorMessage() the PARSED RESPONSE BODY plus the
+ * HTTP status, never `new Error(body.error)`.
+ *
+ * `withRouteContext` answers any thrown error with the canonical envelope
+ * `{ error: { code, message, message_en } }`, so `body.error` is an OBJECT on
+ * that path. `new Error(object)` stringifies it to "[object Object]", which
+ * matches no known pattern and no Swedish heuristic, so the route's own reason
+ * is discarded and the user is told "Något gick fel". The same call site also
+ * loses the HTTP status, so the status map cannot rescue it either.
+ *
+ * These cases pin the contract for all three response shapes a route can
+ * produce: nested envelope, the deprecated bare `{ error: 'string' }`, and no
+ * parseable body at all.
+ */
+describe('getErrorMessage: API response body vs new Error(body.error)', () => {
+  // Exactly what withRouteContext -> errorResponse() -> buildResponse() emits.
+  const envelope = {
+    error: {
+      code: 'TARGET_PERIOD_LOCKED',
+      message:
+        'Räkenskapsperioden för det valda datumet är låst (t.o.m. 2026-03-31). Lås upp perioden för att flytta verifikationen dit.',
+      message_en: 'The fiscal period for the selected date is locked.',
+      requestId: 'req_00000000-0000-4000-8000-000000000000',
+      details: { lockDate: '2026-03-31' },
+    },
+  }
+
+  it('the parsed body plus statusCode resolves the envelope reason', () => {
+    const msg = getErrorMessage(envelope, { statusCode: 409 })
+    expect(msg).toContain('låst')
+    expect(msg).toContain('2026-03-31')
+    expect(msg).not.toBe('Något gick fel. Försök igen.')
+  })
+
+  it('the inner error object alone also resolves (forwarded body.error)', () => {
+    const msg = getErrorMessage(envelope.error, { statusCode: 409 })
+    expect(msg).toContain('låst')
+    expect(msg).not.toBe('Något gick fel. Försök igen.')
+  })
+
+  it('new Error(body.error) stringifies the envelope to "[object Object]"', () => {
+    // The defect in one line: the Error constructor calls String() on the object.
+    expect(new Error(envelope.error as unknown as string).message).toBe('[object Object]')
+  })
+
+  it('new Error(body.error) discards the reason and yields the generic fallback', () => {
+    const thrown = new Error(envelope.error as unknown as string)
+    expect(getErrorMessage(thrown)).toBe('Något gick fel. Försök igen.')
+  })
+
+  it('new Error(body.error) is not rescued by passing statusCode either', () => {
+    // The status map fires, but the specific reason is already gone: the user
+    // is told "a conflict occurred", not which period is locked.
+    const thrown = new Error(envelope.error as unknown as string)
+    const msg = getErrorMessage(thrown, { statusCode: 409 })
+    expect(msg).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
+    expect(msg).not.toContain('2026-03-31')
+  })
+
+  it('the same call handles the deprecated bare { error: string } shape', () => {
+    const body = { error: 'Du har endast läsbehörighet i detta företag.' }
+    expect(getErrorMessage(body, { statusCode: 403 })).toBe(
+      'Du har endast läsbehörighet i detta företag.',
+    )
+  })
+
+  it('the same call handles an unparseable body via statusCode', () => {
+    // `await response.json().catch(() => null)` on an HTML 403 page.
+    expect(getErrorMessage(null, { statusCode: 403 })).toBe(
+      'Du har inte behörighet att utföra denna åtgärd.',
+    )
+  })
+
+  it('English locale gets message_en from the envelope, not the Swedish prose', () => {
+    const msg = getErrorMessage(envelope, { statusCode: 409, locale: 'en' })
+    expect(msg).not.toContain('Räkenskapsperioden')
+    expect(msg).not.toBe('Something went wrong. Please try again.')
+  })
+})
+
+/**
+ * Hand-rolled `{ error: '<Swedish sentence>' }` routes (the extension routes,
+ * /api/team/accept, and friends) only reach the toast verbatim when
+ * isSwedishUserMessage() recognizes the sentence. Several real route strings
+ * ("hittades inte", "är redan bokförd", "kan inte matchas", "en låst eller
+ * saknad räkenskapsperiod") matched none of the original patterns, so even the
+ * correct call-site treatment (body plus statusCode) collapsed them to the
+ * status-map sentence, or, where the status has no map entry (423), to the
+ * generic fallback. These pin the added patterns: hittades / redan / kan inte /
+ * låst.
+ */
+describe('getErrorMessage: Swedish heuristic covers real route sentences', () => {
+  it('"hittades inte" passes through verbatim instead of the 404 map sentence', () => {
+    const body = { error: 'Skattekonto-transaktionen hittades inte.', code: 'TRANSACTION_NOT_FOUND' }
+    expect(getErrorMessage(body, { statusCode: 404 })).toBe(
+      'Skattekonto-transaktionen hittades inte.',
+    )
+  })
+
+  it('"är redan bokförd" passes through verbatim instead of the 409 map sentence', () => {
+    const body = { error: 'Transaktionen är redan bokförd.', code: 'ALREADY_BOOKED' }
+    expect(getErrorMessage(body, { statusCode: 409 })).toBe('Transaktionen är redan bokförd.')
+  })
+
+  it('"kan inte" passes through verbatim', () => {
+    const body = { error: 'Verifikatet är makulerat och kan inte matchas.', code: 'INVALID_CANDIDATE' }
+    expect(getErrorMessage(body, { statusCode: 422 })).toBe(
+      'Verifikatet är makulerat och kan inte matchas.',
+    )
+  })
+
+  it('"låst eller saknad räkenskapsperiod" survives a status (423) that has no map entry', () => {
+    const body = {
+      error: 'Datumet 2026-01-15 ligger i en låst eller saknad räkenskapsperiod. Lås upp perioden eller hoppa över raden.',
+      code: 'PERIOD_LOCKED',
+    }
+    const msg = getErrorMessage(body, { statusCode: 423 })
+    expect(msg).toContain('låst eller saknad räkenskapsperiod')
+    expect(msg).not.toBe('Något gick fel. Försök igen.')
+  })
+
+  it('an English body still falls to the status map, not passthrough', () => {
+    expect(getErrorMessage({ error: 'Extension context required' }, { statusCode: 500 })).toBe(
+      'Ett oväntat serverfel uppstod. Försök igen senare.',
+    )
+  })
+})

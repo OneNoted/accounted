@@ -172,6 +172,72 @@ describe('GET /callback: OAuth state binding', () => {
   })
 })
 
+/**
+ * The callback's no-opener arm used to be near-dead: the wizard only ever
+ * reached this route through a popup, which always has a window.opener.
+ * ArcimMigrationWorkspace now falls back to a full-page OAuth flow when the
+ * popup is blocked (a discarded window.open return value made a blocked popup
+ * look exactly like a successful one), so that arm is a live user path and the
+ * only way a popup-blocked user finishes the migration.
+ *
+ * These pin the URL it navigates to, because the wizard reads it on the other
+ * end: `/import?migration=...` sets mode='migration'
+ * (app/(dashboard)/import/page.tsx:1990) and handleOAuthReturn consumes
+ * `consentId` / `reason` from there. Dropping the arm, or renaming a param,
+ * would strand every popup-blocked user on this HTML page.
+ */
+describe('GET /callback: full-page fallback when there is no opener', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  /** The URL the page navigates to when window.opener is absent. */
+  function fallbackNavigation(html: string): URL {
+    // Both arms are emitted; the opener arm postMessages instead of navigating.
+    expect(html).toContain('window.opener')
+    const match = html.match(/window\.location\.href = "([^"]+)"/)
+    expect(match, 'callback HTML has no no-opener navigation').not.toBeNull()
+    return new URL(match![1])
+  }
+
+  it('sends a successful connect back to the wizard with the consent id', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue({
+      consentId: 'consent-1',
+      provider: 'fortnox',
+    })
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'one-time-token' }),
+    )
+    const target = fallbackNavigation(await res.text())
+
+    expect(target.origin).toBe(APP_URL)
+    expect(target.pathname).toBe('/import')
+    expect(target.searchParams.get('migration')).toBe('connected')
+    expect(target.searchParams.get('consentId')).toBe('consent-1')
+  })
+
+  it('sends a failure back to the wizard with the reason attached', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue(null)
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'forged-token' }),
+    )
+    const target = fallbackNavigation(await res.text())
+
+    expect(target.pathname).toBe('/import')
+    expect(target.searchParams.get('migration')).toBe('error')
+    expect(target.searchParams.get('reason')).toContain(GENERIC_REJECTION)
+  })
+})
+
 describe('GET /preview: cross-tenant consent status oracle', () => {
   beforeEach(() => {
     vi.clearAllMocks()

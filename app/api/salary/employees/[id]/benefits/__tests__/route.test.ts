@@ -89,4 +89,76 @@ describe('POST /api/salary/employees/[id]/benefits', () => {
     const response = await POST(post(validBenefit), params)
     expect(response.status).toBe(404)
   })
+
+  // Validity period: mirrors CHECK (valid_to IS NULL OR valid_to >= valid_from)
+  // on employee_benefits (migration 20260512200100). Before the schema mirrored
+  // it, an end date before the start date reached Postgres and came back as an
+  // opaque 500.
+  describe('valid_from / valid_to ordering', () => {
+    it('rejects valid_to before valid_from with an actionable 400', async () => {
+      // Queued as the DB would answer without the schema mirror: the employee
+      // resolves, then the insert trips the CHECK. The route must never get
+      // there; before the mirror this exact input returned an opaque 500.
+      enqueue({ data: { id: 'emp-1' } })
+      enqueue({
+        data: null,
+        error: { code: '23514', message: 'violates check constraint "employee_benefits_check"' },
+      })
+
+      const response = await POST(
+        post({ ...validBenefit, valid_from: '2026-06-01', valid_to: '2026-05-31' }),
+        params,
+      )
+      const { status, body } = await parseJsonResponse<{
+        error: string
+        errors: { field: string; message: string }[]
+      }>(response)
+
+      expect(status).toBe(400)
+      expect(body.errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: 'valid_to' })]),
+      )
+      // Names both fields as labelled in the form and how to express open-ended.
+      expect(body.error).toContain('Gäller till')
+      expect(body.error).toContain('Gäller från')
+      expect(body.error).toContain('löpande')
+      // Nothing was attempted against the DB.
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('accepts valid_to equal to valid_from (the bound is inclusive)', async () => {
+      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: 'ben-1' } })
+
+      const response = await POST(
+        post({ ...validBenefit, valid_from: '2026-06-01', valid_to: '2026-06-01' }),
+        params,
+      )
+      expect(response.status).toBe(201)
+    })
+
+    it('accepts an omitted valid_to (open-ended benefit stays legal)', async () => {
+      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: { id: 'ben-1' } })
+
+      const response = await POST(post(validBenefit), params)
+      expect(response.status).toBe(201)
+    })
+
+    it('maps a check_violation from the insert to 400, not 500', async () => {
+      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: null, error: { code: '23514', message: 'violates check constraint' } })
+
+      const response = await POST(post(validBenefit), params)
+      expect(response.status).toBe(400)
+    })
+
+    it('still reports a genuine DB failure as 500', async () => {
+      enqueue({ data: { id: 'emp-1' } })
+      enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
+
+      const response = await POST(post(validBenefit), params)
+      expect(response.status).toBe(500)
+    })
+  })
 })

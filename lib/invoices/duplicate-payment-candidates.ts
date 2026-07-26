@@ -5,6 +5,17 @@ import {
   escapeLikePattern,
   normalizeOcrReference,
 } from './duplicate-payment-guard'
+import {
+  invoiceAmountSek,
+  magnitudesWithinTolerance,
+  normalizeCurrencyCode,
+  planAmountSweeps,
+  type ComparableAmount,
+} from './duplicate-guard-currency'
+import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('invoices/duplicate-payment-candidates')
 
 export type DuplicatePaymentMatchReason =
   | 'ocr_exact'
@@ -37,6 +48,19 @@ const MATCH_REASON_CONFIDENCE: Record<DuplicatePaymentMatchReason, number> = {
 interface CustomerInvoice {
   invoice_number: string | null
   customer_name: string | null | undefined
+  /**
+   * `invoices.currency`; null means SEK (the column default). REQUIRED rather
+   * than optional on purpose: an optional field silently reads as SEK for any
+   * caller that forgets it, which is exactly how a 1 000 EUR payment came to be
+   * banded against a kronor column. TypeScript now refuses the call instead.
+   */
+  currency: string | null
+  /** `invoices.total`, in `currency`. Pro-rates `total_sek` down to the payment. */
+  total: number | null
+  /** `invoices.total_sek`: the stored SEK view of `total`. */
+  total_sek: number | null
+  /** `invoices.exchange_rate`: SEK per unit of `currency`. */
+  exchange_rate: number | null
 }
 
 type Row = {
@@ -46,6 +70,9 @@ type Row = {
   description: string | null
   merchant_name: string | null
   reference: string | null
+  currency: string | null
+  amount_sek: number | null
+  exchange_rate: number | null
 }
 
 /**
@@ -60,6 +87,15 @@ type Row = {
  *  - per-candidate scoring with OCR (invoice_number normalized) as the
  *    strongest signal
  *
+ * Units: `paymentAmount` is denominated in the INVOICE's currency (that is what
+ * `invoices.remaining_amount` and `total` are stored in), while
+ * `transactions.amount` is denominated in the bank row's own currency. The
+ * plus-minus tolerance band is therefore planned per currency by
+ * `planAmountSweeps` and re-checked per row by `magnitudesWithinTolerance`:
+ * band and column always share a unit, and a candidate that cannot be brought
+ * into a shared unit is excluded rather than compared as a raw number. A SEK
+ * invoice produces exactly one sweep with the same band as before.
+ *
  * The merchant_name and description searches are issued as two separate
  * parameterised `.ilike()` queries and deduplicated by id. We deliberately
  * avoid `.or('merchant_name.ilike.%X%,description.ilike.%X%')` because that
@@ -73,6 +109,7 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   params: {
     companyId: string
     invoice: CustomerInvoice
+    /** The payment being booked, in `invoice.currency`. */
     paymentAmount: number
     paymentDate: string
   },
@@ -81,8 +118,39 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   const customerName = invoice.customer_name
   if (!customerName) return []
 
-  const windowLow = Math.round(paymentAmount * (1 - DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
-  const windowHigh = Math.round(paymentAmount * (1 + DUPLICATE_AMOUNT_TOLERANCE_PCT) * 100) / 100
+  const paymentCurrency = normalizeCurrencyCode(invoice.currency)
+  const reference: ComparableAmount = {
+    amount: paymentAmount,
+    currency: paymentCurrency,
+    sek: invoiceAmountSek({
+      amount: paymentAmount,
+      currency: paymentCurrency,
+      total: invoice.total,
+      totalSek: invoice.total_sek,
+      exchangeRate: invoice.exchange_rate,
+    }),
+  }
+  const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
+    reference,
+    DUPLICATE_AMOUNT_TOLERANCE_PCT,
+  )
+  if (sweeps.length === 0) return []
+  if (crossCurrencyUnverifiable) {
+    // A foreign invoice with neither a usable total_sek nor an exchange_rate
+    // cannot be stated in kronor, so kronor bank rows are excluded rather than
+    // compared raw (a raw compare reads 1 000 kr as 1 000 EUR). Same-currency
+    // rows are still swept. Logged for the same reason the supplier-side twin
+    // logs it: an unevaluated candidate set is not a clean "no duplicate", and
+    // the gap must be visible in behandlingshistorik (BFNAR 2013:2 kap 8)
+    // rather than pass silently.
+    log.warn('duplicate-payment guard: cross-currency candidates not evaluated', {
+      reason: 'invoice_missing_sek_value',
+      companyId,
+      currency: paymentCurrency,
+      invoiceNumber: invoice.invoice_number,
+    })
+  }
+
   const dateMs = new Date(paymentDate).getTime()
   const dateLow = new Date(dateMs - DUPLICATE_DATE_WINDOW_DAYS * 24 * 3600 * 1000)
     .toISOString()
@@ -92,31 +160,43 @@ export async function findDuplicatePaymentCandidatesForInvoice(
     .split('T')[0]
   const pattern = `%${escapeLikePattern(customerName)}%`
 
-  const base = () =>
-    supabase
+  const base = (sweepIndex: number) => {
+    const sweep = sweeps[sweepIndex]
+    return supabase
       .from('transactions')
-      .select('id, date, amount, description, merchant_name, reference')
+      .select(
+        'id, date, amount, description, merchant_name, reference, currency, amount_sek, exchange_rate',
+      )
       .eq('company_id', companyId)
       .eq('is_business', true)
       .is('invoice_id', null)
       .is('supplier_invoice_id', null)
       .gt('amount', 0)
-      .gte('amount', windowLow)
-      .lte('amount', windowHigh)
+      .or(sweep.currencyFilter)
+      .gte('amount', sweep.low)
+      .lte('amount', sweep.high)
       .gte('date', dateLow)
       .lte('date', dateHigh)
+  }
 
-  const [byMerchantRes, byDescriptionRes] = await Promise.all([
-    base().ilike('merchant_name', pattern).order('date', { ascending: false }).limit(5),
-    base().ilike('description', pattern).order('date', { ascending: false }).limit(5),
-  ])
+  const responses = await Promise.all(
+    sweeps.flatMap((_sweep, i) => [
+      base(i).ilike('merchant_name', pattern).order('date', { ascending: false }).limit(5),
+      base(i).ilike('description', pattern).order('date', { ascending: false }).limit(5),
+    ]),
+  )
 
   const merged = new Map<string, Row>()
-  for (const row of (byMerchantRes.data ?? []) as Row[]) merged.set(row.id, row)
-  for (const row of (byDescriptionRes.data ?? []) as Row[]) {
-    if (!merged.has(row.id)) merged.set(row.id, row)
+  for (const res of responses) {
+    for (const row of (res.data ?? []) as Row[]) {
+      if (!merged.has(row.id)) merged.set(row.id, row)
+    }
   }
+
   const data = Array.from(merged.values())
+    .filter((row) =>
+      magnitudesWithinTolerance(reference, rowAmount(row), DUPLICATE_AMOUNT_TOLERANCE_PCT),
+    )
     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     .slice(0, 5)
 
@@ -148,6 +228,25 @@ export async function findDuplicatePaymentCandidatesForInvoice(
 
   candidates.sort((a, b) => MATCH_REASON_RANK[a.match_reason] - MATCH_REASON_RANK[b.match_reason])
   return candidates
+}
+
+/**
+ * A bank row as a comparable amount. `resolveTransactionAmountSek` is the one
+ * definition of "this bank line in kronor" (shared with the booking-time
+ * duplicate guard) and returns null rather than falling back to the raw foreign
+ * number.
+ */
+function rowAmount(row: Row): ComparableAmount {
+  return {
+    amount: Number(row.amount),
+    currency: normalizeCurrencyCode(row.currency),
+    sek: resolveTransactionAmountSek({
+      amount: row.amount,
+      currency: row.currency,
+      amount_sek: row.amount_sek,
+      exchange_rate: row.exchange_rate,
+    }),
+  }
 }
 
 function scoreCandidate(args: {

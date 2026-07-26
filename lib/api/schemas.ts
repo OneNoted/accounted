@@ -35,6 +35,33 @@ const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactl
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
 
+/**
+ * SEK per one unit of a foreign currency.
+ *
+ * Mirrors the database CHECK that every table storing a rate carries:
+ * `invoices_exchange_rate_check`, `supplier_invoices_exchange_rate_check`,
+ * `invoice_payments_payment_exchange_rate_check` and
+ * `supplier_invoice_payments_payment_exchange_rate_check` all read
+ * `rate IS NULL OR (rate > 0 AND rate < 100000)`. BOTH bounds are exclusive,
+ * so this mirror is `.positive()` + `.lt(100000)`; `.max(100000)` would let
+ * exactly 100000 through the schema and straight into a 23514 violation.
+ *
+ * Without the mirror a plausible fat-fingered rate (250000, a pasted total
+ * instead of a rate) passed validation, hit the constraint in Postgres, and
+ * surfaced as an unexplained 500. Through this primitive it lands in
+ * `validateBody`'s 400 with a message naming the field and the fix.
+ *
+ * The ceiling is a typo guard rather than a precise band: no currency the app
+ * supports comes near it (USD ~10.5, EUR ~11.5, GBP ~13.5).
+ */
+const exchangeRate = z
+  .number()
+  .positive('Växelkursen måste vara större än 0')
+  .lt(
+    100000,
+    'Växelkursen måste vara mindre än 100 000. Ange kursen per 1 enhet av valutan, till exempel 11,45 för EUR, inte fakturans belopp.',
+  )
+
 const invoiceEmailAddress = z
   .string()
   .trim()
@@ -660,10 +687,16 @@ export const CreateSelfBillingInvoiceSchema = z.object({
 // Recurring invoice schedule schemas
 // ============================================================
 
-// Swedish VAT rates per ML 17 kap 24§ p.9: null means "use customer default
-// from getAvailableVatRates". Any other value would produce a non-compliant
-// invoice (buyer cannot deduct ingående moms). Cron-time validation against
-// the customer's allowed set still runs in executeRecurringSchedule.
+// Swedish VAT rates per ML 17 kap 24§ p.9. null means "use the customer's
+// default rate" (getAvailableVatRates), which is 0% for a VAT-validated EU
+// business or an export customer: huvudregeln, ML 6 kap. 34 §, taxes a B2B
+// service where the buyer is established. An explicit 25/12/6 is still lawful
+// for those customers when the supply is taxed where it is performed
+// (fastighetstjänst, persontransport, korttidsuthyrning, restaurang/catering,
+// admission to cultural and sports events), so cron-time validation in
+// executeRecurringSchedule gates on getPermittedVatRates, not on the default.
+// A rate outside 0/6/12/25 is rejected here: there is no such Swedish rate, and
+// the buyer could not deduct ingående moms on it.
 export const RecurringScheduleItemSchema = z.object({
   description: z.string().min(1, 'Item description is required'),
   quantity: z.number().positive('Quantity must be positive'),
@@ -814,7 +847,17 @@ export const UpdateCustomerSchema = z.object({
   country: z.string().optional(),
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
-  personal_number: z.string().regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number').nullable().optional(),
+  // Plaintext personnummer (validated here, then encrypted by the route), or
+  // the masked form '********-1234' that every read path returns. The route
+  // reads the mask as "leave the stored value alone" and never stores it, so
+  // a client echoing back what it read cannot wipe the personnummer.
+  // CreateCustomerSchema stays strict: on create there is no stored value to
+  // preserve, so a mask there is a client error and earns a 400.
+  personal_number: z
+    .string()
+    .regex(/^(?:(\d{6}|\d{8})[-+]?\d{4}|\*{8}-\d{4})$/, 'Invalid personal number')
+    .nullable()
+    .optional(),
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
@@ -929,7 +972,9 @@ export const CreateSupplierInvoiceSchema = z.object({
   due_date: isoDate,
   delivery_date: optionalIsoDate,
   currency: CurrencySchema.optional(),
-  exchange_rate: z.number().positive().optional(),
+  // Bounded by the shared `exchangeRate` primitive so the value can never
+  // reach `supplier_invoices_exchange_rate_check` and come back as a 500.
+  exchange_rate: exchangeRate.optional(),
   vat_treatment: VatTreatmentSchema.optional(),
   reverse_charge: z.boolean().optional(),
   payment_reference: z.string().optional(),
@@ -1347,13 +1392,16 @@ export const MatchInvoiceSchema = z
     // settlement. Used when the Riksbanken lookup returns nothing (rate not
     // published for that date): the dialog surfaces an input so the user can
     // type the rate from their bank statement. Ignored when tx.currency ===
-    // invoice.currency. The .max() is a sanity ceiling against pasted garbage /
+    // invoice.currency. The ceiling is a sanity guard against pasted garbage /
     // scientific-notation input silently corrupting the FX-diff posting and
     // invoice_payments.amount: no supported currency's SEK rate approaches it
     // (USD~10.5, EUR~11.5, GBP~13.5). It is a guard rail, not a precise band;
     // the dialog's live preview (paid_in_invoice_currency + FX gain/loss) is
     // what catches a plausible-but-wrong decimal-shift typo before confirm.
-    manual_exchange_rate: z.number().positive().max(100000).optional(),
+    // It used to be `.max(100000)`, an inclusive ceiling against an exclusive
+    // `payment_exchange_rate < 100000` CHECK: exactly 100000 passed Zod and
+    // died in Postgres. The shared primitive is exclusive on both ends.
+    manual_exchange_rate: exchangeRate.optional(),
   })
   .refine((v) => !v.force || !!v.expected_journal_entry_id, {
     message: 'expected_journal_entry_id is required when force=true',
@@ -2492,6 +2540,23 @@ export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefin
 
 export const EmployeeBenefitTypeSchema = z.enum(['bike', 'car', 'meals', 'housing', 'wellness', 'other'])
 
+/**
+ * Mirrors the table-level CHECK on employee_benefits (migration
+ * 20260512200100_employee_benefits.sql):
+ *
+ *   CHECK (valid_to IS NULL OR valid_to >= valid_from)
+ *
+ * The bound is INCLUSIVE (`>=`): valid_to === valid_from is a legal single-day
+ * benefit, and the run-calculation window is inclusive at both ends too
+ * (`valid_from <= payment_date` AND `valid_to IS NULL OR valid_to >=
+ * payment_date`, lib/salary/run-calculation.ts). A NULL/omitted valid_to means
+ * an open-ended benefit and stays legal. Only a strictly earlier valid_to is
+ * rejected. Shared with the routes so the schema 400 and the route's
+ * merged-state 400 say the same thing.
+ */
+export const BENEFIT_PERIOD_ORDER_MESSAGE =
+  '"Gäller till" måste vara samma dag som eller efter "Gäller från". Lämna fältet tomt för en löpande förmån.'
+
 export const CreateEmployeeBenefitSchema = z.object({
   benefit_type: EmployeeBenefitTypeSchema,
   description: z.string().min(1).max(200),
@@ -2519,6 +2584,20 @@ export const CreateEmployeeBenefitSchema = z.object({
       path: ['monthly_value'],
     })
   }
+
+  // Validity period: exact mirror of the DB CHECK (see
+  // BENEFIT_PERIOD_ORDER_MESSAGE). Both dates are always fully visible on a
+  // create, so the whole constraint is checkable here and the insert can no
+  // longer trip the CHECK and surface as an opaque 500. ISO YYYY-MM-DD strings
+  // order lexicographically the same as chronologically, so a plain `<` is
+  // exact; `=== undefined` keeps the open-ended case legal.
+  if (data.valid_to !== undefined && data.valid_to < data.valid_from) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: BENEFIT_PERIOD_ORDER_MESSAGE,
+      path: ['valid_to'],
+    })
+  }
 })
 
 export const UpdateEmployeeBenefitSchema = z.object({
@@ -2529,6 +2608,25 @@ export const UpdateEmployeeBenefitSchema = z.object({
   valid_to: isoDate.nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   is_active: z.boolean().optional(),
+}).superRefine((data, ctx) => {
+  // Same DB CHECK mirror as the create schema, with the .partial() caveat: an
+  // all-optional body only lets the schema compare the two dates when it
+  // carries BOTH. A single-date PATCH has nothing in-body to compare against
+  // (the other half lives on the stored row), so the route re-checks the merged
+  // stored+patched pair before it writes. `valid_to: null` clears the end date
+  // and stays legal, exactly as `valid_to IS NULL` is in the CHECK.
+  if (
+    data.valid_from !== undefined &&
+    data.valid_to !== undefined &&
+    data.valid_to !== null &&
+    data.valid_to < data.valid_from
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: BENEFIT_PERIOD_ORDER_MESSAGE,
+      path: ['valid_to'],
+    })
+  }
 })
 
 export const CreateSalaryRunSchema = z.object({

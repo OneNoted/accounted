@@ -32,6 +32,7 @@ import {
   buildMappingResultFromCounterpartyTemplate,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { recordVoucherGapExplanation } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -465,6 +466,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             .from('journal_entries')
             .select('fiscal_period_id, voucher_series, voucher_number')
             .eq('id', journalEntryId)
+            .eq('company_id', ctx.companyId!)
             .single()
           if (orphan && orphan.voucher_series) {
             // Skip the gap row when the engine didn't tag a series on the
@@ -472,19 +474,23 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             // index the gap explanation under the wrong key, hiding it from
             // series-specific audit queries (BFL 5 kap 6 §). A missing series
             // is logged above already; a human will reconcile via that trail.
-            await ctx.supabase.from('voucher_gap_explanations').insert({
-              company_id: ctx.companyId!,
-              fiscal_period_id: orphan.fiscal_period_id,
-              voucher_series: orphan.voucher_series,
-              gap_number: orphan.voucher_number,
+            //
+            // The insert itself lives in the shared helper: it owns the real
+            // voucher_gap_explanations column set (gap_start/gap_end/user_id)
+            // and logs a failed insert loudly instead of swallowing it.
+            await recordVoucherGapExplanation(ctx.supabase, {
+              companyId: ctx.companyId!,
+              userId: ctx.userId,
+              fiscalPeriodId: orphan.fiscal_period_id,
+              voucherSeries: orphan.voucher_series,
+              voucherNumber: orphan.voucher_number,
               explanation:
                 'CAS-race orphan; automatisk storno misslyckades. Manuell reconciliation krävs.',
-              created_by: ctx.userId,
             })
           }
         } catch (gapErr) {
           txLog.error(
-            'TX_CATEGORIZE_RACE: failed to log voucher_gap_explanations after storno failure',
+            'TX_CATEGORIZE_RACE: failed to look up the orphan for its gap explanation',
             gapErr as Error,
             { orphanJournalEntryId: journalEntryId },
           )

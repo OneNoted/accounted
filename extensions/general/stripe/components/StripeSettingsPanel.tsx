@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -10,7 +10,15 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
+import { failureDescription } from '@/lib/browser/action-failure'
+import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { CreditCard, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
+import {
+  stripeRequest,
+  syncSummary,
+  STRIPE_SYNC_TIMEOUT_MS,
+  type StripeSyncPayload,
+} from '../lib/settings-actions'
 import type { StripeStatusResponse } from '../types'
 
 type ConnectionInfo = NonNullable<StripeStatusResponse['connection']>
@@ -24,12 +32,15 @@ const STATUS_VARIANT: Record<ConnectionInfo['status'], 'success' | 'secondary' |
 
 export default function StripeSettingsPanel() {
   const t = useTranslations('settings_payments')
+  const tCommon = useTranslations('common')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { formatDateLong } = useFormat()
 
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [configured, setConfigured] = useState(false)
   const [connection, setConnection] = useState<ConnectionInfo | null>(null)
   const [connecting, setConnecting] = useState(false)
@@ -38,21 +49,39 @@ export default function StripeSettingsPanel() {
   const [syncing, setSyncing] = useState(false)
   const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
 
+  // The failure copy is the same sentence for every action here: all four calls
+  // are quick writes whose outcome the panel itself reveals once reloaded, so a
+  // timeout says "reload and check" and a dead connection says "check the
+  // connection", regardless of which button was pressed.
+  const failureCopy = { timeout: t('action_timeout'), network: t('action_network') }
+
   const loadStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/extensions/ext/stripe/status')
-      if (!res.ok) return
-      const data = (await res.json()) as StripeStatusResponse
-      setConfigured(data.configured)
-      setConnection(data.connection)
-    } finally {
-      setLoading(false)
+    // A failed status read must never render as "not configured": that message
+    // tells the user to contact an administrator about an installation that is
+    // in fact configured, and it is what a swallowed error produced here.
+    const result = await stripeRequest<StripeStatusResponse>({
+      url: '/api/extensions/ext/stripe/status',
+      method: 'GET',
+      locale,
+    })
+    setLoading(false)
+    if (!result.ok || !result.data) {
+      setLoadFailed(true)
+      return
     }
-  }, [])
+    setLoadFailed(false)
+    setConfigured(result.data.configured)
+    setConnection(result.data.connection)
+  }, [locale])
 
   useEffect(() => {
     void loadStatus()
   }, [loadStatus])
+
+  function retryLoadStatus() {
+    setLoading(true)
+    void loadStatus()
+  }
 
   // Consume the one-shot OAuth bounce-back params (?stripe_connected=true /
   // ?stripe_error=...) off the render path, mirroring the banking section.
@@ -82,65 +111,73 @@ export default function StripeSettingsPanel() {
   }, [searchParams, router, toast, t])
 
   async function handleConnect() {
+    if (connecting) return
     setConnecting(true)
     try {
-      const res = await fetch('/api/extensions/ext/stripe/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+      // The route ignores the request body, so none is sent.
+      const result = await stripeRequest<{ url?: string }>({
+        url: '/api/extensions/ext/stripe/connect',
+        locale,
       })
-      const data = (await res.json()) as { url?: string; error?: string }
-      if (!res.ok || !data.url) {
+      if (!result.ok || !result.data?.url) {
         toast({
           title: t('connect_failed_title'),
-          description: data.error || t('error_generic'),
+          description: result.ok
+            // A 2xx with no url is a route bug: nothing more specific is known.
+            ? t('error_generic')
+            : failureDescription(result, failureCopy),
           variant: 'destructive',
         })
         return
       }
-      window.location.href = data.url
-    } catch {
-      toast({ title: t('connect_failed_title'), description: t('error_generic'), variant: 'destructive' })
+      window.location.href = result.data.url
     } finally {
       setConnecting(false)
     }
   }
 
   async function handleSyncNow() {
+    if (syncing) return
     setSyncing(true)
     try {
-      const res = await fetch('/api/extensions/ext/stripe/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+      const result = await stripeRequest<StripeSyncPayload>({
+        url: '/api/extensions/ext/stripe/sync',
+        locale,
+        timeoutMs: STRIPE_SYNC_TIMEOUT_MS,
       })
-      const data = (await res.json().catch(() => ({}))) as {
-        transactions?: { fetched?: number; imported?: number; linked?: number }
-        error?: string
-      }
-      if (!res.ok) {
+      // Exactly one toast per outcome: TOAST_LIMIT is 1, so a second toast in
+      // the same tick evicts the first and only the last one renders.
+      if (!result.ok) {
         toast({
           title: t('sync_failed_title'),
-          description: data.error || t('error_generic'),
+          description: failureDescription(result, failureCopy),
           variant: 'destructive',
         })
         return
       }
-      // Honest summary: report what Stripe actually returned. An all-zero
-      // run is a real answer ("the account had nothing in the window"), not
-      // a silent success.
-      const fetched = data.transactions?.fetched ?? 0
-      toast({
-        title: t('sync_done_title'),
-        description:
-          fetched === 0
-            ? t('sync_done_empty')
-            : t('sync_done_feed', {
-                fetched,
-                imported: data.transactions?.imported ?? 0,
-                linked: data.transactions?.linked ?? 0,
-              }),
-      })
+      // Honest summary: report what Stripe actually returned. An all-zero run is
+      // a real answer ("the account had nothing in the window"), a revoked
+      // connection is not, and a body that never parsed is neither.
+      const summary = syncSummary(result.data)
+      if (summary.reason === 'revoked') {
+        toast({
+          title: t('sync_failed_title'),
+          description: t('sync_revoked'),
+          variant: 'destructive',
+        })
+      } else if (summary.reason === 'empty') {
+        toast({ title: t('sync_done_title'), description: t('sync_done_empty') })
+      } else if (summary.reason === 'errors') {
+        toast({
+          title: t('sync_done_title'),
+          description: t('sync_done_feed_errors', summary.values),
+        })
+      } else if (summary.reason === 'feed') {
+        toast({ title: t('sync_done_title'), description: t('sync_done_feed', summary.values) })
+      } else {
+        // The sync ran, but the response never said what it did. Claim only that.
+        toast({ title: t('sync_done_title') })
+      }
       await loadStatus()
     } finally {
       setSyncing(false)
@@ -148,18 +185,18 @@ export default function StripeSettingsPanel() {
   }
 
   async function handleToggleTransactionSync(enabled: boolean) {
+    if (togglingTransactionSync) return
     setTogglingTransactionSync(true)
     try {
-      const res = await fetch('/api/extensions/ext/stripe/transaction-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+      const result = await stripeRequest({
+        url: '/api/extensions/ext/stripe/transaction-sync',
+        body: { enabled },
+        locale,
       })
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!result.ok) {
         toast({
           title: t('transaction_sync_toggle_failed'),
-          description: data.error,
+          description: failureDescription(result, failureCopy),
           variant: 'destructive',
         })
         return
@@ -170,27 +207,25 @@ export default function StripeSettingsPanel() {
           : t('transaction_sync_disabled_toast'),
       })
       await loadStatus()
-    } catch {
-      toast({ title: t('transaction_sync_toggle_failed'), variant: 'destructive' })
     } finally {
       setTogglingTransactionSync(false)
     }
   }
 
   async function handleDisconnect() {
-    if (!connection) return
+    if (!connection || disconnecting) return
     setDisconnecting(true)
     try {
-      const res = await fetch('/api/extensions/ext/stripe/disconnect', {
+      const result = await stripeRequest({
+        url: '/api/extensions/ext/stripe/disconnect',
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connection.id }),
+        body: { connection_id: connection.id },
+        locale,
       })
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!result.ok) {
         toast({
           title: t('disconnect_failed_title'),
-          description: data.error || t('error_generic'),
+          description: failureDescription(result, failureCopy),
           variant: 'destructive',
         })
         return
@@ -210,6 +245,26 @@ export default function StripeSettingsPanel() {
           <Skeleton className="h-5 w-48" />
           <Skeleton className="h-4 w-72" />
           <Skeleton className="h-10 w-40" />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (loadFailed) {
+    // Kept strictly apart from `!configured` below: a status read that never
+    // answered says nothing about whether Stripe is configured, and the user can
+    // fix a dropped connection themselves. Recoverable, so it offers the retry.
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{t('title')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 pt-0">
+          <p className="text-sm text-destructive">{t('load_failed')}</p>
+          <Button variant="outline" size="sm" onClick={retryLoadStatus}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {tCommon('retry')}
+          </Button>
         </CardContent>
       </Card>
     )

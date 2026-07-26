@@ -17,6 +17,10 @@ import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import {
+  consumeInviteCookie,
+  INVITE_PROBLEM_MESSAGE_KEYS,
+} from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 
 const branding = getBranding()
@@ -59,7 +63,26 @@ function LoginPageContent() {
   const bankIdEnabled = isBankIdEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
+  const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
+
+  // Accept a pending invite, if any, and report a non-definitive failure.
+  // Returns true when the caller should land the user in the app directly.
+  // The invite cookie survives anything that is not a settled outcome, so
+  // /onboarding and /select-company can retry acceptance server-side.
+  const acceptPendingInvite = async (): Promise<boolean> => {
+    const invite = await consumeInviteCookie()
+    if (invite.accepted) return true
+    if (invite.problem) {
+      const keys = INVITE_PROBLEM_MESSAGE_KEYS[invite.problem]
+      toast({
+        title: tInvite(keys.title),
+        description: tInvite(keys.body),
+        variant: 'destructive',
+      })
+    }
+    return false
+  }
 
   // Reset cooldown timer
   useEffect(() => {
@@ -114,26 +137,9 @@ function LoginPageContent() {
         }
 
         // Check for pending invite token
-        const bankIdCookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
-        const bankIdInviteToken = bankIdCookieMatch?.[1]
-
-        if (bankIdInviteToken) {
-          try {
-            const res = await fetch('/api/team/accept', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ token: bankIdInviteToken }),
-            })
-
-            if (res.ok) {
-              document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
-              window.location.href = '/'
-              return
-            }
-          } catch (err) {
-            console.error('[login] invite acceptance failed:', err)
-          }
-          document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+        if (await acceptPendingInvite()) {
+          window.location.href = '/'
+          return
         }
 
         if (nextPath !== '/') {
@@ -196,27 +202,9 @@ function LoginPageContent() {
       }
 
       // Check for pending invite token
-      const cookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
-      const inviteToken = cookieMatch?.[1]
-
-      if (inviteToken) {
-        try {
-          const res = await fetch('/api/team/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: inviteToken }),
-          })
-
-          if (res.ok) {
-            document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
-            window.location.href = '/'
-            return
-          }
-        } catch (err) {
-          console.error('[login] invite acceptance failed:', err)
-        }
-        // Clear cookie even on failure to avoid retrying stale tokens
-        document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+      if (await acceptPendingInvite()) {
+        window.location.href = '/'
+        return
       }
 
       if (nextPath !== '/') {

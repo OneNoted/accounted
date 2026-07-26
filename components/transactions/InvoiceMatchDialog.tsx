@@ -1,12 +1,14 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { isInvoiceBookingRateMissing, previewedFxGainSek } from './invoice-match-fx'
 import { CheckCircle2, AlertTriangle, Trash2, Plus, Pencil } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { BASAccount } from '@/types'
@@ -108,6 +110,18 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+/**
+ * A preview request that came back non-2xx. `code` is the structured error
+ * code from the canonical envelope when the body carried one, `message` the
+ * locale-resolved sentence. Both null for a transport failure (offline,
+ * proxy error page), where the generic fallback copy is all we can honestly
+ * say.
+ */
+interface PreviewFailure {
+  code: string | null
+  message: string | null
+}
+
 export default function InvoiceMatchDialog({
   open,
   onOpenChange,
@@ -117,6 +131,7 @@ export default function InvoiceMatchDialog({
   onLinkToExisting,
 }: InvoiceMatchDialogProps) {
   const t = useTranslations('tx_invoice_match')
+  const uiLocale = useLocale() === 'en' ? ('en' as const) : ('sv' as const)
   const isSupplierInvoice = !!transaction?.potential_supplier_invoice
   const isCustomerInvoice = !!transaction?.potential_invoice
   const transactionId = transaction?.id ?? null
@@ -127,7 +142,7 @@ export default function InvoiceMatchDialog({
   const invoiceId = transaction?.potential_invoice?.id ?? null
   const supplierInvoiceId = transaction?.potential_supplier_invoice?.id ?? null
   const [preview, setPreview] = useState<MatchPreview | null>(null)
-  const [previewFailed, setPreviewFailed] = useState(false)
+  const [previewFailure, setPreviewFailure] = useState<PreviewFailure | null>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [editLines, setEditLines] = useState<EditableLine[]>([])
   // Manual SEK-per-invoice-currency rate the user types when Riksbanken has
@@ -161,7 +176,7 @@ export default function InvoiceMatchDialog({
   useEffect(() => {
     if (!open || !transactionId) {
       setPreview(null)
-      setPreviewFailed(false)
+      setPreviewFailure(null)
       setIsEditing(false)
       setEditLines([])
       setManualRate('')
@@ -175,15 +190,35 @@ export default function InvoiceMatchDialog({
         : null
     if (!previewUrl) {
       setPreview(null)
-      setPreviewFailed(false)
+      setPreviewFailure(null)
       return
     }
     async function loadPreview() {
-      setPreviewFailed(false)
+      setPreviewFailure(null)
       try {
         const res = await fetch(previewUrl!)
         if (!res.ok) {
-          if (!cancelled) setPreviewFailed(true)
+          // The preview route builds its clearing lines with the same helper
+          // the POST commits with, so it refuses in exactly the places the
+          // commit would: a foreign invoice with no booking rate makes
+          // buildInvoicePaymentClearingLines throw
+          // MATCH_INVOICE_BOOKING_RATE_MISSING and this GET returns 400. Keep
+          // the code and the Swedish sentence rather than collapsing every
+          // failure into "could not preview, continue or cancel": that copy
+          // invites an action the server has already decided to reject.
+          let failure: PreviewFailure = { code: null, message: null }
+          try {
+            const body = (await res.json()) as { error?: { code?: unknown } }
+            if (body?.error && typeof body.error === 'object') {
+              failure = {
+                code: typeof body.error.code === 'string' ? body.error.code : null,
+                message: getErrorMessage(body, { locale: uiLocale }),
+              }
+            }
+          } catch {
+            // Non-JSON body (proxy/edge error page): generic copy is all we have.
+          }
+          if (!cancelled) setPreviewFailure(failure)
           return
         }
         const data = (await res.json()) as MatchPreview
@@ -192,14 +227,14 @@ export default function InvoiceMatchDialog({
           setEditLines(data.lines.map(previewToEditable))
         }
       } catch {
-        if (!cancelled) setPreviewFailed(true)
+        if (!cancelled) setPreviewFailure({ code: null, message: null })
       }
     }
     loadPreview()
     return () => {
       cancelled = true
     }
-  }, [open, transactionId, isCustomerInvoice, isSupplierInvoice, invoiceId, supplierInvoiceId])
+  }, [open, transactionId, isCustomerInvoice, isSupplierInvoice, invoiceId, supplierInvoiceId, uiLocale])
 
   useEffect(() => {
     if (!open || !transactionId || !isCustomerInvoice || !onLinkToExisting) {
@@ -247,6 +282,21 @@ export default function InvoiceMatchDialog({
       totalCredit,
     }
   }, [isEditing, editLines])
+
+  // Cross-currency settlement whose invoice carries no booked exchange rate.
+  // The kursvinst/kursförlust is then UNDEFINED, not zero: the SEK value the
+  // receivable was posted at is unknown, so nothing on this screen can honestly
+  // state what the FX result of the settlement is, and the booking path refuses
+  // to invent one. Third state, distinct from "no FX at all" (a SEK invoice)
+  // and from "FX with a real computed result". See ./invoice-match-fx.ts.
+  const invoiceCurrency = transaction?.potential_invoice?.currency ?? null
+  const invoiceRateMissing = isInvoiceBookingRateMissing({
+    transactionCurrency: transaction?.currency,
+    invoiceCurrency,
+    invoiceExchangeRate: transaction?.potential_invoice?.exchange_rate,
+    previewEntryType: preview?.entry_type ?? null,
+    previewErrorCode: previewFailure?.code ?? null,
+  })
 
   const handleConfirm = (opts?: { force?: boolean; expected_journal_entry_id?: string }) => {
     const linesPayload = isEditing && preview && editValidation.isValid
@@ -505,20 +555,52 @@ export default function InvoiceMatchDialog({
               )
             })()}
 
+            {/* Third FX state: the invoice is in a foreign currency and no
+                booking rate was ever stored, so the SEK value of the 1510
+                receivable is unknown and the kursvinst/kursförlust on
+                settlement is not a computable number.
+                buildInvoicePaymentClearingLines refuses to build the verifikat
+                (MATCH_INVOICE_BOOKING_RATE_MISSING) on both the preview GET and
+                the commit POST, so there is nothing to approve: say that up
+                front instead of showing a confident zero. Rendered on its own
+                rather than inside the Valutaomräkning card below, because in
+                this state the preview 400s and that card never renders. */}
+            {invoiceRateMissing && (
+              <div className="rounded-lg border border-warning/40 bg-warning/5 p-4">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 text-warning-foreground flex-shrink-0" />
+                  <div className="flex-1 text-sm">
+                    {/* Untinted title, matching the sibling
+                        fx_rate_unavailable panel below: the ochre lives in the
+                        icon and the surface, not in the heading. */}
+                    <p className="font-medium">{t('fx_invoice_rate_missing_title')}</p>
+                    <p className="text-muted-foreground mt-1">
+                      {t('fx_invoice_rate_missing_description', {
+                        invoiceCurrency: invoiceCurrency ?? '',
+                      })}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Valutaomräkning section: only renders when the preview
-                route flagged a cross-currency settlement. Shows the
-                Riksbanken rate + invoice-currency-equivalent of the bank
-                payment + the projected post-payment invoice state. When
-                the rate lookup failed, swaps in a manual-rate input so
-                the user can type the rate from their bank statement and
-                retry. */}
+                route flagged a cross-currency settlement (a SEK invoice
+                paid in SEK has no FX effect and renders nothing here).
+                Shows the Riksbanken rate + invoice-currency-equivalent of
+                the bank payment + the projected post-payment invoice state.
+                When the payment-date rate lookup failed, swaps in a
+                manual-rate input so the user can type the rate from their
+                bank statement and retry. */}
             {preview?.fx_conversion?.required && (() => {
               const fx = preview.fx_conversion
               if (!fx?.required) return null
-              const txAbs = transaction ? Math.abs(transaction.amount) : 0
-              const invRemaining = transaction?.potential_invoice?.remaining_amount
-                ?? transaction?.potential_invoice?.total
-                ?? 0
+              // fx_conversion is only produced by the customer-invoice preview
+              // route. No invoice row means there is nothing honest to show:
+              // render nothing rather than fall back to zeroed money.
+              const inv = transaction.potential_invoice
+              if (!inv) return null
+              const invRemaining = inv.remaining_amount ?? inv.total
 
               if ('error' in fx) {
                 // Riksbanken unavailable: show manual rate input.
@@ -560,13 +642,10 @@ export default function InvoiceMatchDialog({
               const paidInInvoice = fx.paid_in_invoice_currency
               const remainingAfter = Math.max(0, Math.round((invRemaining - paidInInvoice) * 100) / 100)
               const willBeFullyPaid = remainingAfter <= 0
-              // FX gain/loss for the kursvinst/kursförlust note: bankSek -
-              // arSek, where arSek = paidInInvoice × invoice.exchange_rate.
-              // Positive number = the SEK we received exceeded the SEK
-              // value of the debt reduction (kursvinst).
-              const invoiceRate = transaction?.potential_invoice?.exchange_rate ?? 0
-              const arSek = invoiceRate > 0 ? Math.round(paidInInvoice * invoiceRate * 100) / 100 : 0
-              const fxGain = invoiceRate > 0 ? Math.round((txAbs - arSek) * 100) / 100 : 0
+              // The kursvinst/kursförlust note is READ OFF the previewed
+              // verifikat (3960 credit = vinst, 7960 debit = förlust) instead
+              // of recomputed from the invoice here: see previewedFxGainSek.
+              const fxGain = previewedFxGainSek(preview.lines)
 
               return (
                 <div className="rounded-lg border bg-card p-4 space-y-3">
@@ -598,7 +677,7 @@ export default function InvoiceMatchDialog({
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {willBeFullyPaid ? t('fx_status_paid') : t('fx_status_partially_paid')}
-                    {Math.abs(fxGain) > 0.005 && (
+                    {!invoiceRateMissing && Math.abs(fxGain) > 0.005 && (
                       <>
                         {' · '}
                         {fxGain > 0
@@ -612,8 +691,12 @@ export default function InvoiceMatchDialog({
             })()}
 
             {/* Bookkeeping preview: editable. Read-only by default; user
-                clicks "Redigera" to switch the rows to inputs. */}
-            {(preview || previewFailed) && (
+                clicks "Redigera" to switch the rows to inputs. Suppressed
+                entirely when the invoice's missing booking rate is what
+                blocked the preview: the ochre panel above already owns that
+                story, and an empty "Bokföring" card with a second phrasing of
+                the same refusal reads as two separate problems. */}
+            {(preview || (previewFailure && !invoiceRateMissing)) && (
               <div className="rounded-lg border p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium">{t('booking_title')}</p>
@@ -641,8 +724,15 @@ export default function InvoiceMatchDialog({
                   )}
                 </div>
 
-                {previewFailed && !preview && (
-                  <p className="text-sm text-muted-foreground">{t('booking_unavailable')}</p>
+                {/* Prefer the route's own structured message (resolved through
+                    getErrorMessage, so it follows the UI locale) over the
+                    generic "continue or cancel" copy: when the server named a
+                    reason the user can act on it, and "continue" is often not
+                    actually available. */}
+                {previewFailure && !preview && (
+                  <p className="text-sm text-muted-foreground">
+                    {previewFailure.message ?? t('booking_unavailable')}
+                  </p>
                 )}
 
                 {preview && !isEditing && (
@@ -806,7 +896,18 @@ export default function InvoiceMatchDialog({
               // paths pass through unaffected.
               (preview?.fx_conversion?.required === true &&
                 'error' in preview.fx_conversion &&
-                parseAmount(manualRate) <= 0)
+                parseAmount(manualRate) <= 0) ||
+              // Cross-currency invoice with no booked exchange rate: the FX
+              // result of the settlement is uncomputable, so there is no
+              // honest entry to approve and the POST would reject it with the
+              // same MATCH_INVOICE_BOOKING_RATE_MISSING the preview already
+              // returned. A hand-written entry is still allowed through: the
+              // user has then supplied the numbers themselves rather than
+              // approving a fabricated preview. (Edit mode requires a
+              // successful preview to enter, so today this only relaxes the
+              // guard in the defense-in-depth branch of
+              // isInvoiceBookingRateMissing.)
+              (invoiceRateMissing && !(isEditing && editValidation.isValid))
             }
           >
             {isConfirming ? t('confirming') : t('confirm_match')}

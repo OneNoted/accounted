@@ -296,3 +296,101 @@ describe('proposeSendLines', () => {
     })
   })
 })
+
+/**
+ * The preview is not decoration: `editable` is SEK-only, so for an FX invoice the
+ * read-only grid is exactly what the server generator will post. A foreign
+ * invoice with no exchange rate has no SEK value at item granularity, and because
+ * the 1510 debit is derived from the sum of the credits the grid would even read
+ * "Balanserar" while showing 1 000 kr where 11 500 kr belongs. No proposal is the
+ * honest answer; the send itself is refused server-side with
+ * INVOICE_FX_RATE_MISSING.
+ */
+describe('proposeSendLines: foreign currency without an exchange rate', () => {
+  it('returns no proposal instead of relabelling EUR amounts as kronor', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: null }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toEqual([])
+  })
+
+  it('returns no proposal for a zero or negative rate', () => {
+    for (const rate of [0, -11.5]) {
+      expect(
+        proposeSendLines({
+          invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: rate }),
+          entityType: 'enskild_firma',
+        })
+      ).toEqual([])
+    }
+  })
+
+  it('does not throw: it runs inside a useMemo during render', () => {
+    expect(() =>
+      proposeSendLines({
+        invoice: makeInvoiceInput({ currency: 'EUR', exchange_rate: null }),
+        entityType: 'enskild_firma',
+      })
+    ).not.toThrow()
+  })
+
+  it('EUR with a rate proposes converted, balanced lines', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: 11.5,
+        subtotal: 1000,
+        vat_amount: 250,
+        total: 1250,
+        items: [makeItem({ line_total: 1000, unit_price: 1000, vat_rate: 25, vat_amount: 250 })],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('11500')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2875')
+    expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('14375')
+
+    const debit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+  })
+
+  it('SEK without a rate is unaffected', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({ currency: 'SEK', exchange_rate: null }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('12500')
+    const debit = lines.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = lines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+  })
+
+  // The invoice-level fallback (no items at all) has a genuine second source in
+  // subtotal_sek / vat_amount_sek and is deliberately left lenient: killing it
+  // would blank the preview for rows that CAN be expressed in kronor.
+  it('still proposes from invoice-level *_sek when there are no items', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        currency: 'EUR',
+        exchange_rate: null,
+        items: [],
+        subtotal: 1000,
+        subtotal_sek: 11500,
+        vat_amount: 250,
+        vat_amount_sek: 2875,
+        total: 1250,
+        total_sek: 14375,
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((l) => l.account_number === '3001')?.credit_amount).toBe('11500')
+    expect(lines.find((l) => l.account_number === '2611')?.credit_amount).toBe('2875')
+    expect(lines.find((l) => l.account_number === '1510')?.debit_amount).toBe('14375')
+  })
+})

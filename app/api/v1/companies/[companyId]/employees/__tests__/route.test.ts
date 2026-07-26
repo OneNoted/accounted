@@ -110,11 +110,12 @@ beforeEach(() => {
 })
 
 // 12-digit synthetic personnummer: passes the schema's `^\d{12}$` regex
-// while being obviously not a real birthdate (year 1900, day 1, zero
+// while being obviously not a real birthdate (year 1900, day 1, near-zero
 // suffix). ISO A.5.34 / GDPR Art.5(1)(c): test fixtures must not look like
-// production-format PII. Last-4 is '0000' so the mask assertion is still
-// easy to spot.
-const SAMPLE_PERSONNUMMER = '190001010000'
+// production-format PII. The last digit is the Luhn check digit for this
+// otherwise-zero suffix: the create route now enforces the checksum, so a
+// fixture ending '0000' would be rejected before it reached the insert.
+const SAMPLE_PERSONNUMMER = '190001010008'
 
 const SAMPLE_EMPLOYEE = {
   id: EMPLOYEE_ID,
@@ -493,6 +494,55 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
+  it('returns 400 for a check-digit-invalid personnummer (matches the dashboard surface)', async () => {
+    // The schema only checks `^\d{12}$`, so before this guard a transposed or
+    // mistyped digit entered payroll here and only surfaced weeks later as a
+    // rejected arbetsgivardeklaration from Skatteverket. '190001010001' has a
+    // valid date but the wrong Luhn check digit (the correct one is 8).
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({ ...validBody, personnummer: '190001010001' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('personnummer')
+    // GDPR Art.5(1)(c): the rejection must not echo the supplied number back.
+    expect(JSON.stringify(body)).not.toContain('190001010001')
+  })
+
+  it('accepts a samordningsnummer (day carries +60), same as the AGI generator', async () => {
+    // A samordningsnummer holder can be filed for under FK215, so registering
+    // one as an employee must work on this surface too. '19000161' is day
+    // 01 + 60; '5' is the matching Luhn check digit.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({ ...validBody, personnummer: '190001610005' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).not.toBe(400)
+  })
+
   it('requires tax_table_number for A-skatt non-sidoinkomst employees', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -506,7 +556,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
         body: JSON.stringify({
           first_name: 'Bo',
           last_name: 'Berg',
-          personnummer: '190001020000',
+          personnummer: '190001020007',
           employment_start: '2024-02-01',
           salary_type: 'monthly',
           monthly_salary: 30000,

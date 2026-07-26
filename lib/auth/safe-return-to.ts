@@ -20,7 +20,20 @@ export function safeReturnTo(value: string | null | undefined, fallback: string)
     const base = 'https://gnubok.invalid'
     const parsed = new URL(value, base)
     if (parsed.origin !== base) return fallback
-    return parsed.pathname + parsed.search + parsed.hash
+    const path = parsed.pathname + parsed.search + parsed.hash
+    // Re-check the NORMALISED path, not just the raw input. Dot-segment
+    // resolution turns several innocent-looking inputs into a
+    // protocol-relative one: `/..//evil.com`, `/.//evil.com` and
+    // `/%2e%2e//evil.com` all normalise to `//evil.com`. Those keep the
+    // sentinel origin above (they are relative to it), so the origin check
+    // passes, but the returned string navigates to https://evil.com the
+    // moment a caller uses it as a bare href (window.location.assign,
+    // router.push). The output is already in normal form, so this one
+    // post-check cannot itself be re-normalised around.
+    if (!path.startsWith('/') || path.startsWith('//') || path.startsWith('/\\')) {
+      return fallback
+    }
+    return path
   } catch {
     return fallback
   }

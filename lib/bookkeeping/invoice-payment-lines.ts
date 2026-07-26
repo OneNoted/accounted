@@ -34,7 +34,13 @@
  *   tx.exchange_rate : populated at ingest only when tx.currency != SEK
  *   tx.amount_sek    : pre-computed SEK at ingest for non-SEK tx
  *   invoice.currency : currency the invoice was issued in
- *   invoice.exchange_rate: the rate at which AR was originally booked on 1510
+ *   invoice.exchange_rate: the rate at which AR was originally booked on 1510.
+ *                     REQUIRED whenever the invoice is foreign AND the bank tx
+ *                     is in a different currency: without it the SEK value of
+ *                     the receivable was never established, so the kursvinst /
+ *                     kursförlust on settlement is not computable and the
+ *                     helper throws InvoiceBookingRateMissingError rather than
+ *                     inventing a number. Never needed for a SEK invoice.
  *
  *   Bank-leg (1930) = always the actual SEK that hit the bank.
  *   AR-leg (1510)   = the SEK value of the customer-debt reduction at the
@@ -54,6 +60,70 @@ import { ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 import { resolveSekAmount } from './currency-utils'
 
 const TWO_DP = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * Structured code for "the foreign-currency invoice carries no usable booking
+ * rate". Registered in lib/errors/structured-errors.ts, so errorResponse()
+ * turns a throw into the canonical 400 envelope and getErrorMessage() resolves
+ * the Swedish sentence. Mirrors the honest BATCH_FX_RATE_MISSING guard in the
+ * match_batch_allocate RPC, which refuses the same situation server-side.
+ */
+export const MATCH_INVOICE_BOOKING_RATE_MISSING = 'MATCH_INVOICE_BOOKING_RATE_MISSING' as const
+
+/**
+ * Upper bound mirrors the match_batch_allocate RPC (0 < rate < 100000): a rate
+ * that far out is as unusable as NULL and must not silently value the AR leg.
+ */
+const MAX_PLAUSIBLE_FX_RATE = 100000
+
+/**
+ * Raised when a payment settles a foreign-currency invoice whose SEK value was
+ * never established. Booking the payment would require a kursvinst/kursförlust
+ * on 3960/7960, and that figure is the difference between the SEK actually
+ * received and the SEK the receivable was booked at. With no booking rate there
+ * is no second number: any "difference" is fabricated. Defaulting the rate to 1
+ * (the old `?? 1`) read the foreign amount as if it were SEK and dumped the
+ * entire bank receipt minus that number onto 3960 as a phantom kursvinst, with
+ * revenue understated by the same amount. The verifikat balanced, so no DB
+ * trigger fired: only refusing to post catches it.
+ */
+export class InvoiceBookingRateMissingError extends Error {
+  readonly code = MATCH_INVOICE_BOOKING_RATE_MISSING
+
+  constructor(
+    public readonly invoiceCurrency: string,
+    public readonly exchangeRate: number | null,
+  ) {
+    super(
+      `Invoice is denominated in ${invoiceCurrency} but carries no usable booking exchange rate ` +
+        `(exchange_rate=${exchangeRate === null ? 'null' : String(exchangeRate)}). ` +
+        'The FX difference on settlement cannot be computed without the rate the receivable was booked at.',
+    )
+    this.name = 'InvoiceBookingRateMissingError'
+  }
+}
+
+/**
+ * The invoice's booking rate, or a loud failure. Only ever called on the
+ * cross-currency path (foreign invoice settled by a bank movement in another
+ * currency): a SEK invoice never reaches it, because a SEK receivable already
+ * carries its own SEK value and needs no rate at all. "Currency is SEK" and
+ * "rate is missing" are therefore separate conditions, not one fallback.
+ */
+function requireInvoiceBookingRate(
+  exchangeRate: number | null,
+  invoiceCurrency: string,
+): number {
+  if (
+    exchangeRate == null ||
+    !Number.isFinite(exchangeRate) ||
+    exchangeRate <= 0 ||
+    exchangeRate >= MAX_PLAUSIBLE_FX_RATE
+  ) {
+    throw new InvoiceBookingRateMissingError(invoiceCurrency, exchangeRate)
+  }
+  return exchangeRate
+}
 
 export interface PaymentClearingTx {
   amount: number
@@ -130,6 +200,16 @@ export interface PaymentClearingLines {
  *   deferred path leaves the GL slightly understated until the final
  *   settlement closes the invoice.
  *
+ * # Cross-currency with no invoice booking rate
+ *   Throws InvoiceBookingRateMissingError (code
+ *   MATCH_INVOICE_BOOKING_RATE_MISSING). Both cross-currency paths above
+ *   value the AR leg at the invoice's booking rate; without it the SEK value
+ *   of the receivable is unknown and the kursvinst/kursförlust is not a
+ *   computable number. The caller must obtain the rate the invoice was booked
+ *   at instead of posting a guess. Only the cross-currency path can throw: a
+ *   SEK invoice is settled entirely by the branches above and never consults
+ *   invoice.exchange_rate.
+ *
  * # paymentAccount
  *   The bank-leg account (the debit line below). Defaults to '1930': callers
  *   that haven't resolved the transaction's actual cash account keep booking
@@ -198,7 +278,7 @@ export function buildInvoicePaymentClearingLines(
     // using today's spot rate. AR-leg comes off 1510 at the invoice's
     // BOOKING rate (so the GL credit matches what was originally posted
     // for those units of foreign currency). FX diff balances the verifikat.
-    const invRate = invoice.exchange_rate ?? 1
+    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
     arSek = TWO_DP(paidInInvoiceCurrency * invRate)
     fxDiffSek = TWO_DP(arSek - bankSek)
   } else {
@@ -206,7 +286,7 @@ export function buildInvoicePaymentClearingLines(
     // callers, Riksbanken lookup failed with no manual override). Same
     // pre-FX-rewrite behaviour: full-clear gets FX diff, partial defers.
     const invRemainingForeign = invoice.remaining_amount ?? invoice.total - (invoice.paid_amount ?? 0)
-    const invRate = invoice.exchange_rate ?? 1
+    const invRate = requireInvoiceBookingRate(invoice.exchange_rate, invoice.currency)
     const arSekFullRemaining = TWO_DP(invRemainingForeign * invRate)
     if (bankSek >= arSekFullRemaining - 0.005) {
       arSek = arSekFullRemaining

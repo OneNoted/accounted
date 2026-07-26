@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { CreateJournalEntryInput, Currency } from '@/types'
 import { makeInvoice, makeSupplierInvoice } from '@/tests/helpers'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
-// Mock riksbanken
+// Mock riksbanken. The revaluation deliberately uses fetchExchangeRate, the
+// documented booking path that returns null rather than one of the hardcoded
+// display-only fallback constants, so the mock returns null for any currency
+// the test did not price.
 vi.mock('@/lib/currency/riksbanken', () => ({
-  fetchMultipleRates: vi.fn(),
+  fetchExchangeRate: vi.fn(),
 }))
 
 // Mock engine
@@ -34,8 +38,8 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
-const { fetchMultipleRates } = await import('@/lib/currency/riksbanken')
-const mockedFetchRates = vi.mocked(fetchMultipleRates)
+const { fetchExchangeRate } = await import('@/lib/currency/riksbanken')
+const mockedFetchRate = vi.mocked(fetchExchangeRate)
 
 const { createJournalEntry } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
@@ -46,6 +50,18 @@ const {
   previewCurrencyRevaluation,
   executeCurrencyRevaluation,
 } = await import('../currency-revaluation')
+
+/**
+ * Price the given currencies. Anything not listed resolves to null, which is
+ * exactly what fetchExchangeRate does when Riksbanken is unreachable and the
+ * cache is empty: no rate at all, never a fabricated one.
+ */
+function mockRates(rates: Partial<Record<Currency, number>>) {
+  mockedFetchRate.mockImplementation(async (currency: Currency) => {
+    const rate = rates[currency]
+    return rate === undefined ? null : { currency, rate, date: '2024-12-31' }
+  })
+}
 
 // Helper to build mock supabase
 function createMockSupabase(config: {
@@ -221,7 +237,12 @@ describe('currency-revaluation', () => {
       expect(result).toHaveLength(0)
     })
 
-    it('excludes invoices without exchange_rate', async () => {
+    // INVERTED (was: 'excludes invoices without exchange_rate'). The SQL
+    // `.not('exchange_rate','is',null)` filter meant the invoices with the
+    // largest unmeasured FX exposure never reached the caller and were never
+    // reported. The fetcher now returns them; previewCurrencyRevaluation
+    // partitions and counts them (see 'reports unconverted rows' below).
+    it('returns invoices without exchange_rate so the caller can report them', async () => {
       const noRateInvoice = makeInvoice({
         status: 'sent',
         currency: 'EUR',
@@ -233,7 +254,8 @@ describe('currency-revaluation', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await getOpenForeignCurrencyReceivables(supabase as any, 'company-1')
 
-      expect(result).toHaveLength(0)
+      expect(result).toHaveLength(1)
+      expect(result[0].exchange_rate).toBeNull()
     })
   })
 
@@ -291,17 +313,6 @@ describe('currency-revaluation', () => {
   })
 
   describe('previewCurrencyRevaluation', () => {
-    function mockRates(rates: Record<Currency, number>) {
-      mockedFetchRates.mockResolvedValue(
-        new Map(
-          Object.entries(rates).map(([currency, rate]) => [
-            currency as Currency,
-            { currency: currency as Currency, rate, date: '2024-12-31' },
-          ])
-        )
-      )
-    }
-
     it('returns empty preview when no foreign currency items', async () => {
       const supabase = createMockSupabase({
         invoices: [],
@@ -326,7 +337,7 @@ describe('currency-revaluation', () => {
         invoice_number: 'F-001',
       })
 
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({ invoices: [eurInvoice] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -359,7 +370,7 @@ describe('currency-revaluation', () => {
         invoice_number: 'F-002',
       })
 
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({ invoices: [eurInvoice] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -390,7 +401,7 @@ describe('currency-revaluation', () => {
         supplier_invoice_number: 'LF-001',
       })
 
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({ supplierInvoices: [eurSI] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -418,7 +429,7 @@ describe('currency-revaluation', () => {
         supplier_invoice_number: 'LF-002',
       })
 
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({ supplierInvoices: [eurSI] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -453,7 +464,7 @@ describe('currency-revaluation', () => {
         invoice_number: 'F-USD',
       })
 
-      mockRates({ EUR: 11.5, USD: 10.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5, USD: 10.5 })
 
       const supabase = createMockSupabase({ invoices: [eurInvoice, usdInvoice] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -484,7 +495,7 @@ describe('currency-revaluation', () => {
       })
 
       // EUR went up to 11.5
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({
         invoices: [gainInvoice],
@@ -516,7 +527,7 @@ describe('currency-revaluation', () => {
         supplier_invoice_number: 'LF-PARTIAL',
       })
 
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({ supplierInvoices: [partialSI] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -538,7 +549,7 @@ describe('currency-revaluation', () => {
       })
 
       // Closing rate equals original rate
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createMockSupabase({ invoices: [eurInvoice] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -546,6 +557,123 @@ describe('currency-revaluation', () => {
 
       expect(preview.items).toHaveLength(0)
       expect(preview.lines).toHaveLength(0)
+    })
+
+    it('reports rows with no exchange_rate as unconverted instead of dropping them', async () => {
+      const ratedInvoice = makeInvoice({
+        id: 'inv-rated',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-RATED',
+      })
+      const unratedInvoice = makeInvoice({
+        id: 'inv-unrated',
+        status: 'sent',
+        currency: 'USD',
+        exchange_rate: null,
+        total: 4000,
+        invoice_number: 'F-UNRATED',
+      })
+      const unratedSI = makeSupplierInvoice({
+        id: 'si-unrated',
+        status: 'registered',
+        currency: 'GBP',
+        exchange_rate: null,
+        remaining_amount: 700,
+        supplier_invoice_number: 'LF-UNRATED',
+      })
+
+      mockRates({ EUR: 11.5 })
+
+      const supabase = createMockSupabase({
+        invoices: [ratedInvoice, unratedInvoice],
+        supplierInvoices: [unratedSI],
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      // Only the rated invoice is revalued.
+      expect(preview.items).toHaveLength(1)
+      expect(preview.items[0].source_id).toBe('inv-rated')
+
+      // The other two are surfaced, not silently swallowed.
+      expect(preview.unconvertedFxCount).toBe(2)
+      expect(preview.unconvertedFx.map((u) => u.source_id).sort()).toEqual([
+        'inv-unrated',
+        'si-unrated',
+      ])
+      expect(preview.unconvertedFx.find((u) => u.source_id === 'inv-unrated')).toMatchObject({
+        type: 'receivable',
+        currency: 'USD',
+        reference: 'F-UNRATED',
+        amount_in_currency: 4000,
+      })
+      expect(preview.unconvertedFx.find((u) => u.source_id === 'si-unrated')).toMatchObject({
+        type: 'payable',
+        currency: 'GBP',
+        reference: 'LF-UNRATED',
+        amount_in_currency: 700,
+      })
+
+      // No rate was ever requested for a currency we cannot revalue anyway.
+      expect(mockedFetchRate).toHaveBeenCalledTimes(1)
+      expect(mockedFetchRate.mock.calls[0][0]).toBe('EUR')
+      // Looked up for the closing date (not "today") and through the shared
+      // exchange_rates cache, so the balansdagen rate stays reproducible.
+      expect(mockedFetchRate.mock.calls[0][1]).toEqual(new Date('2024-12-31'))
+      expect(mockedFetchRate.mock.calls[0][2]).toBe(supabase)
+    })
+
+    it('treats a zero exchange_rate as unconverted instead of valuing the row at 0 SEK', async () => {
+      const zeroRateInvoice = makeInvoice({
+        id: 'inv-zero',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 0,
+        total: 1000,
+        invoice_number: 'F-ZERO',
+      })
+
+      mockRates({ EUR: 11.5 })
+
+      const supabase = createMockSupabase({ invoices: [zeroRateInvoice] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      // A 0 original rate makes originalSek 0, so the whole 11 500 SEK would
+      // read as an orealiserad kursvinst on 3960. Same > 0 rule the reskontra
+      // reports use for unconverted_fx_count.
+      expect(preview.items).toHaveLength(0)
+      expect(preview.lines).toHaveLength(0)
+      expect(preview.unconvertedFxCount).toBe(1)
+      expect(preview.unconvertedFx[0].source_id).toBe('inv-zero')
+      expect(mockedFetchRate).not.toHaveBeenCalled()
+    })
+
+    it('reports a missing closing rate instead of substituting a fallback constant', async () => {
+      const eurInvoice = makeInvoice({
+        id: 'inv-norate',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-NORATE',
+      })
+
+      // Riksbanken unreachable and cache empty: fetchExchangeRate resolves null.
+      mockRates({})
+
+      const supabase = createMockSupabase({ invoices: [eurInvoice] })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const preview = await previewCurrencyRevaluation(supabase as any, 'company-1', '2024-12-31')
+
+      expect(preview.missingClosingRates).toEqual([{ currency: 'EUR', date: '2024-12-31' }])
+      // Nothing is valued off a guessed rate: no items, no lines, no 11.5.
+      expect(preview.items).toHaveLength(0)
+      expect(preview.lines).toHaveLength(0)
+      expect(preview.closingRates).toEqual({})
     })
 
     it('all generated journal lines balance (debits === credits)', async () => {
@@ -566,7 +694,7 @@ describe('currency-revaluation', () => {
         supplier_invoice_number: 'LF-BAL',
       })
 
-      mockRates({ EUR: 11.8, GBP: 13.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.8, GBP: 13.5 })
 
       const supabase = createMockSupabase({
         invoices: [eurInvoice],
@@ -582,17 +710,6 @@ describe('currency-revaluation', () => {
   })
 
   describe('executeCurrencyRevaluation', () => {
-    function mockRates(rates: Record<Currency, number>) {
-      mockedFetchRates.mockResolvedValue(
-        new Map(
-          Object.entries(rates).map(([currency, rate]) => [
-            currency as Currency,
-            { currency: currency as Currency, rate, date: '2024-12-31' },
-          ])
-        )
-      )
-    }
-
     it('returns null when no foreign currency items exist', async () => {
       const supabase = createFullMockSupabase({
         invoices: [],
@@ -600,7 +717,7 @@ describe('currency-revaluation', () => {
         existingRevaluation: false,
       })
 
-      mockRates({} as Record<Currency, number>)
+      mockRates({})
 
       const result = await executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1')
 
@@ -617,7 +734,7 @@ describe('currency-revaluation', () => {
         invoice_number: 'F-001',
       })
 
-      mockRates({ EUR: 11.5 } as Record<Currency, number>)
+      mockRates({ EUR: 11.5 })
 
       const supabase = createFullMockSupabase({
         invoices: [eurInvoice],
@@ -648,6 +765,175 @@ describe('currency-revaluation', () => {
       expect(mockedCreateEntry).not.toHaveBeenCalled()
     })
 
+    it('books the receivable gain to 1510 / 3960 with a real Riksbanken rate', async () => {
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-001',
+      })
+      const gbpSI = makeSupplierInvoice({
+        status: 'registered',
+        currency: 'GBP',
+        exchange_rate: 14.0,
+        remaining_amount: 500,
+        supplier_invoice_number: 'LF-001',
+      })
+
+      // EUR up (receivable gain), GBP down (payable gain).
+      mockRates({ EUR: 11.5, GBP: 13.5 })
+
+      const supabase = createFullMockSupabase({
+        invoices: [eurInvoice],
+        supplierInvoices: [gbpSI],
+        existingRevaluation: false,
+      })
+
+      await executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1')
+
+      const lines = mockedCreateEntry.mock.calls[0][3].lines
+      const find = (account: string, side: 'debit_amount' | 'credit_amount') =>
+        lines.find((l) => l.account_number === account && l[side] > 0)
+
+      // Receivable revalued up 1000 * 0.5 = 500 → Dr 1510 / Cr 3960
+      expect(find('1510', 'debit_amount')!.debit_amount).toBe(500)
+      // Payable shrank 500 * 0.5 = 250 → Dr 2440 / Cr 3960
+      expect(find('2440', 'debit_amount')!.debit_amount).toBe(250)
+      expect(find('3960', 'credit_amount')!.credit_amount).toBe(750)
+      expect(find('7960', 'debit_amount')).toBeUndefined()
+
+      const totalDebit = lines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = lines.reduce((s, l) => s + l.credit_amount, 0)
+      expect(Math.round(totalDebit * 100) / 100).toBe(Math.round(totalCredit * 100) / 100)
+      expect(totalDebit).toBeGreaterThan(0)
+    })
+
+    it('refuses to post when the closing rate is unavailable', async () => {
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-001',
+      })
+
+      // No rate at all. Before the fix, fetchMultipleRates padded its Map with
+      // the display-only fallback (EUR 11.5) and this posted a real 3960/7960
+      // verifikat computed from a hardcoded constant.
+      mockRates({})
+
+      const supabase = createFullMockSupabase({
+        invoices: [eurInvoice],
+        existingRevaluation: false,
+      })
+
+      await expect(
+        executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1')
+      ).rejects.toMatchObject({
+        code: 'FX_CLOSING_RATE_UNAVAILABLE',
+        missingRates: [{ currency: 'EUR', date: '2024-12-31' }],
+      })
+
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
+    })
+
+    it('translates the refusal into a Swedish message naming currency and date', async () => {
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-001',
+      })
+
+      mockRates({})
+
+      const supabase = createFullMockSupabase({
+        invoices: [eurInvoice],
+        existingRevaluation: false,
+      })
+
+      const err = await executeCurrencyRevaluation(
+        supabase, 'company-1', '2024-12-31', 'period-1'
+      ).catch((e: unknown) => e)
+
+      const message = getErrorMessage(err)
+      expect(message).toContain('EUR per 2024-12-31')
+      expect(message).toContain('har inte bokförts')
+      // Never leak the raw English engine message into a Swedish UI.
+      expect(message).not.toContain('Riksbanken exchange rate available')
+    })
+
+    it('refuses a partial valuation when only some currencies have a rate', async () => {
+      const eurInvoice = makeInvoice({
+        id: 'inv-eur',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-EUR',
+      })
+      const usdInvoice = makeInvoice({
+        id: 'inv-usd',
+        status: 'sent',
+        currency: 'USD',
+        exchange_rate: 10.0,
+        total: 500,
+        invoice_number: 'F-USD',
+      })
+
+      mockRates({ EUR: 11.5 })
+
+      const supabase = createFullMockSupabase({
+        invoices: [eurInvoice, usdInvoice],
+        existingRevaluation: false,
+      })
+
+      await expect(
+        executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1')
+      ).rejects.toMatchObject({
+        code: 'FX_CLOSING_RATE_UNAVAILABLE',
+        missingRates: [{ currency: 'USD', date: '2024-12-31' }],
+      })
+
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
+    })
+
+    it('surfaces unconverted rows on the result so the caller can warn', async () => {
+      const ratedInvoice = makeInvoice({
+        id: 'inv-rated',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_number: 'F-RATED',
+      })
+      const unratedInvoice = makeInvoice({
+        id: 'inv-unrated',
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: null,
+        total: 9000,
+        invoice_number: 'F-UNRATED',
+      })
+
+      mockRates({ EUR: 11.5 })
+
+      const supabase = createFullMockSupabase({
+        invoices: [ratedInvoice, unratedInvoice],
+        existingRevaluation: false,
+      })
+
+      const result = await executeCurrencyRevaluation(
+        supabase, 'company-1', '2024-12-31', 'period-1'
+      )
+
+      expect(result).not.toBeNull()
+      expect(result!.preview.unconvertedFxCount).toBe(1)
+      expect(result!.preview.unconvertedFx[0].source_id).toBe('inv-unrated')
+    })
+
     it('returns entry and preview in result', async () => {
       const eurInvoice = makeInvoice({
         status: 'sent',
@@ -657,7 +943,7 @@ describe('currency-revaluation', () => {
         invoice_number: 'F-001',
       })
 
-      mockRates({ EUR: 12.0 } as Record<Currency, number>)
+      mockRates({ EUR: 12.0 })
 
       const supabase = createFullMockSupabase({
         invoices: [eurInvoice],

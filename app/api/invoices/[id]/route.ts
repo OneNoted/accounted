@@ -7,6 +7,7 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateInvoiceSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import type { InvoiceDocumentType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -237,30 +238,17 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctxLog, { requestId })
     }
 
-    // Replace line items wholesale. A draft has no journal entry or linked docs,
-    // so delete + reinsert is safe and lets the user add / remove / reorder rows
-    // freely. invoice_items cascade nothing else.
-    const { error: deleteItemsError } = await supabase
-      .from('invoice_items')
-      .delete()
-      .eq('invoice_id', id)
-
-    if (deleteItemsError) {
-      ctxLog.error('invoice items delete failed on update', deleteItemsError, { invoiceId: id })
+    // Replace line items wholesale (shared helper: the v1 REST route and the
+    // update_invoice commit executor use the same delete + reinsert). A draft
+    // has no journal entry or linked docs, so full replace is safe and lets
+    // the user add / remove / reorder rows freely. invoice_items cascade
+    // nothing else.
+    const replaced = await replaceInvoiceItems(supabase, id, build.items)
+    if (!replaced.ok) {
+      ctxLog.error(`invoice items ${replaced.stage} failed on update`, replaced.error, { invoiceId: id })
       return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctxLog, {
         requestId,
-        details: { pgCode: deleteItemsError.code, pgMessage: getUserErrorMessage(deleteItemsError) },
-      })
-    }
-
-    const itemsToInsert = build.items.map((item) => ({ ...item, invoice_id: id }))
-    const { error: itemsError } = await supabase.from('invoice_items').insert(itemsToInsert)
-
-    if (itemsError) {
-      ctxLog.error('invoice items insert failed on update', itemsError, { invoiceId: id })
-      return errorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctxLog, {
-        requestId,
-        details: { pgCode: itemsError.code, pgMessage: getUserErrorMessage(itemsError) },
+        details: { pgCode: replaced.error.code, pgMessage: getUserErrorMessage(replaced.error) },
       })
     }
 

@@ -11,6 +11,10 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, LogOut } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import {
+  consumeInviteCookie,
+  INVITE_PROBLEM_MESSAGE_KEYS,
+} from '@/lib/auth/consume-invite-cookie'
 
 export default function MfaVerifyPage() {
   return (
@@ -23,6 +27,7 @@ export default function MfaVerifyPage() {
 function MfaVerifyContent() {
   const t = useTranslations('mfa')
   const tCommon = useTranslations('common')
+  const tInvite = useTranslations('invite')
   const [code, setCode] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [factorId, setFactorId] = useState<string | null>(null)
@@ -67,6 +72,24 @@ function MfaVerifyContent() {
     const interval = setInterval(tick, 1000)
     return () => clearInterval(interval)
   }, [lockoutUntil])
+
+  // Accept a pending invite, if any, and report a non-definitive failure.
+  // Returns true when the caller should land the user in the app directly.
+  // The invite cookie survives anything that is not a settled outcome, so
+  // /onboarding and /select-company can retry acceptance server-side.
+  const acceptPendingInvite = async (): Promise<boolean> => {
+    const invite = await consumeInviteCookie()
+    if (invite.accepted) return true
+    if (invite.problem) {
+      const keys = INVITE_PROBLEM_MESSAGE_KEYS[invite.problem]
+      toast({
+        title: tInvite(keys.title),
+        description: tInvite(keys.body),
+        variant: 'destructive',
+      })
+    }
+    return false
+  }
 
   const handleVerify = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -116,26 +139,9 @@ function MfaVerifyContent() {
         return
       }
 
-      const cookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
-      const inviteToken = cookieMatch?.[1]
-
-      if (inviteToken) {
-        try {
-          const res = await fetch('/api/team/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: inviteToken }),
-          })
-
-          if (res.ok) {
-            document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
-            window.location.href = '/'
-            return
-          }
-        } catch (err) {
-          console.error('[mfa/verify] invite acceptance failed:', err)
-        }
-        document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+      if (await acceptPendingInvite()) {
+        window.location.href = '/'
+        return
       }
 
       if (returnTo.startsWith('/api/')) {

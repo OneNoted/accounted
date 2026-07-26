@@ -66,6 +66,35 @@ export function getVapidPublicKey(): string | null {
 }
 
 /**
+ * The single consent read every gate shares.
+ *
+ * Consent polarity: PostgREST distinguishes "no row" from "read failed", and
+ * the two must never collapse into one value. A missing row means the user
+ * never touched the toggles, so the defaults apply (`settings: null`). A
+ * failed read (`readable: false`) means we cannot prove consent, and every
+ * caller MUST treat it as DO NOT SEND: the old shape (`data ?? null` +
+ * `if (settings && !settings.x_enabled)`) failed open and notified users who
+ * had opted out whenever the read errored.
+ */
+export type NotificationSettingsRead =
+  | { readable: true; settings: NotificationSettings | null }
+  | { readable: false }
+
+export async function readNotificationSettings(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<NotificationSettingsRead> {
+  const { data, error } = await supabase
+    .from('notification_settings')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (error) return { readable: false }
+  return { readable: true, settings: (data as NotificationSettings | null) ?? null }
+}
+
+/**
  * Send a notification to a specific user.
  *
  * Performs the full pipeline:
@@ -88,8 +117,12 @@ export async function sendNotificationToUser(
   daysBefore: number = 0
 ): Promise<{ sent: boolean; reason?: string }> {
   try {
-    // 1. Check notification settings
-    const settings = await getUserNotificationSettings(supabase, userId)
+    // 1. Check notification settings. Unreadable settings mean no send.
+    const settingsRead = await readNotificationSettings(supabase, userId)
+    if (!settingsRead.readable) {
+      return { sent: false, reason: 'settings_unreadable' }
+    }
+    const settings = settingsRead.settings
 
     if (settings && !settings.push_enabled) {
       return { sent: false, reason: 'push_disabled' }
@@ -235,14 +268,26 @@ async function wasNotificationSent(
   referenceId: string,
   daysBefore: number
 ): Promise<boolean> {
-  const { data } = await supabase
+  // `logNotification()` below writes user_id and leaves company_id null, so
+  // filtering this check on company_id could never match a row it had written:
+  // every cron pass re-sent the same notification. The dedup key is user_id
+  // (mirrored by idx_notification_log_skv_kvittens_dedup, unique on
+  // (user_id, reference_id)). limit(1) because rows written while the check was
+  // broken can legitimately be duplicated, and .single() would error on them.
+  const { data, error } = await supabase
     .from('notification_log')
     .select('id')
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .eq('notification_type', notificationType)
     .eq('reference_id', referenceId)
     .eq('days_before', daysBefore)
-    .single()
+    .limit(1)
+    .maybeSingle()
+
+  // Same polarity as the settings gate: an unreadable log cannot prove the
+  // notification was NOT already sent, so treat it as sent and skip. Failing
+  // open here re-spams every user on every cron pass whenever the read errors.
+  if (error) return true
 
   return !!data
 }
@@ -270,23 +315,10 @@ export async function getUserSubscriptions(
   const { data } = await supabase
     .from('push_subscriptions')
     .select('endpoint, p256dh, auth')
-    .eq('company_id', userId)
+    .eq('user_id', userId)
     .eq('is_active', true)
 
   return data || []
-}
-
-export async function getUserNotificationSettings(
-  supabase: SupabaseClient,
-  userId: string
-): Promise<NotificationSettings | null> {
-  const { data } = await supabase
-    .from('notification_settings')
-    .select('*')
-    .eq('company_id', userId)
-    .single()
-
-  return data
 }
 
 async function disableGoneSubscriptions(

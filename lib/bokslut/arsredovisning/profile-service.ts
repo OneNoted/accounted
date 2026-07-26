@@ -1,3 +1,18 @@
+/**
+ * Persistence for the annual-report compliance profile.
+ *
+ * Error contract: Supabase errors are rethrown untouched, exactly as
+ * `lib/articles/validate-revenue-account.ts` does. Re-wrapping them in a plain
+ * `new Error(...)` kept only `.message` and dropped `.code`, so `errorResponse()`
+ * could no longer see the SQLSTATE and mapped every constraint failure on this
+ * table to INTERNAL_ERROR / 500. The reachable ones are real caller mistakes:
+ * 23514 from `annual_report_profiles_parent_consistency` (e.g. setting
+ * `parent_group_size` on a row already stored with `is_parent_company = false`,
+ * since the upsert only writes the columns present in the payload) and 42501
+ * when RLS refuses the write. With the code intact those become 400/403 with a
+ * Swedish message. SQLSTATEs that are genuine infrastructure trouble are not in
+ * `postgresCodeToStructured()` and still fall through to 500.
+ */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   emptyAnnualReportProfile,
@@ -22,7 +37,7 @@ export async function getAnnualReportProfile(
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .maybeSingle()
-  if (error) throw new Error(`Failed to load annual report profile: ${error.message}`)
+  if (error) throw error
   return data
     ? (data as AnnualReportProfile)
     : emptyAnnualReportProfile(companyId, fiscalPeriodId)
@@ -50,8 +65,10 @@ export async function upsertAnnualReportProfile(
     .upsert(payload, { onConflict: 'company_id,fiscal_period_id' })
     .select(PROFILE_COLUMNS)
     .single()
-  if (error || !data) {
-    throw new Error(`Failed to save annual report profile: ${error?.message ?? 'unknown'}`)
-  }
+  if (error) throw error
+  // `.single()` always reports a missing row as an error, so this is a
+  // belt-and-braces guard rather than a reachable branch: keep it a plain
+  // Error (no SQLSTATE to preserve) so it maps to 500.
+  if (!data) throw new Error('Failed to save annual report profile: no row returned')
   return data as AnnualReportProfile
 }

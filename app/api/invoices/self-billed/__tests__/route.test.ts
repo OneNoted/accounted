@@ -28,9 +28,13 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 const mockGetVatRules = vi.fn()
 const mockGetAvailableVatRates = vi.fn()
+// Mocked SEPARATELY from getAvailableVatRates on purpose: the picker default and
+// the validation gate are two different sets, and the gate must read this one.
+const mockGetPermittedVatRates = vi.fn()
 vi.mock('@/lib/invoices/vat-rules', () => ({
   getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
   getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+  getPermittedVatRates: (...args: unknown[]) => mockGetPermittedVatRates(...args),
 }))
 
 vi.mock('@/lib/currency/riksbanken', () => ({
@@ -59,6 +63,13 @@ const validBody = {
   items: [{ description: 'Konsulttjänst', quantity: 10, unit: 'tim', unit_price: 1000 }],
 }
 
+const DOMESTIC_RATES = [
+  { rate: 25, label: '25%', treatment: 'standard_25' },
+  { rate: 12, label: '12%', treatment: 'reduced_12' },
+  { rate: 6, label: '6%', treatment: 'reduced_6' },
+  { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
+]
+
 function mockDomesticVat() {
   mockGetVatRules.mockReturnValue({
     treatment: 'standard_25',
@@ -66,11 +77,33 @@ function mockDomesticVat() {
     momsRuta: '05',
     reverseChargeText: null,
   })
+  // Domestically the two sets are identical (getPermittedVatRates only widens
+  // for a foreign business customer).
+  mockGetAvailableVatRates.mockReturnValue(DOMESTIC_RATES)
+  mockGetPermittedVatRates.mockReturnValue(DOMESTIC_RATES)
+}
+
+/**
+ * A VAT-validated EU business: the picker DEFAULT is a single locked 0%
+ * (huvudregeln, ML 6 kap. 34 §), while the PERMITTED set also carries the
+ * Swedish rates for the supplies taxed where they are performed. The gate must
+ * read the permitted set, so the two mocks deliberately disagree here.
+ */
+function mockEuBusinessVat() {
+  mockGetVatRules.mockReturnValue({
+    treatment: 'reverse_charge',
+    rate: 0,
+    momsRuta: '39',
+    reverseChargeText: 'Omvänd skattskyldighet / Reverse charge',
+  })
   mockGetAvailableVatRates.mockReturnValue([
+    { rate: 0, label: '0% (omvänd skattskyldighet)', treatment: 'reverse_charge' },
+  ])
+  mockGetPermittedVatRates.mockReturnValue([
+    { rate: 0, label: '0% (omvänd skattskyldighet)', treatment: 'reverse_charge' },
     { rate: 25, label: '25%', treatment: 'standard_25' },
     { rate: 12, label: '12%', treatment: 'reduced_12' },
     { rate: 6, label: '6%', treatment: 'reduced_6' },
-    { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
   ])
 }
 
@@ -118,11 +151,13 @@ describe('POST /api/invoices/self-billed', () => {
   it('rejects an item VAT rate the customer is not allowed to use', async () => {
     mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '05', reverseChargeText: null })
     // Domestic-only set: 0% is NOT allowed for this customer.
-    mockGetAvailableVatRates.mockReturnValue([
+    const noZero = [
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
       { rate: 6, label: '6%', treatment: 'reduced_6' },
-    ])
+    ]
+    mockGetAvailableVatRates.mockReturnValue(noZero)
+    mockGetPermittedVatRates.mockReturnValue(noZero)
     enqueue({ data: makeCustomer({ id: VALID_UUID }), error: null })
 
     const request = createMockRequest('/api/invoices/self-billed', {
@@ -134,6 +169,63 @@ describe('POST /api/invoices/self-billed', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
+  })
+
+  it('accepts 12% to a VAT-validated EU business (taxed where performed)', async () => {
+    // A Stockholm hotel night self-billed by a German customer: 12% Swedish VAT
+    // is lawful even though the picker default for that customer is 0%. Refusing
+    // it made the sale impossible to register at all.
+    mockEuBusinessVat()
+    const customer = makeCustomer({ id: VALID_UUID, customer_type: 'eu_business' })
+    const created = makeInvoice({
+      id: 'inv-1',
+      invoice_number: null,
+      is_self_billed: true,
+      external_invoice_number: 'KUND-55012',
+      total: 11200,
+    })
+
+    enqueue({ data: customer, error: null })                                   // fetch customer
+    enqueue({ data: created, error: null })                                    // insert invoice
+    enqueue({ data: null, error: null })                                       // insert items
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: { ...created, customer, items: [] }, error: null })        // fetch complete
+    enqueue({ data: null, error: null })                                       // update journal_entry_id
+    enqueue({ data: { ...created, customer, items: [], journal_entry_id: 'je-1' }, error: null }) // fetch final
+
+    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        items: [{ description: 'Hotellnatt Stockholm', quantity: 10, unit: 'st', unit_price: 1000, vat_rate: 12 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+  })
+
+  it('still rejects a rate that is not a Swedish VAT rate at all', async () => {
+    // Widening the permitted set must not turn this into a pass-through: 10% is
+    // no Swedish rate. Here it never even reaches the domain gate, because
+    // SelfBillingInvoiceItemSchema only accepts 0/6/12/25.
+    mockEuBusinessVat()
+
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        items: [{ description: 'X', quantity: 1, unit: 'st', unit_price: 100, vat_rate: 10 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ type: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.type).toBe('validation_error')
   })
 
   it('creates a self-billed sale, books it (accrual), skips own numbering, and emits invoice.created', async () => {

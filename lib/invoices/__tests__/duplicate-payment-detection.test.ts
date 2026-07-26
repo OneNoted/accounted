@@ -67,6 +67,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 0,
+      transactionCurrency: 'SEK',
     })
     expect(result).toBeNull()
   })
@@ -77,6 +78,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: 'not-a-date',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
     expect(result).toBeNull()
   })
@@ -88,6 +90,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
     expect(result).toBeNull()
   })
@@ -112,6 +115,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).not.toBeNull()
@@ -146,6 +150,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     const tables = supabase.from.mock.calls.slice(callsBefore).map((c) => c[0])
@@ -159,6 +164,8 @@ describe('detectDuplicatePaymentVoucher', () => {
       amount: 1000,
       bank_account_number: '1930',
       reason: 'exact_amount_same_date',
+      amount_verified: true,
+      unverified_reason: null,
     })
   })
 
@@ -180,6 +187,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 500,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).not.toBeNull()
@@ -204,6 +212,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).toBeNull()
@@ -227,6 +236,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).toBeNull()
@@ -250,6 +260,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).toBeNull()
@@ -273,6 +284,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).toBeNull()
@@ -303,6 +315,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).not.toBeNull()
@@ -327,6 +340,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: -250,
+      transactionCurrency: 'SEK',
     })
 
     // Note: while the match-invoice route only handles income, the
@@ -352,6 +366,7 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-1',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).toBeNull()
@@ -376,9 +391,162 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionId: 'tx-caller',
       transactionDate: '2026-05-15',
       transactionAmount: 1000,
+      transactionCurrency: 'SEK',
     })
 
     expect(result).not.toBeNull()
     expect(result!.journal_entry_id).toBe('je-caller')
+  })
+
+  // ── FX: the bank line may be foreign, the 19xx debit is always SEK ─────────
+  //
+  // journal_entry_lines.debit_amount is written in SEK even when the line
+  // carries currency='EUR' + amount_in_currency as document metadata, so the
+  // bank line has to be converted before the two can be compared at all.
+
+  it('flags a foreign receipt against the SEK voucher its own booking produced', async () => {
+    // 100 EUR at 11.50 was booked as a 1150 SEK debit.
+    enqueueLines([
+      makeLineRow({ je_id: 'je-fx', account: '1930', debit: 1150, date: '2026-05-15', voucher_label: 'A9' }),
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 100,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: 1150,
+      transactionExchangeRate: 11.5,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.journal_entry_id).toBe('je-fx')
+    expect(result!.amount).toBe(1150)
+    expect(result!.amount_verified).toBe(true)
+    expect(result!.unverified_reason).toBeNull()
+  })
+
+  it('converts via exchange_rate when amount_sek was never stored', async () => {
+    enqueueLines([
+      makeLineRow({ je_id: 'je-rate', account: '1930', debit: 1150, date: '2026-05-15' }),
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 100,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: null,
+      transactionExchangeRate: 11.5,
+    })
+
+    expect(result!.journal_entry_id).toBe('je-rate')
+    expect(result!.amount_verified).toBe(true)
+  })
+
+  it('does NOT flag a EUR line against an unrelated same-magnitude SEK voucher', async () => {
+    // 1000 EUR is ~11 500 SEK, nothing to do with a 1000 SEK voucher. The old
+    // comparison put the raw 1000 against the leg and matched.
+    enqueueLines([
+      makeLineRow({ je_id: 'je-coincidence', account: '1930', debit: 1000, date: '2026-05-15' }),
+    ])
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 1000,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: 11500,
+      transactionExchangeRate: 11.5,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  it('WARNS rather than passing when a foreign line carries no rate', async () => {
+    // Nothing can be compared. A null return would read as "no duplicate" and
+    // let the matcher post a second payment voucher for one affärshändelse.
+    enqueueLines([
+      makeLineRow({ je_id: 'je-unverifiable', account: '1930', debit: 1150, date: '2026-05-15' }),
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 100,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: null,
+      transactionExchangeRate: null,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.journal_entry_id).toBe('je-unverifiable')
+    expect(result!.amount_verified).toBe(false)
+    expect(result!.unverified_reason).toBe('transaction_missing_sek_value')
+    // The leg's SEK figure, never the bank line's foreign 100.
+    expect(result!.amount).toBe(1150)
+  })
+
+  it('returns null (a verified pass) for a rateless foreign line with no 19xx debit in the window', async () => {
+    enqueueLines([])
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 100,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: null,
+      transactionExchangeRate: null,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  it('still excludes storno when the amount cannot be verified', async () => {
+    enqueueLines([
+      makeLineRow({ je_id: 'je-s', account: '1930', debit: 1150, date: '2026-05-15', source_type: 'storno' }),
+    ])
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 100,
+      transactionCurrency: 'EUR',
+      transactionAmountSek: null,
+      transactionExchangeRate: null,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  it('leaves a SEK company on exactly the old path (null currency = SEK default)', async () => {
+    enqueueLines([
+      makeLineRow({ je_id: 'je-sek', account: '1930', debit: 1000, date: '2026-05-15' }),
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 1000,
+      transactionCurrency: null,
+    })
+
+    expect(result!.journal_entry_id).toBe('je-sek')
+    expect(result!.amount_verified).toBe(true)
   })
 })

@@ -138,7 +138,14 @@ export default function ApprovalCard({
           setState('pending')
           return
         }
-        throw new Error(errorText(body.error) || `HTTP ${res.status}`)
+        // Map the parsed body plus the status, never `new Error(body.error)`:
+        // the route answers thrown errors with the canonical envelope
+        // `{ error: { code, message } }`, and the Error constructor would
+        // stringify that object to "[object Object]", discarding the route's
+        // own Swedish reason.
+        setState('error')
+        setErrorMessage(getUserErrorMessage(body, { statusCode: res.status }))
+        return
       }
       // Best-effort deep-link to the created artifact in the success state.
       if (body?.data) setCommitResult(body.data)
@@ -163,8 +170,10 @@ export default function ApprovalCard({
         body: JSON.stringify({ account_numbers: accountsToActivate }),
       })
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(body.error || 'Kunde inte aktivera kontona.')
+        const body = await res.json().catch(() => null)
+        setState('error')
+        setErrorMessage(getUserErrorMessage(body, { statusCode: res.status }))
+        return
       }
       setAccountsToActivate(null)
       await handleCommit()
@@ -196,8 +205,10 @@ export default function ApprovalCard({
           : {}),
       })
       if (!res.ok) {
-        const text = await res.text()
-        throw new Error(text || `HTTP ${res.status}`)
+        const body = await res.json().catch(() => null)
+        setState('error')
+        setErrorMessage(getUserErrorMessage(body, { statusCode: res.status }))
+        return
       }
       setShowRejectForm(false)
       setState('rejected')
@@ -641,12 +652,6 @@ function CategorizeTransactionPreview({
 
 // Pull a human message out of an API error body that may be either a bare
 // string ({ error: "…" }) or the structured envelope ({ error: { message } }).
-function errorText(error: string | { message?: string } | undefined): string | null {
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object' && typeof error.message === 'string') return error.message
-  return null
-}
-
 function prettyCategory(value: string | undefined): string {
   if (!value) return '(saknas)'
   return CATEGORY_OPTIONS.find((o) => o.value === value)?.label ?? value

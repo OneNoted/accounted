@@ -2,22 +2,36 @@
 
 import Link from 'next/link'
 import { useEffect, useState, useCallback } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { FyPicker } from '@/components/common/FyPicker'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
+import { useToast } from '@/components/ui/use-toast'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/info-tooltip'
-import { ArrowLeft, Download, FileSpreadsheet, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  Download,
+  FileSpreadsheet,
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+} from 'lucide-react'
 import { formatDate } from '@/lib/utils'
+import { downloadFile } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
 import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  getErrorMessage as getUserErrorMessage,
+  type ErrorLocale,
+} from '@/lib/errors/get-error-message'
 
 function formatAmount(n: number): string {
   return n.toLocaleString('sv-SE', {
@@ -55,10 +69,14 @@ function SubtotalRow({ label, amount }: SubtotalRowProps) {
 }
 
 export function KassaflodesanalysClient() {
+  const t = useTranslations('reports')
+  const locale = useLocale() as ErrorLocale
+  const { toast } = useToast()
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
   const [report, setReport] = useState<KassaflodesanalysReport | null>(null)
   const [isLoadingPeriods, setIsLoadingPeriods] = useState(true)
   const [isLoadingReport, setIsLoadingReport] = useState(false)
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const loadReport = useCallback(async (periodId: string) => {
@@ -88,10 +106,60 @@ export function KassaflodesanalysClient() {
     }
   }, [selectedPeriod, loadReport])
 
-  const handleDownloadPdf = useCallback(() => {
-    if (!selectedPeriod) return
-    window.location.href = `/api/reports/kassaflodesanalys/pdf?period_id=${selectedPeriod}`
-  }, [selectedPeriod])
+  /**
+   * Fetch the statutory kassaflödesanalys PDF and save it only if the server
+   * actually produced one.
+   *
+   * This used to be `window.location.href = <pdf route>`, which has no seam for
+   * either half of the problem. On success the browser cancels the navigation
+   * (the route answers Content-Disposition: attachment) and the click gives no
+   * feedback at all, so nothing marks the render as in flight: a second click
+   * starts a second full report query plus renderToBuffer. On failure the route
+   * answers a JSON error envelope with no Content-Disposition, so the browser
+   * navigates the whole app away and the user is left staring at raw JSON with
+   * their report page gone. There is no `res` to check and no promise to catch
+   * on a location assignment; the only fix is to make the download a bounded
+   * fetch.
+   *
+   * The filename mirrors the route's Content-Disposition
+   * (kassaflodesanalys-<period_start>.pdf): both sides derive it from the same
+   * fiscal period, and the button is disabled until that report is loaded.
+   *
+   * No success toast: the saved file is the feedback. On failure nothing was
+   * written to disk and exactly one toast says why. Never two, TOAST_LIMIT is 1
+   * (components/ui/use-toast.tsx), so a second toast in the same tick evicts the
+   * first and only the last is rendered.
+   */
+  const handleDownloadPdf = useCallback(async () => {
+    // The button is disabled while a render is in flight; this guard closes the
+    // double-click / Enter-repeat race before React has re-rendered it.
+    if (!selectedPeriod || !report || isDownloadingPdf) return
+    setIsDownloadingPdf(true)
+    try {
+      // The shared 15s deadline applies: this is one fiscal year of aggregation
+      // plus a single-page render with stock fonts, so the realistic worst case
+      // is a cold start and one round trip. If a healthy render ever needs
+      // longer, the answer is maxDuration on the route plus a matching
+      // timeoutMs here, never an unbounded fetch that spins forever.
+      const result = await downloadFile({
+        url: `/api/reports/kassaflodesanalys/pdf?period_id=${selectedPeriod}`,
+        filename: `kassaflodesanalys-${report.period_start}.pdf`,
+        locale,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('pdf_download_failed_title'),
+          description: failureDescription(result, {
+            timeout: t('pdf_download_timeout'),
+            network: t('pdf_download_network'),
+          }),
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setIsDownloadingPdf(false)
+    }
+  }, [selectedPeriod, report, isDownloadingPdf, locale, toast, t])
 
   return (
     <div className="space-y-8">
@@ -116,9 +184,13 @@ export function KassaflodesanalysClient() {
           <Button
             variant="outline"
             onClick={handleDownloadPdf}
-            disabled={!report || isLoadingReport}
+            disabled={!report || isLoadingReport || isDownloadingPdf}
           >
-            <Download className="mr-2 h-4 w-4" />
+            {isDownloadingPdf ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
             Ladda ner PDF
           </Button>
           <TooltipProvider delayDuration={300}>

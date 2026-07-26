@@ -10,6 +10,9 @@ import {
   calculateExpenseRatio,
   calculateAvgPaymentDays,
   calculateVatLiability,
+  aggregateTopSuppliers,
+  topSupplierInvoicesQuery,
+  type KpiSupplierInvoiceRow,
 } from '@/lib/reports/kpi'
 import {
   reportToWorkbook,
@@ -87,13 +90,7 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
         .eq('company_id', companyId)
         .eq('status', 'paid')
         .not('paid_at', 'is', null),
-      supabase
-        .from('supplier_invoices')
-        .select('supplier_id, total_sek, total, supplier:suppliers(id, name)')
-        .eq('company_id', companyId)
-        .gte('invoice_date', period.period_start)
-        .lte('invoice_date', period.period_end)
-        .neq('status', 'credited'),
+      topSupplierInvoicesQuery(supabase, companyId, period.period_start, period.period_end),
     ])
 
     const cashPosition = calculateCashPosition(trialBalanceResult.rows)
@@ -119,30 +116,12 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
       { class4: 0, class5: 0, class6: 0, class7: 0 },
     )
 
-    type SupplierInvoiceRow = {
-      supplier_id: string | null
-      total_sek: number | null
-      total: number | null
-      supplier: { id: string; name: string } | { id: string; name: string }[] | null
-    }
-    const supplierTotals = new Map<string, { name: string; total: number }>()
-    for (const row of (topSuppliersResult.data ?? []) as SupplierInvoiceRow[]) {
-      if (!row.supplier_id) continue
-      const supplier = Array.isArray(row.supplier) ? row.supplier[0] : row.supplier
-      if (!supplier?.name) continue
-      const amount = row.total_sek ?? null
-      if (amount == null) continue
-      const existing = supplierTotals.get(row.supplier_id)
-      if (existing) existing.total += amount
-      else supplierTotals.set(row.supplier_id, { name: supplier.name, total: amount })
-    }
-    const topSuppliers = Array.from(supplierTotals.values())
-      .map((v) => ({
-        supplier_name: v.name,
-        total: Math.round(v.total * 100) / 100,
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 7)
+    // Same query, same aggregation as the KPI JSON route: both go through
+    // topSupplierInvoicesQuery + aggregateTopSuppliers, so the export and the
+    // in-app panel report identical supplier totals for a given period.
+    const { suppliers: topSuppliers, unconvertedFxCount } = aggregateTopSuppliers(
+      (topSuppliersResult.data ?? []) as KpiSupplierInvoiceRow[],
+    )
 
     // Sheet 1: scalar KPIs, label + value. Currency by default; percent rows
     // are split into a separate sheet so the formatting is unambiguous.
@@ -166,6 +145,9 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
 
     const integerKpis: KpiKv[] = [
       { label: 'Genomsnittliga betaldagar', value: calculateAvgPaymentDays(paidInvoices) },
+      // Antal valutafakturor som saknar både SEK-belopp och kurs och därför
+      // inte kan räknas in i "Topp leverantörer". 0 = inget är exkluderat.
+      { label: 'Ej omräknade valutafakturor (leverantörer)', value: unconvertedFxCount },
     ]
 
     const monthRows: MonthRow[] = monthlyBreakdown.months

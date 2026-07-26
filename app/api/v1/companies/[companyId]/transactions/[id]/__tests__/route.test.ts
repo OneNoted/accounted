@@ -28,7 +28,7 @@ vi.mock('@supabase/supabase-js', async () => {
 })
 
 // Engine stubs: happy-path returns reusable across cases.
-const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, createSupplierInvCashJE, findMissingAccountsMock } = vi.hoisted(() => ({
+const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, createSupplierInvCashJE, findMissingAccountsMock, createJEMock, findFiscalPeriodMock } = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
   createInvPmtJE: vi.fn().mockResolvedValue({ id: 'je-invpmt' }),
@@ -39,6 +39,15 @@ const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSup
   // template-references-inactive-account bug or a race where deactivation
   // happened between our validation and the engine's resolveAccountIds.
   findMissingAccountsMock: vi.fn().mockResolvedValue([]),
+  // match-invoice's accrual path builds its lines with
+  // buildInvoicePaymentClearingLines (the same helper the dashboard route and
+  // its preview use) and posts them through the engine directly, so the engine
+  // mock has to carry createJournalEntry + findFiscalPeriod. Stubbing them here
+  // keeps the assertions on the ORCHESTRATION (which account got the bank leg,
+  // what source_type, what period) while the line math stays covered by the
+  // helper's own unit tests.
+  createJEMock: vi.fn().mockResolvedValue({ id: 'je-clearing' }),
+  findFiscalPeriodMock: vi.fn().mockResolvedValue('fp-2026-05'),
 }))
 
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
@@ -46,6 +55,8 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
 }))
 vi.mock('@/lib/bookkeeping/engine', () => ({
   reverseEntry: reverseEntryMock,
+  createJournalEntry: createJEMock,
+  findFiscalPeriod: findFiscalPeriodMock,
 }))
 vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
   createInvoicePaymentJournalEntry: createInvPmtJE,
@@ -533,7 +544,20 @@ describe('POST :id/match-invoice', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.invoice_status).toBe('paid')
-    expect(body.data.journal_entry_id).toBe('je-invpmt')
+    expect(body.data.journal_entry_id).toBe('je-clearing')
+    // Pure-SEK accrual match: Dr 1930 / Cr 1510 for the full 12 500, no FX or
+    // öresavrundning leg. Asserted here because v1 now builds these lines
+    // itself (shared helper) instead of delegating to
+    // createInvoicePaymentJournalEntry, and the ledger result must stay
+    // identical to the dashboard route's.
+    expect(createJEMock).toHaveBeenCalledTimes(1)
+    const je = createJEMock.mock.calls[0][3]
+    expect(je.source_type).toBe('invoice_paid')
+    expect(je.fiscal_period_id).toBe('fp-2026-05')
+    expect(je.lines).toEqual([
+      expect.objectContaining({ account_number: '1930', debit_amount: 12500, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '1510', debit_amount: 0, credit_amount: 12500 }),
+    ])
   })
 
   it('rejects negative transaction with MATCH_INVOICE_NOT_INCOME', async () => {
@@ -609,7 +633,7 @@ describe('POST :id/match-invoice', () => {
 
     expect(res.status).toBe(400)
     expect((await res.json()).error.code).toBe('MATCH_INVOICE_CREDIT_NOTE')
-    expect(createInvPmtJE).not.toHaveBeenCalled()
+    expect(createJEMock).not.toHaveBeenCalled()
     expect(createInvCashJE).not.toHaveBeenCalled()
   })
 
@@ -669,17 +693,14 @@ describe('POST :id/match-invoice', () => {
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.data.invoice_status).toBe('paid')
-      expect(createInvPmtJE).toHaveBeenCalledWith(
-        expect.anything(),
-        COMPANY_ID,
-        'user-1',
-        expect.objectContaining({ id: INV_ID }),
-        '2026-05-12',
-        undefined,
-        'Acme',
-        12500,
-        '1940',
-      )
+      // The bank leg carries the account resolved from the transaction's own
+      // cash_account_id (1940), not the hardcoded primary 1930.
+      expect(createJEMock).toHaveBeenCalledTimes(1)
+      const je = createJEMock.mock.calls[0][3]
+      expect(je.lines).toEqual([
+        expect.objectContaining({ account_number: '1940', debit_amount: 12500, credit_amount: 0 }),
+        expect.objectContaining({ account_number: '1510', debit_amount: 0, credit_amount: 12500 }),
+      ])
     })
 
     it('aborts with 500 BOOKKEEPING_DATABASE_ERROR (mutates nothing) when the cash_accounts lookup errors', async () => {
@@ -728,7 +749,7 @@ describe('POST :id/match-invoice', () => {
       expect(res.status).toBe(500)
       const body = await res.json()
       expect(body.error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
-      expect(createInvPmtJE).not.toHaveBeenCalled()
+      expect(createJEMock).not.toHaveBeenCalled()
       expect(createInvCashJE).not.toHaveBeenCalled()
     })
 
@@ -785,7 +806,7 @@ describe('POST :id/match-invoice', () => {
       expect(body.error.details.account_numbers).toEqual(['1940'])
       // Engine and invoice/transaction updates must NOT run: the match stays
       // retryable rather than posting a payment against a dead account.
-      expect(createInvPmtJE).not.toHaveBeenCalled()
+      expect(createJEMock).not.toHaveBeenCalled()
       expect(createInvCashJE).not.toHaveBeenCalled()
     })
   })

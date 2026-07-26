@@ -691,6 +691,171 @@ describe('createInvoiceJournalEntry: EUR foreign currency', () => {
   })
 })
 
+/**
+ * A foreign invoice with no exchange rate has no SEK value at item granularity
+ * (InvoiceItem has no *_sek column). The old fallback returned the raw foreign
+ * amount, and since the 1510 debit is derived from the sum of the credits on the
+ * FX branch, the verifikation still balanced: 1 000 EUR posted as 1 000 kr to
+ * 3001 and 250 kr to 2611 instead of 11 500 kr and 2 875 kr, understating ruta
+ * 05 and ruta 10. Nothing downstream could detect it, so the generator refuses.
+ */
+describe('foreign currency without an exchange rate is refused, not relabelled', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function eurInvoiceWithoutRate(overrides: Partial<Invoice> = {}): Invoice {
+    return makeInvoice({
+      currency: 'EUR',
+      exchange_rate: null,
+      subtotal: 1000,
+      subtotal_sek: null,
+      vat_amount: 250,
+      vat_amount_sek: null,
+      total: 1250,
+      total_sek: null,
+      vat_treatment: 'standard_25',
+      items: [makeItem({ line_total: 1000, vat_rate: 25, vat_amount: 250 })],
+      ...overrides,
+    })
+  }
+
+  it('createInvoiceJournalEntry throws INVOICE_FX_RATE_MISSING and posts nothing', async () => {
+    await expect(
+      createInvoiceJournalEntry(null as never, 'company-1', 'user-1', eurInvoiceWithoutRate())
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING', currency: 'EUR' })
+
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a zero exchange rate the same way', async () => {
+    await expect(
+      createInvoiceJournalEntry(
+        null as never,
+        'company-1',
+        'user-1',
+        eurInvoiceWithoutRate({ exchange_rate: 0 })
+      )
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createInvoiceCashEntry refuses too', async () => {
+    await expect(
+      createInvoiceCashEntry(
+        null as never,
+        'company-1',
+        'user-1',
+        eurInvoiceWithoutRate(),
+        '2024-06-20'
+      )
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('createCreditNoteJournalEntry refuses too', async () => {
+    const creditNote = eurInvoiceWithoutRate({
+      credited_invoice_id: 'inv-original',
+      subtotal: -1000,
+      vat_amount: -250,
+      total: -1250,
+      items: [makeItem({ line_total: -1000, quantity: -1, vat_rate: 25, vat_amount: -250 })],
+    })
+
+    await expect(
+      createCreditNoteJournalEntry(null as never, 'company-1', 'user-1', creditNote)
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  // generateRotRutLines has its own conversion; 1513 is a kronor receivable on
+  // Skatteverket, so it must refuse on the same terms. Note that
+  // generatePerRateLines runs first and refuses first, so this asserts the
+  // outcome for a ROT invoice; the positive case below is what proves the 1513
+  // leg itself goes through the honest ladder rather than a private fallback.
+  it('a ROT invoice in EUR without a rate is refused, nothing lands on 1513', async () => {
+    const invoice = eurInvoiceWithoutRate({
+      items: [
+        makeItem({
+          line_total: 1000,
+          unit_price: 1000,
+          quantity: 1,
+          vat_rate: 25,
+          vat_amount: 250,
+          deduction_type: 'rot',
+        } as Partial<InvoiceItem>),
+      ],
+    })
+
+    await expect(
+      createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    ).rejects.toMatchObject({ code: 'INVOICE_FX_RATE_MISSING' })
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+  })
+
+  it('the ROT 1513 leg converts at the rate and the split still balances', async () => {
+    // 1 000 EUR labour at 11,50 = 11 500 kr; ROT is 30% of labour = 3 450 kr on
+    // 1513, so 1510 carries 14 375 - 3 450 = 10 925 kr.
+    const invoice = eurInvoiceWithoutRate({
+      exchange_rate: 11.5,
+      items: [
+        makeItem({
+          line_total: 1000,
+          unit_price: 1000,
+          quantity: 1,
+          vat_rate: 25,
+          vat_amount: 250,
+          deduction_type: 'rot',
+        } as Partial<InvoiceItem>),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const debit1513 = input.lines.find((l) => l.account_number === '1513')
+    expect(debit1513?.debit_amount).toBe(3450)
+    expect(input.lines.find((l) => l.account_number === '1510')?.debit_amount).toBe(10925)
+
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(Math.round(totalDebit * 100)).toBe(Math.round(totalCredit * 100))
+  })
+
+  it('a SEK invoice with no exchange rate is completely unaffected', async () => {
+    const invoice = makeInvoice({
+      currency: 'SEK',
+      exchange_rate: null,
+      subtotal: 1000,
+      vat_amount: 250,
+      total: 1250,
+      items: [makeItem({ line_total: 1000, vat_rate: 25, vat_amount: 250 })],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(1250)
+    expect(totalDebit).toBe(totalCredit)
+  })
+
+  it('an EUR invoice WITH a rate still books, and still balances', async () => {
+    const invoice = eurInvoiceWithoutRate({ exchange_rate: 11.5 })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines.find((l) => l.account_number === '3001')?.credit_amount).toBe(11500)
+    expect(input.lines.find((l) => l.account_number === '2611')?.credit_amount).toBe(2875)
+    const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(totalDebit).toBe(14375)
+    expect(totalDebit).toBe(totalCredit)
+  })
+})
+
 describe('BFL-compliant descriptions with counterparty names', () => {
   beforeEach(() => {
     vi.clearAllMocks()

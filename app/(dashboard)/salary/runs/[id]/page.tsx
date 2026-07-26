@@ -22,7 +22,15 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
-import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
+import {
+  deriveAgiFilingState,
+  resolveRunAgiKvittensnummer,
+} from '@/lib/salary/agi-submission-state'
+import {
+  buildPayslipZipReport,
+  payslipEmployeeLabel,
+  type PayslipZipAttempt,
+} from '@/lib/salary/payslip-zip-report'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { AGIPanel } from '@/components/salary/AGIPanel'
 import { PaymentFilePanel } from '@/components/salary/PaymentFilePanel'
@@ -34,7 +42,7 @@ import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
 import { periodLabelOf, type RunDetail } from '@/components/salary/run/types'
-import type { Employee, SalaryRunEmployee } from '@/types'
+import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 
 export default function SalaryRunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -45,7 +53,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   const [run, setRun] = useState<RunDetail | null>(null)
-  const [availableEmployees, setAvailableEmployees] = useState<Employee[]>([])
+  const [availableEmployees, setAvailableEmployees] = useState<EmployeeMasked[]>([])
   const [preview, setPreview] = useState<PreviewData | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -157,30 +165,41 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }, [id, isCalculatedForPreview, run?.total_gross, run?.total_tax, run?.total_avgifter])
 
+  // Every handler below releases actionLoading in a finally: the flag gates the
+  // header button, the progress rail and the employee table, so a rejected
+  // fetch that skipped the release froze the whole page until a reload.
   async function handleAction(action: string, method: string = 'POST') {
     setActionLoading(action)
-    const res = await fetch(`/api/salary/runs/${id}/${action}`, { method })
-    if (res.ok) {
-      // Optimistic: the status-transition endpoints return the updated run row.
-      // Merge it in immediately so the screen flips without waiting for the
-      // heavy detail refetch, then reconcile in the background. This is what
-      // makes "Till granskning" / "Godkänn" feel instant.
-      const payload = await res.json().catch(() => null)
-      if (payload?.data) {
-        setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/${action}`, { method })
+      if (res.ok) {
+        // Optimistic: the status-transition endpoints return the updated run row.
+        // Merge it in immediately so the screen flips without waiting for the
+        // heavy detail refetch, then reconcile in the background. This is what
+        // makes "Till granskning" / "Godkänn" feel instant.
+        const payload = await res.json().catch(() => null)
+        if (payload?.data) {
+          setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+        }
+        toast({ title: t('toast_status_updated') })
+        loadRun() // background reconcile - not awaited
+        return
       }
+      const result = await res.json().catch(() => ({}))
+      toast({
+        title: t('toast_status_failed'),
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    } catch (err) {
+      toast({
+        title: t('toast_status_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
+    } finally {
       setActionLoading(null)
-      toast({ title: t('toast_status_updated') })
-      loadRun() // background reconcile - not awaited
-      return
     }
-    const result = await res.json().catch(() => ({}))
-    toast({
-      title: t('toast_status_failed'),
-      description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
-      variant: 'destructive',
-    })
-    setActionLoading(null)
   }
 
   // Approval is an authorization step. Missing bank details are an *overridable*
@@ -189,38 +208,46 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // the user chooses "Godkänn ändå". The payment-file step still hard-blocks.
   async function doApprove(force: boolean) {
     setActionLoading('approve')
-    const res = await fetch(`/api/salary/runs/${id}/approve${force ? '?force=true' : ''}`, {
-      method: 'POST',
-    })
-    if (res.ok) {
-      setApproveOverride(null)
-      const payload = await res.json().catch(() => null)
-      if (payload?.data) {
-        setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/approve${force ? '?force=true' : ''}`, {
+        method: 'POST',
+      })
+      if (res.ok) {
+        setApproveOverride(null)
+        const payload = await res.json().catch(() => null)
+        if (payload?.data) {
+          setRun(prev => (prev ? { ...prev, ...payload.data } : prev))
+        }
+        toast({ title: t('toast_status_updated') })
+        loadRun() // background reconcile - not awaited
+        return
       }
+      const result = await res.json().catch(() => ({}))
+      // Overridable → open the confirm dialog instead of toasting the error.
+      if (
+        !force &&
+        result?.code === 'SALARY_APPROVE_BANK_DETAILS_MISSING' &&
+        Array.isArray(result.details)
+      ) {
+        setApproveOverride(result.details as string[])
+        return
+      }
+      setApproveOverride(null)
+      toast({
+        title: t('toast_status_failed'),
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    } catch (err) {
+      setApproveOverride(null)
+      toast({
+        title: t('toast_status_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
+    } finally {
       setActionLoading(null)
-      toast({ title: t('toast_status_updated') })
-      loadRun() // background reconcile - not awaited
-      return
     }
-    const result = await res.json().catch(() => ({}))
-    // Overridable → open the confirm dialog instead of toasting the error.
-    if (
-      !force &&
-      result?.code === 'SALARY_APPROVE_BANK_DETAILS_MISSING' &&
-      Array.isArray(result.details)
-    ) {
-      setApproveOverride(result.details as string[])
-      setActionLoading(null)
-      return
-    }
-    setApproveOverride(null)
-    toast({
-      title: t('toast_status_failed'),
-      description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
-      variant: 'destructive',
-    })
-    setActionLoading(null)
   }
 
   // Recall an approval (approved → review). Approval is only an internal
@@ -255,18 +282,29 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     })
     if (!ok) return
     setActionLoading('delete')
-    const res = await fetch(`/api/salary/runs/${id}`, { method: 'DELETE' })
-    if (res.ok) {
-      toast({ title: t('toast_draft_deleted') })
-      router.push('/salary')
-      return
+    // No finally here: the success path navigates away and deliberately leaves
+    // the buttons disabled for the duration of the route change. Every path
+    // that stays on the page releases the flag.
+    try {
+      const res = await fetch(`/api/salary/runs/${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        toast({ title: t('toast_draft_deleted') })
+        router.push('/salary')
+        return
+      }
+      const result = await res.json().catch(() => ({}))
+      toast({
+        title: t('toast_delete_failed'),
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    } catch (err) {
+      toast({
+        title: t('toast_delete_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
     }
-    const result = await res.json().catch(() => ({}))
-    toast({
-      title: t('toast_delete_failed'),
-      description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
-      variant: 'destructive',
-    })
     setActionLoading(null)
   }
 
@@ -274,41 +312,60 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // RunHeader; this fires only after the user has confirmed there.
   async function handleCorrect() {
     setActionLoading('correct')
-    const res = await fetch(`/api/salary/runs/${id}/correct`, { method: 'POST' })
-    if (res.ok) {
-      const { data } = await res.json()
-      toast({ title: t('toast_correction_created'), description: t('toast_correction_description') })
-      router.push(`/salary/runs/${data.id}`)
-      return
+    // As in handleDelete: the success path navigates to the new run and keeps
+    // the buttons disabled meanwhile; every path that stays here releases.
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/correct`, { method: 'POST' })
+      if (res.ok) {
+        const { data } = await res.json()
+        toast({ title: t('toast_correction_created'), description: t('toast_correction_description') })
+        router.push(`/salary/runs/${data.id}`)
+        return
+      }
+      const result = await res.json().catch(() => ({}))
+      toast({
+        title: t('toast_correction_failed'),
+        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        variant: 'destructive',
+      })
+    } catch (err) {
+      toast({
+        title: t('toast_correction_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
+        variant: 'destructive',
+      })
     }
-    const result = await res.json().catch(() => ({}))
-    toast({
-      title: t('toast_correction_failed'),
-      description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
-      variant: 'destructive',
-    })
     setActionLoading(null)
   }
 
   async function handleAddEmployee(employeeId: string) {
     setActionLoading('add-employee')
-    const res = await fetch(`/api/salary/runs/${id}/employees`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee_id: employeeId }),
-    })
-    if (res.ok) {
-      await loadRun()
-      toast({ title: t('toast_employee_added') })
-    } else {
-      const result = await res.json().catch(() => ({}))
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/employees`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee_id: employeeId }),
+      })
+      if (res.ok) {
+        await loadRun()
+        toast({ title: t('toast_employee_added') })
+      } else {
+        const result = await res.json().catch(() => ({}))
+        toast({
+          title: t('toast_add_employee_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+      }
+    } catch (err) {
       toast({
         title: t('toast_add_employee_failed'),
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
+      setActionLoading(null)
     }
-    setActionLoading(null)
   }
 
   // Remove an employee from a draft run. The DELETE endpoint is draft-only and
@@ -322,21 +379,30 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     })
     if (!ok) return
     setActionLoading(`remove-${employeeId}`)
-    const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
-      method: 'DELETE',
-    })
-    if (res.ok) {
-      await loadRun()
-      toast({ title: t('toast_employee_removed') })
-    } else {
-      const result = await res.json()
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
+        method: 'DELETE',
+      })
+      if (res.ok) {
+        await loadRun()
+        toast({ title: t('toast_employee_removed') })
+      } else {
+        const result = await res.json().catch(() => ({}))
+        toast({
+          title: t('toast_remove_employee_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+      }
+    } catch (err) {
       toast({
         title: t('toast_remove_employee_failed'),
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
+      setActionLoading(null)
     }
-    setActionLoading(null)
   }
 
   // Edit this month's monthly salary for one employee (draft only). The engine
@@ -346,89 +412,127 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     const monthly = Number(raw.replace(/\s/g, '').replace(',', '.'))
     if (!Number.isFinite(monthly) || monthly < 0 || monthly === previous) return
     setActionLoading(`salary-${employeeId}`)
-    const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ monthly_salary: monthly }),
-    })
-    if (res.ok) {
-      await loadRun()
-      toast({ title: t('toast_salary_updated'), description: t('toast_salary_updated_hint') })
-    } else {
-      const result = await res.json()
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthly_salary: monthly }),
+      })
+      if (res.ok) {
+        await loadRun()
+        toast({ title: t('toast_salary_updated'), description: t('toast_salary_updated_hint') })
+      } else {
+        const result = await res.json().catch(() => ({}))
+        toast({
+          title: t('toast_salary_update_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+      }
+    } catch (err) {
       toast({
         title: t('toast_salary_update_failed'),
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
+      setActionLoading(null)
     }
-    setActionLoading(null)
   }
 
   async function handleCalculate() {
     setActionLoading('calculate')
-    const res = await fetch(`/api/salary/runs/${id}/calculate`, { method: 'POST' })
-    if (res.ok) {
-      const payload = await res.json()
-      await loadRun()
-      const warnings = (payload.warnings as string[] | undefined) ?? []
-      if (warnings.length === 0) {
-        toast({ title: t('toast_calculation_done') })
-      } else {
-        for (const warning of warnings) {
-          toast({ title: t('toast_calculation_warning'), description: warning })
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/calculate`, { method: 'POST' })
+      if (res.ok) {
+        const payload = await res.json().catch(() => ({}))
+        await loadRun()
+        const warnings = (payload.warnings as string[] | undefined) ?? []
+        if (warnings.length === 0) {
+          toast({ title: t('toast_calculation_done') })
+        } else {
+          for (const warning of warnings) {
+            toast({ title: t('toast_calculation_warning'), description: warning })
+          }
         }
+      } else {
+        const result = await res.json().catch(() => ({}))
+        toast({
+          title: t('toast_calculation_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
       }
-    } else {
-      const result = await res.json()
+    } catch (err) {
       toast({
         title: t('toast_calculation_failed'),
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
+      setActionLoading(null)
     }
-    setActionLoading(null)
   }
 
   async function handlePreview() {
     setActionLoading('preview')
-    const res = await fetch(`/api/salary/runs/${id}/preview`)
-    if (res.ok) {
-      const { data } = await res.json()
-      setPreview(data)
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/preview`)
+      if (res.ok) {
+        const { data } = await res.json()
+        setPreview(data)
+      }
+    } catch {
+      // The preview is a read-only convenience; the auto-load effect retries on
+      // the next calculation. Nothing to report, but the flag must be released.
+    } finally {
+      setActionLoading(null)
     }
-    setActionLoading(null)
   }
 
   async function handleSendPayslips() {
     setActionLoading('payslips-send')
-    const res = await fetch(`/api/salary/runs/${id}/payslips/send`, { method: 'POST' })
-    if (res.ok) {
-      const { data } = await res.json()
-      await loadRun()
-      toast({
-        title: t('toast_payslips_sent'),
-        description: t('toast_payslips_sent_detail', {
-          sent: data.sent,
-          skipped: data.skipped,
-        }),
-      })
-      if (data.errors?.length) {
-        for (const err of data.errors as string[]) {
-          toast({ title: t('toast_payslip_error'), description: err, variant: 'destructive' })
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/payslips/send`, { method: 'POST' })
+      if (res.ok) {
+        const { data } = await res.json()
+        await loadRun()
+        toast({
+          title: t('toast_payslips_sent'),
+          description: t('toast_payslips_sent_detail', {
+            sent: data.sent,
+            skipped: data.skipped,
+          }),
+        })
+        if (data.errors?.length) {
+          for (const err of data.errors as string[]) {
+            toast({ title: t('toast_payslip_error'), description: err, variant: 'destructive' })
+          }
         }
+      } else {
+        const result = await res.json().catch(() => ({}))
+        toast({
+          title: t('toast_payslips_send_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
       }
-    } else {
-      const result = await res.json()
+    } catch (err) {
       toast({
         title: t('toast_payslips_send_failed'),
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
+      setActionLoading(null)
     }
-    setActionLoading(null)
   }
 
+  // Bulk payslip archive. One PDF request per employee, so a single failure
+  // must not take the batch down - but it must not vanish either: the employer
+  // hands out what the ZIP contains and has no other signal that someone is
+  // missing from it. Every outcome is recorded per employee and reported by
+  // name; a short archive is never presented as a complete one.
   async function handleBulkPayslipDownload() {
     if (!run) return
     setActionLoading('bulk_payslip')
@@ -436,24 +540,45 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       const { default: JSZip } = await import('jszip')
       const zip = new JSZip()
       const periodLabel = periodLabelOf(run)
-      let added = 0
+      const attempts: PayslipZipAttempt[] = []
       for (const sre of employees) {
         const employee = (sre as SalaryRunEmployee & {
           employee?: { first_name: string; last_name: string }
         }).employee
-        const res = await fetch(`/api/salary/runs/${id}/payslips/${sre.employee_id}/pdf`)
-        if (!res.ok) continue
-        const blob = await res.blob()
-        const name = employee
-          ? `${employee.last_name}_${employee.first_name}`.replace(/[^A-Za-z0-9_-]/g, '_')
-          : sre.employee_id.slice(0, 8)
-        zip.file(`Lonespec_${periodLabel}_${name}.pdf`, blob)
-        added++
+        let ok = false
+        try {
+          const res = await fetch(`/api/salary/runs/${id}/payslips/${sre.employee_id}/pdf`)
+          if (res.ok) {
+            const blob = await res.blob()
+            const fileName = employee
+              ? `${employee.last_name}_${employee.first_name}`.replace(/[^A-Za-z0-9_-]/g, '_')
+              : sre.employee_id.slice(0, 8)
+            zip.file(`Lonespec_${periodLabel}_${fileName}.pdf`, blob)
+            ok = true
+          }
+        } catch {
+          // A network-level failure for this one employee counts exactly like a
+          // non-ok response: missing from the archive, named in the report.
+        }
+        attempts.push({ name: payslipEmployeeLabel(sre.employee_id, employee), ok })
       }
-      if (added === 0) {
+
+      const report = buildPayslipZipReport(attempts)
+
+      // Nothing to archive: no file is produced, so say so and stop.
+      if (report.outcome === 'empty') {
         toast({ title: t('toast_payslips_download_empty'), variant: 'destructive' })
         return
       }
+      if (report.outcome === 'none') {
+        toast({
+          title: t('toast_payslips_download_empty'),
+          description: t('toast_payslips_download_none_detail', { total: report.total }),
+          variant: 'destructive',
+        })
+        return
+      }
+
       const archive = await zip.generateAsync({ type: 'blob' })
       const url = URL.createObjectURL(archive)
       const a = document.createElement('a')
@@ -463,7 +588,32 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-      toast({ title: t('toast_payslips_downloaded'), description: t('toast_payslips_downloaded_detail', { count: added }) })
+
+      // The toaster holds one toast at a time: a warning emitted next to a
+      // success toast is evicted and never rendered. So a partial archive gets
+      // a single destructive toast naming who is missing, not success + warning.
+      if (report.outcome === 'partial') {
+        const shown = report.missingShown.join(', ')
+        const names =
+          report.missingOverflow > 0
+            ? t('toast_payslips_download_more', { names: shown, count: report.missingOverflow })
+            : shown
+        toast({
+          title: t('toast_payslips_download_partial'),
+          description: t('toast_payslips_download_partial_detail', {
+            added: report.added,
+            total: report.total,
+            names,
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      toast({
+        title: t('toast_payslips_downloaded'),
+        description: t('toast_payslips_downloaded_detail', { count: report.added }),
+      })
     } catch (err) {
       toast({
         title: t('toast_zip_failed'),
@@ -475,33 +625,44 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     }
   }
 
+  // actionLoading gates this button, the progress rail and the employee table,
+  // so it has to be released on every path. A rejected fetch (or a blob/read
+  // failure) used to leave it set and freeze the page until a full reload.
   async function handleDownloadAgi() {
     if (!run) return
     setActionLoading('agi-download')
-    const res = await fetch(`/api/salary/runs/${id}/agi/xml`)
-    if (!res.ok) {
-      const result = await res.json().catch(() => ({ error: t('toast_agi_failed') }))
+    try {
+      const res = await fetch(`/api/salary/runs/${id}/agi/xml`)
+      if (!res.ok) {
+        const result = await res.json().catch(() => ({ error: t('toast_agi_failed') }))
+        toast({
+          title: t('toast_agi_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const compactPeriod = `${run.period_year}${String(run.period_month).padStart(2, '0')}`
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `AGI_${compactPeriod}.xml`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      await loadRun()
+      toast({ title: t('toast_agi_downloaded') })
+    } catch (err) {
       toast({
         title: t('toast_agi_failed'),
-        description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+        description: err instanceof Error ? getErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
+    } finally {
       setActionLoading(null)
-      return
     }
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const compactPeriod = `${run.period_year}${String(run.period_month).padStart(2, '0')}`
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `AGI_${compactPeriod}.xml`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    await loadRun()
-    toast({ title: t('toast_agi_downloaded') })
-    setActionLoading(null)
   }
 
   if (loading) {
@@ -536,6 +697,11 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // Real AGI filing state: run-row timestamps + the extension's submission
   // record. Falls back gracefully when the extension is unavailable.
   const agiState = deriveAgiFilingState(run, agiSubmission)
+  // The submission record is cached per PERIOD, but a corrected month holds two
+  // runs and each files its own complete replacement declaration, so each gets
+  // its own kvittens from Skatteverket. Resolving the record against this run
+  // keeps the rail from labelling one run's step with the sibling's receipt.
+  const agiKvittensnummer = resolveRunAgiKvittensnummer(run, agiSubmission)
 
   // Advancing a draft to review. For a nollkörning confirm first: an empty
   // declaration is filed to Skatteverket, which should be deliberate.
@@ -586,7 +752,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         isCalculated={isCalculated}
         noPayout={noPayout}
         agiState={agiState}
-        agiKvittensnummer={agiSubmission?.kvittensnummer ?? null}
+        agiKvittensnummer={agiKvittensnummer}
         canWrite={canWrite}
         actionLoading={actionLoading}
         primaryAction={primaryAction}

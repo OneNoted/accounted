@@ -82,6 +82,51 @@ export const POST = withRouteContext(
 
     const opLog = log.child({ txCount: body.tx_ids.length })
 
+    // Fetch the selected txs ONCE, up front, for every path. The template
+    // branch needs the amounts to expand the template; all three branches
+    // need the currencies for the homogeneity gate below.
+    const { data: txs, error: txError } = await supabase
+      .from('transactions')
+      .select('id, amount, currency, description, date')
+      .in('id', body.tx_ids)
+      .eq('company_id', companyId)
+
+    if (txError || !txs || txs.length === 0) {
+      return errorResponseFromCode('BULK_BOOK_TXS_NOT_FOUND', opLog, { requestId })
+    }
+    if (txs.length !== body.tx_ids.length) {
+      return errorResponseFromCode('BULK_BOOK_TXS_NOT_FOUND', opLog, {
+        requestId,
+        details: { expected: body.tx_ids.length, found: txs.length },
+      })
+    }
+
+    const txTyped = txs as Pick<Transaction, 'id' | 'amount' | 'currency' | 'description' | 'date'>[]
+
+    // Currency homogeneity, enforced BEFORE the branch split so it covers
+    // all three paths (template, manual_lines, existing_journal_entry_id).
+    // BFL 4 kap 6 § requires the bokföring to be presented in one and the
+    // same redovisningsvaluta. A samlingsverifikation mixing e.g. SEK and
+    // EUR has no representable single belopp: summing the raw amounts adds
+    // 100 EUR to 100 SEK as if they were one unit, and the verifikat would
+    // then state an amount matching no affärshändelse (BFL 5 kap 7 §
+    // "belopp"). Nothing the caller can pass makes that correct without
+    // per-tx FX rates, so this refuses instead of warning. Mirrors the MCP
+    // twin (gnubok_bulk_book_transactions), which guards the same three
+    // paths; cross-currency batches belong in the FX-aware batch-allocate
+    // flow (kursdifferens on 7960/3960).
+    // NULL currency is legacy for the column default 'SEK' (the codebase
+    // reads it that way everywhere), so it is normalized before comparison:
+    // a NULL/SEK selection is not a currency mix and must stay bookable.
+    const currencies = new Set(txTyped.map((t) => t.currency ?? 'SEK'))
+    if (currencies.size > 1) {
+      return errorResponseFromCode('BULK_BOOK_MIXED_CURRENCY', opLog, {
+        requestId,
+        details: { currencies: Array.from(currencies).sort() },
+      })
+    }
+    const currency = txTyped[0]!.currency ?? 'SEK'
+
     // Three paths now (PR #608):
     //   1. existing_journal_entry_id → null new_entry, RPC links txs to JE.
     //   2. template_id → route expands template per mode, builds lines.
@@ -156,40 +201,9 @@ export const POST = withRouteContext(
 
       const templateLines = (template.lines ?? []) as BookingTemplateLibraryLine[]
 
-      // Need each tx's amount + currency to expand per mode. The RPC also
-      // re-validates (date, direction, not-already-booked) but we need the
-      // amount sum to drive the template expansion.
-      const { data: txs, error: txError } = await supabase
-        .from('transactions')
-        .select('id, amount, currency, description, date')
-        .in('id', body.tx_ids)
-        .eq('company_id', companyId)
-
-      if (txError || !txs || txs.length === 0) {
-        return errorResponseFromCode('BULK_BOOK_TXS_NOT_FOUND', opLog, { requestId })
-      }
-      if (txs.length !== body.tx_ids.length) {
-        return errorResponseFromCode('BULK_BOOK_TXS_NOT_FOUND', opLog, {
-          requestId,
-          details: { expected: body.tx_ids.length, found: txs.length },
-        })
-      }
-
-      const txTyped = txs as Pick<Transaction, 'id' | 'amount' | 'currency' | 'description' | 'date'>[]
-
-      // Same-currency invariant for v1. Mixed-currency batches would need
-      // FX conversion per tx; out of scope. Use the dedicated
-      // BULK_BOOK_MIXED_CURRENCY code so the toast doesn't blame direction
-      // (PR #606 review fix).
-      const currencies = new Set(txTyped.map((t) => t.currency))
-      if (currencies.size > 1) {
-        return errorResponseFromCode('BULK_BOOK_MIXED_CURRENCY', opLog, {
-          requestId,
-          details: { currencies: Array.from(currencies) },
-        })
-      }
-      const currency = txTyped[0]!.currency
-
+      // The tx rows (amount + currency) were fetched and currency-gated
+      // above; the RPC still re-validates date, direction, and
+      // not-already-booked.
       const txAbsAmounts = txTyped.map((t) => Math.abs(t.amount))
       const totalAbs = round2(txAbsAmounts.reduce((s, a) => s + a, 0))
 

@@ -23,6 +23,23 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 const supabase = createClient()
 
+/**
+ * The sentence the route meant to say, from a response it refused.
+ *
+ * The parsed body goes to the mapper as-is. Wrapping it in `new Error()` first,
+ * which every handler here used to do, stringifies the canonical envelope
+ * `{ error: { code, message } }` into "[object Object]": the mapper then has
+ * nothing to match on and falls through to the generic "Något gick fel",
+ * discarding the route's own Swedish reason and its Zod field list. Passing the
+ * status as well means a body-less or non-JSON refusal still resolves to the
+ * right sentence, so a 403 read-only refusal reads as one instead of as a
+ * generic failure.
+ */
+async function describeFailure(response: Response): Promise<string> {
+  const body: unknown = await response.json().catch(() => null)
+  return getUserErrorMessage(body, { statusCode: response.status })
+}
+
 export default function DeadlinesPage() {
   const { company } = useCompany()
   const companyId = company?.id
@@ -37,8 +54,11 @@ export default function DeadlinesPage() {
   const [editingDeadline, setEditingDeadline] = useState<Deadline | null>(null)
   const { toast } = useToast()
 
-  const fetchData = useCallback(async () => {
-    if (!companyId) return
+  // Returns whether the list on screen was actually refreshed. Handlers that
+  // confirm an outcome to the user need that: claiming a row moved while the
+  // reload failed would describe a list the user is not looking at.
+  const fetchData = useCallback(async (): Promise<boolean> => {
+    if (!companyId) return false
     setIsLoading(true)
 
     try {
@@ -73,7 +93,17 @@ export default function DeadlinesPage() {
             .from('invoices')
             .select('total_sek, total, currency')
             .eq('company_id', companyId)
-            .in('status', ['sent', 'unpaid'])
+            // The open statuses, and only those the CHECK actually allows
+            // (draft, sent, paid, partially_paid, overdue, cancelled,
+            // credited): draft is not owed yet, paid/cancelled/credited are
+            // settled. There is no 'unpaid' status; this filter used to name
+            // one, so every invoice the reminder run had already flipped to
+            // 'overdue' fell out of the total silently. partially_paid is
+            // deliberately absent: the sum below is the invoice total, not
+            // remaining_amount, so counting one would report money already
+            // received as still owed, and the action link lands on the
+            // invoices tab that lists exactly sent + overdue.
+            .in('status', ['sent', 'overdue'])
             .lt('due_date', today)
             .order('id', { ascending: true })
             .range(from, to),
@@ -94,12 +124,14 @@ export default function DeadlinesPage() {
       setDeadlines(deadlineRows)
       setCustomers(customerRows)
       setOverdueInvoices({ count: overdueRows.length, total: overdueTotal, unconverted: unconvertedCount })
+      return true
     } catch {
       toast({
         title: t('load_failed_title'),
         description: t('load_failed_description'),
         variant: 'destructive',
       })
+      return false
     } finally {
       setIsLoading(false)
     }
@@ -112,12 +144,32 @@ export default function DeadlinesPage() {
   const handleGenerateSystemDeadlines = async () => {
     setIsGenerating(true)
     try {
-      const response = await fetch('/api/tax-deadlines/generate', { method: 'POST' })
-      const result = await response.json()
+      const response = await fetch('/api/tax-deadlines/generate', {
+        method: 'POST',
+      }).catch(() => null)
+
+      // The request never reached the route (offline, connection reset), so
+      // point at the connection rather than the data.
+      if (!response) {
+        toast({
+          title: t('generate_failed_title'),
+          description: t('load_failed_description'),
+          variant: 'destructive',
+        })
+        return
+      }
 
       if (!response.ok) {
-        throw new Error(result.error || t('generate_failed_description'))
+        toast({
+          title: t('generate_failed_title'),
+          description: await describeFailure(response),
+          variant: 'destructive',
+        })
+        return
       }
+
+      // Only a malformed success body reaches the catch below now.
+      const result = await response.json()
 
       if ((result.created ?? 0) === 0) {
         // Nothing was generated: the tax settings are genuinely incomplete.
@@ -145,149 +197,216 @@ export default function DeadlinesPage() {
     }
   }
 
-  const handleDeadlineCreate = async (data: DeadlineFormValues) => {
-    try {
-      const response = await fetch('/api/deadlines', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      })
+  // Returns whether the create landed. False keeps the form open with the
+  // user's input (handleFormSubmit only closes it on success); the toast above
+  // each return is the user's copy of why. Not a throw: DeadlineForm's submit
+  // wrapper has no catch, so a rejection here would escape as an unhandled
+  // promise rejection rather than control flow.
+  const handleDeadlineCreate = async (data: DeadlineFormValues): Promise<boolean> => {
+    const response = await fetch('/api/deadlines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).catch(() => null)
 
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || 'Failed to create deadline')
-      }
-
-      toast({
-        title: t('created_title'),
-        description: t('created_description'),
-      })
-
-      fetchData()
-    } catch (error) {
+    if (!response) {
+      // The request never reached the route (offline, connection reset), so
+      // point at the connection rather than the data.
       toast({
         title: t('create_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
-      throw error
+      return false
     }
+
+    if (!response.ok) {
+      toast({
+        title: t('create_failed_title'),
+        description: await describeFailure(response),
+        variant: 'destructive',
+      })
+      return false
+    }
+
+    toast({
+      title: t('created_title'),
+      description: t('created_description'),
+    })
+
+    fetchData()
+    return true
   }
+
+  // "Ångra" on the marked-done toast. It lives here rather than inline in the
+  // toast so it gets the same treatment as every other mutation on this page:
+  // gated on res.ok, refetched, and answered with exactly one sentence. A
+  // Skatteverket deadline that is still marked done must never be reported as
+  // back on the list, and a failed undo must not look like a successful one.
+  const handleUndoComplete = useCallback(
+    async (deadline: Deadline) => {
+      const response = await fetch(`/api/deadlines/${deadline.id}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // The target state, not a toggle: clicking undo twice, or undoing a row
+        // something else already un-ticked, must not re-complete the deadline.
+        body: JSON.stringify({ is_completed: false }),
+      }).catch(() => null)
+
+      // null: the request never completed (offline, connection reset). Nothing
+      // was undone, so point at the connection rather than the data.
+      if (!response) {
+        toast({
+          title: t('undo_failed'),
+          description: t('load_failed_description'),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      if (!response.ok) {
+        toast({
+          title: t('undo_failed'),
+          // The route knows why it refused (gone, read-only member); prefer its
+          // own message over generic retry copy.
+          description: await describeFailure(response),
+          variant: 'destructive',
+        })
+        return
+      }
+
+      // Confirm only once the row is provably back. When the reload failed,
+      // fetchData has already said so and TOAST_LIMIT is 1, so a success
+      // sentence here would evict that warning and render alone.
+      if (!(await fetchData())) return
+
+      toast({ title: t('marked_not_done', { title: deadline.title }) })
+    },
+    [fetchData, toast, t],
+  )
 
   const handleDeadlineToggle = async (deadline: Deadline) => {
     const wasCompleted = deadline.is_completed
     const newCompleted = !wasCompleted
 
-    try {
-      const response = await fetch(`/api/deadlines/${deadline.id}/complete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_completed: newCompleted }),
-      })
+    const response = await fetch(`/api/deadlines/${deadline.id}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_completed: newCompleted }),
+    }).catch(() => null)
 
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || 'Failed to toggle deadline')
-      }
-
-      fetchData()
-
-      if (newCompleted) {
-        toast({
-          title: t('marked_done', { title: deadline.title }),
-          action: (
-            <ToastAction altText={t('undo')} onClick={async () => {
-              try {
-                await fetch(`/api/deadlines/${deadline.id}/complete`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ is_completed: false }),
-                })
-              } catch {
-                toast({
-                  title: t('undo_failed'),
-                  variant: 'destructive',
-                })
-              }
-            }}>
-              {t('undo')}
-            </ToastAction>
-          ),
-        })
-      } else {
-        toast({ title: t('marked_not_done', { title: deadline.title }) })
-      }
-    } catch (error) {
+    if (!response) {
       toast({
         title: t('toggle_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
+      return
+    }
+
+    if (!response.ok) {
+      toast({
+        title: t('toggle_failed_title'),
+        description: await describeFailure(response),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    fetchData()
+
+    if (newCompleted) {
+      toast({
+        title: t('marked_done', { title: deadline.title }),
+        action: (
+          <ToastAction
+            altText={t('undo')}
+            onClick={() => {
+              void handleUndoComplete(deadline)
+            }}
+          >
+            {t('undo')}
+          </ToastAction>
+        ),
+      })
+    } else {
+      toast({ title: t('marked_not_done', { title: deadline.title }) })
     }
   }
 
   // Sends ONLY the form-managed fields: the PUT route whitelists to the same
   // set, and posting a whole Deadline row from here would fabricate system
   // fields (source, status, reminder_offsets) that only the whitelist drops.
-  const handleDeadlineEdit = async (id: string, data: DeadlineFormValues) => {
-    try {
-      const response = await fetch(`/api/deadlines/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      })
+  // Returns whether the edit landed, same contract as create: false keeps the
+  // form open with the user's input instead of silently discarding it.
+  const handleDeadlineEdit = async (id: string, data: DeadlineFormValues): Promise<boolean> => {
+    const response = await fetch(`/api/deadlines/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).catch(() => null)
 
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || 'Failed to edit deadline')
-      }
-
-      toast({
-        title: t('updated_title'),
-        description: t('updated_description'),
-      })
-
-      fetchData()
-    } catch (error) {
+    if (!response) {
       toast({
         title: t('update_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
-      // Rethrow (like create) so a failed edit keeps the form open with the
-      // user's input instead of silently discarding it.
-      throw error
+      return false
     }
+
+    if (!response.ok) {
+      toast({
+        title: t('update_failed_title'),
+        description: await describeFailure(response),
+        variant: 'destructive',
+      })
+      return false
+    }
+
+    toast({
+      title: t('updated_title'),
+      description: t('updated_description'),
+    })
+
+    fetchData()
+    return true
   }
 
   const handleDeadlineDelete = async (deadline: Deadline) => {
-    try {
-      const response = await fetch(`/api/deadlines/${deadline.id}`, {
-        method: 'DELETE',
-      })
+    const response = await fetch(`/api/deadlines/${deadline.id}`, {
+      method: 'DELETE',
+    }).catch(() => null)
 
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || 'Failed to delete deadline')
-      }
-
-      toast({ title: t('deleted_title') })
-      fetchData()
-    } catch (error) {
+    if (!response) {
       toast({
         title: t('delete_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
+        description: t('load_failed_description'),
         variant: 'destructive',
       })
+      return
     }
+
+    if (!response.ok) {
+      toast({
+        title: t('delete_failed_title'),
+        description: await describeFailure(response),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    toast({ title: t('deleted_title') })
+    fetchData()
   }
 
   const handleFormSubmit = async (data: DeadlineFormValues) => {
-    if (editingDeadline) {
-      await handleDeadlineEdit(editingDeadline.id, data)
-    } else {
-      await handleDeadlineCreate(data)
-    }
+    const ok = editingDeadline
+      ? await handleDeadlineEdit(editingDeadline.id, data)
+      : await handleDeadlineCreate(data)
+    // On failure the handler has already toasted; leave the form open so the
+    // user's input survives a retry.
+    if (!ok) return
     setShowForm(false)
     setEditingDeadline(null)
   }

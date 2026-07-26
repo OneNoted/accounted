@@ -11,13 +11,183 @@ let results: Array<{ data?: unknown; error?: unknown; count?: number | null }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'insert', 'update', 'delete', 'lte', 'gte', 'in', 'neq', 'not', 'or', 'order', 'limit', 'is']) {
+  for (const m of ['select', 'eq', 'insert', 'update', 'delete', 'lte', 'gte', 'in', 'neq', 'not', 'or', 'order', 'limit', 'is', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.maybeSingle = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
+}
+
+// ============================================================
+// Filter-aware mock, used by the balansdagen FX readiness tests
+// ============================================================
+
+type Row = Record<string, unknown>
+
+interface SeededTables {
+  fiscal_periods?: Row[]
+  journal_entries?: Row[]
+  voucher_sequences?: Row[]
+  invoices?: Row[]
+  supplier_invoices?: Row[]
+  invoice_payments?: Row[]
+  supplier_invoice_payments?: Row[]
+}
+
+/**
+ * Resolves each query by actually applying its filters to a seeded table,
+ * unlike the positional queue above which hands back a fixed row set no matter
+ * what was asked for.
+ *
+ * The FX readiness check is entirely a question about WHICH rows a query
+ * selects: status at balansdagen vs status now, `entry_date` on the
+ * revaluation verifikat, presence of `exchange_rate`. A queue mock answers all
+ * of those identically and so cannot tell the old behaviour from the new one.
+ */
+function makeFilteringClient(tables: SeededTables, failTable?: string) {
+  return {
+    from: vi.fn((table: string) => {
+      const eqs: Array<[string, unknown]> = []
+      const neqs: Array<[string, unknown]> = []
+      const ins: Array<[string, unknown[]]> = []
+      const ltes: Array<[string, string]> = []
+      const notNull: string[] = []
+      let head = false
+      let orderColumn: string | null = null
+      let orderAscending = true
+      let limitN: number | null = null
+      let rangeFrom: number | null = null
+      let rangeTo: number | null = null
+
+      function matching(): Row[] {
+        if (failTable === table) throw new Error(`simulated query failure on ${table}`)
+        const out = (tables[table as keyof SeededTables] ?? []).filter(
+          (r) =>
+            eqs.every(([c, v]) => r[c] === v) &&
+            neqs.every(([c, v]) => r[c] !== v) &&
+            ins.every(([c, vs]) => vs.includes(r[c])) &&
+            ltes.every(([c, v]) => String(r[c] ?? '') <= v) &&
+            notNull.every((c) => r[c] != null)
+        )
+        if (orderColumn) {
+          const col = orderColumn
+          out.sort((a, b2) => {
+            const av = a[col] as string | number
+            const bv = b2[col] as string | number
+            if (av === bv) return 0
+            return (av < bv ? -1 : 1) * (orderAscending ? 1 : -1)
+          })
+        }
+        return limitN == null ? out : out.slice(0, limitN)
+      }
+
+      function resolve() {
+        const all = matching()
+        const paged = rangeFrom == null ? all : all.slice(rangeFrom, (rangeTo ?? 0) + 1)
+        return { data: head ? null : paged, error: null, count: all.length }
+      }
+
+      const b: Record<string, unknown> = {}
+      b.select = vi.fn((_cols?: string, opts?: { head?: boolean }) => {
+        head = opts?.head === true
+        return b
+      })
+      b.eq = vi.fn((c: string, v: unknown) => { eqs.push([c, v]); return b })
+      b.neq = vi.fn((c: string, v: unknown) => { neqs.push([c, v]); return b })
+      b.in = vi.fn((c: string, v: unknown[]) => { ins.push([c, v]); return b })
+      b.lte = vi.fn((c: string, v: string) => { ltes.push([c, v]); return b })
+      b.not = vi.fn((c: string, op: string, v: unknown) => {
+        if (op === 'is' && v === null) notNull.push(c)
+        return b
+      })
+      b.order = vi.fn((c: string, opts?: { ascending?: boolean }) => {
+        orderColumn = c
+        orderAscending = opts?.ascending !== false
+        return b
+      })
+      b.limit = vi.fn((n: number) => { limitN = n; return b })
+      b.range = vi.fn((from: number, to: number) => { rangeFrom = from; rangeTo = to; return b })
+      for (const m of ['gte', 'is', 'or', 'insert', 'update', 'delete']) {
+        b[m] = vi.fn().mockReturnValue(b)
+      }
+      b.single = vi.fn(async () => ({ data: matching()[0] ?? null, error: null }))
+      b.maybeSingle = vi.fn(async () => ({ data: matching()[0] ?? null, error: null }))
+      b.then = (done: (v: unknown) => void) => done(resolve())
+      return b
+    }),
+    rpc: vi.fn(async () => ({ data: [], error: null })),
+  }
+}
+
+const FX_PERIOD_END = '2024-12-31'
+
+/**
+ * Baseline books that pass every non-FX readiness gate: one posted verifikat,
+ * no drafts, no voucher gaps, sequence counter reconciled.
+ */
+function fxBaseTables(extra: SeededTables = {}): SeededTables {
+  return {
+    fiscal_periods: [
+      makeFiscalPeriod({
+        id: 'fp-1',
+        company_id: 'company-1',
+        is_closed: false,
+        closing_entry_id: null,
+        period_end: FX_PERIOD_END,
+      }) as unknown as Row,
+    ],
+    voucher_sequences: [
+      { company_id: 'company-1', fiscal_period_id: 'fp-1', voucher_series: 'A', last_number: 10 },
+    ],
+    journal_entries: [
+      {
+        company_id: 'company-1',
+        fiscal_period_id: 'fp-1',
+        voucher_series: 'A',
+        voucher_number: 10,
+        status: 'posted',
+        source_type: 'manual',
+        entry_date: '2024-06-01',
+      },
+      ...(extra.journal_entries ?? []),
+    ],
+    invoices: extra.invoices ?? [],
+    supplier_invoices: extra.supplier_invoices ?? [],
+    invoice_payments: extra.invoice_payments ?? [],
+    supplier_invoice_payments: extra.supplier_invoice_payments ?? [],
+  }
+}
+
+/** A posted currency_revaluation verifikat dated `entryDate`. */
+function revaluationEntry(entryDate: string): Row {
+  return {
+    company_id: 'company-1',
+    fiscal_period_id: 'fp-1',
+    voucher_series: 'A',
+    voucher_number: 5,
+    status: 'posted',
+    source_type: 'currency_revaluation',
+    entry_date: entryDate,
+  }
+}
+
+/** An open EUR customer invoice. `exchange_rate: null` = never converted. */
+function fxInvoice(overrides: Row = {}): Row {
+  return {
+    id: `inv-${Math.random().toString(36).slice(2, 10)}`,
+    company_id: 'company-1',
+    status: 'sent',
+    currency: 'EUR',
+    exchange_rate: 11.2,
+    invoice_date: '2024-11-15',
+    total: 1000,
+    paid_amount: 0,
+    remaining_amount: 1000,
+    paid_at: null,
+    ...overrides,
+  }
 }
 
 function makeClient() {
@@ -76,9 +246,7 @@ describe('validateYearEndReadiness', () => {
   function noGapResults(period: ReturnType<typeof makeFiscalPeriod>, overrides: {
     draftCount?: number
     postedCount?: number
-    revalCount?: number
-    fxReceivables?: number
-    fxPayables?: number
+    balansdagenRevalCount?: number
   } = {}) {
     return [
       { data: period, error: null },                                          // fetch period (.single)
@@ -90,9 +258,9 @@ describe('validateYearEndReadiness', () => {
       { data: { voucher_number: 10 }, error: null },                          // reconciliation: journal_entries max (.maybeSingle)
       // trial balance mocked separately
       { data: null, error: null, count: overrides.postedCount ?? 5 },         // count posted (thenable)
-      { data: null, error: null, count: overrides.revalCount ?? 0 },          // count revaluation (thenable)
-      { data: null, error: null, count: overrides.fxReceivables ?? 0 },       // fx receivables (thenable)
-      { data: null, error: null, count: overrides.fxPayables ?? 0 },          // fx payables (thenable)
+      { data: null, error: null, count: overrides.balansdagenRevalCount ?? 0 }, // revaluation dated on balansdagen (thenable)
+      { data: null, error: null },                                            // open FX receivables: no rows (fetchAllRows)
+      { data: null, error: null },                                            // open FX payables: no rows (fetchAllRows)
     ]
   }
 
@@ -395,6 +563,204 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('redan ingående balanser bokförda'))).toBe(true)
+  })
+})
+
+describe('validateYearEndReadiness: open FX items at balansdagen (ÅRL 4 kap. 13 §)', () => {
+  beforeEach(() => {
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValue(null as never)
+  })
+
+  const revaluationWarning = (w: string) => w.includes('har inte omvärderats till balansdagskurs')
+  const missingRateWarning = (w: string) => w.includes('saknar valutakurs')
+
+  it('does not let one interim revaluation hide items still open on balansdagen', async () => {
+    // A single revaluation run in June. Twelve invoices were still outstanding
+    // on 31 December and none of them were valued at the balansdagen rate.
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        journal_entries: [revaluationEntry('2024-06-30')],
+        invoices: Array.from({ length: 12 }, (_, i) => fxInvoice({ id: `inv-${i}` })),
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.filter(revaluationWarning)).toHaveLength(1)
+    expect(result.warnings.find(revaluationWarning)).toContain('12 post(er)')
+    expect(result.warnings.find(revaluationWarning)).toContain(FX_PERIOD_END)
+    // Advisory, not a blocker: executeYearEndClosing revalues in its step 2.
+    expect(result.ready).toBe(true)
+  })
+
+  it('counts items with no exchange rate at all and states the different remedy', async () => {
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        invoices: [
+          fxInvoice({ id: 'inv-a', exchange_rate: null }),
+          fxInvoice({ id: 'inv-b', exchange_rate: null }),
+          fxInvoice({ id: 'inv-c', exchange_rate: 0 }),
+        ],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    // These are invisible to the revaluation, so they get their own warning
+    // with its own remedy, and they are never folded into the other count.
+    const missing = result.warnings.find(missingRateWarning)
+    expect(missing).toBeDefined()
+    expect(missing).toContain('3 post(er)')
+    expect(missing).toContain('Registrera kursen på fakturan')
+    expect(result.warnings.filter(revaluationWarning)).toHaveLength(0)
+    expect(result.ready).toBe(true)
+  })
+
+  it('separates the two states when both are present', async () => {
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        invoices: [
+          fxInvoice({ id: 'inv-rate-1' }),
+          fxInvoice({ id: 'inv-rate-2' }),
+          fxInvoice({ id: 'inv-norate', exchange_rate: null }),
+        ],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.find(missingRateWarning)).toContain('1 post(er)')
+    expect(result.warnings.find(revaluationWarning)).toContain('2 post(er)')
+  })
+
+  it('still reports a clean company as ready with no FX warning', async () => {
+    const supabase = makeFilteringClient(fxBaseTables())
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(true)
+    expect(result.warnings.filter((w: string) => w.includes('valuta'))).toHaveLength(0)
+  })
+
+  it('counts an invoice paid after balansdagen: it was open on the balance sheet date', async () => {
+    // Status today is 'paid', status on 31 December was open. ÅRL 4 kap. 13 §
+    // values the item at balansdagen, so it must still be counted.
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        invoices: [
+          fxInvoice({
+            id: 'inv-late-paid',
+            status: 'paid',
+            invoice_date: '2024-10-01',
+            total: 5000,
+            paid_amount: 5000,
+            remaining_amount: 0,
+            paid_at: '2025-03-10',
+          }),
+        ],
+        invoice_payments: [
+          {
+            id: 'pay-1',
+            company_id: 'company-1',
+            invoice_id: 'inv-late-paid',
+            amount: 5000,
+            payment_date: '2025-03-10',
+          },
+        ],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.find(revaluationWarning)).toContain('1 post(er)')
+  })
+
+  it('ignores an invoice issued after balansdagen even though it is open today', async () => {
+    // The mirror image: open now, did not exist on the balance sheet date.
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        invoices: [fxInvoice({ id: 'inv-next-year', invoice_date: '2025-02-01' })],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.filter((w: string) => w.includes('valuta'))).toHaveLength(0)
+  })
+
+  it('counts open FX payables as well as receivables', async () => {
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        supplier_invoices: [
+          {
+            id: 'si-1',
+            company_id: 'company-1',
+            status: 'approved',
+            currency: 'USD',
+            exchange_rate: 10.4,
+            invoice_date: '2024-09-01',
+            total: 2000,
+            paid_amount: 0,
+            remaining_amount: 2000,
+            paid_at: null,
+          },
+          {
+            id: 'si-2',
+            company_id: 'company-1',
+            status: 'registered',
+            currency: 'USD',
+            exchange_rate: null,
+            invoice_date: '2024-09-02',
+            total: 800,
+            paid_amount: 0,
+            remaining_amount: 800,
+            paid_at: null,
+          },
+        ],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.find(revaluationWarning)).toContain('1 post(er)')
+    expect(result.warnings.find(missingRateWarning)).toContain('1 post(er)')
+  })
+
+  it('suppresses only the revaluation warning when a balansdagen revaluation exists', async () => {
+    const supabase = makeFilteringClient(
+      fxBaseTables({
+        journal_entries: [revaluationEntry(FX_PERIOD_END)],
+        invoices: [
+          fxInvoice({ id: 'inv-rate-1' }),
+          fxInvoice({ id: 'inv-rate-2' }),
+          fxInvoice({ id: 'inv-norate', exchange_rate: null }),
+        ],
+      })
+    )
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.warnings.filter(revaluationWarning)).toHaveLength(0)
+    // The posted revaluation provably did not include the unconverted row:
+    // previewCurrencyRevaluation partitions it out. So it stays warned about.
+    expect(result.warnings.find(missingRateWarning)).toContain('1 post(er)')
+  })
+
+  it('says the check did not run rather than reporting no exposure when it fails', async () => {
+    const supabase = makeFilteringClient(fxBaseTables(), 'invoices')
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(
+      result.warnings.some((w: string) => w.includes('kunde inte genomföras'))
+    ).toBe(true)
+    expect(result.ready).toBe(true)
   })
 })
 

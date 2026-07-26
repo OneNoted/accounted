@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { AttnLine } from '@/components/ui/attn-line'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import {
   DropdownMenu,
@@ -37,6 +39,8 @@ import {
 import Link from 'next/link'
 import { cn, formatCurrency } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
+import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
+import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
@@ -86,6 +90,20 @@ interface InboxAddress {
   local_part: string
   status: string
 }
+
+// How far the underlag behind the selected row got.
+//
+// `none` is the only state that may claim "Inget underlag bifogat": it means the
+// row carries no document_id at all. A failed or hung metadata read is `error`,
+// never `none`: the document exists (the row points at it), we just could not
+// load it, and telling the user their underlag is missing invites a duplicate
+// upload or the conclusion that the receipt is gone (BFL 7 kap 2 § retention).
+type DocumentLoadState = 'none' | 'loading' | 'ready' | 'error'
+
+// A signed-URL lookup is one indexed row plus a storage sign call: seconds at
+// worst, even on a cold start. 15s leaves several times that headroom while
+// still ending the spinner instead of leaving it turning forever.
+const DOCUMENT_FETCH_TIMEOUT_MS = 15_000
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -204,11 +222,16 @@ function WorkspaceSkeleton() {
 
 export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
+  const t = useTranslations('inbox_workspace')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const { openAgentSheet, identity } = useAgentSheet()
 
   const [items, setItems] = useState<InboxItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  // The list read failed (non-2xx, unparseable body, or network). Kept apart
+  // from "the list is empty": with no list at all we know nothing about the
+  // inbox and must not render an authoritative "Inkorgen är tom".
+  const [itemsLoadFailed, setItemsLoadFailed] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // List filter + search (client-side over the already-fetched items list).
   // Defaults to 'todo': the active inbox (everything not yet booked), so
@@ -232,7 +255,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [selected, setSelected] = useState<InboxItem | null>(null)
   const [docUrl, setDocUrl] = useState<string | null>(null)
   const [docMime, setDocMime] = useState<string | null>(null)
+  const [docState, setDocState] = useState<DocumentLoadState>('none')
+  // Which selection the in-flight document read belongs to. The user can click
+  // another row while it is running, and a late resolution must not paint its
+  // outcome (a URL, or an error) onto the row that is now selected.
+  const docRequestRef = useRef<string | null>(null)
   const [inboxAddress, setInboxAddress] = useState<InboxAddress | null>(null)
+  // We asked for the inbox address and did not get an answer we can trust
+  // (5xx, network, unparseable). Distinct from a 404, which honestly means no
+  // address is provisioned yet.
+  const [addressLoadFailed, setAddressLoadFailed] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isRotating, setIsRotating] = useState(false)
@@ -259,21 +291,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/items?limit=500')
       const json = await res.json()
-      if (res.ok) {
-        const serverItems: InboxItem[] = json.data?.items ?? []
-        // Preserve optimistic upload placeholders that haven't resolved to a
-        // server row yet. A refetch can now fire mid-upload (a realtime event
-        // from an unrelated booking), and a wholesale replace would briefly
-        // drop the in-flight placeholder. Placeholders carry a `temp-` id that
-        // never collides with a real row, and uploadFile() removes its own
-        // placeholder before its fetchItems(), so this never duplicates.
-        setItems((prev) => {
-          const pending = prev.filter((it) => it.isPlaceholder)
-          return pending.length > 0 ? [...pending, ...serverItems] : serverItems
-        })
+      if (!res.ok) {
+        // No list came back, so we cannot say anything about the inbox: the
+        // list column renders the failure instead of "Inkorgen är tom".
+        setItemsLoadFailed(true)
+        return
       }
+      const serverItems: InboxItem[] = json.data?.items ?? []
+      // Preserve optimistic upload placeholders that haven't resolved to a
+      // server row yet. A refetch can now fire mid-upload (a realtime event
+      // from an unrelated booking), and a wholesale replace would briefly
+      // drop the in-flight placeholder. Placeholders carry a `temp-` id that
+      // never collides with a real row, and uploadFile() removes its own
+      // placeholder before its fetchItems(), so this never duplicates.
+      setItems((prev) => {
+        const pending = prev.filter((it) => it.isPlaceholder)
+        return pending.length > 0 ? [...pending, ...serverItems] : serverItems
+      })
+      setItemsLoadFailed(false)
     } catch (err) {
       console.error('[invoice-inbox] fetchItems failed:', err)
+      setItemsLoadFailed(true)
     } finally {
       setIsLoading(false)
     }
@@ -285,9 +323,20 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (res.ok) {
         const { data } = await res.json()
         setInboxAddress(data)
+        setAddressLoadFailed(false)
+        return
       }
+      // 404 is the honest "no inbox provisioned yet" answer, so the activate
+      // button is the right thing to offer. Anything else (503 without an
+      // inbound domain, 500, an HTML error page) leaves us not knowing whether
+      // an address exists, and offering "Aktivera inkorgsadress" there is not
+      // just wrong copy: handleRotateAddress skips its confirm dialog when
+      // inboxAddress is null, so one click would silently retire a live address
+      // that suppliers and forwarding rules already point at.
+      setInboxAddress(null)
+      setAddressLoadFailed(res.status !== 404)
     } catch {
-      // 404 / 503 are expected when no address provisioned yet
+      setAddressLoadFailed(true)
     }
   }, [])
 
@@ -366,8 +415,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       !!it.matched_transaction_id ||
       !!it.created_journal_entry_id
   )
+  // The list read failed and left us with nothing: we do not know whether the
+  // inbox is empty. A failed refetch that still has rows on screen is not this.
+  const itemsUnknown = itemsLoadFailed && !hasAnyItem
+  // Never coach "ladda upp ditt första underlag" off a list we could not read:
+  // that step may well be done already.
   const showOnboarding =
-    !onboardingDismissed && !(hasInboxAddress && hasAnyItem && hasResolvedItem)
+    !onboardingDismissed && !itemsUnknown && !(hasInboxAddress && hasAnyItem && hasResolvedItem)
 
   // ── List filter + search (client-side over the fetched list) ─
 
@@ -427,11 +481,58 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   // ── Selection ──────────────────────────────────────────────
 
+  // Resolve the signed URL for a row's underlag. Every exit sets docState, so
+  // the preview pane always says which of the four situations it is in: no
+  // document, still loading, ready, or "we could not load it". The pane must
+  // never fall back to "Inget underlag bifogat" for a row that has a
+  // document_id, which is what the old silent catch produced.
+  const loadDocument = useCallback(async (itemId: string, documentId: string | null) => {
+    docRequestRef.current = itemId
+    setDocUrl(null)
+    setDocMime(null)
+    if (!documentId) {
+      setDocState('none')
+      return
+    }
+    setDocState('loading')
+    try {
+      const res = await fetchWithTimeout(
+        `/api/documents/${documentId}`,
+        { method: 'GET' },
+        { timeoutMs: DOCUMENT_FETCH_TIMEOUT_MS, description: `document ${documentId}` },
+      )
+      if (docRequestRef.current !== itemId) return
+      if (!res.ok) {
+        setDocState('error')
+        return
+      }
+      const { data } = await res.json()
+      if (docRequestRef.current !== itemId) return
+      const url: string | null = data?.download_url ?? null
+      if (!url) {
+        // The document row exists but no signed URL came back: still a load
+        // failure, not an absent underlag.
+        setDocState('error')
+        return
+      }
+      setDocUrl(url)
+      setDocMime(data?.mime_type ?? null)
+      setDocState('ready')
+    } catch {
+      // Timeout, offline, or an unparseable body. The document itself is
+      // untouched, so the retry in the preview pane is the whole recovery.
+      if (docRequestRef.current !== itemId) return
+      setDocState('error')
+    }
+  }, [])
+
   const handleSelect = useCallback(async (id: string) => {
     setSelectedId(id)
     setSelected(null)
     setDocUrl(null)
     setDocMime(null)
+    setDocState('none')
+    docRequestRef.current = id
     // Intentionally no auto-scroll: in the vertical-stack layout (below xl)
     // scrolling the preview into view pushes the list off-screen, and the
     // user has no obvious way back to pick another item. The row-highlight
@@ -443,19 +544,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (!res.ok) throw new Error(json.error ?? 'Kunde inte hämta posten')
       const item = json.data as InboxItem
       setSelected(item)
-
-      if (item.document_id) {
-        try {
-          const docRes = await fetch(`/api/documents/${item.document_id}`)
-          if (docRes.ok) {
-            const { data } = await docRes.json()
-            setDocUrl(data.download_url ?? null)
-            setDocMime(data.mime_type ?? null)
-          }
-        } catch {
-          // Preview is optional
-        }
-      }
+      await loadDocument(id, item.document_id)
     } catch (err) {
       toast({
         title: 'Kunde inte ladda dokumentet',
@@ -463,7 +552,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         variant: 'destructive',
       })
     }
-  }, [toast])
+  }, [toast, loadDocument])
 
   // ── Upload ─────────────────────────────────────────────────
 
@@ -678,14 +767,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   // ── Inbox address ──────────────────────────────────────────
 
-  const handleCopyAddress = useCallback(() => {
-    if (!inboxAddress) return
-    navigator.clipboard.writeText(inboxAddress.address).catch(() => {})
-    toast({ title: 'Adress kopierad' })
-  }, [inboxAddress, toast])
-
   const handleRotateAddress = useCallback(async () => {
-    if (inboxAddress && !confirm('Skapa en ny inkorgsadress? Den gamla slutar att fungera.')) return
+    // Confirm whenever an address may already exist: either we hold one, or the
+    // read failed and we cannot rule one out. Rotating retires the old address,
+    // and suppliers plus forwarding rules already point at it, so the one case
+    // that must never skip this dialog is the one where we are unsure.
+    if (
+      (inboxAddress || addressLoadFailed) &&
+      !confirm('Skapa en ny inkorgsadress? Den gamla slutar att fungera.')
+    ) {
+      return
+    }
     setIsRotating(true)
     try {
       const res = await fetch('/api/extensions/ext/invoice-inbox/inbox/rotate', {
@@ -694,6 +786,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Rotation misslyckades')
       setInboxAddress(json.data)
+      setAddressLoadFailed(false)
       toast({ title: 'Ny adress skapad', description: json.data.address })
     } catch (err) {
       toast({
@@ -704,7 +797,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } finally {
       setIsRotating(false)
     }
-  }, [toast, inboxAddress])
+  }, [toast, inboxAddress, addressLoadFailed])
 
   // ── Render ─────────────────────────────────────────────────
 
@@ -727,33 +820,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
           <h1 className="font-medium text-sm shrink-0">Dokumentinkorg</h1>
           {inboxAddress ? (
-            <>
-              <span className="text-muted-foreground text-xs shrink-0">·</span>
-              <code className="font-mono text-xs text-muted-foreground truncate min-w-0">
-                {inboxAddress.address}
-              </code>
-              <button
-                type="button"
-                className="text-muted-foreground hover:text-foreground shrink-0"
-                onClick={handleCopyAddress}
-                title="Kopiera adress"
+            <InboxAddressBar
+              address={inboxAddress.address}
+              onRotate={handleRotateAddress}
+              isRotating={isRotating}
+            />
+          ) : addressLoadFailed ? (
+            // We do not know whether an address exists, so we offer a retry
+            // rather than an activate button that would rotate a live address.
+            <div role="status" aria-live="polite" className="min-w-0">
+              <AttnLine
+                action={{ label: t('retry'), onClick: () => { void fetchInboxAddress() } }}
               >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                className="text-muted-foreground hover:text-foreground shrink-0"
-                onClick={handleRotateAddress}
-                disabled={isRotating}
-                title="Rotera till ny adress"
-              >
-                {isRotating ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </>
+                {t('address_load_failed')}
+              </AttnLine>
+            </div>
           ) : (
             <Button
               variant="outline"
@@ -911,7 +992,22 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               </div>
             </div>
           )}
-          {!hasAnyItem ? (
+          {itemsUnknown ? (
+            // The list read failed. "Inkorgen är tom" would be a claim we
+            // cannot back: a mailed-in invoice may be sitting there unread.
+            <div className="p-6 text-center text-sm text-muted-foreground space-y-2">
+              <AlertTriangle className="h-5 w-5 mx-auto text-attn" />
+              <p>{t('items_load_failed')}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => { void fetchItems() }}
+              >
+                {t('retry')}
+              </Button>
+            </div>
+          ) : !hasAnyItem ? (
             // On desktop the preview pane is always visible alongside this
             // column, so showing the onboarding card here would duplicate it.
             // Below xl the panes stack into one feed, so the sibling preview
@@ -977,7 +1073,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         >
           {selected ? (
-            <DocumentPreview docUrl={docUrl} docMime={docMime} isProcessing={!!selected.isPlaceholder} />
+            <DocumentPreview
+              docUrl={docUrl}
+              docMime={docMime}
+              isProcessing={!!selected.isPlaceholder}
+              loadState={docState}
+              onRetry={() => { void loadDocument(selected.id, selected.document_id) }}
+            />
           ) : showOnboarding ? (
             <div className="h-full flex items-center justify-center px-4 py-6">
               <OnboardingCard
@@ -993,7 +1095,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           ) : (
             <EmptyPreview
               onUploadClick={() => fileInputRef.current?.click()}
-              onActivateInbox={inboxAddress ? null : handleRotateAddress}
+              // Only offer activation when we know there is nothing to retire:
+              // a failed address read is not a "you have no address yet".
+              onActivateInbox={inboxAddress || addressLoadFailed ? null : handleRotateAddress}
               isActivating={isRotating}
             />
           )}
@@ -1131,6 +1235,94 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 }
 
 
+// ── Inbox address bar ────────────────────────────────────────
+// The address plus its copy and rotate controls. Owns the copy state so the
+// header can report an honest outcome: a clipboard write rejects for ordinary
+// reasons (insecure context, a blocking Permissions-Policy, a document that
+// lost focus) and the previous handler swallowed that and said "Adress
+// kopierad" anyway. The user then waits for supplier invoices at an address
+// they never captured, which is unrecoverable in the sense that matters: no
+// invoice ever arrives and nothing explains why.
+//
+// Treatment mirrors CopyBlock in components/settings/ApiKeysPanel.tsx: icon
+// swap for the state, one ochre AttnLine on failure, live region always
+// mounted. No toast on any path, so nothing here can be evicted by (or evict)
+// another toast under TOAST_LIMIT = 1.
+
+function InboxAddressBar({
+  address,
+  onRotate,
+  isRotating,
+}: {
+  address: string
+  onRotate: () => void
+  isRotating: boolean
+}) {
+  const t = useTranslations('inbox_workspace')
+  const [copyState, setCopyState] = useState<AddressCopyState>('idle')
+
+  async function handleCopy() {
+    // The clipboard write is the first await, so the click's user activation
+    // still holds when it runs.
+    const next = await copyInboxAddress(address)
+    setCopyState(next)
+    if (next === 'copied') setTimeout(() => setCopyState('idle'), 2000)
+  }
+
+  return (
+    <div className="flex flex-col min-w-0">
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-muted-foreground text-xs shrink-0">·</span>
+        <code
+          className={cn(
+            'select-all font-mono text-xs text-muted-foreground min-w-0',
+            // With no clipboard, reading the address off the screen is the only
+            // way to get it: show it whole instead of ellipsised.
+            copyState === 'failed' ? 'break-all' : 'truncate',
+          )}
+        >
+          {address}
+        </code>
+        <button
+          type="button"
+          className="text-muted-foreground hover:text-foreground shrink-0"
+          onClick={handleCopy}
+          aria-label={t('copy_address')}
+          title={t('copy_address')}
+        >
+          {copyState === 'copied' ? (
+            <Check className="h-3.5 w-3.5 text-success" />
+          ) : copyState === 'failed' ? (
+            <AlertTriangle className="h-3.5 w-3.5 text-attn" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+        </button>
+        <button
+          type="button"
+          className="text-muted-foreground hover:text-foreground shrink-0"
+          onClick={onRotate}
+          disabled={isRotating}
+          title="Rotera till ny adress"
+        >
+          {isRotating ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RotateCcw className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
+      {/* Always mounted so the sentence is announced when it appears, not
+          merely inserted. */}
+      <div role="status" aria-live="polite">
+        {copyState === 'failed' && (
+          <AttnLine className="mt-1">{t('copy_address_failed')}</AttnLine>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── List row ─────────────────────────────────────────────────
 
 function InboxRow({
@@ -1244,16 +1436,47 @@ export function DocumentPreview({
   docUrl,
   docMime,
   isProcessing = false,
+  loadState,
+  onRetry,
 }: {
   docUrl: string | null
   docMime: string | null
   isProcessing?: boolean
+  /** Omitted by callers that only ever hold a resolved URL. */
+  loadState?: DocumentLoadState
+  onRetry?: () => void
 }) {
+  const t = useTranslations('inbox_workspace')
+  const state: DocumentLoadState = loadState ?? (docUrl ? 'ready' : 'none')
+
   if (isProcessing) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
         <Loader2 className="h-6 w-6 animate-spin" />
         <span>Tolkar dokument med AI…</span>
+      </div>
+    )
+  }
+  if (state === 'loading') {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <span>{t('document_loading')}</span>
+      </div>
+    )
+  }
+  if (state === 'error' || (state === 'ready' && !docUrl)) {
+    // The row points at a stored document: say that it could not be shown, not
+    // that there is nothing attached.
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+        <AlertTriangle className="h-5 w-5 text-attn" />
+        <span>{t('document_load_failed')}</span>
+        {onRetry && (
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onRetry}>
+            {t('retry')}
+          </Button>
+        )}
       </div>
     )
   }

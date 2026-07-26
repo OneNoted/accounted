@@ -16,6 +16,11 @@ type TxRow = {
   id: string
   date: string
   amount: number | string
+  /** Absent in most fixtures: the detector normalises a missing/null label to SEK. */
+  currency?: string | null
+  /** The sibling's own FX fields: the source of its reported SEK figure. */
+  amount_sek?: number | string | null
+  exchange_rate?: number | string | null
   description: string | null
   cash_account_id: string | null
   journal_entry_id: string
@@ -59,7 +64,7 @@ describe('detectBookedDuplicateTransaction', () => {
   it('returns null when no same-date booked sibling exists', async () => {
     const supabase = makeSupabase([])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -67,23 +72,27 @@ describe('detectBookedDuplicateTransaction', () => {
   it('flags a same date+amount+account booked sibling with its voucher label', async () => {
     const supabase = makeSupabase([sibling()])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toEqual({
       transaction_id: 'sib-1',
+      currency: null,
+      amount_in_currency: null,
       journal_entry_id: 'je-1',
       voucher_label: 'A142',
       entry_date: '2025-12-19',
       description: 'TELENOR SVERIGE AB',
       amount: -1616,
       account_number: null,
+      amount_verified: true,
+      unverified_reason: null,
     })
   })
 
   it('does NOT flag a sibling on a different known cash account', async () => {
     const supabase = makeSupabase([sibling({ cash_account_id: 'acct-A' })])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: 'acct-B',
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: 'acct-B',
     })
     expect(result).toBeNull()
   })
@@ -91,7 +100,7 @@ describe('detectBookedDuplicateTransaction', () => {
   it('flags when accounts are compatible via a null on either side', async () => {
     const supabase = makeSupabase([sibling({ cash_account_id: 'acct-A' })])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.transaction_id).toBe('sib-1')
   })
@@ -99,7 +108,7 @@ describe('detectBookedDuplicateTransaction', () => {
   it('does NOT flag a sibling with a different amount', async () => {
     const supabase = makeSupabase([sibling({ amount: -1000 })])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -107,7 +116,7 @@ describe('detectBookedDuplicateTransaction', () => {
   it('matches a numeric-string amount from PostgREST against a JS number (öre)', async () => {
     const supabase = makeSupabase([sibling({ amount: '-1616.00' })])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.transaction_id).toBe('sib-1')
   })
@@ -115,7 +124,7 @@ describe('detectBookedDuplicateTransaction', () => {
   it('returns null for a zero-amount target without querying', async () => {
     const supabase = makeSupabase([sibling({ amount: 0 })])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: 0, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: 0, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -126,7 +135,7 @@ describe('detectBookedDuplicateTransaction', () => {
       sibling({ id: 'sib-2' }),
     ])
     const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.transaction_id).toBe('sib-2')
   })
@@ -137,7 +146,7 @@ describe('detectBookedDuplicateTransaction', () => {
     const result = await detectBookedDuplicateTransaction(
       supabase,
       COMPANY,
-      { id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null },
+      { id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null },
       { excludeTransactionIds: ['sib-batch'] },
     )
     expect(result).toBeNull()
@@ -149,10 +158,94 @@ describe('detectBookedDuplicateTransaction', () => {
     const result = await detectBookedDuplicateTransaction(
       supabase,
       COMPANY,
-      { id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null },
+      { id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null },
       { excludeTransactionIds: ['sib-batch'] },
     )
     expect(result?.transaction_id).toBe('sib-old')
+  })
+
+  // ── Currency (transactions.amount is denominated in transactions.currency) ──
+  it('flags a foreign sibling and reports ITS OWN SEK figure, never the raw EUR number', async () => {
+    // The candidate's `amount` field is kr-labelled by every consumer
+    // (formatCurrency's SEK default in DuplicateBookingDialog, "${amount} kr"
+    // in the agent messages), so it must hold the sibling's SEK value, exactly
+    // as the ledger branch reports the 19xx leg's SEK figure.
+    const supabase = makeSupabase([
+      sibling({ amount: -1000, currency: 'EUR', amount_sek: -11500, exchange_rate: 11.5 }),
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1000, currency: 'EUR',
+      amount_sek: -11450, exchange_rate: 11.45, cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+    // The SIBLING's stored SEK, not the raw -1000 and not the target's -11450.
+    expect(result?.amount).toBe(-11500)
+    expect(result?.amount_verified).toBe(true)
+    expect(result?.unverified_reason).toBeNull()
+    // Foreign context rides along so the UI can show the recognisable original.
+    expect(result?.currency).toBe('EUR')
+    expect(result?.amount_in_currency).toBe(-1000)
+  })
+
+  it('converts via the sibling exchange_rate when its amount_sek was never stored', async () => {
+    const supabase = makeSupabase([
+      sibling({ amount: -1000, currency: 'EUR', amount_sek: null, exchange_rate: 11.5 }),
+    ])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1000, currency: 'EUR',
+      amount_sek: -11500, exchange_rate: 11.5, cash_account_id: null,
+    })
+    expect(result?.amount).toBe(-11500)
+    expect(result?.amount_verified).toBe(true)
+  })
+
+  it('surfaces a rateless foreign sibling as unverified with NO kr figure', async () => {
+    // THE dialog bug this module's contract exists to prevent: a 1 000 EUR
+    // sibling without amount_sek/exchange_rate used to reach the dialog as
+    // amount: -1000, which formatCurrency() prints as "-1 000,00 kr" for an
+    // ~11 500 kr movement, on the exact screen whose only question is "is this
+    // the same event?". The match itself is exact (same currency, same öre),
+    // so the candidate is still surfaced: but with the honest foreign figure
+    // and no fabricated kronor. Note the TARGET's own rate is present here and
+    // must NOT be borrowed for the sibling.
+    const supabase = makeSupabase([sibling({ amount: -1000, currency: 'EUR' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1000, currency: 'EUR',
+      amount_sek: -11500, exchange_rate: 11.5, cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-1')
+    expect(result?.amount).toBeNull()
+    expect(result?.amount_verified).toBe(false)
+    expect(result?.unverified_reason).toBe('transaction_missing_sek_value')
+    expect(result?.currency).toBe('EUR')
+    expect(result?.amount_in_currency).toBe(-1000)
+  })
+
+  it('does NOT flag a EUR line against a same-magnitude SEK sibling', async () => {
+    // 100 EUR and 100 SEK on one day are two different affärshändelser. Before
+    // the currency guard the raw öre keys collided and this false-positived.
+    const supabase = makeSupabase([sibling({ amount: -100, currency: 'SEK' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -100, currency: 'EUR',
+      amount_sek: -1150, exchange_rate: 11.5, cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('does NOT flag a SEK line against a same-magnitude EUR sibling (mirror)', async () => {
+    const supabase = makeSupabase([sibling({ amount: -100, currency: 'EUR' })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -100, currency: 'SEK', cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('treats a null sibling currency as SEK (column default), so SEK companies are unaffected', async () => {
+    const supabase = makeSupabase([sibling({ amount: -1616, currency: null })])
+    const result = await detectBookedDuplicateTransaction(supabase, COMPANY, {
+      id: 'self', date: '2025-12-19', amount: -1616, currency: null, cash_account_id: null,
+    })
+    expect(result?.transaction_id).toBe('sib-1')
   })
 })
 
@@ -289,7 +382,7 @@ describe('detectLedgerDuplicateVoucher', () => {
     // query starts on journal_entry_lines with the scope on an embed.
     const supabase = makeLedgerSupabase({ lines: [jel()] })
     await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(tablesTouched.indexOf('journal_entries')).toBeGreaterThanOrEqual(0)
     expect(tablesTouched.indexOf('journal_entries')).toBeLessThan(
@@ -300,7 +393,7 @@ describe('detectLedgerDuplicateVoucher', () => {
   it('flags an inbound receipt already booked as a 19xx debit voucher (no sibling tx)', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel()] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toEqual({
       transaction_id: null,
@@ -312,6 +405,11 @@ describe('detectLedgerDuplicateVoucher', () => {
       // The matched leg's account rides along so the dialog's match action
       // links on the exact 19xx the voucher was booked to (issue #919).
       account_number: '1930',
+      // The leg is SEK by construction: no foreign context to carry.
+      currency: null,
+      amount_in_currency: null,
+      amount_verified: true,
+      unverified_reason: null,
     })
   })
 
@@ -326,7 +424,7 @@ describe('detectLedgerDuplicateVoucher', () => {
     })
     const supabase = makeLedgerSupabase({ lines: [salaryLine] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-05-04', amount: -16609, cash_account_id: null,
+      id: 'self', date: '2026-05-04', amount: -16609, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.journal_entry_id).toBe('je-3')
     expect(result?.transaction_id).toBeNull()
@@ -338,7 +436,7 @@ describe('detectLedgerDuplicateVoucher', () => {
     // A 19xx CREDIT is a payout, not the receipt the inbound line is looking for.
     const supabase = makeLedgerSupabase({ lines: [jel({ debit_amount: 0, credit_amount: 98565 })] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -346,7 +444,7 @@ describe('detectLedgerDuplicateVoucher', () => {
   it('does NOT flag when the amount differs', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel({ debit_amount: 90000 })] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -354,7 +452,7 @@ describe('detectLedgerDuplicateVoucher', () => {
   it('excludes a voucher already linked to a transaction', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel()], txLinks: [{ journal_entry_id: 'je-2' }] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -362,7 +460,7 @@ describe('detectLedgerDuplicateVoucher', () => {
   it('excludes a voucher already linked to an invoice payment', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel()], payLinks: [{ journal_entry_id: 'je-2' }] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -371,7 +469,7 @@ describe('detectLedgerDuplicateVoucher', () => {
     const stornoLine = jel({ journal_entry: { ...jel().journal_entry, source_type: 'storno' } })
     const supabase = makeLedgerSupabase({ lines: [stornoLine] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -379,7 +477,7 @@ describe('detectLedgerDuplicateVoucher', () => {
   it('matches a numeric-string leg amount from PostgREST (öre)', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel({ debit_amount: '98565.00' })] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.journal_entry_id).toBe('je-2')
   })
@@ -387,7 +485,7 @@ describe('detectLedgerDuplicateVoucher', () => {
   it('returns null for a zero-amount target without querying', async () => {
     const supabase = makeLedgerSupabase({ lines: [jel()] })
     const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 0, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 0, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -398,7 +496,7 @@ describe('detectLedgerDuplicateVoucher', () => {
     const result = await detectLedgerDuplicateVoucher(
       supabase,
       COMPANY,
-      { id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null },
+      { id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null },
       { excludeJournalEntryIds: ['je-2'] },
     )
     expect(result).toBeNull()
@@ -409,10 +507,95 @@ describe('detectLedgerDuplicateVoucher', () => {
     const result = await detectLedgerDuplicateVoucher(
       supabase,
       COMPANY,
-      { id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null },
+      { id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null },
       { excludeJournalEntryIds: ['je-booked-this-batch'] },
     )
     expect(result?.journal_entry_id).toBe('je-2')
+  })
+
+  // ── FX: the bank line is foreign, the 19xx leg is always SEK ───────────────
+  //
+  // Fixture: a 8570.87 EUR receipt booked at 11.5 SEK/EUR lands on the ledger as
+  // a 98565 SEK debit (that is what jel() holds). The bank line's own `amount`
+  // is 8570.87 and must never be the number compared against the leg.
+
+  it('flags a foreign receipt against the SEK leg its own booking produced', async () => {
+    const supabase = makeLedgerSupabase({ lines: [jel()] }) // 98565 SEK debit
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      amount_sek: 98565, cash_account_id: null,
+    })
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.amount).toBe(98565)
+    expect(result?.amount_verified).toBe(true)
+    expect(result?.unverified_reason).toBeNull()
+  })
+
+  it('converts via exchange_rate when amount_sek was never stored', async () => {
+    const supabase = makeLedgerSupabase({ lines: [jel()] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 8570.8695652, currency: 'EUR',
+      amount_sek: null, exchange_rate: 11.5, cash_account_id: null,
+    })
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.amount_verified).toBe(true)
+  })
+
+  it('does NOT flag a foreign line against an unrelated same-magnitude SEK voucher', async () => {
+    // 98565 EUR is ~1.13 MSEK, nothing to do with the 98565 SEK leg. The old
+    // guard compared the raw numbers and matched them.
+    const supabase = makeLedgerSupabase({ lines: [jel()] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'EUR',
+      amount_sek: 1133497.5, exchange_rate: 11.5, cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('WARNS rather than passing when a foreign line has no rate at all', async () => {
+    // Neither amount_sek nor exchange_rate: nothing can be compared. Returning
+    // null here would wave the booking through and mint a second verifikat for
+    // one affärshändelse, so the candidate is surfaced as unverified instead.
+    const supabase = makeLedgerSupabase({ lines: [jel()] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      amount_sek: null, exchange_rate: null, cash_account_id: null,
+    })
+    expect(result).not.toBeNull()
+    expect(result?.journal_entry_id).toBe('je-2')
+    expect(result?.amount_verified).toBe(false)
+    expect(result?.unverified_reason).toBe('transaction_missing_sek_value')
+    // Still the leg's SEK figure, so no caller can print a foreign number as kr.
+    expect(result?.amount).toBe(98565)
+  })
+
+  it('returns null (a verified pass) for a rateless foreign line with no 19xx leg in the window', async () => {
+    // The existence half of the question needs no currency: no candidate leg at
+    // all means there provably is no ledger twin, so this is not a silent pass.
+    const supabase = makeLedgerSupabase({ lines: [] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      amount_sek: null, exchange_rate: null, cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('still respects direction and storno filters when the amount cannot be verified', async () => {
+    const stornoLine = jel({ journal_entry: { ...jel().journal_entry, source_type: 'storno' } })
+    const supabase = makeLedgerSupabase({ lines: [stornoLine] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 8570.87, currency: 'EUR',
+      amount_sek: null, exchange_rate: null, cash_account_id: null,
+    })
+    expect(result).toBeNull()
+  })
+
+  it('leaves a SEK company on exactly the old path (no FX fields, exact match required)', async () => {
+    const supabase = makeLedgerSupabase({ lines: [jel({ debit_amount: 90000 })] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, {
+      id: 'self', date: '2026-03-26', amount: 98565, currency: null, cash_account_id: null,
+    })
+    expect(result).toBeNull()
   })
 })
 
@@ -420,7 +603,7 @@ describe('detectBookingDuplicate (orchestrator)', () => {
   it('returns the sibling transaction when one exists (voucher scan not needed)', async () => {
     const supabase = makeLedgerSupabase({ transactionRows: [sibling()] })
     const result = await detectBookingDuplicate(supabase, COMPANY, {
-      id: 'self', date: '2025-12-19', amount: -1616, cash_account_id: null,
+      id: 'self', date: '2025-12-19', amount: -1616, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.transaction_id).toBe('sib-1')
   })
@@ -428,7 +611,7 @@ describe('detectBookingDuplicate (orchestrator)', () => {
   it('falls through to the ledger voucher when there is no sibling transaction', async () => {
     const supabase = makeLedgerSupabase({ transactionRows: [], lines: [jel()] })
     const result = await detectBookingDuplicate(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result?.transaction_id).toBeNull()
     expect(result?.journal_entry_id).toBe('je-2')
@@ -437,7 +620,7 @@ describe('detectBookingDuplicate (orchestrator)', () => {
   it('returns null when neither a sibling nor a voucher matches', async () => {
     const supabase = makeLedgerSupabase({ transactionRows: [], lines: [] })
     const result = await detectBookingDuplicate(supabase, COMPANY, {
-      id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null,
+      id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null,
     })
     expect(result).toBeNull()
   })
@@ -452,7 +635,7 @@ describe('detectBookingDuplicate (orchestrator)', () => {
     const result = await detectBookingDuplicate(
       supabase,
       COMPANY,
-      { id: 'self', date: '2026-03-26', amount: 98565, cash_account_id: null },
+      { id: 'self', date: '2026-03-26', amount: 98565, currency: 'SEK', cash_account_id: null },
       { excludeTransactionIds: ['sib-batch'], excludeJournalEntryIds: ['je-2'] },
     )
     expect(result).toBeNull()

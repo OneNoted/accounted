@@ -44,6 +44,15 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierCreditNoteEntry: (...args: unknown[]) => mockedCredit(...args),
 }))
 
+// Riksbanken feeds the new server-side rate lookup on the create path.
+// Spread the real module so unrelated exports stay intact.
+const mockFetchExchangeRate = vi.fn()
+vi.mock('@/lib/currency/riksbanken', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
+  return { ...actual, fetchExchangeRate: (...args: unknown[]) => mockFetchExchangeRate(...args) }
+})
+
 // reverseEntry is dynamically imported in the route file for orphan storno:
 // stub it so the import resolves quickly without exercising the real engine.
 vi.mock('@/lib/bookkeeping/engine', async () => {
@@ -72,7 +81,15 @@ interface TableResp {
   count?: number | null
 }
 
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
+/** Payload handed to `.insert()`, recorded per table so writes can be asserted. */
+type InsertRecord = { table: string; payload: Record<string, unknown> }
+
+function makeFlexibleSupabase(
+  byTable: Record<string, TableResp | TableResp[]>,
+  // Opt-in sink for insert payloads: the Proxy chain is otherwise write-only,
+  // and the route echoes back the fixture row rather than what it wrote.
+  insertSink?: InsertRecord[],
+) {
   // Per-table queue: TableResp[] consumes one entry per await, then sticks
   // on the last entry. Plain TableResp is treated as a constant.
   const queues = new Map<string, TableResp[]>()
@@ -89,7 +106,18 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          if (
+            insertSink &&
+            prop === 'insert' &&
+            args[0] &&
+            typeof args[0] === 'object' &&
+            !Array.isArray(args[0])
+          ) {
+            insertSink.push({ table, payload: args[0] as Record<string, unknown> })
+          }
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -771,6 +799,213 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     const body = await res.json()
     expect(body.data.preview.default_dimensions).toEqual({ '6': 'P001' })
     expect(body.data.preview.items[0].dimensions).toEqual({ '1': 'KS01' })
+  })
+})
+
+describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + SEK amounts', () => {
+  const captured: InsertRecord[] = []
+
+  const validBody = {
+    supplier_id: SUPPLIER_ID,
+    supplier_invoice_number: '2026-FX',
+    invoice_date: '2026-05-10',
+    due_date: '2026-06-09',
+    items: [
+      { description: 'Cloud hosting', amount: 1000, account_number: '5410', vat_rate: 0.25 },
+    ],
+  }
+
+  function installSupabase() {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          suppliers: { data: SAMPLE_SUPPLIER, error: null },
+          company_settings: { data: { accounting_method: 'cash' }, error: null },
+          fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+          supplier_invoices: { data: SAMPLE_SI, error: null },
+          supplier_invoice_items: { data: null, error: null },
+          idempotency_keys: { data: null, error: null },
+        },
+        captured,
+      ),
+    )
+  }
+
+  const siInsert = () => captured.find((c) => c.table === 'supplier_invoices')?.payload
+
+  function post(body: Record<string, unknown>) {
+    return createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+      companyParams(COMPANY_ID),
+    )
+  }
+
+  beforeEach(() => {
+    captured.length = 0
+    mockFetchExchangeRate.mockReset()
+    installSupabase()
+  })
+
+  it('returns 401 UNAUTHORIZED when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'invalid api key', status: 401 })
+    const res = await post(validBody)
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body.error.code).toBe('UNAUTHORIZED')
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 VALIDATION_ERROR when the body is malformed', async () => {
+    const res = await post({ ...validBody, invoice_date: '10/05/2026' })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 404 SUPPLIER_NOT_FOUND before any rate lookup', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          suppliers: { data: null, error: null },
+        },
+        captured,
+      ),
+    )
+    const res = await post({ ...validBody, currency: 'EUR' })
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('SUPPLIER_NOT_FOUND')
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('populates total_sek for a SEK invoice without touching Riksbanken', async () => {
+    const res = await post(validBody)
+    expect(res.status).toBe(201)
+
+    const payload = siInsert()
+    expect(payload).toBeDefined()
+    expect(payload!.subtotal_sek).toBe(1000)
+    expect(payload!.vat_amount_sek).toBe(250)
+    expect(payload!.total_sek).toBe(1250)
+    expect(payload!.total_sek).toBe(payload!.total)
+    expect(payload!.exchange_rate).toBeNull()
+    expect(payload!.exchange_rate_date).toBeNull()
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('honours a caller-supplied rate on a foreign invoice', async () => {
+    const res = await post({
+      ...validBody,
+      currency: 'USD',
+      exchange_rate: 10.5,
+      // SAMPLE_SUPPLIER is a Swedish business, so reverse_charge stays off and
+      // the 25 % line VAT is legal here.
+    })
+    expect(res.status).toBe(201)
+
+    const payload = siInsert()
+    expect(payload!.currency).toBe('USD')
+    expect(payload!.exchange_rate).toBe(10.5)
+    expect(payload!.subtotal_sek).toBe(10500)
+    expect(payload!.vat_amount_sek).toBe(2625)
+    expect(payload!.total_sek).toBe(13125)
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('fetches the invoice-date rate when the agent omits exchange_rate', async () => {
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.4, date: '2026-05-08' })
+
+    const res = await post({ ...validBody, currency: 'EUR' })
+    expect(res.status).toBe(201)
+
+    expect(mockFetchExchangeRate).toHaveBeenCalledTimes(1)
+    const [currencyArg, dateArg, clientArg] = mockFetchExchangeRate.mock.calls[0]
+    expect(currencyArg).toBe('EUR')
+    expect((dateArg as Date).toISOString().slice(0, 10)).toBe('2026-05-10')
+    // Passed through so the shared exchange_rates cache is read and written.
+    expect(clientArg).toBeDefined()
+
+    const payload = siInsert()
+    expect(payload!.exchange_rate).toBe(11.4)
+    expect(payload!.exchange_rate_date).toBe('2026-05-08')
+    expect(payload!.total_sek).toBe(14250)
+  })
+
+  it('refuses the create with 400 SI_FX_RATE_MISSING when no rate can be resolved', async () => {
+    mockFetchExchangeRate.mockResolvedValue(null)
+
+    const res = await post({ ...validBody, currency: 'EUR' })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(body.error.details.currency).toBe('EUR')
+    // No row, no ankomstnummer, no verifikat: a NULL-rate row would only
+    // relocate the failure into the booking path.
+    expect(siInsert()).toBeUndefined()
+    expect(mockedReg).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the same refusal in a dry run', async () => {
+    mockFetchExchangeRate.mockResolvedValue(null)
+
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices?dry_run=true`, {
+        method: 'POST',
+        body: JSON.stringify({ ...validBody, currency: 'EUR' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+  })
+
+  // v1 shares CreateSupplierInvoiceSchema with POST /api/supplier-invoices and
+  // the inbox convert route, so the constraint mirror is enforced identically
+  // on all three. These pin that agreement: an agent posting a pasted total
+  // where a rate belongs gets a structured 400, never a 23514-driven 500.
+  it('rejects an out-of-range exchange rate with 400 VALIDATION_ERROR, not a 500', async () => {
+    const res = await post({ ...validBody, currency: 'EUR', exchange_rate: 250000 })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    const issue = body.error.details.issues.find(
+      (i: { field: string }) => i.field === 'exchange_rate',
+    )
+    expect(issue?.message).toContain('100 000')
+    expect(siInsert()).toBeUndefined()
+    expect(mockedReg).not.toHaveBeenCalled()
+    expect(mockFetchExchangeRate).not.toHaveBeenCalled()
+  })
+
+  it('rejects exactly 100000: the CHECK bound is exclusive', async () => {
+    const res = await post({ ...validBody, currency: 'EUR', exchange_rate: 100000 })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(siInsert()).toBeUndefined()
+  })
+
+  it('accepts 99999.99, the largest rate the CHECK allows', async () => {
+    const res = await post({ ...validBody, currency: 'EUR', exchange_rate: 99999.99 })
+    expect(res.status).toBe(201)
+    expect(siInsert()!.exchange_rate).toBe(99999.99)
+  })
+
+  it('rejects a zero or negative rate the same way', async () => {
+    for (const rate of [0, -11.5]) {
+      captured.length = 0
+      const res = await post({ ...validBody, currency: 'EUR', exchange_rate: rate })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(siInsert()).toBeUndefined()
+    }
   })
 })
 

@@ -564,6 +564,164 @@ describe('ensureFiscalPeriod validation', () => {
       ),
     ).rejects.toThrow(/överlappar men matchar inte/)
   })
+
+  // BFL 3 kap. caps any räkenskapsår at 18 months (12 is the norm; 18 is the
+  // ceiling for a förlängt/omlagt year). #RAR used to be validated for start
+  // and end DAY only, so a 24-month räkenskapsår from a foreign system
+  // imported cleanly and stamped every voucher with an illegal period. The cap
+  // now mirrors validatePeriodDuration(), which the fiscal-periods routes,
+  // period-service and onboarding already enforce.
+  describe('18-month cap (BFL 3 kap.)', () => {
+    /** Queue for the happy path: day-1 start, so the earlier-period lookup is skipped. */
+    const createQueue = (newId: string) => [
+      { data: null, error: null }, // containing check, no match
+      { data: [], error: null },   // overlapping check, none
+      { data: [], error: null },   // no predecessor in the continuity chain
+      { data: { id: newId }, error: null }, // insert result
+      { data: [], error: null },   // no successor to relink
+    ]
+
+    it('allows a normal 12-month räkenskapsår (unaffected by the cap)', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany(createQueue('calendar-2026'))
+
+      const id = await ensureFiscalPeriod(
+        supabase as unknown as Supabase,
+        'company-id',
+        '2026-01-01',
+        '2026-12-31',
+      )
+
+      expect(id).toBe('calendar-2026')
+    })
+
+    it('allows exactly 18 months (förlängt räkenskapsår, the legal maximum)', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany(createQueue('extended-first-year'))
+
+      const id = await ensureFiscalPeriod(
+        supabase as unknown as Supabase,
+        'company-id',
+        '2025-07-01',
+        '2026-12-31',
+      )
+
+      expect(id).toBe('extended-first-year')
+    })
+
+    it('refuses 19 months, one month past the cap', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: null, error: null }, // containing check, no match
+        { data: [], error: null },   // overlapping check, none
+      ])
+
+      await expect(
+        ensureFiscalPeriod(
+          supabase as unknown as Supabase,
+          'company-id',
+          '2025-06-01',
+          '2026-12-31',
+        ),
+      ).rejects.toThrow(/omfattar 19 månader.*högst 18 månader \(BFL 3 kap\.\)/s)
+    })
+
+    it('refuses a 24-month räkenskapsår and names the recovery path', async () => {
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: null, error: null },
+        { data: [], error: null },
+      ])
+
+      await expect(
+        ensureFiscalPeriod(
+          supabase as unknown as Supabase,
+          'company-id',
+          '2025-01-01',
+          '2026-12-31',
+        ),
+      ).rejects.toThrow(/omfattar 24 månader/)
+
+      // The message has to tell an accountant who cannot edit the SIE file what
+      // to do instead: re-export one räkenskapsår per file from the source system.
+      await expect(
+        ensureFiscalPeriod(
+          supabase as unknown as Supabase,
+          'company-id',
+          '2025-01-01',
+          '2026-12-31',
+        ),
+      ).rejects.toThrow(/exportera om från källsystemet med ett räkenskapsår per fil/)
+    })
+
+    it('refuses before deleting an empty seeded period, leaving the company untouched', async () => {
+      // The over-long range overlaps an onboarding-seeded period that the
+      // importer would otherwise replace. The cap runs before that destructive
+      // delete, so a refused import costs the user nothing.
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany([
+        { data: null, error: null }, // containing check, no match
+        {
+          data: [
+            {
+              id: 'seeded-2026',
+              period_start: '2026-01-01',
+              period_end: '2026-12-31',
+              name: 'Räkenskapsår 2026',
+              is_closed: false,
+              locked_at: null,
+              opening_balances_set: false,
+            },
+          ],
+          error: null,
+        },
+        { data: [], error: null }, // journal_entries: none, so the period is replaceable
+      ])
+
+      await expect(
+        ensureFiscalPeriod(
+          supabase as unknown as Supabase,
+          'company-id',
+          '2025-01-01',
+          '2026-12-31',
+        ),
+      ).rejects.toThrow(/högst 18 månader/)
+
+      // containing + overlapping + journal_entries only: no delete, no insert.
+      expect(supabase.from).toHaveBeenCalledTimes(3)
+    })
+
+    it('checks every #RAR range it is handed, not just the first', async () => {
+      // A SIE migration walks one räkenskapsår per file (#RAR 0 each time), so
+      // the realistic failure is a valid current year followed by a broken
+      // prior year. Each range is validated on its own; a good year importing
+      // does not buy the next one a pass.
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      enqueueMany(createQueue('year-2026'))
+
+      const currentYear = await ensureFiscalPeriod(
+        supabase as unknown as Supabase,
+        'company-id',
+        '2026-01-01',
+        '2026-12-31',
+      )
+      expect(currentYear).toBe('year-2026')
+
+      enqueueMany([
+        { data: null, error: null },
+        { data: [], error: null },
+      ])
+
+      await expect(
+        ensureFiscalPeriod(
+          supabase as unknown as Supabase,
+          'company-id',
+          '2024-01-01',
+          '2025-12-31', // 24 months masquerading as the prior year
+        ),
+      ).rejects.toThrow(/omfattar 24 månader/)
+    })
+  })
 })
 
 describe('linkOpeningBalanceEntryToPeriod', () => {

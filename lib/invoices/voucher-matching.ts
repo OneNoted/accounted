@@ -29,6 +29,7 @@ import {
   customerNameMatches,
 } from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
+import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { Invoice, Customer } from '@/types'
 
 const log = createLogger('voucher-matching')
@@ -86,8 +87,11 @@ export interface VoucherCandidate {
   description: string
   /** Matched amount on this voucher, always positive: the AR credit (151x) on
    *  faktureringsmetoden, or the liquid-funds debit (19xx) on kontantmetoden.
+   *  Expressed in `currency` below (the INVOICE's currency), never in the raw
+   *  SEK ledger column: see ledgerLineSideAmountIn.
    *  Kept under this name for API/UI back-compat across both methods. */
   ar_credit_amount: number
+  /** The unit `ar_credit_amount` is quoted in: always the invoice's currency. */
   currency: string
   /** Currency of the matched line; nullable when the line stores SEK only. */
   ar_line_currency: string | null
@@ -105,7 +109,10 @@ interface JournalEntryLine {
   account_number: string
   debit_amount: number | null
   credit_amount: number | null
+  /** Labels the DOCUMENT, NOT the unit of debit_amount/credit_amount. */
   currency: string | null
+  /** The line's amount in `currency`: the only non-SEK figure on the row. */
+  amount_in_currency: number | string | null
 }
 
 interface VoucherRow {
@@ -119,9 +126,13 @@ interface VoucherRow {
   fiscal_period_id: string
 }
 
+/** `fiscal_periods` has no `status` column: open/locked/closed is derived from
+ *  `is_closed` + `locked_at`, exactly as the `enforce_period_lock` trigger
+ *  (migration 017) and `resolvePeriodStatusForDate()` do it. */
 interface FiscalPeriodRow {
   id: string
-  status: string
+  is_closed: boolean | null
+  locked_at: string | null
 }
 
 interface CandidateContext {
@@ -174,6 +185,22 @@ export async function findMatchingVouchersForInvoice(
   // dropped before it is ever scored. The band is a superset of every case
   // scoreCandidate accepts (exact remaining/total + fuzzy ±1% capped 500 SEK),
   // so it never hides a single-line match.
+  //
+  // CRITICAL: `remainingAmount` and `invoice.total` are in the INVOICE's
+  // currency, while debit_amount/credit_amount are ALWAYS SEK. Bounding the SEK
+  // column by a foreign band excluded the one correct voucher server-side,
+  // before scoring ever ran, and left only same-magnitude SEK coincidences
+  // behind. On a foreign invoice the band therefore has to move onto
+  // `amount_in_currency` (the only column quoted in the invoice's currency,
+  // see ledgerLineSideAmountIn) together with the matching currency label.
+  //
+  // `documentCurrency()` and not `invoice.currency` directly: the column is
+  // nullable, and a NULL would test `!== 'SEK'` and send a plain domestic
+  // invoice down the FX path where nothing is convertible. The label guard in
+  // scoreCandidate still compares the RAW `invoice.currency`, so a NULL row
+  // behaves exactly as it did before this change.
+  const invoiceCurrency = documentCurrency(invoice.currency)
+  const isForeignInvoice = invoiceCurrency !== 'SEK'
   const hiAmount = Math.max(remainingAmount, invoice.total)
   const loAmount = Math.min(remainingAmount, invoice.total)
   const amountPad = Math.min(hiAmount * 0.01, 500) + 0.02
@@ -207,7 +234,8 @@ export async function findMatchingVouchersForInvoice(
         account_number,
         debit_amount,
         credit_amount,
-        currency
+        currency,
+        amount_in_currency
       )
       `
     )
@@ -219,10 +247,24 @@ export async function findMatchingVouchersForInvoice(
   query = isCash
     ? query.gt('journal_entry_lines.debit_amount', 0)
     : query.gt('journal_entry_lines.credit_amount', 0)
-  const { data: entryRows, error } = await query
-    .gte(`journal_entry_lines.${amountColumn}`, amountFloor)
-    .lte(`journal_entry_lines.${amountColumn}`, amountCeil)
-    .limit(limit * 10)
+  if (isForeignInvoice) {
+    // Only lines actually labelled with the invoice's currency AND carrying a
+    // rate can be compared to it at all; everything else is unscoreable, so
+    // narrowing to them here is a strict superset of what survives scoring.
+    // The band is |amount_in_currency| <= ceil rather than [floor, ceil]:
+    // a few production rows store the foreign figure negatively, and the
+    // direction is taken from the debit/credit side anyway. NULL
+    // amount_in_currency drops out of both comparisons, which is correct.
+    query = query
+      .eq('journal_entry_lines.currency', invoiceCurrency)
+      .gte('journal_entry_lines.amount_in_currency', -amountCeil)
+      .lte('journal_entry_lines.amount_in_currency', amountCeil)
+  } else {
+    query = query
+      .gte(`journal_entry_lines.${amountColumn}`, amountFloor)
+      .lte(`journal_entry_lines.${amountColumn}`, amountCeil)
+  }
+  const { data: entryRows, error } = await query.limit(limit * 10)
   if (error) {
     // Surface transient failures instead of silently rendering "no candidates":
     // a swallowed error looks like a match that intermittently vanishes.
@@ -241,11 +283,18 @@ export async function findMatchingVouchersForInvoice(
     { entry: VoucherRow; arCreditTotal: number; lineCurrency: string | null }
   >()
 
+  const matchedSide: 'debit' | 'credit' = isCash ? 'debit' : 'credit'
+
   for (const raw of entryRows) {
     const entry = raw as unknown as VoucherRow & {
       journal_entry_lines: Pick<
         JournalEntryLine,
-        'id' | 'account_number' | 'debit_amount' | 'credit_amount' | 'currency'
+        | 'id'
+        | 'account_number'
+        | 'debit_amount'
+        | 'credit_amount'
+        | 'currency'
+        | 'amount_in_currency'
       >[]
     }
     if (EXCLUDED_SOURCE_TYPES.includes(entry.source_type ?? '')) continue
@@ -253,9 +302,12 @@ export async function findMatchingVouchersForInvoice(
     let matchedTotal = 0
     let lineCurrency: string | null = null
     for (const line of entry.journal_entry_lines ?? []) {
-      // Matched amount = the bank/cash debit (cash) or AR credit (accrual).
-      const matched = isCash ? Number(line.debit_amount ?? 0) : Number(line.credit_amount ?? 0)
-      if (matched <= 0) continue
+      // Matched amount = the bank/cash debit (cash) or AR credit (accrual),
+      // quoted in the INVOICE's currency. On SEK this reads the raw column
+      // exactly as before; on a foreign invoice it reads amount_in_currency and
+      // returns null for any line that carries no figure in that currency.
+      const matched = ledgerLineSideAmountIn(line, invoiceCurrency, matchedSide)
+      if (matched === null || matched <= 0) continue
       matchedTotal += matched
       if (!lineCurrency) lineCurrency = line.currency
     }
@@ -274,7 +326,7 @@ export async function findMatchingVouchersForInvoice(
   const periodIds = Array.from(
     new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id))
   )
-  const [{ data: existingLinks }, { data: periods }] = await Promise.all([
+  const [{ data: existingLinks }, { data: periods, error: periodsError }] = await Promise.all([
     supabase
       .from('invoice_payments')
       .select('journal_entry_id')
@@ -283,7 +335,7 @@ export async function findMatchingVouchersForInvoice(
       .in('journal_entry_id', candidateEntryIds),
     supabase
       .from('fiscal_periods')
-      .select('id, status')
+      .select('id, is_closed, locked_at')
       .in('id', periodIds),
   ])
 
@@ -297,15 +349,26 @@ export async function findMatchingVouchersForInvoice(
   if (byEntry.size === 0) return []
 
   // Linking is allowed in locked periods (no JE mutation): this flag is just
-  // informational for the candidate preview.
-  const lockedPeriods = new Set(
-    (periods ?? [])
-      .filter(
-        (p) =>
-          (p as FiscalPeriodRow).status === 'closed' ||
-          (p as FiscalPeriodRow).status === 'locked'
-      )
-      .map((p) => (p as FiscalPeriodRow).id)
+  // informational for the candidate preview. On a lookup failure fail CLOSED
+  // (flag every candidate as locked) rather than silently claiming "open": the
+  // badge blocks nothing, so an over-cautious badge is harmless while a
+  // wrongly-absent one is the exact mis-advice this guard exists to prevent.
+  if (periodsError) {
+    log.warn('fiscal period lock lookup failed; flagging candidates as locked', {
+      companyId,
+      invoiceId: invoice.id,
+      message: periodsError.message,
+    })
+  }
+  const lockedPeriods = new Set<string>(
+    periodsError
+      ? periodIds
+      : (periods ?? [])
+          .filter((p) => {
+            const period = p as FiscalPeriodRow
+            return period.is_closed === true || period.locked_at != null
+          })
+          .map((p) => (p as FiscalPeriodRow).id)
   )
 
   // Score and rank.
@@ -350,10 +413,13 @@ function scoreCandidate(
     }
   }
 
-  // Currency mismatch is a hard filter at validation time; candidate listing
-  // still surfaces near-misses so the user sees them, but we only score them
-  // for now if the line currency is absent (treated as invoice currency) or
-  // matches the invoice currency.
+  // Label guard, unchanged in shape. It is no longer what makes the amounts
+  // comparable (that used to be the bug: it passed on exactly the FX rows it
+  // existed to catch, then compared a SEK ledger amount to a foreign
+  // remainder). `arCreditTotal` already arrives expressed in
+  // ctx.invoice.currency and any line that could not be expressed there was
+  // dropped before summing. What survives here is the counterparty
+  // discriminator: a matched line stamped with another document's currency.
   const lineCurrencyEffective = lineCurrency ?? ctx.invoice.currency
   if (lineCurrencyEffective !== ctx.invoice.currency) {
     return null
@@ -469,30 +535,74 @@ export async function validateVoucherForInvoiceLink(
     return { ok: false, code: 'LINK_VOUCHER_NO_AR_CREDIT', details: { source_type: v.source_type } }
   }
 
+  // `amount_in_currency` is not optional here: on a foreign invoice it is the
+  // ONLY column quoted in the invoice's currency. Omitting it from the column
+  // list would leave every FX line unconvertible and this guard would reject
+  // vouchers it should accept.
   const { data: lines, error: linesError } = await supabase
     .from('journal_entry_lines')
-    .select('account_number, debit_amount, credit_amount, currency')
+    .select('account_number, debit_amount, credit_amount, currency, amount_in_currency')
     .eq('journal_entry_id', journalEntryId)
   if (linesError || !lines || lines.length === 0) {
     return { ok: false, code: 'LINK_VOUCHER_NO_AR_CREDIT' }
   }
 
+  // Nullable column, non-null type: see documentCurrency(). The label guard
+  // below still compares the RAW invoice.currency, so a NULL row is rejected
+  // exactly as it was before, rather than newly failing as "unconvertible".
+  const invoiceCurrency = documentCurrency(invoice.currency)
+  const matchedSide: 'debit' | 'credit' = isCash ? 'debit' : 'credit'
   let arCreditTotal = 0
   let lineCurrency: string | null = null
+  // A matched-side line on the right account that carries no amount in the
+  // invoice's currency. Fail CLOSED on it: summing only the convertible lines
+  // would silently understate a voucher that settles more than we can see.
+  let unconvertibleLineCurrency: string | null | undefined
   for (const raw of lines) {
-    const line = raw as { account_number: string; debit_amount: number | null; credit_amount: number | null; currency: string | null }
+    const line = raw as {
+      account_number: string
+      debit_amount: number | null
+      credit_amount: number | null
+      currency: string | null
+      amount_in_currency: number | string | null
+    }
     if (!line.account_number?.startsWith(accountPrefix)) continue
-    const matched = isCash ? Number(line.debit_amount ?? 0) : Number(line.credit_amount ?? 0)
+    const matched = ledgerLineSideAmountIn(line, invoiceCurrency, matchedSide)
+    if (matched === null) {
+      // Only a line that actually moves on the matched side counts as evidence
+      // of a settlement we cannot read; the opposite leg is irrelevant.
+      const rawSide = Number(isCash ? line.debit_amount : line.credit_amount) || 0
+      if (rawSide > 0 && unconvertibleLineCurrency === undefined) {
+        unconvertibleLineCurrency = line.currency
+      }
+      continue
+    }
     if (matched <= 0) continue
     arCreditTotal += matched
     if (!lineCurrency) lineCurrency = line.currency
   }
   arCreditTotal = round2(arCreditTotal)
 
+  if (unconvertibleLineCurrency !== undefined) {
+    return {
+      ok: false,
+      code: 'LINK_VOUCHER_CURRENCY_MISMATCH',
+      details: {
+        invoice_currency: invoice.currency,
+        line_currency: unconvertibleLineCurrency,
+      },
+    }
+  }
+
   if (arCreditTotal <= 0) {
     return { ok: false, code: 'LINK_VOUCHER_NO_AR_CREDIT' }
   }
 
+  // Label guard, unchanged. This is NOT a unit check any more (the amount above
+  // is already in the invoice's currency); it is a counterparty discriminator:
+  // a matched line stamped with a different document currency belongs to some
+  // other invoice. On a foreign invoice it always passes, because only
+  // same-labelled lines could be converted at all.
   const lineCurrencyEffective = lineCurrency ?? invoice.currency
   if (lineCurrencyEffective !== invoice.currency) {
     return {

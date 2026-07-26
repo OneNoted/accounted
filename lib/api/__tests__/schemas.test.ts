@@ -794,6 +794,34 @@ describe('CreateSupplierInvoiceSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  // The DB CHECK supplier_invoices_exchange_rate_check reads
+  // `exchange_rate IS NULL OR (exchange_rate > 0 AND exchange_rate < 100000)`.
+  // The schema had no ceiling at all, so a fat-fingered rate reached Postgres
+  // and came back as a 23514 the route surfaced as a 500. These three pin the
+  // mirror to the constraint, exclusivity included.
+  it('rejects an exchange rate at or above the DB ceiling of 100000', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      validSupplierInvoice({ exchange_rate: 250000 })
+    )
+    expect(result.success).toBe(false)
+    const issue = result.error?.issues.find((i) => i.path.join('.') === 'exchange_rate')
+    expect(issue?.message).toContain('100 000')
+  })
+
+  it('rejects exactly 100000: the CHECK bound is exclusive', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      validSupplierInvoice({ exchange_rate: 100000 })
+    )
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts 99999.99, just inside the exclusive ceiling', () => {
+    const result = CreateSupplierInvoiceSchema.safeParse(
+      validSupplierInvoice({ exchange_rate: 99999.99 })
+    )
+    expect(result.success).toBe(true)
+  })
+
   it('accepts item with legacy quantity/unit_price fields', () => {
     const result = CreateSupplierInvoiceSchema.safeParse(
       validSupplierInvoice({
@@ -1198,6 +1226,36 @@ describe('MatchInvoiceSchema', () => {
   it('rejects non-UUID invoice_id', () => {
     const result = MatchInvoiceSchema.safeParse({ invoice_id: 'INV-001' })
     expect(result.success).toBe(false)
+  })
+
+  // manual_exchange_rate lands in invoice_payments.payment_exchange_rate,
+  // whose CHECK is `> 0 AND < 100000`. The old `.max(100000)` was inclusive:
+  // exactly 100000 passed Zod and then violated the constraint.
+  it('rejects exactly 100000 for manual_exchange_rate (exclusive CHECK)', () => {
+    const result = MatchInvoiceSchema.safeParse({
+      invoice_id: validUuid,
+      manual_exchange_rate: 100000,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts 99999.99 for manual_exchange_rate', () => {
+    const result = MatchInvoiceSchema.safeParse({
+      invoice_id: validUuid,
+      manual_exchange_rate: 99999.99,
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it('rejects a zero or negative manual_exchange_rate', () => {
+    expect(MatchInvoiceSchema.safeParse({
+      invoice_id: validUuid,
+      manual_exchange_rate: 0,
+    }).success).toBe(false)
+    expect(MatchInvoiceSchema.safeParse({
+      invoice_id: validUuid,
+      manual_exchange_rate: -11.5,
+    }).success).toBe(false)
   })
 })
 

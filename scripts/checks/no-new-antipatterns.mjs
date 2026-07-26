@@ -29,6 +29,16 @@
  *   5. raw-user-error: raw caught-error messages passed to API response fields,
  *      client error state, or toast fields. Engine, database, and upstream
  *      messages must pass through getErrorMessage() or errorResponse().
+ *   6. sek-labelled-amount: a single-argument formatCurrency() call on a value
+ *      read off a record the same file reads `.currency` from, which prints a
+ *      foreign amount with the SEK symbol. Implementation and rationale in
+ *      format-currency-sek-label.mjs. No baseline: the count is 0 today.
+ *   7. extension-route guards: physical routes under app/api/extensions/<id>/
+ *      (the sanctioned core-build carve-out for crons/OAuth callbacks) may
+ *      only import their OWN extension (hard fail, 0 today) and must gate on
+ *      extensionRegistry.get('<id>') so a disabled extension never exposes a
+ *      live surface (allowlisted file-set, may only shrink). Implementation
+ *      and rationale in extension-route-guards.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -40,6 +50,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
+import {
+  findExtensionRouteFindings,
+  UNGATED_EXTENSION_ROUTES,
+} from './extension-route-guards.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'antipatterns-baseline.json')
@@ -450,6 +465,8 @@ const current = {
   directJelInsert: findDirectJelInserts(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
+  sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
+  extensionRoutes: findExtensionRouteFindings(ROOT),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -535,6 +552,64 @@ if (current.rawUserErrors.length) {
   )
 }
 
+// 1e. sek-labelled-amount: a foreign amount must never be printed with the SEK
+// symbol. No baseline: every current single-argument call formats a SEK twin or
+// a ledger column, so the count is 0 and any new one is a hard failure.
+if (current.sekLabelledAmounts.length) {
+  failed = true
+  console.error(
+    `\n✗ sek-labelled-amount: ${current.sekLabelledAmounts.length} formatCurrency() call(s) print a possibly-foreign amount as SEK:`,
+  )
+  current.sekLabelledAmounts.forEach((f) =>
+    console.error(`    ${f.where}  formatCurrency(${f.expr})\n      ${f.reason}`),
+  )
+  console.error(
+    '  → pass the record\'s currency as the second argument, formatCurrency(amount, record.currency),\n' +
+      '    or format the SEK twin (record.amount_sek / record.total_sek) when one exists.',
+  )
+}
+
+// 1f. cross-extension-import: a physical extension route may only import its
+// own extension. No baseline: the count is 0 today, any hit is a hard failure.
+if (current.extensionRoutes.crossImports.length) {
+  failed = true
+  console.error(
+    `\n✗ cross-extension-import: ${current.extensionRoutes.crossImports.length} route(s) under ` +
+      `app/api/extensions/<id>/ import a DIFFERENT extension:`,
+  )
+  current.extensionRoutes.crossImports.forEach((c) =>
+    console.error(`    ${c.file} imports @/extensions/*/${c.imported}/`),
+  )
+  console.error(
+    '  → a physical extension route may only import its own extension; shared logic belongs in lib/\n' +
+      '    or behind the Extension.services registry bridge.',
+  )
+}
+
+// 1g. ungated-extension-route: allowlist lives in extension-route-guards.mjs
+// (UNGATED_EXTENSION_ROUTES) and may only shrink. A NEW physical extension
+// route must check extensionRegistry.get('<id>') before executing extension
+// code, so disabling the extension in extensions.config.json actually
+// disarms the deployed route.
+const newUngatedRoutes = current.extensionRoutes.ungated.filter(
+  (f) => !UNGATED_EXTENSION_ROUTES.has(f),
+)
+const gatedSinceBaseline = [...UNGATED_EXTENSION_ROUTES].filter(
+  (f) => !current.extensionRoutes.ungated.includes(f),
+)
+if (newUngatedRoutes.length) {
+  failed = true
+  console.error(
+    `\n✗ ungated-extension-route: ${newUngatedRoutes.length} new physical extension route(s) run ` +
+      `extension code without checking the registry:`,
+  )
+  newUngatedRoutes.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    "  → call loadExtensions() and refuse (503 EXTENSION_DISABLED) when extensionRegistry.get('<id>')\n" +
+      '    is undefined, like app/api/extensions/push-notifications/cron/route.ts.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -553,11 +628,18 @@ if (fixedAuthFiles.length || current.naiveOreRound < baseline.naiveOreRound.coun
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
 }
+if (gatedSinceBaseline.length) {
+  console.log(
+    `\n✓ ungated-extension-route progress: ${gatedSinceBaseline.length} allowlisted route(s) now gated or gone.` +
+      ' Remove them from UNGATED_EXTENSION_ROUTES in scripts/checks/extension-route-guards.mjs to lock it in:',
+  )
+  gatedSinceBaseline.forEach((f) => console.log(`    ${f}`))
+}
 
 if (failed) {
   console.error('\nAntipattern guard failed: see above.')
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
 )

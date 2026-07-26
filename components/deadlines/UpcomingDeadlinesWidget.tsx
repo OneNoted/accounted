@@ -73,8 +73,17 @@ export function UpcomingDeadlinesWidget({ deadlines, maxItems = 5, onStatusChang
       })
 
       if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Failed to update status')
+        // Map the parsed body plus the status, never `new Error(data.error)`:
+        // the route answers thrown errors with the canonical envelope
+        // `{ error: { code, message } }`, and the Error constructor would
+        // stringify that object to "[object Object]", discarding the route's
+        // own Swedish reason.
+        const body = await response.json().catch(() => null)
+        toast({
+          title: getUserErrorMessage(body, { statusCode: response.status }),
+          variant: 'destructive',
+        })
+        return
       }
 
       toast({

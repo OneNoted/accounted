@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -10,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -33,9 +35,15 @@ import {
   throwOnStructuredError,
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  linkDocuments,
+  formatFailedDocumentNames,
+  type DocumentLinkFailure,
+} from '@/lib/documents/link-documents'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
@@ -125,6 +133,7 @@ export default function JournalEntryForm({
 }: Props) {
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
+  const router = useRouter()
   const { company } = useCompany()
   const t = useTranslations('journal_form')
   // Reused only for the bilingual entity-type labels the shared TemplateForm
@@ -862,42 +871,79 @@ export default function JournalEntryForm({
   // Inner submit: builds payload, POSTs, throws a structured error on failure
   // (so the activation hook can intercept ACCOUNTS_NOT_IN_CHART).
   const postJournalEntry = useCallback(async () => {
-    let currencyMetaApplied = false
-    const entryLines: CreateJournalEntryLineInput[] = lines
-      .filter((l) => l.account_number && (l.debit_amount || l.credit_amount))
-      .map((l) => {
-        const base: CreateJournalEntryLineInput = {
-          account_number: l.account_number,
-          debit_amount: parseFloat(l.debit_amount) || 0,
-          credit_amount: parseFloat(l.credit_amount) || 0,
-          line_description: l.line_description || undefined,
-        }
+    const submittableLines = lines.filter(
+      (l) => l.account_number && (l.debit_amount || l.credit_amount)
+    )
 
-        if (l.dimensions) {
-          const dims = Object.fromEntries(
-            Object.entries(l.dimensions).filter(([, v]) => typeof v === 'string' && v.trim() !== '')
-          )
-          if (Object.keys(dims).length > 0) base.dimensions = dims
-        }
+    // PRE-PASS: decide which single line carries the entry's FX metadata BEFORE
+    // any line is built, so the answer cannot depend on line order. Deciding
+    // inside the map meant the "already applied" latch only closed once the
+    // loop had reached a hydrated FX line, so an agent-created EUR draft edited
+    // here could end up with TWO lines claiming the same foreign amount; and
+    // the old test (first account starting with '19') picked the SEK leg of a
+    // EUR/SEK växling and dropped the metadata entirely on entries with no 19xx
+    // line at all. lib/bookkeeping/fx-line-slot.ts states the rule.
+    const fxSlot = resolveFxLineSlot(
+      submittableLines.map((l) => ({
+        account_number: l.account_number,
+        debit_amount: parseFloat(l.debit_amount) || 0,
+        credit_amount: parseFloat(l.credit_amount) || 0,
+        currency: l.currency,
+      })),
+      { entryCurrency, exchangeRate: rate, foreignAmount: computedForeignAmount }
+    )
 
-        if (l.tax_code) base.tax_code = l.tax_code
-
-        if (l.currency) {
-          base.currency = l.currency
-          if (l.amount_in_currency != null) base.amount_in_currency = l.amount_in_currency
-          if (l.exchange_rate != null) base.exchange_rate = l.exchange_rate
-          // A line already carrying FX metadata (hydrated edit) IS the FX
-          // line: don't also stamp the fallback meta onto another 19xx line.
-          if (l.currency !== 'SEK') currencyMetaApplied = true
-        } else if (isForeign && rate > 0 && l.account_number.startsWith('19') && !currencyMetaApplied) {
-          base.currency = entryCurrency
-          base.amount_in_currency = computedForeignAmount
-          base.exchange_rate = rate
-          currencyMetaApplied = true
-        }
-
-        return base
+    if (fxSlot.kind === 'unplaceable') {
+      // `journal_entries` has no currency or exchange_rate column: a rate that
+      // is not written onto a line is unrecoverable, and the verifikat would
+      // post looking as if it had always been in SEK. Refuse instead, before
+      // anything is sent, and say which rader are involved.
+      const messageKey =
+        fxSlot.reason === 'ambiguous'
+          ? 'fx_unplaceable_ambiguous'
+          : fxSlot.reason === 'currency_conflict'
+            ? 'fx_unplaceable_currency_conflict'
+            : 'fx_unplaceable_no_carrier'
+      const message = t(messageKey, {
+        currency: entryCurrency,
+        amount: computedForeignAmount.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+        rate: rate.toLocaleString('sv-SE', { minimumFractionDigits: 4 }),
+        accounts: fxSlot.accounts.join(', '),
+        lineCurrency: fxSlot.lineCurrency ?? '',
       })
+      throw Object.assign(new Error(message), { body: { error: { message } }, status: 400 })
+    }
+
+    const entryLines: CreateJournalEntryLineInput[] = submittableLines.map((l, index) => {
+      const base: CreateJournalEntryLineInput = {
+        account_number: l.account_number,
+        debit_amount: parseFloat(l.debit_amount) || 0,
+        credit_amount: parseFloat(l.credit_amount) || 0,
+        line_description: l.line_description || undefined,
+      }
+
+      if (l.dimensions) {
+        const dims = Object.fromEntries(
+          Object.entries(l.dimensions).filter(([, v]) => typeof v === 'string' && v.trim() !== '')
+        )
+        if (Object.keys(dims).length > 0) base.dimensions = dims
+      }
+
+      if (l.tax_code) base.tax_code = l.tax_code
+
+      if (l.currency) {
+        // The line speaks for itself (hydrated draft, agent-created entry).
+        base.currency = l.currency
+        if (l.amount_in_currency != null) base.amount_in_currency = l.amount_in_currency
+        if (l.exchange_rate != null) base.exchange_rate = l.exchange_rate
+      } else if (fxSlot.kind === 'slot' && fxSlot.index === index) {
+        base.currency = entryCurrency
+        base.amount_in_currency = computedForeignAmount
+        base.exchange_rate = rate
+      }
+
+      return base
+    })
 
     const baseUrl = submitUrl ?? '/api/bookkeeping/journal-entries'
     // Edit mode PATCHes the draft in place; create mode POSTs (with ?as_draft
@@ -926,10 +972,48 @@ export default function JournalEntryForm({
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, isForeign, rate, entryCurrency, computedForeignAmount, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes])
+  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)
+
+  // Attach the uploaded underlag to the entry that was just written. BFL 5 kap
+  // 7 § requires the verifikation to reference its underlag and BFL 7 kap
+  // requires that underlag to be archived with it, but the entry is already
+  // committed when this runs: a failed link cannot be rolled back, only
+  // reported. Files that did not attach are KEPT in the upload zone (clearing
+  // them would erase the user's only pointer to the underlag they believed
+  // was filed); the ones that attached are dropped.
+  const linkUploadedDocuments = async (
+    journalEntryId: string | undefined,
+  ): Promise<DocumentLinkFailure[]> => {
+    const targets = uploadedFiles
+      .filter((f) => f.status === 'uploaded' && f.id)
+      .map((f) => ({ documentId: f.id as string, fileName: f.fileName }))
+    if (targets.length === 0) {
+      setUploadedFiles([])
+      return []
+    }
+    if (!journalEntryId) {
+      // No id came back, so there is nothing to link to: report it as a
+      // failure rather than clearing the files behind a success toast.
+      return targets.map((target) => ({
+        documentId: target.documentId,
+        fileName: target.fileName ?? null,
+        status: 0,
+        code: null,
+        reason: null,
+      }))
+    }
+    const { failed } = await linkDocuments(targets, journalEntryId)
+    if (failed.length === 0) {
+      setUploadedFiles([])
+      return []
+    }
+    const failedIds = new Set(failed.map((f) => f.documentId))
+    setUploadedFiles((prev) => prev.filter((f) => f.id != null && failedIds.has(f.id)))
+    return failed
+  }
 
   const handleConfirm = async () => {
     setIsSubmitting(true)
@@ -938,38 +1022,40 @@ export default function JournalEntryForm({
       const result = await runSubmit()
 
       const journalEntryId = result.data?.id ?? result.journal_entry_id
-      if (journalEntryId && uploadedFiles.length > 0) {
-        const filesToLink = uploadedFiles.filter((f) => f.status === 'uploaded' && f.id)
-        let linkFailCount = 0
-        for (const file of filesToLink) {
-          try {
-            await fetch(`/api/documents/${file.id}/link`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ journal_entry_id: journalEntryId }),
-            })
-          } catch {
-            linkFailCount++
-          }
-        }
-        if (linkFailCount > 0) {
-          toast({
-            title: t('toast_attach_failed_title'),
-            description: t('toast_attach_failed_description', { count: linkFailCount }),
-            variant: 'destructive',
-          })
-        }
-      }
+      const voucher = formatVoucher(result.data ?? {})
+      const linkFailures = await linkUploadedDocuments(journalEntryId)
 
-      toast({
-        title: t('toast_created_title'),
-        description: t('toast_created_description', { voucher: formatVoucher(result.data ?? {}) }),
-      })
+      if (linkFailures.length > 0) {
+        // The verifikat exists but its underlag does not: say exactly that.
+        // Never the plain "Verifikation skapad", which would leave the user
+        // believing the receipt is on the books.
+        toast({
+          title: t('toast_created_missing_docs_title'),
+          description: t('toast_created_missing_docs_description', {
+            voucher,
+            count: linkFailures.length,
+            files: formatFailedDocumentNames(linkFailures),
+          }),
+          variant: 'destructive',
+          action: journalEntryId ? (
+            <ToastAction
+              altText={t('toast_open_entry')}
+              onClick={() => router.push(`/bookkeeping/${journalEntryId}`)}
+            >
+              {t('toast_open_entry')}
+            </ToastAction>
+          ) : undefined,
+        })
+      } else {
+        toast({
+          title: t('toast_created_title'),
+          description: t('toast_created_description', { voucher }),
+        })
+      }
       setLastPostedMonth(entryDate.slice(0, 7))
       setShowReview(false)
       setDescription('')
       setNotes('')
-      setUploadedFiles([])
       setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
       setHeaderDims({})
       setEntryCurrency('SEK')
@@ -1036,28 +1122,35 @@ export default function JournalEntryForm({
       const result = await runSubmit()
 
       const journalEntryId = result.data?.id ?? result.journal_entry_id
-      if (journalEntryId && uploadedFiles.length > 0) {
-        const filesToLink = uploadedFiles.filter((f) => f.status === 'uploaded' && f.id)
-        for (const file of filesToLink) {
-          try {
-            await fetch(`/api/documents/${file.id}/link`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ journal_entry_id: journalEntryId }),
-            })
-          } catch {
-            // Non-blocking: user can attach underlag from the draft view
-          }
-        }
-      }
+      const linkFailures = await linkUploadedDocuments(journalEntryId)
 
-      toast({
-        title: t('toast_draft_saved_title'),
-        description: t('toast_draft_saved_description'),
-      })
+      if (linkFailures.length > 0) {
+        // Same rule as the posted path: the draft was saved, the underlag was
+        // not attached, and the user is told which files are missing.
+        toast({
+          title: t('toast_draft_missing_docs_title'),
+          description: t('toast_draft_missing_docs_description', {
+            count: linkFailures.length,
+            files: formatFailedDocumentNames(linkFailures),
+          }),
+          variant: 'destructive',
+          action: journalEntryId ? (
+            <ToastAction
+              altText={t('toast_open_entry')}
+              onClick={() => router.push(`/bookkeeping/${journalEntryId}`)}
+            >
+              {t('toast_open_entry')}
+            </ToastAction>
+          ) : undefined,
+        })
+      } else {
+        toast({
+          title: t('toast_draft_saved_title'),
+          description: t('toast_draft_saved_description'),
+        })
+      }
       setDescription('')
       setNotes('')
-      setUploadedFiles([])
       setLines([{ ...BLANK_LINE }, { ...BLANK_LINE }])
       setHeaderDims({})
       setEntryCurrency('SEK')

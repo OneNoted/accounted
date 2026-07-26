@@ -19,7 +19,12 @@ import type { KPIPreferences } from '@/types'
 
 interface KPISettingsDialogProps {
   preferences: KPIPreferences
-  onSave: (prefs: KPIPreferences) => void
+  /**
+   * Resolves true when the layout was actually stored. The dialog awaits it, so
+   * `saving` gets a chance to render, and stays open on false so the draft is
+   * still there to retry with.
+   */
+  onSave: (prefs: KPIPreferences) => Promise<boolean>
   saving: boolean
 }
 
@@ -31,6 +36,10 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
   const [open, setOpen] = useState(false)
 
   function handleOpen(isOpen: boolean) {
+    // Esc and click-outside must not discard a draft that is mid-save: the save
+    // could still fail, and the draft is the only copy of what the user picked.
+    // Bounded wait, the request carries a 15s deadline.
+    if (!isOpen && saving) return
     if (isOpen) setDraft(preferences)
     setOpen(isOpen)
   }
@@ -71,9 +80,21 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
     setDraft(getDefaultPreferences())
   }
 
-  function handleSave() {
-    onSave(draft)
-    setOpen(false)
+  /**
+   * Await the save and close only if it landed.
+   *
+   * Closing first made the parent's `saving` state unrenderable and, worse, made
+   * a failed save look identical to a successful one: the dialog vanished, the
+   * grid showed the draft, and the layout was gone on the next page load. On
+   * failure the parent shows the one toast that says why and this dialog stays
+   * open with the draft intact.
+   */
+  async function handleSave() {
+    // Closes the double-click race before React has re-rendered the disabled
+    // button; a second PUT would race the first over the same row.
+    if (saving) return
+    const saved = await onSave(draft)
+    if (saved) setOpen(false)
   }
 
   return (
@@ -202,7 +223,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
           </button>
           <div className="flex gap-2">
             <DialogClose asChild>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" disabled={saving}>
                 {tCommon('cancel')}
               </Button>
             </DialogClose>

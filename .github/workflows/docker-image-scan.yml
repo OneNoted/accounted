@@ -68,6 +68,12 @@ jobs:
           ignore-unfixed: true
           format: sarif
           output: trivy-results.sarif
+          # Without this, trivy-action unsets TRIVY_SEVERITY when format is
+          # sarif (entrypoint.sh: "Building SARIF report with all severities"),
+          # silently discarding the CRITICAL,HIGH filter above. The exit code
+          # then fires on any fixable CVE down to LOW, which is not the policy
+          # documented here and turns routine low-severity noise into a red run.
+          limit-severities-for-sarif: true
 
       - name: Upload Trivy results to GitHub Security tab
         # if: always() so findings still reach the Security tab even though the

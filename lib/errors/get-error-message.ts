@@ -167,6 +167,10 @@ function tryMatchKnownError(message: string): string | null {
 function isSwedishUserMessage(message: string): boolean {
   const swedishPatterns = [
     /kunde inte/i,
+    /kan inte/i,
+    /hittades/i,
+    /redan/i,
+    /låst/i,
     /försök igen/i,
     /ogiltigt?/i,
     /saknas/i,
@@ -375,6 +379,20 @@ export function getErrorMessage(
 
       if (structured.code === 'CURRENCY_REVALUATION_ALREADY_EXISTS') {
         return 'En valutaomvärdering finns redan för denna period.'
+      }
+
+      if (structured.code === 'FX_CLOSING_RATE_UNAVAILABLE') {
+        // Name the currency and the date: the user needs to know exactly which
+        // rate is missing to judge whether to wait or pick another closing
+        // date. Nothing was posted, so this is never a partial-state message.
+        const details = structured.details as { missingRates?: unknown } | undefined
+        const missing = Array.isArray(details?.missingRates)
+          ? (details.missingRates as { currency?: unknown; date?: unknown }[])
+              .filter((m) => typeof m?.currency === 'string' && typeof m?.date === 'string')
+              .map((m) => `${m.currency as string} per ${m.date as string}`)
+          : []
+        const what = missing.length > 0 ? missing.join(', ') : 'balansdagen'
+        return `Ingen valutakurs från Riksbanken finns för ${what}. Valutaomvärderingen har inte bokförts: en uppskattad kurs får inte bokföras mot 3960/7960. Försök igen när kursen är publicerad.`
       }
 
       if (structured.code === 'INVALID_MAPPING_RESULT') {

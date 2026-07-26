@@ -22,7 +22,14 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { getVatRules } from '@/lib/invoices/vat-rules'
+import {
+  resolveLineVatRates,
+  planCustomerSwitchVatSnap,
+  hasSwedishVatToForeignBusiness,
+  FALLBACK_VAT_RATE,
+} from '@/components/invoices/line-vat-rates'
+import { AttnLine } from '@/components/ui/attn-line'
 import { sortArticles } from '@/lib/articles/sort'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
@@ -333,6 +340,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // re-derive due_date / forced VAT rates from it: those came from the saved
   // draft. Starts true for create (always derive), false for edit (skip once).
   const didInitialCustomerSync = useRef(!isEditMode)
+  // The DEFAULT VAT rate of the customer currently selected. A customer switch
+  // compares against it to tell an inherited line rate (follows the new
+  // customer) from a deliberate one (left alone). Starts at the rate an empty
+  // form's first line carries, before any customer is picked.
+  const previousDefaultRateRef = useRef<number>(FALLBACK_VAT_RATE)
+  // Edit and copy pre-fill the lines from an existing invoice, and the customer
+  // that resolves first IS that invoice's customer: its rates are already
+  // correct, so the first resolution must only RECORD the baseline, never snap.
+  // A fresh form has no such baseline, so there the first pick does snap.
+  const didSeedVatSnapBaseline = useRef(!(isEditMode || isCopyMode))
 
   // Edit mode: the claim card's property fields are restored from the first
   // rot line (they're stamped onto every rot line server-side at save time).
@@ -536,10 +553,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setValue(`items.${index}.description`, a.name, { shouldValidate: true, shouldDirty: true })
     if (a.unit) setValue(`items.${index}.unit`, a.unit, { shouldDirty: true })
     setValue(`items.${index}.unit_price`, Number(a.price_excl_vat) || 0, { shouldValidate: true, shouldDirty: true })
-    // Only adopt the article's VAT rate when it's allowed for this customer
-    // (and the rate isn't locked, e.g. reverse charge / export). Otherwise keep
-    // the line's current rate so the API's per-customer VAT rule isn't violated.
-    if (!isRateLocked && availableRates.some((r) => r.rate === a.vat_rate)) {
+    // Only adopt the article's VAT rate when it belongs to the customer's
+    // DEFAULT set, never to the wider permitted set. An article's stored rate is
+    // its domestic rate; nothing on it says the supply is one of the ML 6 kap.
+    // ones taxed where performed. Adopting 25% because the article says 25%
+    // would silently put Swedish VAT on a reverse-charge invoice, so a foreign
+    // business customer (single locked 0% default) keeps the line's rate and the
+    // user picks 12%/6% explicitly when it really is a hotel night or a ticket.
+    if (!vatRatePlan.hasSingleDefault && vatRatePlan.defaultRates.some((r) => r.rate === a.vat_rate)) {
       setValue(`items.${index}.vat_rate`, a.vat_rate, { shouldValidate: true, shouldDirty: true })
     }
     // The account override rides along regardless of rate; the engine ignores it
@@ -699,11 +720,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       const customer = customers.find((c) => c.id === watchCustomerId)
       setSelectedCustomer(customer || null)
 
-      // Skip the derived side-effects (due_date, forced VAT rate) the first time
+      // Skip the derived side-effects (due_date, VAT rate snap) the first time
       // we resolve a pre-filled customer in edit mode: those values came from
       // the saved draft and must not be overwritten. Applied normally on every
       // subsequent (user-initiated) customer change, and always in create mode.
       if (customer) {
+        const nextDefaultRate = resolveLineVatRates(customer).defaultRate
         if (didInitialCustomerSync.current) {
           // Update due date based on customer payment terms
           if (customer.default_payment_terms) {
@@ -713,16 +735,24 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             )
           }
 
-          // When the customer forces a single rate (reverse charge/export),
-          // update all lines so the picker can't leave stale 25% values behind.
-          const rates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
-          if (rates.length === 1) {
-            const forcedRate = rates[0].rate
-            watchItems.forEach((_, i) => {
-              setValue(`items.${i}.vat_rate`, forcedRate)
-            })
+          // Move only the lines still sitting on the OLD customer's default
+          // rate onto the new one: the switch must not leave a stale 25% on a
+          // reverse-charge invoice, nor a stale 0% on a domestic one. A line
+          // the user moved off that default stays put: 12% on a Stockholm
+          // hotel night sold to a German company is lawful (taxed where
+          // performed, ML 6 kap.) and snapping it to 0% would destroy it.
+          if (didSeedVatSnapBaseline.current) {
+            for (const snap of planCustomerSwitchVatSnap({
+              items: watchItems ?? [],
+              previousDefaultRate: previousDefaultRateRef.current,
+              nextDefaultRate,
+            })) {
+              setValue(`items.${snap.index}.vat_rate`, snap.rate)
+            }
           }
         }
+        previousDefaultRateRef.current = nextDefaultRate
+        didSeedVatSnapBaseline.current = true
         didInitialCustomerSync.current = true
       }
     }
@@ -786,10 +816,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     ? getVatRules(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
     : null
 
-  const availableRates = selectedCustomer
-    ? getAvailableVatRates(selectedCustomer.customer_type, selectedCustomer.vat_number_validated)
-    : []
-  const isRateLocked = availableRates.length === 1
+  // Rendered options and the default are deliberately two different sets:
+  // `options` is what may LAWFULLY appear on a line (getPermittedVatRates),
+  // `defaultRates` / `defaultRate` is what the form OFFERS by itself
+  // (getAvailableVatRates). See components/invoices/line-vat-rates.ts.
+  const vatRatePlan = resolveLineVatRates(selectedCustomer)
+  // One ochre sentence, and only once a Swedish rate is actually selected on an
+  // invoice to a foreign business: 0% is the rule, a non-zero rate is lawful
+  // only for the ML 6 kap. supplies taxed where they are performed.
+  const showTaxedWherePerformedHint =
+    vatRegistered && hasSwedishVatToForeignBusiness({ plan: vatRatePlan, items: watchItems ?? [] })
   // A non-momsregistrerad company never charges VAT: hide the Moms column and
   // book every line momsfritt. `vatRegistered` is the single switch the whole
   // form keys off: no rate picker, no warning, no VAT in the totals/preview.
@@ -1817,13 +1853,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               <Select
                                 value={String(field.value ?? 25)}
                                 onValueChange={(v) => field.onChange(Number(v))}
-                                disabled={isRateLocked}
+                                disabled={vatRatePlan.isPickerLocked}
                               >
                                 <SelectTrigger>
                                   <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {availableRates.map((opt) => (
+                                  {/* The lawful set, not the default one: a
+                                      foreign business customer gets 0% first
+                                      (and preselected) plus 25/12/6 for the
+                                      supplies taxed where they are performed. */}
+                                  {vatRatePlan.options.map((opt) => (
                                     <SelectItem key={opt.rate} value={String(opt.rate)}>
                                       {opt.label}
                                     </SelectItem>
@@ -1928,6 +1968,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           <AccrualPeriodControl
                             direction="revenue"
                             amount={lineTotal}
+                            /* The customer-invoice editor carries no FX rate
+                               (the form has no exchange_rate field), so the
+                               currency alone is passed: it keeps the preview
+                               honest and suppresses the SEK-only K2 hint on
+                               foreign-currency lines. */
+                            currency={watchCurrency}
                             idPrefix={`accrual-invoice-${index}`}
                             value={{
                               start: watchItems[index]?.accrual_period_start ?? '',
@@ -2029,7 +2075,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         quantity: 1,
                         unit: 'st',
                         unit_price: 0,
-                        vat_rate: vatRegistered ? (availableRates[0]?.rate ?? 25) : 0,
+                        // The DEFAULT, never the widest permitted rate: 0% for
+                        // a reverse-charge / export customer, 25% domestically.
+                        vat_rate: vatRegistered ? vatRatePlan.defaultRate : 0,
                         article_id: null,
                         revenue_account: null,
                         deduction_type: null,
@@ -2087,6 +2135,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                     </Button>
                   )}
                 </div>
+
+                {/* Attention is one ochre sentence, not a banner (UI convention
+                    6). Silent for the normal 0% case; renders only when a
+                    Swedish rate is actually picked for a customer whose default
+                    is 0%, where it is lawful for taxed-where-performed supplies
+                    only. */}
+                {showTaxedWherePerformedHint && (
+                  <AttnLine>{t('vat_taxed_where_performed_hint')}</AttnLine>
+                )}
               </div>
             </CardContent>
           </Card>

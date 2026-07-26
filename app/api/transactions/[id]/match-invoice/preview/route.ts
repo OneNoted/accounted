@@ -135,6 +135,41 @@ export const GET = withRouteContext(
       | { required: true; error: 'rate_unavailable'; tx_currency: string; invoice_currency: string }
       | { required: false }
 
+    // Mirrors the POST handler's guard. transactions.amount is denominated in
+    // transactions.currency; the SEK value lives in amount_sek (pre-computed at
+    // ingest) or is derivable from exchange_rate. A foreign row carrying
+    // neither (the shape a row gets when the Riksbanken lookup failed at
+    // ingest, see lib/transactions/ingest.ts) has no establishable SEK value,
+    // and the raw foreign number must never stand in for one: the dialog would
+    // preview a 500 USD receipt as a 500 SEK verifikat. Refuse here too so the
+    // preview never shows lines the POST would reject.
+    const txIsForeign = !!transaction.currency && transaction.currency !== 'SEK'
+    if (
+      txIsForeign &&
+      transaction.amount_sek == null &&
+      !(transaction.exchange_rate != null && transaction.exchange_rate > 0)
+    ) {
+      return errorResponseFromCode('MATCH_INVOICE_TX_FX_RATE_MISSING', log, {
+        requestId,
+        details: {
+          transactionCurrency: transaction.currency,
+          transactionDate: transaction.date,
+        },
+      })
+    }
+    // Actual SEK that hit the bank, resolved through the same helper
+    // buildInvoicePaymentClearingLines uses for the bank leg. SEK rows return
+    // Math.abs(amount) unchanged.
+    const txAbsSek =
+      Math.round(
+        resolveSekAmount(
+          Math.abs(transaction.amount),
+          transaction.amount_sek != null ? Math.abs(transaction.amount_sek) : null,
+          transaction.currency,
+          transaction.exchange_rate,
+        ) * 100,
+      ) / 100
+
     let fxConversion: FxConversion = { required: false }
     if (transaction.currency !== invoice.currency) {
       const rateInfo = await fetchExchangeRate(
@@ -145,10 +180,6 @@ export const GET = withRouteContext(
         // bankSek / rate = how many units of invoice.currency this payment
         // satisfies. Round to 4 decimal places to preserve precision through
         // subsequent partial-payment accumulations.
-        const txAbsSek =
-          transaction.currency === 'SEK'
-            ? Math.abs(transaction.amount)
-            : Math.abs(transaction.amount) * (transaction.exchange_rate ?? 1)
         const paidInInvoiceCurrency =
           Math.round((txAbsSek / rateInfo.rate) * 10000) / 10000
         fxConversion = {

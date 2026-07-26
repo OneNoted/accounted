@@ -1,9 +1,12 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
-import { useState, useEffect, useCallback } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
+import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
+import { parseTeamMembersPayload } from '@/components/settings/members-payload'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface TeamMember {
   id: string
@@ -16,9 +19,16 @@ interface TeamMember {
 
 export function TeamPanel() {
   const t = useTranslations('settings_team_panel')
-  const [isLoading, setIsLoading] = useState(true)
-  const [members, setMembers] = useState<TeamMember[]>([])
+  const errorLocale = useLocale() as ErrorLocale
+  // null = the roster is not known: still loading, or the read failed
+  // (loadError). A failed read must never render an apparently member-less
+  // team; the empty look is reserved for a confirmed empty read.
+  const [members, setMembers] = useState<TeamMember[] | null>(null)
   const [teamName, setTeamName] = useState('')
+  // detail === null: transient, so the line carries a retry. A detail sentence
+  // means the user has to act (an expired session) and a retry cannot help.
+  const [loadError, setLoadError] = useState<{ detail: string | null } | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
 
   const roleLabel = (role: string) => {
     switch (role) {
@@ -29,29 +39,78 @@ export function TeamPanel() {
     }
   }
 
-  const fetchMembers = useCallback(async () => {
-    try {
-      const res = await fetch('/api/team/members')
-      const data = await res.json()
-      if (res.ok) {
-        setMembers(data.data.members)
-        if (data.data.teamName) setTeamName(data.data.teamName)
-      }
-    } catch {
-      // Silently fail
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
   useEffect(() => {
-    fetchMembers()
-  }, [fetchMembers])
+    let cancelled = false
 
-  if (isLoading) {
+    async function load() {
+      setLoadError(null)
+      try {
+        const res = await fetch('/api/team/members')
+        if (!res.ok) {
+          // Not-JSON bodies (an HTML error page, an empty 502) leave null, and
+          // getErrorMessage falls back to the status map.
+          const body = await res.json().catch(() => null)
+          if (cancelled) return
+          const sessionGone = res.status === 401 || res.status === 403
+          setMembers(null)
+          setLoadError({
+            detail: sessionGone
+              ? getErrorMessage(body, { statusCode: res.status, locale: errorLocale })
+              : null,
+          })
+          return
+        }
+        // A 200 whose body will not parse throws into the catch below; a 200
+        // without the roster list is a failed read too. Neither may become a
+        // fabricated empty member list.
+        const parsed = parseTeamMembersPayload<TeamMember>(await res.json())
+        if (cancelled) return
+        if (parsed === null) {
+          setMembers(null)
+          setLoadError({ detail: null })
+          return
+        }
+        setMembers(parsed.members)
+        if (parsed.teamName) setTeamName(parsed.teamName)
+      } catch {
+        if (!cancelled) {
+          setMembers(null)
+          setLoadError({ detail: null })
+        }
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [reloadKey, errorLocale])
+
+  if (members === null) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div>
+        {/* Live region always mounted while the roster is unknown, so the
+            failure is announced when it appears, not merely inserted. */}
+        <div role="status" aria-live="polite" className="min-w-0 px-1">
+          {loadError && (
+            <AttnLine
+              action={
+                loadError.detail
+                  ? undefined
+                  : { label: t('load_retry'), onClick: () => setReloadKey((k) => k + 1) }
+              }
+            >
+              {loadError.detail
+                ? `${t('load_failed')} ${loadError.detail}`
+                : t('load_failed')}
+            </AttnLine>
+          )}
+        </div>
+        {!loadError && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        )}
       </div>
     )
   }

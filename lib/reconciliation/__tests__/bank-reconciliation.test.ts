@@ -12,6 +12,7 @@ import {
   unlinkReconciliation,
   getReconciliationStatus,
   scopeTransactionsToAccount,
+  ledgerLineAmountIn,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { makeTransaction } from '@/tests/helpers'
@@ -38,6 +39,83 @@ function makeGLLine(overrides: Partial<UnlinkedGLLine> = {}): UnlinkedGLLine {
     ...overrides,
   }
 }
+
+// ============================================================
+// ledgerLineAmountIn: the single definition of "this ledger line's amount,
+// expressed in the currency the account is being reconciled in"
+// ============================================================
+
+describe('ledgerLineAmountIn', () => {
+  it('nets debit against credit on SEK, ignoring the currency LABEL', () => {
+    // The headline trap: currency-utils stamps `currency: 'EUR'` +
+    // amount_in_currency onto a line whose debit_amount is SEK (a EUR supplier
+    // invoice paid from a SEK account). Reconciling that account in SEK must
+    // use the SEK columns and ignore the label entirely.
+    expect(ledgerLineAmountIn({ debit_amount: 1150, credit_amount: 0 }, 'SEK')).toBe(1150)
+    expect(ledgerLineAmountIn({ debit_amount: 0, credit_amount: 1150 }, 'SEK')).toBe(-1150)
+    expect(
+      ledgerLineAmountIn(
+        { debit_amount: 1150, credit_amount: 0, currency: 'EUR', amount_in_currency: 100 },
+        'SEK',
+      ),
+    ).toBe(1150)
+  })
+
+  it('never returns null on SEK: the 95% path always has an answer', () => {
+    expect(ledgerLineAmountIn({ debit_amount: null, credit_amount: null }, 'SEK')).toBe(0)
+    expect(ledgerLineAmountIn({ debit_amount: '250.50', credit_amount: '0' }, 'SEK')).toBe(250.5)
+  })
+
+  it('returns the FOREIGN amount, not the SEK figure, on a foreign account', () => {
+    // 100 EUR booked at 11.50: debit_amount is the 1150 SEK conversion.
+    // Reconciling the EUR account must yield 100, never 1150.
+    expect(
+      ledgerLineAmountIn(
+        { debit_amount: 1150, credit_amount: 0, currency: 'EUR', amount_in_currency: 100 },
+        'EUR',
+      ),
+    ).toBe(100)
+    expect(
+      ledgerLineAmountIn(
+        { debit_amount: 0, credit_amount: 1150, currency: 'EUR', amount_in_currency: 100 },
+        'EUR',
+      ),
+    ).toBe(-100)
+  })
+
+  it('takes direction from the debit/credit side, magnitude from amount_in_currency', () => {
+    // Some rows carry a negatively-signed amount_in_currency; the ledger side is
+    // authoritative for direction, so the sign must not be applied twice.
+    expect(
+      ledgerLineAmountIn(
+        { debit_amount: 0, credit_amount: 1150, currency: 'EUR', amount_in_currency: -100 },
+        'EUR',
+      ),
+    ).toBe(-100)
+  })
+
+  it('returns null (never the SEK figure) when the line carries no amount in that currency', () => {
+    // No rate on the row: a SIE-imported or pre-FX line on a EUR account. There
+    // is nothing to convert with, so the caller must report it, not guess.
+    expect(ledgerLineAmountIn({ debit_amount: 1150, credit_amount: 0 }, 'EUR')).toBeNull()
+    expect(
+      ledgerLineAmountIn({ debit_amount: 1150, credit_amount: 0, currency: 'SEK' }, 'EUR'),
+    ).toBeNull()
+    expect(
+      ledgerLineAmountIn(
+        { debit_amount: 1150, credit_amount: 0, currency: 'EUR', amount_in_currency: null },
+        'EUR',
+      ),
+    ).toBeNull()
+    // Wrong label: a USD line on a EUR account carries no EUR amount.
+    expect(
+      ledgerLineAmountIn(
+        { debit_amount: 1150, credit_amount: 0, currency: 'USD', amount_in_currency: 110 },
+        'EUR',
+      ),
+    ).toBeNull()
+  })
+})
 
 // ============================================================
 // scopeTransactionsToAccount: the per-account query filter
@@ -296,6 +374,56 @@ describe('tryReconcileTransaction', () => {
     const result = tryReconcileTransaction(tx, [line])
 
     expect(result).toBeNull()
+  })
+
+  // The currency check must gate BOTH sides. Gating only the transaction left a
+  // foreign bank amount being compared against a ledger figure that is always
+  // SEK, so a same-magnitude coincidence in the wrong unit scored auto_exact.
+  it('does NOT match a foreign bank row to a same-magnitude SEK ledger leg', () => {
+    const tx = makeTransaction({ amount: 100, date: '2024-06-15', currency: 'EUR' })
+    // A plain SEK booking: 100 kr on the same date. Same number, wrong unit.
+    const sekLine = makeGLLine({
+      debit_amount: 100,
+      entry_date: '2024-06-15',
+      currency: 'SEK',
+    })
+
+    const result = tryReconcileTransaction(tx, [sekLine], 'EUR')
+
+    expect(result).toBeNull()
+  })
+
+  it('matches a EUR bank row against the EUR amount recorded on the ledger line', () => {
+    const tx = makeTransaction({ amount: 100, date: '2024-06-15', currency: 'EUR' })
+    // 100 EUR at 11.50: the ledger columns hold the 1150 SEK conversion.
+    const eurLine = makeGLLine({
+      debit_amount: 1150,
+      entry_date: '2024-06-15',
+      currency: 'EUR',
+      amount_in_currency: 100,
+    })
+
+    const result = tryReconcileTransaction(tx, [eurLine], 'EUR')
+
+    expect(result).not.toBeNull()
+    expect(result!.method).toBe('auto_exact')
+  })
+
+  it('still matches a SEK payment of a EUR invoice on the SEK account (label is not the unit)', () => {
+    // Regression guard for the 95% path: currency-utils labels this line 'EUR'
+    // while debit_amount is SEK. Reconciling 1930 in SEK must be unaffected.
+    const tx = makeTransaction({ amount: 1150, date: '2024-06-15', currency: 'SEK' })
+    const line = makeGLLine({
+      debit_amount: 1150,
+      entry_date: '2024-06-15',
+      currency: 'EUR',
+      amount_in_currency: 100,
+    })
+
+    const result = tryReconcileTransaction(tx, [line])
+
+    expect(result).not.toBeNull()
+    expect(result!.method).toBe('auto_exact')
   })
 
   // ------------------------------------------------------------------
@@ -1431,5 +1559,152 @@ describe('getReconciliationStatus', () => {
     expect(status.bank_transaction_total).toBe(3000)    // only March feed
     expect(status.difference).toBe(0)
     expect(status.is_reconciled).toBe(true)
+  })
+
+  // ----------------------------------------------------------------
+  // Avstämt requires BOTH a zero net difference AND nothing unidentified
+  // ----------------------------------------------------------------
+
+  it('is NOT reconciled when two unmatched transactions offset each other', async () => {
+    // +500 and -500 net to zero against a zero period movement, so the old
+    // net-difference test called this avstämt while BOTH rows were still
+    // unbooked affärshändelser, each owing its own verifikation identifying
+    // belopp and motpart (BFL 5 kap 1-2 §, 6-7 §). Offsetting two unknowns is
+    // not knowing either one (ÅRL 2 kap: individuell värdering,
+    // bruttoredovisning): the account is not avstämt until both are booked.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [
+        { date: '2026-03-05', amount: 500, journal_entry_id: null, reconciliation_method: null },
+        { date: '2026-03-06', amount: -500, journal_entry_id: null, reconciliation_method: null },
+      ],
+    })
+    // Only the IB on the ledger: period movement is 0, matching the bank net.
+    enqueue({
+      data: [{ id: 'je-ib', status: 'posted', source_type: 'opening_balance', entry_date: '2026-01-01' }],
+    })
+    enqueue({ data: [{ debit_amount: 50000, credit_amount: 0, journal_entry_id: 'je-ib' }] })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.difference).toBe(0)
+    expect(status.unmatched_transaction_count).toBe(2)
+    expect(status.is_reconciled).toBe(false)
+  })
+
+  // ----------------------------------------------------------------
+  // Foreign-currency accounts are reconciled in their OWN currency
+  // ----------------------------------------------------------------
+
+  it('reconciles a EUR cash account in EUR, not against its SEK ledger figures', async () => {
+    // 100 EUR booked at 11.50: debit_amount holds the 1150 SEK conversion while
+    // the EUR amount sits in amount_in_currency. Summing the SEK column against
+    // a EUR bank feed produced a difference roughly the size of the exchange
+    // rate, so a foreign cash account could never show is_reconciled.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [{ date: '2026-03-05', amount: 100, journal_entry_id: 'je-eur', reconciliation_method: 'manual' }],
+    })
+    enqueue({
+      data: [{ id: 'je-eur', status: 'posted', source_type: 'import', entry_date: '2026-03-05' }],
+    })
+    enqueue({
+      data: [
+        {
+          debit_amount: 1150,
+          credit_amount: 0,
+          currency: 'EUR',
+          amount_in_currency: 100,
+          journal_entry_id: 'je-eur',
+        },
+      ],
+    })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(
+      supabase as never,
+      'company-1',
+      undefined,
+      undefined,
+      '1932',
+      'EUR',
+    )
+
+    expect(status.currency).toBe('EUR')
+    expect(status.gl_1930_period_movement).toBe(100)   // EUR, not 1150 SEK
+    expect(status.bank_transaction_total).toBe(100)
+    expect(status.difference).toBe(0)
+    expect(status.is_reconciled).toBe(true)
+    expect(status.not_reconcilable_reason).toBeNull()
+    expect(status.unconvertible_gl_line_count).toBe(0)
+  })
+
+  it('reports not-reconcilable-yet when a foreign account has lines with no amount in that currency', async () => {
+    // A SIE-imported / pre-FX line on the EUR account: only a SEK figure, no
+    // per-row rate. There is nothing honest to convert with, so the window must
+    // say so instead of quietly treating 1150 SEK as 1150 EUR.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [{ date: '2026-03-05', amount: 100, journal_entry_id: 'je-eur', reconciliation_method: 'manual' }],
+    })
+    enqueue({
+      data: [{ id: 'je-eur', status: 'posted', source_type: 'import', entry_date: '2026-03-05' }],
+    })
+    enqueue({
+      data: [{ debit_amount: 1150, credit_amount: 0, currency: 'SEK', journal_entry_id: 'je-eur' }],
+    })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(
+      supabase as never,
+      'company-1',
+      undefined,
+      undefined,
+      '1932',
+      'EUR',
+    )
+
+    expect(status.unconvertible_gl_line_count).toBe(1)
+    expect(status.not_reconcilable_reason).toBe('gl_lines_missing_currency_amount')
+    expect(status.is_reconciled).toBe(false)
+  })
+
+  it('leaves a SEK account untouched when its lines carry a foreign LABEL', async () => {
+    // 95%-path regression guard: a SEK payment of a EUR supplier invoice is
+    // labelled 'EUR' on the line while debit/credit are SEK. Reconciling 1930
+    // in SEK must use the SEK columns and never flag it as unconvertible.
+    const { supabase, enqueue } = createQueueMockSupabase()
+
+    enqueue({
+      data: [{ date: '2026-03-05', amount: -1150, journal_entry_id: 'je-1', reconciliation_method: 'manual' }],
+    })
+    enqueue({
+      data: [{ id: 'je-1', status: 'posted', source_type: 'import', entry_date: '2026-03-05' }],
+    })
+    enqueue({
+      data: [
+        {
+          debit_amount: 0,
+          credit_amount: 1150,
+          currency: 'EUR',
+          amount_in_currency: 100,
+          journal_entry_id: 'je-1',
+        },
+      ],
+    })
+    enqueue({ data: [] })
+
+    const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(status.currency).toBe('SEK')
+    expect(status.gl_1930_period_movement).toBe(-1150)
+    expect(status.difference).toBe(0)
+    expect(status.is_reconciled).toBe(true)
+    expect(status.unconvertible_gl_line_count).toBe(0)
+    expect(status.not_reconcilable_reason).toBeNull()
   })
 })
