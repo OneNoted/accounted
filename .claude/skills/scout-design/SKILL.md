@@ -37,6 +37,20 @@ Read ALL files in the resolved scope (pages + components). For each file, evalua
 - Are icon sizes consistent (15px nav, larger for empty states)?
 - Are borders full-opacity `border-border` on cards/surfaces (no opacity-suffixed border classes like `border-border/60`)?
 
+**Locked UI-migration conventions (2026-07; full list in `.claude/rules/design.md`)**
+- Frame layout intact: content lives inside the rounded page panel; no per-page restyling of `MAIN_PANEL_CLASS`, no `window`-scroll assumptions on dashboard pages.
+- Page title via `PageHeader` (24px/32px serif); buttons keep the app-wide pill radius (no per-call-site `rounded-*` overrides on `<Button>`).
+- Cards are flat: no `shadow-*`, `rounded-lg` only; shadows survive only on dialogs/popovers.
+- Table rows are one line; secondary info belongs in the detail view or a click-popup, never sub-rows.
+- Chips mark exceptions only: normal states render as muted text; the same Badge on every row means the chip is wrong.
+- Attention is one ochre `.attn` sentence, never a banner; max one per page.
+- Help lives behind the "?" button after the H1; no instructional copy in the page flow.
+- One context picker per page, far right in the toolbar (`FyPicker` / `ContextPicker` chip-dropdown).
+- Primary action in the page header; actions that post or send confirm up front in a dialog instead of writing outcome text into the page.
+- `.stagger-enter` on list/table content entry (server render and client-fetch alike).
+- Overlays: centered modal to create/confirm, right slide-over to review an object.
+- Settings speak Fönster: flat hairline rows (`SettingsRows.tsx`), switches not checkboxes, dirty-only sticky save bar.
+
 **Loading & Empty States**
 - Does the page/component have a loading state? (skeleton, spinner, or shimmer)
 - Is there an empty state when no data exists? (illustration, message, CTA)
@@ -127,9 +141,9 @@ After creating tickets, list them with their Linear identifiers so the user can 
 
 ## Important Notes
 
-- Be specific. "The button looks off" is not actionable. "The primary button in InvoiceForm uses `rounded-lg` while all other forms use `rounded-md`" is.
+- Be specific. "The button looks off" is not actionable. "The primary button in InvoiceForm overrides the app-wide pill radius with `rounded-lg`" is.
 - Reference exact Tailwind classes, component names, and line numbers.
-- Don't flag things that are intentional design choices documented in CLAUDE.md.
+- Don't flag things that are intentional design choices documented in `.claude/rules/design.md` or `DECISIONS.md` (e.g. the LedgerGraph always-dark panel and SalaryCalendar's categorical absence colors are sanctioned exceptions).
 - Don't suggest adding features, only flag design/UX issues with what already exists.
 - Keep findings focused on visual design, interaction design, and frontend polish. Not code quality or architecture.
 - If a component is very small or trivial (e.g., a simple redirect page), skip it.
