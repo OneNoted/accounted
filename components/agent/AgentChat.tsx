@@ -196,6 +196,10 @@ export default function AgentChat({
   const firstTurnFiredRef = useRef(false)
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
+  // Read by the announcement effect, which must not re-run on every token: a
+  // `messages` dependency would fire it hundreds of times per turn.
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
   const hasAi = useCapability(CAPABILITY.ai)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -204,13 +208,20 @@ export default function AgentChat({
   // erroring, aborting or being stopped, and a channel that misses one of
   // those leaves the trigger claiming the agent is still working forever.
   const turnOpenRef = useRef(false)
+  // Screen-reader announcement for the turn. Deliberately NOT the streaming
+  // text: a live region over token deltas re-announces on every delta and
+  // renders the chat unusable with a screen reader. Announce the two states
+  // that matter instead, and the finished answer once, when it is finished.
+  const [announcement, setAnnouncement] = useState('')
   useEffect(() => {
     if (streaming) {
       turnOpenRef.current = true
       onStatus?.({ type: 'turn_start' })
+      setAnnouncement('Assistenten skriver ett svar.')
     } else if (turnOpenRef.current) {
       turnOpenRef.current = false
       onStatus?.({ type: 'turn_end' })
+      setAnnouncement(announceableAnswer(messagesRef.current))
     }
   }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -717,6 +728,13 @@ export default function AgentChat({
 
   return (
     <div className="relative flex flex-col h-full min-h-0">
+      {/* The chat had no live region at all, so a screen-reader user got no
+          signal that the assistant had answered: the reply simply appeared for
+          people who could see it. role="status" is the polite variant, which
+          waits for a pause rather than interrupting. */}
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {announcement}
+      </div>
       {/* The pill is positioned against THIS box, not the whole component: the
           composer below grows as the user types, and a fixed offset from the
           bottom would slide the pill under it. */}
@@ -1283,4 +1301,21 @@ export function normalizeStoredMessages(
     })
   }
   return out
+}
+
+/**
+ * What to read out when a turn finishes.
+ *
+ * The visible answer, capped: screen readers read a live region straight
+ * through, and a 900-word bokslut explanation announced in one uninterruptible
+ * burst is worse than not announcing it. The cap points the user at the
+ * message they can then navigate normally.
+ */
+export function announceableAnswer(messages: ChatMessage[]): string {
+  const last = [...messages].reverse().find((m) => m.role === 'assistant')
+  const text = last?.text?.trim()
+  if (!text) return 'Assistenten är klar.'
+  const limit = 400
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit).trimEnd()}… Svaret fortsätter i meddelandet.`
 }
