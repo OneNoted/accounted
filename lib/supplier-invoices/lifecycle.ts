@@ -94,3 +94,75 @@ export function canApproveSupplierInvoice(invoice: {
   if (invoice.approved_at) return false
   return invoice.status === 'registered' || invoice.status === 'overdue'
 }
+
+/**
+ * Fields that are copied onto the registration verifikat when it is posted:
+ *
+ *   - invoice_date   -> journal_entries.entry_date (and the fiscal period the
+ *                       entry was filed in), lib/bookkeeping/supplier-invoice-entries.ts
+ *   - supplier_invoice_number -> the verifikat description ("Leverantörsfaktura
+ *                       <nr>, <leverantör>") and every line_description built
+ *                       from it
+ *
+ * BFL 5 kap 6-7 § makes "datum för affärshändelsen" and the identification of
+ * the underlying verifikation mandatory verifikat content, and 5 kap 5 §
+ * requires a correction to leave the original visible. Rewriting either field
+ * on the invoice row after the entry is posted satisfies neither: the entry
+ * keeps its original values, nothing lands in journal_entry_rattelse_log, and
+ * the invoice and its verifikat silently disagree (#1230).
+ */
+export const VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS = [
+  'invoice_date',
+  'supplier_invoice_number',
+] as const
+
+export type VerifikatCriticalSupplierInvoiceField =
+  (typeof VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS)[number]
+
+/**
+ * The verifikat-critical fields an update would actually move, ignoring
+ * whether an entry has been posted yet.
+ *
+ * Only a *differing* value is reported: clients that PUT the whole form back
+ * (the dashboard edit dialog resends every field it rendered) must keep
+ * working, and resending the stored value changes nothing on the verifikat.
+ * Amounts and accounts are not listed because the update schema cannot reach
+ * them; the damage this guards against is metadata drift, not entry balance.
+ */
+export function findChangedVerifikatFields(
+  // Callers hand over the whole validated update body, so unrelated keys
+  // (due_date, notes, ...) have to be accepted rather than stripped first.
+  update: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null | undefined>> & {
+    [key: string]: unknown
+  },
+  existing: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null>>,
+): VerifikatCriticalSupplierInvoiceField[] {
+  return VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS.filter((field) => {
+    const next = update[field]
+    if (next === undefined) return false
+    return next !== (existing[field] ?? null)
+  })
+}
+
+/**
+ * The verifikat-critical fields an update would change on an invoice whose
+ * registration entry is already posted. Empty means the update is safe.
+ *
+ * An empty result on an as-yet unbooked invoice is only true as of the read it
+ * was computed from: a registration entry can be posted between that read and
+ * the write. Callers must therefore pin `registration_journal_entry_id is null`
+ * on the update itself whenever findChangedVerifikatFields() is non-empty and
+ * this returns empty, so a concurrent posting turns into zero matched rows
+ * rather than the very drift this guards against.
+ */
+export function findLockedVerifikatFields(
+  update: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null | undefined>> & {
+    [key: string]: unknown
+  },
+  existing: {
+    registration_journal_entry_id?: string | null
+  } & Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null>>,
+): VerifikatCriticalSupplierInvoiceField[] {
+  if (!existing.registration_journal_entry_id) return []
+  return findChangedVerifikatFields(update, existing)
+}

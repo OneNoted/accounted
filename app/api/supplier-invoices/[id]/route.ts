@@ -6,6 +6,8 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import {
+  findChangedVerifikatFields,
+  findLockedVerifikatFields,
   isUnsettledSupplierInvoiceStatus,
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
@@ -43,9 +45,12 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   // even extend the due date to un-overdue them (#1206). The update body only
   // carries metadata (numbers, dates, reference, notes), never amounts or
   // accounts, so a posted registration verifikat cannot be desynced by money.
+  // The two fields that DO reach the verifikat are gated separately below.
   const { data: existing } = await supabase
     .from('supplier_invoices')
-    .select('status, due_date, remaining_amount, is_credit_note, approved_at')
+    .select(
+      'status, due_date, remaining_amount, is_credit_note, approved_at, invoice_date, supplier_invoice_number, registration_journal_entry_id',
+    )
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
@@ -64,6 +69,25 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   const validation = await validateBody(request, UpdateSupplierInvoiceSchema)
   if (!validation.success) return validation.response
   const body = validation.data
+
+  // A posted registration verifikat carries the invoice date (as entry_date)
+  // and the invoice number (in the description). Rewriting either here would
+  // desync the two silently and outside both sanctioned rättelse paths, so it
+  // is refused with a pointer at the right route (#1230).
+  const lockedFields = findLockedVerifikatFields(body, existing)
+  if (lockedFields.length > 0) {
+    return errorResponseFromCode('SI_EDIT_VERIFIKAT_LOCKED', log, {
+      requestId,
+      details: {
+        fields: lockedFields,
+        journalEntryId: existing.registration_journal_entry_id,
+      },
+    })
+  }
+
+  // Unbooked, but the update does move a verifikat-critical field: the write
+  // below has to stay conditional on the invoice still being unbooked.
+  const movesVerifikatFields = findChangedVerifikatFields(body, existing).length > 0
 
   // Keep the overdue label in step with the due date this update lands on
   // instead of waiting for the next cron run: extending the due date should
@@ -85,6 +109,15 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
     .update(rewritesStatus ? { ...body, status: restingStatus } : body)
     .eq('id', id)
     .eq('company_id', companyId)
+
+  if (movesVerifikatFields) {
+    // The lock check above read a row that was still unbooked. A registration
+    // entry posted between that read and this write would let exactly the
+    // drift this guards against slip through, so pin the column: a concurrent
+    // posting then matches zero rows and the caller is told to reload (the
+    // retry hits the lock with the right message).
+    update = update.is('registration_journal_entry_id', null)
+  }
 
   if (rewritesStatus) {
     // Compare-and-swap, but only when this write derives a new status. The
