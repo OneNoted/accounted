@@ -30,6 +30,7 @@ import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle } f
 import { cn, formatDateLong } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
+import { ILLUSTRATIONS, illustrationSrc } from '@/components/onboarding/onboarding-illustrations'
 import { STAGING_SCOPES } from '@/lib/auth/api-keys'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
 
@@ -474,6 +475,34 @@ export function ApiKeysPanel() {
       </SettingsGroup>
 
       <SettingsGroup label={t('connect_mcp_title')}>
+        {/* The marketing site's halftone AI marks (Claude, OpenAI): a quiet
+            "works with" cue, not chrome. Text carries the meaning; the marks
+            are decorative. */}
+        <div className="flex items-center gap-3 px-1 pb-1 pt-3">
+          <div aria-hidden className="flex shrink-0 items-center gap-2">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={illustrationSrc('logo-claude')}
+              width={ILLUSTRATIONS['logo-claude'].w}
+              height={ILLUSTRATIONS['logo-claude'].h}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-5 w-auto"
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={illustrationSrc('logo-openai')}
+              width={ILLUSTRATIONS['logo-openai'].w}
+              height={ILLUSTRATIONS['logo-openai'].h}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-5 w-auto"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">{t('works_with_ai')}</p>
+        </div>
         <SettingsRow
           label="Claude.ai"
           align="baseline"
